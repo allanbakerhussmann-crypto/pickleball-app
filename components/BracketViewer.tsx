@@ -1,0 +1,59 @@
+
+import React from 'react';
+import { MatchDisplay, MatchCard } from './MatchCard';
+
+interface BracketViewerProps {
+    matches: MatchDisplay[];
+    onUpdateScore: (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute', reason?: string) => void;
+    isVerified: boolean;
+}
+
+export const BracketViewer: React.FC<BracketViewerProps> = ({ matches, onUpdateScore, isVerified }) => {
+    // Group matches by round
+    const rounds: { [key: number]: MatchDisplay[] } = {};
+    let maxRound = 0;
+
+    matches.forEach(m => {
+        // Logic to determine round if not explicit:
+        // For now, we assume round numbers are assigned correctly or we default to 1
+        // In a real bracket generation, round numbers are critical.
+        const round = (m as any).roundNumber || 1; 
+        if (!rounds[round]) rounds[round] = [];
+        rounds[round].push(m);
+        if (round > maxRound) maxRound = round;
+    });
+
+    const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
+
+    return (
+        <div className="overflow-x-auto pb-4">
+             <div className="min-w-max flex gap-8">
+                 {roundKeys.map(roundNum => (
+                     <div key={roundNum} className="flex flex-col w-80">
+                         <h3 className="text-center text-gray-400 font-bold uppercase text-xs mb-4 tracking-wider border-b border-gray-700 pb-2">
+                             {roundNum === maxRound ? 'Finals' : 
+                              roundNum === maxRound - 1 ? 'Semi-Finals' : 
+                              `Round ${roundNum}`}
+                         </h3>
+                         <div className="flex flex-col justify-around flex-grow gap-6">
+                             {rounds[roundNum].map((match, idx) => (
+                                 <div key={match.id} className="relative">
+                                     {/* Connector Lines (CSS tricks would be better but simplified here) */}
+                                     {roundNum < maxRound && (
+                                         <div className="absolute right-[-32px] top-1/2 w-8 h-[1px] bg-gray-700"></div>
+                                     )}
+                                     <MatchCard 
+                                        match={match} 
+                                        matchNumber={idx + 1} // Just visual index
+                                        onUpdateScore={onUpdateScore}
+                                        isVerified={isVerified}
+                                     />
+                                 </div>
+                             ))}
+                         </div>
+                     </div>
+                 ))}
+             </div>
+        </div>
+    );
+};
