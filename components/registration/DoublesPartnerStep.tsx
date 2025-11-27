@@ -8,11 +8,12 @@ import type {
 } from '../../types';
 import {
   getOpenTeamsForDivision,
-  searchUsers,
+  searchEligiblePartners,
   getUsersByIds,
   getTeamsForDivision,
   getPendingInvitesForDivision,
 } from '../../services/firebase';
+
 
 interface DoublesPartnerStepProps {
   tournament: Tournament;
@@ -123,10 +124,21 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
             // 1. Check existing teams
             const teams = await getTeamsForDivision(tournament.id, divId);
             teams.forEach(t => {
-                if (t.status !== 'withdrawn' && t.status !== 'cancelled') {
-                    t.players.forEach(p => statusMap.set(p, 'Already Registered'));
-                }
-            });
+              const isWithdrawn = t.status === 'withdrawn' || t.status === 'cancelled';
+
+              // Solo pending_partner team (one player, waiting for partner) should NOT block invitations.
+            const isSoloPending =
+            t.status === 'pending_partner' &&
+            Array.isArray(t.players) &&
+            t.players.length === 1;
+
+          // Only treat as "Already Registered" if it's not withdrawn/cancelled
+          // AND not just a solo pending team.
+          if (!isWithdrawn && !isSoloPending) {
+            (t.players || []).forEach(p => statusMap.set(p, 'Already Registered'));
+          }
+        });
+
 
             // 2. Check pending invites
             const invites = await getPendingInvitesForDivision(tournament.id, divId);
@@ -198,6 +210,15 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
             enriched.push({ team: t, owner });
           }
 
+           // Sort open teams alphabetically by owner name (fallback to email)
+          enriched.sort((a, b) => {
+            const nameA = (a.owner.displayName || a.owner.email || '').toLowerCase();
+            const nameB = (b.owner.displayName || b.owner.email || '').toLowerCase();
+            if (nameA < nameB) return -1;
+            if (nameA > nameB) return 1;
+            return 0;
+          });
+
           result[divId] = enriched;
         }
 
@@ -227,15 +248,29 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     });
   };
 
-  const handleInviteSearch = async (divId: string, term: string) => {
+    const handleInviteSearch = async (divId: string, term: string) => {
     setSearchTerm(prev => ({ ...prev, [divId]: term }));
     if (!term || term.length < 2) {
       setSearchResults(prev => ({ ...prev, [divId]: [] }));
       return;
     }
-    const results = await searchUsers(term);
+
+    // Find the division so we know its gender setting
+    const division = divisions.find(d => d.id === divId);
+    if (!division) {
+      setSearchResults(prev => ({ ...prev, [divId]: [] }));
+      return;
+    }
+
+    const results = await searchEligiblePartners(
+      term,
+      division.gender,
+      userProfile
+    );
+
     setSearchResults(prev => ({ ...prev, [divId]: results }));
   };
+
 
   const handleSelectInvitePartner = (divId: string, user: UserProfile) => {
     setPartnerDetails(prev => {
@@ -319,12 +354,14 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                 </label>
               </div>
 
-              {/* Invite mode */}
+              {/* Invite mode */}                        
               {mode === 'invite' && (
                 <div className="mt-2 space-y-2">
                   <p className="text-xs text-gray-400">
-                    Search for your partner by name or email. <br/>
-                    <span className="italic">Note: Players who do not meet division criteria or are already registered will be shown but disabled.</span>
+                    Search for your partner by name or email. <br />
+                    <span className="italic">
+                      Note: Players who do not meet division criteria or are already registered will be shown but disabled.
+                    </span>
                   </p>
 
                   {!partnerInfo?.partnerUserId && (
@@ -342,17 +379,30 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                           .map(u => {
                             const unavailabilityReason = unavailableUsers.get(u.id);
                             const isUnavailable = !!unavailabilityReason;
-                            
+
                             const eligibility = checkPartnerEligibility(div, u);
                             const genderComp = checkGenderCompatibility(div, userProfile, u);
-                            
-                            const isDisabled = isUnavailable || !eligibility.eligible || !genderComp.allowed;
-                            let disableReason = '';
-                            if (isUnavailable) disableReason = unavailabilityReason!;
-                            else if (!eligibility.eligible) disableReason = eligibility.reason || 'Not eligible';
-                            else if (!genderComp.allowed) disableReason = genderComp.reason || 'Gender mismatch';
 
-                            const g =
+                            const isDisabled =
+                              isUnavailable || !eligibility.eligible || !genderComp.allowed;
+
+                            let disableReason = '';
+                            if (isUnavailable) {
+                              disableReason = unavailabilityReason || '';
+                            } else if (!eligibility.eligible && eligibility.reason) {
+                              disableReason = eligibility.reason;
+                            } else if (!genderComp.allowed && genderComp.reason) {
+                              disableReason = genderComp.reason;
+                            }
+
+                            const rating =
+                              u.duprDoublesRating ??
+                              u.ratingDoubles ??
+                              u.duprSinglesRating ??
+                              u.ratingSingles ??
+                              null;
+
+                            const genderShort =
                               u.gender === 'male'
                                 ? 'M'
                                 : u.gender === 'female'
@@ -365,32 +415,45 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                                 type="button"
                                 disabled={isDisabled}
                                 className={`w-full text-left text-xs p-2 rounded flex justify-between items-center ${
-                                    isDisabled 
-                                    ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700' 
+                                  isDisabled
+                                    ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700'
                                     : 'bg-gray-900 hover:bg-gray-700 text-white cursor-pointer'
                                 }`}
-                                onClick={() => !isDisabled && handleSelectInvitePartner(div.id, u)}
+                                onClick={() =>
+                                  !isDisabled && handleSelectInvitePartner(div.id, u)
+                                }
                               >
-                                <div>
-                                    {u.displayName || u.email}{' '}
-                                    <span className={`text-[10px] ${isDisabled ? 'text-gray-600' : 'text-gray-400'}`}>
-                                    ({u.email}) [{g}]
-                                    </span>
+                                <div className="flex flex-col">
+                                  <span className="font-medium">
+                                    {u.displayName || u.email}
+                                  </span>
+                                  <span
+                                    className={`text-[10px] ${
+                                      isDisabled ? 'text-gray-600' : 'text-gray-400'
+                                    }`}
+                                  >
+                                    {u.email}{' '}
+                                    [
+                                      {genderShort}
+                                      {rating !== null ? ` · ${rating.toFixed(1)}` : ''}
+                                    ]
+                                  </span>
                                 </div>
-                                {isDisabled && (
-                                    <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">
-                                        {disableReason}
-                                    </span>
+                                {isDisabled && disableReason && (
+                                  <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider">
+                                    {disableReason}
+                                  </span>
                                 )}
                               </button>
                             );
                           })}
                       </div>
-                      
+
                       {/* Help text for non-existing users */}
                       <p className="text-[10px] text-gray-500 italic mt-2 border-t border-gray-700 pt-2">
-                        Partner not listed? If they don't have an account yet, select <strong>"I don't have a partner yet"</strong> below. 
-                        They can sign up later and join your team.
+                        Partner not listed? If they don't have an account yet, select{' '}
+                        <strong>"I don't have a partner yet"</strong> below. They can sign
+                        up later and join your team.
                       </p>
                     </>
                   )}
@@ -411,6 +474,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                   )}
                 </div>
               )}
+
 
               {/* Open team mode */}
               {mode === 'open_team' && (

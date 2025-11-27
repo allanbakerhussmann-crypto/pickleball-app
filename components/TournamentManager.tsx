@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Schedule } from './Schedule';
 import { BracketViewer } from './BracketViewer';
@@ -25,9 +26,8 @@ import {
     generatePoolsSchedule,
     generateBracketSchedule,
     generateFinalsFromPools,
-    updateDivision,
-    getRegistration, // Added
-    getUserTeamsForTournament // Added
+    getRegistration,
+    updateDivision          // ✅ add this
 } from '../services/firebase';
 import { getScheduledQueue } from '../services/courtAllocator';
 
@@ -57,29 +57,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     // Wizard State
     const [showRegistrationWizard, setShowRegistrationWizard] = useState(false);
     const [wizardProps, setWizardProps] = useState<{ mode: 'full'|'waiver_only', initialDivisionId?: string }>({ mode: 'full' });
-    const [userRegistrationStatus, setUserRegistrationStatus] = useState<'none' | 'active'>('none');
-
-    // Check user registration status
-    useEffect(() => {
-        const checkStatus = async () => {
-            if (!userProfile) return;
-            // Check for explicit registration doc or existing teams
-            // We consider 'active' if they have ANY teams that aren't withdrawn, or a completed registration doc.
-            // This is robust against partial states.
-            const reg = await getRegistration(tournament.id, userProfile.id);
-            const teams = await getUserTeamsForTournament(tournament.id, userProfile.id);
-            
-            // Filter strictly for active/pending participation
-            const activeTeams = teams.filter(t => t.status !== 'withdrawn' && t.status !== 'cancelled');
-            
-            if ((reg && reg.status === 'completed') || activeTeams.length > 0) {
-                setUserRegistrationStatus('active');
-            } else {
-                setUserRegistrationStatus('none');
-            }
-        };
-        checkStatus();
-    }, [tournament.id, userProfile, showRegistrationWizard]); // Re-check when wizard closes
 
     useEffect(() => {
         if (initialWizardState?.isOpen) {
@@ -94,11 +71,31 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     }, [initialWizardState, clearWizardState]);
 
     const handleOpenWizard = () => {
-        // Always open in 'full' mode for general registration/management
         setWizardProps({ mode: 'full' });
         setShowRegistrationWizard(true);
     };
-    
+    // Track if the current user has already completed a registration
+const [hasCompletedRegistration, setHasCompletedRegistration] = useState(false);
+
+useEffect(() => {
+  const loadRegistration = async () => {
+    if (!currentUser) {
+      setHasCompletedRegistration(false);
+      return;
+    }
+
+    try {
+      const reg = await getRegistration(tournament.id, currentUser.uid);
+      setHasCompletedRegistration(!!reg && reg.status === 'completed');
+    } catch (err) {
+      console.error('Failed to load registration status', err);
+      setHasCompletedRegistration(false);
+    }
+  };
+
+  loadRegistration();
+}, [tournament.id, currentUser]);
+
     // Subcollection Data
     const [divisions, setDivisions] = useState<Division[]>([]);
     const [teams, setTeams] = useState<Team[]>([]);
@@ -408,11 +405,16 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     tournament={tournament}
                     userProfile={userProfile}
                     onClose={() => setShowRegistrationWizard(false)}
-                    onComplete={() => setShowRegistrationWizard(false)}
-                    initialDivisionId={wizardProps.initialDivisionId}
+                    onComplete={() => {
+                    setShowRegistrationWizard(false);
+                    setHasCompletedRegistration(true);
+                    }}
                     mode={wizardProps.mode}
+                    initialDivisionId={wizardProps.initialDivisionId}
                 />
-            )}
+                )}
+
+
 
             {/* Header */}
             <div className="mb-6 flex items-center gap-2 text-sm text-gray-500">
@@ -852,13 +854,9 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                         <div className="bg-gray-800 p-6 rounded border border-gray-700">
                              <button 
                                 onClick={handleOpenWizard}
-                                className={`w-full font-bold py-3 rounded shadow ${
-                                    userRegistrationStatus === 'active' 
-                                    ? 'bg-blue-600 hover:bg-blue-500 text-white' 
-                                    : 'bg-green-600 hover:bg-green-500 text-white'
-                                }`}
+                                className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded shadow"
                             >
-                                {userRegistrationStatus === 'active' ? 'Manage Registration' : 'Register for Tournament'}
+                                {hasCompletedRegistration ? 'Manage Registration' : 'Register for Tournament'}
                             </button>
                             <div className="mt-4 text-xs text-gray-400 space-y-2">
                                 <p><strong>Format:</strong> {activeDivision.format.stageMode === 'single_stage' ? activeDivision.format.mainFormat : `${activeDivision.format.numberOfPools} Pools + Finals`}</p>

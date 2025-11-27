@@ -1,5 +1,3 @@
-
-
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
 import { 
@@ -19,9 +17,7 @@ import {
   runTransaction,
   deleteDoc,
   orderBy, // Added
-  type Firestore,
-  DocumentReference,
-  DocumentSnapshot
+  type Firestore
 } from '@firebase/firestore';
 import { 
     getStorage, 
@@ -110,182 +106,680 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
 };
 
 export const updateUserProfileDoc = async (userId: string, data: Partial<UserProfile>) => {
-  const userRef = doc(db, 'users', userId);
-  await updateDoc(userRef, { ...data, updatedAt: Date.now() });
-};
-
-export const getAllUsers = async (limitCount = 100): Promise<UserProfile[]> => {
-    const q = query(collection(db, 'users'), limit(limitCount));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
-};
-
-export const getUsersByIds = async (userIds: string[]): Promise<UserProfile[]> => {
-    if (userIds.length === 0) return [];
-    // Firestore "in" query limited to 10
-    const chunks = [];
-    for (let i = 0; i < userIds.length; i += 10) {
-        chunks.push(userIds.slice(i, i + 10));
-    }
-    
-    const results: UserProfile[] = [];
-    for (const chunk of chunks) {
-        const q = query(collection(db, 'users'), where('id', 'in', chunk));
-        const snap = await getDocs(q);
-        snap.forEach(d => results.push({ id: d.id, ...d.data() } as UserProfile));
-    }
-    return results;
+    await setDoc(doc(db, 'users', userId), { ...data, updatedAt: Date.now() }, { merge: true });
 };
 
 export const searchUsers = async (searchTerm: string): Promise<UserProfile[]> => {
-    // Simple client-side search simulation for now as Firestore doesn't do full text search natively
-    // In production, use Algolia or Typesense.
-    // For MVP: Fetch last 100 users and filter? Or use >= startAt.
-    // Using a simpler approach: get recent users and filter in memory.
-    const q = query(collection(db, 'users'), limit(50));
-    const snap = await getDocs(q);
-    const term = searchTerm.toLowerCase();
+    if (!searchTerm || searchTerm.length < 2) return [];
     
-    return snap.docs
-        .map(d => ({ id: d.id, ...d.data() } as UserProfile))
-        .filter(u => 
-            (u.displayName && u.displayName.toLowerCase().includes(term)) || 
-            (u.email && u.email.toLowerCase().includes(term))
-        );
-};
+    const term = searchTerm.trim();
+    // Helper to capitalize first letter for name search (e.g. "john" -> "John")
+    // This helps with Firestore's case-sensitive search
+    const capitalizedTerm = term.charAt(0).toUpperCase() + term.slice(1).toLowerCase();
 
-// --- Roles ---
-export const promoteToAppAdmin = async (userId: string) => {
-    const ref = doc(db, 'users', userId);
-    await updateDoc(ref, { roles: ['player', 'organizer', 'admin'] }); // Overwrite or union
-};
-export const demoteFromAppAdmin = async (userId: string, currentAdminId: string) => {
-    const ref = doc(db, 'users', userId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return;
-    const user = snap.data() as UserProfile;
-    if (user.isRootAdmin) throw new Error("Cannot demote Root Admin");
-    
-    // Remove 'admin' from roles
-    const newRoles = (user.roles || []).filter(r => r !== 'admin');
-    await updateDoc(ref, { roles: newRoles });
-};
-export const promoteToOrganizer = async (userId: string) => {
-    const ref = doc(db, 'users', userId);
-    const snap = await getDoc(ref);
-    const roles = (snap.data() as UserProfile).roles || [];
-    if (!roles.includes('organizer')) {
-        await updateDoc(ref, { roles: [...roles, 'organizer'] });
+    try {
+        const queries = [
+            // 1. Name as typed
+            query(
+                collection(db, 'users'),
+                where('displayName', '>=', term),
+                where('displayName', '<=', term + '\uf8ff'),
+                limit(20)
+            ),
+            // 2. Email as typed
+            query(
+                collection(db, 'users'),
+                where('email', '>=', term),
+                where('email', '<=', term + '\uf8ff'),
+                limit(20)
+            )
+        ];
+
+        // 3. If term starts with lowercase, also try Capitalized Name search
+        if (term !== capitalizedTerm) {
+            queries.push(
+                query(
+                    collection(db, 'users'),
+                    where('displayName', '>=', capitalizedTerm),
+                    where('displayName', '<=', capitalizedTerm + '\uf8ff'),
+                    limit(20)
+                )
+            );
+        }
+
+        const snapshots = await Promise.all(queries.map(q => getDocs(q)));
+
+        const results = new Map<string, UserProfile>();
+        snapshots.forEach(snap => {
+            snap.docs.forEach(d => {
+                results.set(d.id, { id: d.id, ...d.data() } as UserProfile);
+            });
+        });
+
+        // Sort results alphabetically by displayName (fallback to email)
+        const sorted = Array.from(results.values()).sort((a, b) => {
+            const nameA = (a.displayName || a.email || '').toLowerCase();
+            const nameB = (b.displayName || b.email || '').toLowerCase();
+            if (nameA < nameB) return -1;
+            if (nameA > nameB) return 1;
+            return 0;
+        });
+
+        return sorted;
+    } catch (e) {
+        console.error('searchUsers failed', e);
+        return [];
     }
 };
-export const demoteFromOrganizer = async (userId: string) => {
-    const ref = doc(db, 'users', userId);
-    const snap = await getDoc(ref);
-    const roles = (snap.data() as UserProfile).roles || [];
-    await updateDoc(ref, { roles: roles.filter(r => r !== 'organizer') });
-};
-export const promoteToPlayer = async (userId: string) => {
-    const ref = doc(db, 'users', userId);
-    const snap = await getDoc(ref);
-    const roles = (snap.data() as UserProfile).roles || [];
-    if (!roles.includes('player')) {
-        await updateDoc(ref, { roles: [...roles, 'player'] });
+
+// Filtered + ranked partner search for a given division + current player
+export const searchEligiblePartners = async (
+  searchTerm: string,
+  divisionGender: GenderCategory,
+  currentUser: UserProfile
+): Promise<UserProfile[]> => {
+  if (!searchTerm || searchTerm.length < 2) return [];
+
+  // 1. Base search by name/email (already alphabetically sorted)
+  const baseResults = await searchUsers(searchTerm);
+
+  // 2. Exclude yourself
+  let filtered = baseResults.filter(p => p.id !== currentUser.id);
+
+  // 3. Apply gender rules
+  if (divisionGender === 'mixed' && currentUser.gender) {
+    const wantGender = currentUser.gender === 'female' ? 'male' : 'female';
+    filtered = filtered.filter(p => p.gender === wantGender);
+  } else if (divisionGender === 'men') {
+    filtered = filtered.filter(p => p.gender === 'male');
+  } else if (divisionGender === 'women') {
+    filtered = filtered.filter(p => p.gender === 'female');
+  }
+  // 'open' -> no extra gender filter
+
+  // 4. Order by DUPR / rating closeness to current user
+  const getRating = (u: UserProfile): number =>
+    u.duprDoublesRating ??
+    u.ratingDoubles ??
+    u.duprSinglesRating ??
+    u.ratingSingles ??
+    0;
+
+  const myRating = getRating(currentUser);
+
+  filtered.sort((a, b) => {
+    const diffA = Math.abs(getRating(a) - myRating);
+    const diffB = Math.abs(getRating(b) - myRating);
+
+    if (diffA !== diffB) {
+      return diffA - diffB; // closer rating first
     }
-};
-export const demoteFromPlayer = async (userId: string) => {
-    const ref = doc(db, 'users', userId);
-    const snap = await getDoc(ref);
-    const roles = (snap.data() as UserProfile).roles || [];
-    await updateDoc(ref, { roles: roles.filter(r => r !== 'player') });
+
+    // tie-breaker: alphabetical by name/email
+    const nameA = (a.displayName || a.email || '').toLowerCase();
+    const nameB = (b.displayName || b.email || '').toLowerCase();
+    if (nameA < nameB) return -1;
+    if (nameA > nameB) return 1;
+    return 0;
+  });
+
+  return filtered;
 };
 
+
+export const getAllUsers = async (limitCount = 100): Promise<UserProfile[]> => {
+    const snapshot = await getDocs(query(collection(db, 'users'), limit(limitCount)));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
+};
+
+export const getUsersByIds = async (userIds: string[]): Promise<UserProfile[]> => {
+    if (!userIds || userIds.length === 0) return [];
+    const promises = userIds.map(id => getDoc(doc(db, 'users', id)));
+    const docs = await Promise.all(promises);
+    return docs.filter(d => d.exists()).map(d => ({ id: d.id, ...d.data() } as UserProfile));
+};
+
+export const uploadProfileImage = async (userId: string, file: File): Promise<string> => {
+    const snapshot = await uploadBytes(ref(storage, `profile_pictures/${userId}`), file);
+    return getDownloadURL(snapshot.ref);
+};
+
+// --- Admin Role Management ---
+const addRole = async (userId: string, role: UserRole) => {
+  const ref = doc(db, 'users', userId);
+  await runTransaction(db, async tx => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error('User not found');
+    const data = snap.data() as UserProfile;
+    const roles = new Set(data.roles ?? []);
+    roles.add(role);
+    tx.update(ref, { roles: Array.from(roles) });
+  });
+};
+const removeRole = async (userId: string, role: UserRole) => {
+  const ref = doc(db, 'users', userId);
+  await runTransaction(db, async tx => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error('User not found');
+    const data = snap.data() as UserProfile;
+    const roles = new Set(data.roles ?? []);
+    if (!roles.has(role)) return;
+    roles.delete(role);
+    tx.update(ref, { roles: Array.from(roles) });
+  });
+};
+export const promoteToAppAdmin = async (targetUserId: string) => {
+  const ref = doc(db, 'users', targetUserId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error('User not found');
+    const data = snap.data() as UserProfile;
+    const roles = new Set(data.roles ?? []);
+    roles.add('admin');
+    roles.add('organizer');
+    tx.update(ref, { roles: Array.from(roles) });
+  });
+};
+export const demoteFromAppAdmin = async (targetUserId: string, currentUserId: string) => {
+  const ref = doc(db, 'users', targetUserId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error('User not found');
+    const data = snap.data() as UserProfile;
+    if (data.isRootAdmin === true) throw new Error('The root admin cannot be demoted.');
+    const roles = new Set(data.roles ?? []);
+    if (targetUserId === currentUserId && roles.has('admin')) throw new Error('You cannot remove your own admin role.');
+    if (!roles.has('admin')) return;
+    roles.delete('admin');
+    tx.update(ref, { roles: Array.from(roles) });
+  });
+};
+export const promoteToOrganizer = async (userId: string) => addRole(userId, 'organizer');
+export const demoteFromOrganizer = async (userId: string) => removeRole(userId, 'organizer');
+export const promoteToPlayer = async (userId: string) => addRole(userId, 'player');
+export const demoteFromPlayer = async (userId: string) => removeRole(userId, 'player');
 
 // --- Clubs ---
-export const createClub = async (clubData: Partial<Club>) => {
+export const createClub = async (clubData: Partial<Club>): Promise<string> => {
     const clubRef = doc(collection(db, 'clubs'));
-    const club = { ...clubData, id: clubRef.id, createdAt: Date.now(), updatedAt: Date.now() };
+    const id = clubRef.id;
+    const club: Club = {
+        id,
+        name: clubData.name || 'Unnamed Club',
+        slug: clubData.slug || id,
+        description: clubData.description || '',
+        logoUrl: clubData.logoUrl || null,
+        region: clubData.region || null,
+        country: clubData.country || 'New Zealand',
+        createdByUserId: clubData.createdByUserId!,
+        admins: clubData.admins || [],
+        members: clubData.members || [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    };
     await setDoc(clubRef, club);
-    return club;
+    return id;
 };
+
 export const getAllClubs = async (): Promise<Club[]> => {
-    const q = query(collection(db, 'clubs'));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Club));
-};
+    const snapshot = await getDocs(query(collection(db, 'clubs')));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Club));
+}
+
 export const getUserClubs = async (userId: string): Promise<Club[]> => {
-    const q = query(collection(db, 'clubs'), where('admins', 'array-contains', userId));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Club));
+    try {
+        const q = query(collection(db, 'clubs'), where('admins', 'array-contains', userId));
+        const snapshot = await getDocs(q);
+        return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Club));
+    } catch (e) {
+        console.error("Error fetching user clubs:", e);
+        return [];
+    }
 };
-export const getClub = async (clubId: string): Promise<Club | null> => {
-    const snap = await getDoc(doc(db, 'clubs', clubId));
-    return snap.exists() ? { id: snap.id, ...snap.data() } as Club : null;
-};
-export const subscribeToClub = (clubId: string, callback: (c: Club | null) => void) => {
+
+export const subscribeToClub = (clubId: string, callback: (club: Club) => void) => {
     return onSnapshot(doc(db, 'clubs', clubId), (snap) => {
-        callback(snap.exists() ? { id: snap.id, ...snap.data() } as Club : null);
+        if (snap.exists()) callback({ id: snap.id, ...snap.data() } as Club);
     });
 };
 
-// Club Requests
-export const requestJoinClub = async (clubId: string, userId: string) => {
-    const reqRef = doc(collection(db, `clubs/${clubId}/joinRequests`));
-    await setDoc(reqRef, { 
-        id: reqRef.id, clubId, userId, status: 'pending', createdAt: Date.now(), updatedAt: Date.now() 
-    });
-};
 export const subscribeToClubRequests = (clubId: string, callback: (reqs: ClubJoinRequest[]) => void) => {
-    const q = query(collection(db, `clubs/${clubId}/joinRequests`), where('status', '==', 'pending'));
+    const q = query(collection(db, 'clubs', clubId, 'joinRequests'), where('status', '==', 'pending'));
     return onSnapshot(q, (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as ClubJoinRequest)));
     });
 };
+
 export const subscribeToMyClubJoinRequest = (clubId: string, userId: string, callback: (hasPending: boolean) => void) => {
-    const q = query(
-        collection(db, `clubs/${clubId}/joinRequests`), 
-        where('userId', '==', userId),
-        where('status', '==', 'pending')
-    );
+    const q = query(collection(db, 'clubs', clubId, 'joinRequests'), where('userId', '==', userId), where('status', '==', 'pending'));
     return onSnapshot(q, (snap) => {
         callback(!snap.empty);
     });
 };
+
+export const requestJoinClub = async (clubId: string, userId: string) => {
+    const q = query(collection(db, 'clubs', clubId, 'joinRequests'), where('userId', '==', userId), where('status', '==', 'pending'));
+    const snap = await getDocs(q);
+    if (!snap.empty) return; 
+
+    const reqRef = doc(collection(db, 'clubs', clubId, 'joinRequests'));
+    const joinReq: ClubJoinRequest = {
+        id: reqRef.id,
+        clubId,
+        userId,
+        status: 'pending',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    };
+    await setDoc(reqRef, joinReq);
+};
+
 export const approveClubJoinRequest = async (clubId: string, requestId: string, userId: string) => {
-    const batch = writeBatch(db);
-    batch.update(doc(db, `clubs/${clubId}/joinRequests`, requestId), { status: 'approved', updatedAt: Date.now() });
-    batch.update(doc(db, 'clubs', clubId), { members: (await getDoc(doc(db, 'clubs', clubId))).data()?.members.concat(userId) || [userId] });
-    await batch.commit();
+    const clubRef = doc(db, 'clubs', clubId);
+    const reqRef = doc(db, 'clubs', clubId, 'joinRequests', requestId);
+
+    await runTransaction(db, async tx => {
+        const clubSnap = await tx.get(clubRef);
+        if (!clubSnap.exists()) throw new Error('Club not found');
+        const club = clubSnap.data() as Club;
+        const members = new Set(club.members ?? []);
+        members.add(userId);
+        tx.update(clubRef, { members: Array.from(members), updatedAt: Date.now() });
+        tx.update(reqRef, { status: 'approved', updatedAt: Date.now() });
+    });
 };
+
 export const declineClubJoinRequest = async (clubId: string, requestId: string) => {
-    await updateDoc(doc(db, `clubs/${clubId}/joinRequests`, requestId), { status: 'declined', updatedAt: Date.now() });
+    const reqRef = doc(db, 'clubs', clubId, 'joinRequests', requestId);
+    await updateDoc(reqRef, { status: 'declined', updatedAt: Date.now() });
 };
-export const bulkImportClubMembers = async (data: any) => {
-    const fn = httpsCallable(functions, 'bulkImportClubMembers');
-    const result = await fn(data);
-    return (result.data as any).results;
+
+export const bulkImportClubMembers = async (params: any): Promise<any[]> => {
+    const func = httpsCallable(functions, 'bulkImportClubMembers');
+    const result = await func(params);
+    return result.data as any[];
+};
+
+// --- COURTS ---
+
+export const subscribeToCourts = (tournamentId: string, callback: (courts: Court[]) => void) => {
+    return onSnapshot(query(collection(db, 'tournaments', tournamentId, 'courts')), (snap) => {
+        const courts = snap.docs.map(d => ({ id: d.id, ...d.data() } as Court));
+        callback(courts.sort((a,b) => a.order - b.order));
+    });
+};
+
+export const addCourt = async (tournamentId: string, name: string, order: number) => {
+    const ref = doc(collection(db, 'tournaments', tournamentId, 'courts'));
+    await setDoc(ref, { id: ref.id, tournamentId, name, order, active: true });
+};
+
+export const updateCourt = async (tournamentId: string, courtId: string, data: Partial<Court>) => {
+    await updateDoc(doc(db, 'tournaments', tournamentId, 'courts', courtId), data);
+};
+
+export const deleteCourt = async (tournamentId: string, courtId: string) => {
+    await deleteDoc(doc(db, 'tournaments', tournamentId, 'courts', courtId));
 };
 
 
-// --- Tournaments ---
-export const saveTournament = async (tournament: Tournament, divisions?: Division[]) => {
-    const tRef = doc(db, 'tournaments', tournament.id);
-    const batch = writeBatch(db);
-    
-    batch.set(tRef, { ...tournament, updatedAt: Date.now() }, { merge: true });
-    
-    if (divisions) {
-        divisions.forEach(div => {
-            const dRef = doc(db, `tournaments/${tournament.id}/divisions`, div.id);
-            batch.set(dRef, div, { merge: true });
-        });
+// --- SCHEDULING LOGIC ---
+
+// Helper: Seed Teams (Rating or Random)
+const getSeededTeams = (teams: Team[], method: SeedingMethod = 'random', playersCache: Record<string, UserProfile>): Team[] => {
+    if (method === 'manual') {
+        return [...teams];
     }
     
-    await batch.commit();
+    if (method === 'random') {
+         return [...teams].sort(() => Math.random() - 0.5);
+    }
+    
+    // Rating Based
+    if (method === 'rating') {
+        const getRating = (t: Team) => {
+            if (t.players.length === 1) {
+                // Singles
+                const p = playersCache[t.players[0]];
+                return p?.duprSinglesRating ?? p?.ratingSingles ?? 0;
+            } else {
+                // Doubles Average
+                const p1 = playersCache[t.players[0]];
+                const p2 = playersCache[t.players[1]];
+                const r1 = p1?.duprDoublesRating ?? p1?.ratingDoubles ?? 0;
+                const r2 = p2?.duprDoublesRating ?? p2?.ratingDoubles ?? 0;
+                return (r1 + r2) / 2;
+            }
+        };
+
+        const rated = teams.map(t => ({ t, rating: getRating(t) }));
+        const hasAnyRating = rated.some(r => r.rating > 0);
+
+        if (!hasAnyRating) {
+            // no ratings at all, random fallback
+            return [...teams].sort(() => Math.random() - 0.5);
+        }
+
+        return rated.sort((a, b) => b.rating - a.rating).map(r => r.t);
+    }
+    
+    // Fallback
+    return [...teams].sort(() => Math.random() - 0.5);
 };
 
-export const updateDivision = async (tournamentId: string, divisionId: string, updates: Partial<Division>) => {
-    const dRef = doc(db, `tournaments/${tournamentId}/divisions`, divisionId);
-    await updateDoc(dRef, { ...updates, updatedAt: Date.now() });
+// 1. POOLS GENERATION (Snake Seeding)
+export const generatePoolsSchedule = async (tournamentId: string, division: Division, teams: Team[], playersCache: Record<string, UserProfile>) => {
+    const poolsCount = division.format.numberOfPools ?? 1;
+    if (poolsCount < 1) throw new Error("Invalid pool configuration");
+    
+    // 1. Seed Teams
+    const seededTeams = getSeededTeams(teams, division.format.seedingMethod, playersCache);
+    
+    // 2. Snake Distribute
+    const pools: Team[][] = Array.from({ length: poolsCount }, () => []);
+    
+    seededTeams.forEach((team, i) => {
+        const isZig = Math.floor(i / poolsCount) % 2 === 0;
+        const poolIndex = isZig ? (i % poolsCount) : (poolsCount - 1 - (i % poolsCount));
+        pools[poolIndex].push(team);
+    });
+
+    const matches: Match[] = [];
+    
+    // 3. Create Round Robins per Pool
+    pools.forEach((poolTeams, poolIdx) => {
+        const poolName = poolsCount === 1 ? 'Pool A' : `Pool ${String.fromCharCode(65 + poolIdx)}`; // Pool A, B...
+        
+        for (let i = 0; i < poolTeams.length; i++) {
+            for (let j = i + 1; j < poolTeams.length; j++) {
+                matches.push({
+                    id: crypto.randomUUID ? crypto.randomUUID() : `m_${Date.now()}_${Math.random()}`,
+                    tournamentId,
+                    divisionId: division.id,
+                    roundNumber: 1, // Simplified for pools
+                    stage: poolName,
+                    teamAId: poolTeams[i].id,
+                    teamBId: poolTeams[j].id,
+                    scoreTeamAGames: [],
+                    scoreTeamBGames: [],
+                    winnerTeamId: null,
+                    court: null,
+                    startTime: null,
+                    endTime: null,
+                    status: 'pending',
+                    lastUpdatedBy: 'system',
+                    lastUpdatedAt: Date.now()
+                });
+            }
+        }
+    });
+
+    await batchCreateMatches(tournamentId, matches);
+    await updateDoc(doc(db, 'tournaments', tournamentId), { status: 'scheduled' });
+};
+
+// 2. BRACKET GENERATION (Single Stage or Finals)
+export const generateBracketSchedule = async (
+    tournamentId: string, 
+    division: Division, 
+    teams: Team[], 
+    stageName: string = "Main Bracket",
+    playersCache: Record<string, UserProfile>
+) => {
+    // Seed
+    const seeded = getSeededTeams(teams, division.format.seedingMethod, playersCache);
+    const n = seeded.length;
+    
+    // Next power of 2
+    let size = 2;
+    while (size < n) size *= 2;
+    
+    // Matches
+    const matches: Match[] = [];
+    
+    // Standard Bracket Pairing (1 vs Size, 2 vs Size-1...)
+    const getBracketOrder = (num: number): number[] => {
+        if (num === 2) return [1, 2];
+        const prev = getBracketOrder(num / 2);
+        const next: number[] = [];
+        for (let i = 0; i < prev.length; i++) {
+            next.push(prev[i]);
+            next.push(num + 1 - prev[i]);
+        }
+        return next;
+    };
+    
+    const seedOrder = getBracketOrder(size);
+    // seedOrder contains 1-based ranks. Map to 0-based index.
+    
+    const firstRoundMatches = size / 2;
+    
+    for (let i = 0; i < firstRoundMatches; i++) {
+        const rankA = seedOrder[i * 2];     // 1
+        const rankB = seedOrder[i * 2 + 1]; // 8
+        
+        const teamA = seeded[rankA - 1]; // Top seed
+        const teamB = seeded[rankB - 1]; // Bottom seed (might be undefined -> BYE)
+        
+        if (teamA && teamB) {
+            matches.push({
+                id: crypto.randomUUID ? crypto.randomUUID() : `m_${Date.now()}_${Math.random()}`,
+                tournamentId,
+                divisionId: division.id,
+                roundNumber: 1,
+                stage: stageName,
+                teamAId: teamA.id,
+                teamBId: teamB.id,
+                scoreTeamAGames: [],
+                scoreTeamBGames: [],
+                winnerTeamId: null,
+                court: null,
+                startTime: null,
+                endTime: null,
+                status: 'pending',
+                lastUpdatedBy: 'system',
+                lastUpdatedAt: Date.now()
+            });
+        }
+    }
+    
+    // If bronze match enabled AND using medal_rounds (or for single stage brackets)
+    if (division.format.hasBronzeMatch) {
+        // Create a placeholder Bronze Match
+        matches.push({
+            id: `bronze_${Date.now()}`,
+            tournamentId,
+            divisionId: division.id,
+            roundNumber: 99, // Special
+            stage: 'Bronze Match',
+            teamAId: 'tbd_loser_semi_1',
+            teamBId: 'tbd_loser_semi_2',
+            scoreTeamAGames: [],
+            scoreTeamBGames: [],
+            winnerTeamId: null,
+            court: null,
+            startTime: null,
+            endTime: null,
+            status: 'pending',
+            lastUpdatedBy: 'system',
+            lastUpdatedAt: Date.now()
+        });
+    }
+
+    await batchCreateMatches(tournamentId, matches);
+    await updateDoc(doc(db, 'tournaments', tournamentId), { status: 'scheduled' });
+};
+
+
+// 3. GENERATE FINALS FROM POOLS
+export const generateFinalsFromPools = async (
+    tournamentId: string, 
+    division: Division, 
+    standings: StandingsEntry[],
+    teams: Team[],
+    playersCache: Record<string, UserProfile>
+) => {
+    // 1. Group Standings by Pool. 
+    // We need to fetch matches to confirm H2H and pool assignment.
+    const matchesSnap = await getDocs(query(collection(db, 'tournaments', tournamentId, 'matches'), where('divisionId', '==', division.id)));
+    const matches = matchesSnap.docs.map(d => d.data() as Match).filter(m => m.stage?.startsWith('Pool'));
+    
+    const teamPoolMap: Record<string, string> = {};
+    matches.forEach(m => {
+        if (m.stage) {
+            teamPoolMap[m.teamAId] = m.stage;
+            teamPoolMap[m.teamBId] = m.stage;
+        }
+    });
+
+    // Group standings by Pool
+    const poolStandings: Record<string, StandingsEntry[]> = {};
+    standings.forEach(s => {
+        const pool = teamPoolMap[s.teamId];
+        if (pool) {
+            if (!poolStandings[pool]) poolStandings[pool] = [];
+            poolStandings[pool].push(s);
+        }
+    });
+
+    // Helper: Sort using configured tie breakers
+    const sortPool = (entries: StandingsEntry[], poolMatches: Match[]) => {
+        return entries.sort((a, b) => {
+            const breakers = [
+                division.format.tieBreakerPrimary,
+                division.format.tieBreakerSecondary,
+                division.format.tieBreakerTertiary
+            ].filter(Boolean) as TieBreaker[];
+
+            // Default if none set
+            if (breakers.length === 0) breakers.push('match_wins', 'point_diff', 'head_to_head');
+
+            for (const criteria of breakers) {
+                 if (criteria === 'match_wins') {
+                     if (b.wins !== a.wins) return b.wins - a.wins;
+                 } else if (criteria === 'point_diff') {
+                     if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
+                 } else if (criteria === 'head_to_head') {
+                     // Find match between A and B
+                     const match = poolMatches.find(m => 
+                        (m.teamAId === a.teamId && m.teamBId === b.teamId) || 
+                        (m.teamAId === b.teamId && m.teamBId === a.teamId)
+                     );
+                     
+                     if (match && match.winnerTeamId) {
+                         if (match.winnerTeamId === a.teamId) return -1; // A wins, A comes first
+                         if (match.winnerTeamId === b.teamId) return 1;  // B wins, B comes first
+                     }
+                 }
+            }
+            return 0; 
+        });
+    };
+
+    // Sort each pool
+    Object.keys(poolStandings).forEach(pool => {
+        // Filter matches for just this pool for optimization? 
+        // passing all matches is fine for finding the specific H2H match
+        poolStandings[pool] = sortPool(poolStandings[pool], matches);
+    });
+
+    const mainAdvancers: Team[] = [];
+    const plateAdvancers: Team[] = [];
+
+    const advMainCount = division.format.advanceToMainPerPool || 1;
+    const advPlateCount = division.format.advanceToPlatePerPool || 0;
+
+    Object.keys(poolStandings).sort().forEach(pool => {
+        const ranked = poolStandings[pool];
+        
+        // Main
+        for (let i = 0; i < advMainCount; i++) {
+            if (ranked[i]) {
+                const team = teams.find(t => t.id === ranked[i].teamId);
+                if (team) mainAdvancers.push(team);
+            }
+        }
+        
+        // Plate
+        if (division.format.plateEnabled) {
+            for (let i = advMainCount; i < advMainCount + advPlateCount; i++) {
+                 if (ranked[i]) {
+                    const team = teams.find(t => t.id === ranked[i].teamId);
+                    if (team) plateAdvancers.push(team);
+                }
+            }
+        }
+    });
+
+    // Generate Main Bracket
+    // We treat advancers as "seeded" by their pool performance if we want cross-over
+    // For simple seeded bracket generation, we just pass the list.
+    await generateBracketSchedule(tournamentId, division, mainAdvancers, "Main Bracket", playersCache);
+
+    // Generate Plate Bracket
+    if (division.format.plateEnabled && plateAdvancers.length > 1) {
+         await generateBracketSchedule(tournamentId, division, plateAdvancers, "Plate Bracket", playersCache);
+    }
+};
+
+// --- General ---
+
+export const saveTournament = async (tournament: Tournament, divisions?: Division[]) => {
+    const { ...tData } = tournament; 
+    
+    // Fetch Club Details
+    if (tData.clubId) {
+        try {
+            const clubSnap = await getDoc(doc(db, 'clubs', tData.clubId));
+            if (clubSnap.exists()) {
+                const club = clubSnap.data() as Club;
+                tData.clubName = club.name;
+                tData.clubLogoUrl = club.logoUrl || undefined;
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    const tRef = doc(db, 'tournaments', tournament.id);
+    const cleanData = JSON.parse(JSON.stringify(tData));
+    delete cleanData.events;
+    delete cleanData.participants;
+    delete cleanData.matches;
+    
+    await setDoc(tRef, cleanData, { merge: true });
+
+    if (divisions && divisions.length > 0) {
+        const batch = writeBatch(db);
+        divisions.forEach(div => {
+            const divRef = doc(db, 'tournaments', tournament.id, 'divisions', div.id);
+            batch.set(divRef, { ...div, tournamentId: tournament.id });
+        });
+        await batch.commit();
+    }
+};
+
+export const subscribeToTournaments = (userId: string, callback: (tournaments: Tournament[]) => void) => {
+    let owned: Tournament[] = [];
+    let publicComps: Tournament[] = [];
+    const emit = () => {
+        const allMap = new Map<string, Tournament>();
+        publicComps.forEach(c => allMap.set(c.id, c));
+        owned.forEach(c => allMap.set(c.id, c));
+        callback(Array.from(allMap.values()));
+    };
+    const unsubOwned = onSnapshot(query(collection(db, 'tournaments'), where('createdByUserId', '==', userId)), (snap) => {
+        owned = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tournament));
+        emit();
+    });
+    const unsubPublic = onSnapshot(query(collection(db, 'tournaments'), where('visibility', '==', 'public')), (snap) => {
+        publicComps = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tournament));
+        emit();
+    });
+    return () => { unsubOwned(); unsubPublic(); };
+};
+
+export const getAllTournaments = async (limitCount = 50): Promise<Tournament[]> => {
+    const snapshot = await getDocs(query(collection(db, 'tournaments'), limit(limitCount)));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Tournament));
 };
 
 export const getTournament = async (id: string): Promise<Tournament | null> => {
@@ -293,469 +787,663 @@ export const getTournament = async (id: string): Promise<Tournament | null> => {
     return snap.exists() ? { id: snap.id, ...snap.data() } as Tournament : null;
 };
 
-export const getAllTournaments = async (limitCount = 50): Promise<Tournament[]> => {
-    const q = query(collection(db, 'tournaments'), limit(limitCount)); // Simplified
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Tournament));
-};
-
-export const subscribeToTournaments = (userId: string, callback: (tournaments: Tournament[]) => void) => {
-    const q = query(collection(db, 'tournaments'));
-    return onSnapshot(q, (snap) => {
-        const tours = snap.docs.map(d => ({ id: d.id, ...d.data() } as Tournament));
-        callback(tours);
-    });
-};
-
-// --- Divisions ---
 export const subscribeToDivisions = (tournamentId: string, callback: (divisions: Division[]) => void) => {
-    const q = query(collection(db, `tournaments/${tournamentId}/divisions`));
-    return onSnapshot(q, (snap) => {
+    return onSnapshot(collection(db, 'tournaments', tournamentId, 'divisions'), (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Division)));
     });
 };
 
-export const getDivisions = async (tournamentId: string): Promise<Division[]> => {
-    const q = query(collection(db, `tournaments/${tournamentId}/divisions`));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Division));
-};
-
-
-// --- Teams ---
-export const createTeam = async (tournamentId: string, team: Team) => {
-    const ref = doc(db, 'teams', team.id);
-    await setDoc(ref, team);
-};
-
-export const deleteTeam = async (tournamentId: string, teamId: string) => {
-    await deleteDoc(doc(db, 'teams', teamId));
+export const updateDivision = async (
+    tournamentId: string,
+    divisionId: string,
+    data: Partial<Division>
+) => {
+    const divRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
+    await setDoc(
+        divRef,
+        { 
+            ...data,
+            updatedAt: Date.now(),
+        },
+        { merge: true }
+    );
 };
 
 export const subscribeToTeams = (tournamentId: string, callback: (teams: Team[]) => void) => {
-    const q = query(collection(db, 'teams'), where('tournamentId', '==', tournamentId));
-    return onSnapshot(q, (snap) => {
+    return onSnapshot(collection(db, 'tournaments', tournamentId, 'teams'), (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Team)));
     });
 };
 
-export const getTeamsForDivision = async (tournamentId: string, divisionId: string): Promise<Team[]> => {
-    const q = query(collection(db, 'teams'), where('tournamentId', '==', tournamentId), where('divisionId', '==', divisionId));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
-};
-
-export const getOpenTeamsForDivision = async (tournamentId: string, divisionId: string): Promise<Team[]> => {
-    const q = query(
-        collection(db, 'teams'), 
-        where('tournamentId', '==', tournamentId), 
-        where('divisionId', '==', divisionId),
-        where('isLookingForPartner', '==', true),
-        where('status', '==', 'pending_partner')
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
-};
-
-export const getUserTeamsForTournament = async (tournamentId: string, userId: string): Promise<Team[]> => {
-    const q = query(
-        collection(db, 'teams'),
-        where('tournamentId', '==', tournamentId),
-        where('players', 'array-contains', userId)
-    );
-    const snap = await getDocs(q);
-    // Return all teams the user is part of, regardless of status, so we can manage withdrawals correctly
-    return snap.docs.map(d => d.data() as Team);
-};
-
-// --- Registrations ---
-export const getRegistration = async (tournamentId: string, userId: string): Promise<TournamentRegistration | null> => {
-    const ref = doc(db, 'registrations', `${userId}_${tournamentId}`);
-    const snap = await getDoc(ref);
-    return snap.exists() ? { id: snap.id, ...snap.data() } as TournamentRegistration : null;
-};
-
-export const getAllRegistrations = async (): Promise<TournamentRegistration[]> => {
-    const snap = await getDocs(collection(db, 'registrations'));
-    return snap.docs.map(d => d.data() as TournamentRegistration);
-};
-
-export const saveRegistration = async (reg: TournamentRegistration) => {
-    const ref = doc(db, 'registrations', reg.id);
-    await setDoc(ref, reg, { merge: true });
-};
-
-// --- Invite Helper ---
-export const getPendingInvitesForDivision = async (tournamentId: string, divisionId: string): Promise<PartnerInvite[]> => {
-    const q = query(
-        collection(db, 'partnerInvites'),
-        where('tournamentId', '==', tournamentId),
-        where('divisionId', '==', divisionId),
-        where('status', '==', 'pending')
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as PartnerInvite);
-};
-
-// IMPORTANT: Transactional Finalization
-export const finalizeRegistration = async (
-    regData: TournamentRegistration,
-    tournament: Tournament,
-    userProfile: UserProfile
-) => {
-    // 1. PRE-FETCHING (Outside Transaction)
-    const divs = await getDivisions(tournament.id); 
-    const divMap = new Map(divs.map(d => [d.id, d]));
-
-    // Fetch existing teams (active, pending, or withdrawn)
-    const existingTeams = await getUserTeamsForTournament(tournament.id, userProfile.id);
-    
-    // Fetch invites to cancel if withdrawing
-    const myInvitesQ = query(
-        collection(db, 'partnerInvites'), 
-        where('inviterId', '==', userProfile.id),
-        where('tournamentId', '==', tournament.id),
-        where('status', '==', 'pending')
-    );
-    const myInvitesSnap = await getDocs(myInvitesQ);
-    const invitesToCancelIds = myInvitesSnap.docs
-        .filter(d => !regData.selectedEventIds.includes(d.data().divisionId)) // Invites for divisions we are leaving
-        .map(d => d.id);
-
-    // 2. TRANSACTION
-    await runTransaction(db, async (t) => {
-        // --- READ PHASE ---
-        const regRef = doc(db, 'registrations', regData.id);
-        const regSnap = await t.get(regRef); 
-
-        const teamRefsToRead = new Set<string>();
-
-        // A. Identify teams to read for joining (Open Team requests)
-        regData.selectedEventIds.forEach(divId => {
-             const details = regData.partnerDetails?.[divId];
-             if (details?.mode === 'join_open' && details.openTeamId) {
-                 teamRefsToRead.add(details.openTeamId);
-             }
-        });
-
-        // B. Identify teams to read for withdrawal or modification
-        existingTeams.forEach(team => {
-            // If not in selected list, we are withdrawing.
-            // If in selected list, we might be keeping it (so we don't strictly need to write, but reading ensures existence)
-            if (!regData.selectedEventIds.includes(team.divisionId)) {
-                teamRefsToRead.add(team.id);
-            }
-        });
-
-        // Execute Batch Reads
-        const uniqueTeamIds = Array.from(teamRefsToRead);
-        const teamDocsMap = new Map<string, DocumentSnapshot>();
-        
-        if (uniqueTeamIds.length > 0) {
-            const teamDocsRefs = uniqueTeamIds.map(id => doc(db, 'teams', id));
-            const teamDocsSnaps = await Promise.all(teamDocsRefs.map(ref => t.get(ref)));
-            teamDocsSnaps.forEach(d => { 
-                if(d.exists()) teamDocsMap.set(d.id, d); 
-            });
-        }
-
-        // --- WRITE PHASE ---
-        // CRITICAL: No reads (t.get) allowed after this point!
-        
-        // 1. Process Withdrawals
-        for (const team of existingTeams) {
-            // If we are no longer selected for this division, withdraw.
-            if (!regData.selectedEventIds.includes(team.divisionId)) {
-                // If already withdrawn, skip
-                if (team.status === 'withdrawn') continue;
-
-                const teamSnap = teamDocsMap.get(team.id);
-                // Must ensure document exists
-                if (!teamSnap || !teamSnap.exists()) continue; 
-                
-                const teamData = teamSnap.data() as Team;
-                // Remove user from players list
-                const newPlayers = teamData.players.filter(uid => uid !== userProfile.id);
-                
-                if (newPlayers.length === 0) {
-                    // Empty team -> Withdrawn
-                    t.update(teamSnap.ref, { 
-                        status: 'withdrawn', 
-                        players: [], 
-                        updatedAt: Date.now() 
-                    });
-                } else {
-                    // Downgrade to pending partner if it was active
-                    // The remaining player is now "Looking for Partner"
-                    t.update(teamSnap.ref, { 
-                        players: newPlayers,
-                        captainPlayerId: newPlayers[0],
-                        status: 'pending_partner',
-                        isLookingForPartner: true, 
-                        // We reset name so it regenerates properly in UI (e.g. "Player (looking)")
-                        // Or we could keep it if custom name? Safer to reset for consistency.
-                        teamName: null, 
-                        updatedAt: Date.now()
-                    });
-                }
-            }
-        }
-
-        // 2. Cancellations of Invites (Blind Updates)
-        for (const invId of invitesToCancelIds) {
-            t.update(doc(db, 'partnerInvites', invId), { status: 'cancelled' });
-        }
-
-        // 3. New Registrations / Updates
-        for (const divId of regData.selectedEventIds) {
-             const div = divMap.get(divId);
-             if (!div) continue;
-             
-             // Check if we already have an active/pending team for this division
-             const existingTeam = existingTeams.find(t => 
-                t.divisionId === divId && t.status !== 'withdrawn' && t.status !== 'cancelled'
-             );
-             
-             // If we already have a team, we assume no changes needed (status quo)
-             // Unless we want to support switching partners? 
-             // For this MVP, if you are in, you are in. You must withdraw first to switch.
-             if (existingTeam) continue; 
-
-             if (div.type === 'singles') {
-                 // Create Singles Team
-                 const newTeamRef = doc(collection(db, 'teams'));
-                 t.set(newTeamRef, {
-                     id: newTeamRef.id,
-                     tournamentId: tournament.id,
-                     divisionId: divId,
-                     type: 'singles',
-                     captainPlayerId: userProfile.id,
-                     players: [userProfile.id],
-                     status: 'active',
-                     createdAt: Date.now(),
-                     updatedAt: Date.now()
-                 });
-             } else {
-                 // Doubles Logic
-                 const details = regData.partnerDetails?.[divId];
-                 
-                 if (details?.mode === 'join_open' && details.openTeamId) {
-                      const targetSnap = teamDocsMap.get(details.openTeamId);
-                      if (targetSnap && targetSnap.exists()) {
-                          const targetData = targetSnap.data() as Team;
-                          const players = targetData.players || [];
-                          // Validate not full and not already in
-                          if (!players.includes(userProfile.id) && players.length < 2) {
-                              t.update(targetSnap.ref, {
-                                  players: [...players, userProfile.id],
-                                  status: 'active',
-                                  isLookingForPartner: false,
-                                  updatedAt: Date.now()
-                              });
-                          }
-                      }
-                 } else if (details?.mode === 'invite' && details.partnerUserId) {
-                     // Create Team + Invite
-                     const newTeamRef = doc(collection(db, 'teams'));
-                     const inviteRef = doc(collection(db, 'partnerInvites'));
-                     
-                     t.set(newTeamRef, {
-                         id: newTeamRef.id,
-                         tournamentId: tournament.id,
-                         divisionId: divId,
-                         type: 'doubles',
-                         captainPlayerId: userProfile.id,
-                         players: [userProfile.id],
-                         status: 'pending_partner',
-                         createdAt: Date.now(),
-                         updatedAt: Date.now()
-                     });
-                     
-                     t.set(inviteRef, {
-                         id: inviteRef.id,
-                         tournamentId: tournament.id,
-                         divisionId: divId,
-                         teamId: newTeamRef.id,
-                         inviterId: userProfile.id,
-                         invitedUserId: details.partnerUserId,
-                         status: 'pending',
-                         createdAt: Date.now()
-                     });
-                 } else {
-                     // Open Team (Default if no partner selected)
-                     const newTeamRef = doc(collection(db, 'teams'));
-                     t.set(newTeamRef, {
-                         id: newTeamRef.id,
-                         tournamentId: tournament.id,
-                         divisionId: divId,
-                         type: 'doubles',
-                         captainPlayerId: userProfile.id,
-                         players: [userProfile.id],
-                         status: 'pending_partner',
-                         isLookingForPartner: true,
-                         createdAt: Date.now(),
-                         updatedAt: Date.now()
-                     });
-                 }
-             }
-        }
-
-        // 4. Save Registration Doc
-        // Determine status based on active selections
-        const newStatus = regData.selectedEventIds.length === 0 ? 'withdrawn' : 'completed';
-        t.set(regRef, { ...regData, status: newStatus, updatedAt: Date.now() }, { merge: true });
-    });
-};
-
-export const ensureRegistrationForUser = async (tournamentId: string, userId: string, divisionId?: string) => {
-    const regRef = doc(db, 'registrations', `${userId}_${tournamentId}`);
-    const snap = await getDoc(regRef);
-    
-    if (!snap.exists()) {
-        await setDoc(regRef, {
-            id: `${userId}_${tournamentId}`,
-            tournamentId,
-            playerId: userId,
-            status: 'completed',
-            waiverAccepted: true, // Implied by accept? Or prompt? For now, assume yes for invites.
-            selectedEventIds: divisionId ? [divisionId] : [],
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-        });
-    } else {
-        const data = snap.data() as TournamentRegistration;
-        if (divisionId && !data.selectedEventIds.includes(divisionId)) {
-            await updateDoc(regRef, {
-                selectedEventIds: [...data.selectedEventIds, divisionId],
-                updatedAt: Date.now()
-            });
-        }
-    }
-};
-
-
-// --- Invites ---
-export const subscribeToUserPartnerInvites = (userId: string, callback: (invites: PartnerInvite[]) => void) => {
-    const q = query(
-        collection(db, 'partnerInvites'), 
-        where('invitedUserId', '==', userId), 
-        where('status', '==', 'pending')
-    );
-    return onSnapshot(q, (snap) => {
-        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as PartnerInvite)));
-    });
-};
-
-export const respondToPartnerInvite = async (invite: PartnerInvite, response: 'accepted' | 'declined') => {
-    const batch = writeBatch(db);
-    
-    // 1. Update Invite
-    const inviteRef = doc(db, 'partnerInvites', invite.id);
-    // Note: We prepare a batch but don't commit it if we use transaction for 'accepted'.
-    // If 'declined', we use batch.
-
-    if (response === 'accepted') {
-        const teamRef = doc(db, 'teams', invite.teamId);
-        
-        await runTransaction(db, async (t) => {
-             const tInvite = await t.get(inviteRef);
-             if (!tInvite.exists() || tInvite.data().status !== 'pending') {
-                 throw new Error("Invite no longer valid");
-             }
-             const tTeam = await t.get(teamRef);
-             if (!tTeam.exists()) throw new Error("Team not found");
-             
-             const teamData = tTeam.data() as Team;
-             
-             // Update Invite
-             t.update(inviteRef, { status: response, respondedAt: Date.now() });
-             
-             // Update Team
-             const newPlayers = [...teamData.players, invite.invitedUserId];
-             t.update(teamRef, { 
-                 players: newPlayers,
-                 status: 'active',
-                 isLookingForPartner: false,
-                 updatedAt: Date.now()
-             });
-        });
-        
-        return invite;
-    } else {
-        batch.update(inviteRef, { status: response, respondedAt: Date.now() });
-        await batch.commit();
-        return null;
-    }
-};
-
-// --- Matches ---
 export const subscribeToMatches = (tournamentId: string, callback: (matches: Match[]) => void) => {
-    const q = query(collection(db, 'matches'), where('tournamentId', '==', tournamentId));
-    return onSnapshot(q, (snap) => {
+    return onSnapshot(collection(db, 'tournaments', tournamentId, 'matches'), (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Match)));
     });
 };
 
+export const createTeam = async (tournamentId: string, team: Team) => {
+    await setDoc(doc(db, 'tournaments', tournamentId, 'teams', team.id), team);
+};
+
+export const deleteTeam = async (tournamentId: string, teamId: string) => {
+    await setDoc(doc(db, 'tournaments', tournamentId, 'teams', teamId), { status: 'withdrawn' }, { merge: true });
+};
+
+export const createMatch = async (tournamentId: string, match: Match) => {
+    await setDoc(doc(db, 'tournaments', tournamentId, 'matches', match.id), match);
+};
+
 export const updateMatchScore = async (tournamentId: string, matchId: string, updates: Partial<Match>) => {
-    const ref = doc(db, 'matches', matchId);
-    await updateDoc(ref, { ...updates, lastUpdatedAt: Date.now() });
+    await setDoc(doc(db, 'tournaments', tournamentId, 'matches', matchId), { ...updates, lastUpdatedAt: Date.now() }, { merge: true });
 };
 
 export const batchCreateMatches = async (tournamentId: string, matches: Match[]) => {
     const batch = writeBatch(db);
     matches.forEach(m => {
-        const ref = doc(db, 'matches', m.id);
+        const ref = doc(db, 'tournaments', tournamentId, 'matches', m.id);
         batch.set(ref, m);
     });
     await batch.commit();
 };
 
-
-// --- Courts ---
-export const subscribeToCourts = (tournamentId: string, callback: (courts: Court[]) => void) => {
-    const q = query(collection(db, `tournaments/${tournamentId}/courts`), orderBy('order'));
-    return onSnapshot(q, (snap) => {
-        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Court)));
-    });
+export const getRegistration = async (
+  tournamentId: string,
+  playerId: string
+): Promise<TournamentRegistration | null> => {
+  if (!tournamentId || !playerId) return null;
+  const docRef = doc(db, 'tournament_registrations', `${playerId}_${tournamentId}`);
+  const snap = await getDoc(docRef);
+  return snap.exists()
+    ? ({ id: snap.id, ...(snap.data() as any) } as TournamentRegistration)
+    : null;
 };
 
-export const addCourt = async (tournamentId: string, name: string, order: number) => {
-    const ref = doc(collection(db, `tournaments/${tournamentId}/courts`));
-    await setDoc(ref, { id: ref.id, tournamentId, name, order, active: true });
+export const saveRegistration = async (reg: TournamentRegistration) => {
+  // ALWAYS merge – do NOT early-return if the doc exists
+  await setDoc(
+    doc(db, 'tournament_registrations', reg.id),
+    JSON.parse(JSON.stringify(reg)),
+    { merge: true }
+  );
 };
 
-export const updateCourt = async (tournamentId: string, courtId: string, updates: Partial<Court>) => {
-    await updateDoc(doc(db, `tournaments/${tournamentId}/courts`, courtId), updates);
+export const getAllRegistrations = async (limitCount = 100): Promise<TournamentRegistration[]> => {
+    const snapshot = await getDocs(query(collection(db, 'tournament_registrations'), limit(limitCount)));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TournamentRegistration));
 };
 
-export const deleteCourt = async (tournamentId: string, courtId: string) => {
-    await deleteDoc(doc(db, `tournaments/${tournamentId}/courts`, courtId));
+export const getOpenTeamsForDivision = async (
+  tournamentId: string,
+  divisionId: string
+): Promise<Team[]> => {
+  const q = query(
+    collection(db, 'tournaments', tournamentId, 'teams'),
+    where('divisionId', '==', divisionId),
+    where('status', '==', 'pending_partner'),
+    where('isLookingForPartner', '==', true) // Only list teams explicitly looking for a partner
+  );
+  const snap = await getDocs(q);
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() } as Team))
+    .filter(t => (t.players?.length || 0) === 1); // exactly one player in open team
+};
+
+export const getTeamsForDivision = async (tournamentId: string, divisionId: string): Promise<Team[]> => {
+    const q = query(
+        collection(db, 'tournaments', tournamentId, 'teams'),
+        where('divisionId', '==', divisionId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
+};
+
+export const getPendingInvitesForDivision = async (
+  tournamentId: string,
+  divisionId: string
+): Promise<PartnerInvite[]> => {
+  const q = query(
+    collection(db, 'partnerInvites'),
+    where('tournamentId', '==', tournamentId),
+    where('divisionId', '==', divisionId),
+    where('status', '==', 'pending')
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ id: d.id, ...d.data() } as PartnerInvite));
+};
+
+export const finalizeRegistration = async (
+  reg: TournamentRegistration,
+  tournament: Tournament,
+  userProfile: UserProfile
+) => {
+  const regRef = doc(db, 'tournament_registrations', reg.id);
+  // Need to get divisions to know type
+  const divisionsSnap = await getDocs(
+    collection(db, 'tournaments', tournament.id, 'divisions')
+  );
+
+  const divisions: Division[] = divisionsSnap.docs.map(
+    d => ({ id: d.id, ...d.data() } as Division)
+  );
+
+  // PRE-CHECK: See what teams the user is already in.
+  // We only treat *non-solo* teams as blocking. A solo pending_partner team
+  // (the user by themselves, looking for a partner) should NOT prevent them
+  // from joining someone else's open team.
+  const existingTeams = await getUserTeamsForTournament(
+    tournament.id,
+    userProfile.id
+  );
+
+  const blockingTeamDivisions = new Set<string>();
+  existingTeams.forEach(t => {
+    const isWithdrawn = t.status === 'withdrawn' || t.status === 'cancelled';
+
+    const isSoloPending =
+      t.status === 'pending_partner' &&
+      Array.isArray(t.players) &&
+      t.players.length === 1 &&
+      t.players[0] === userProfile.id;
+
+    if (!isWithdrawn && !isSoloPending) {
+      blockingTeamDivisions.add(t.divisionId);
+    }
+  });
+
+
+  const now = Date.now();
+  
+  // Sanitize the registration object to prevent 'undefined' errors in Firestore transactions
+  const regDataForDb = JSON.parse(JSON.stringify({
+      ...reg,
+      status: 'completed',
+      updatedAt: now,
+  }));
+
+  await runTransaction(db, async tx => {
+    // --- READ PHASE ---
+    const teamsToJoin: Record<string, Team> = {};
+    
+    // Identify required reads for "join_open" logic
+    for (const divId of reg.selectedEventIds) {
+        const div = divisions.find(d => d.id === divId);
+        if (div && div.type === 'doubles') {
+            const partnerInfo = reg.partnerDetails?.[divId];
+            if (partnerInfo?.mode === 'join_open' && partnerInfo.openTeamId) {
+                const teamRef = doc(db, 'tournaments', tournament.id, 'teams', partnerInfo.openTeamId);
+                const teamSnap = await tx.get(teamRef);
+                if (!teamSnap.exists()) {
+                     throw new Error('Selected team is no longer available.');
+                }
+                teamsToJoin[partnerInfo.openTeamId] = { id: teamSnap.id, ...teamSnap.data() } as Team;
+            }
+        }
+    }
+
+    // --- WRITE PHASE ---
+
+    // 1) Mark registration as completed
+    tx.set(
+      regRef,
+      regDataForDb,
+      { merge: true }
+    );
+
+    // 2) For each selected division, create/join a team according to partnerDetails
+    for (const divId of reg.selectedEventIds) {
+      const div = divisions.find(d => d.id === divId);
+      if (!div) continue;
+
+      // If user is ALREADY in a blocking team for this division (e.g. full team),
+      // skip creation/join logic. Solo pending teams are not blocking.
+      if (blockingTeamDivisions.has(divId)) {
+        continue;
+      }
+
+
+      const isDoubles = div.type === 'doubles';
+      const partnerInfo = reg.partnerDetails?.[divId];
+
+      // --- DOUBLES, JOIN EXISTING OPEN TEAM ---
+      if (isDoubles && partnerInfo?.mode === 'join_open' && partnerInfo.openTeamId) {
+        // Use the data read previously
+        const team = teamsToJoin[partnerInfo.openTeamId];
+        if (!team) throw new Error('Selected team not found (read phase failed).');
+
+        const teamRef = doc(
+          db,
+          'tournaments',
+          tournament.id,
+          'teams',
+          partnerInfo.openTeamId
+        );
+
+        // Validations
+        if (
+          team.status !== 'pending_partner' ||
+          !team.players ||
+          team.players.length !== 1
+        ) {
+          throw new Error('Team already has a partner or is not open.');
+        }
+
+        if (team.players.includes(userProfile.id)) {
+          throw new Error('You are already on this team.');
+        }
+
+        const newPlayers = [...team.players, userProfile.id];
+        
+        // UPDATE TEAM NAME
+        const newMemberName = userProfile.displayName || 'Player';
+        const currentName = team.teamName || 'Team';
+        const newTeamName = `${currentName} & ${newMemberName}`;
+
+        tx.update(teamRef, {
+          players: newPlayers,
+          status: 'active',
+          teamName: newTeamName,
+          isLookingForPartner: false, // No longer looking
+          updatedAt: now,
+        });
+
+        // ALSO: withdraw any solo pending_partner teams this user already had
+        // in this division (their old "I don't have a partner yet" team).
+        const soloTeamsToWithdraw = existingTeams.filter(t =>
+          t.divisionId === divId &&
+          t.id !== partnerInfo.openTeamId &&
+          t.status === 'pending_partner' &&
+          (t.players?.length || 0) === 1 &&
+          t.players?.[0] === userProfile.id
+        );
+
+        for (const solo of soloTeamsToWithdraw) {
+          const soloRef = doc(
+            db,
+            'tournaments',
+            tournament.id,
+            'teams',
+            solo.id
+          );
+          tx.update(soloRef, {
+            status: 'withdrawn',
+            isLookingForPartner: false,
+            updatedAt: now,
+          });
+        }
+
+        // no new team created for this division in this case
+        continue;
+      }
+
+      
+
+      // --- SINGLES OR DOUBLES WITH NEW TEAM CREATION ---
+      const teamRef = doc(
+        collection(db, 'tournaments', tournament.id, 'teams')
+      );
+      
+      let baseTeamName = userProfile.displayName || userProfile.email || 'Player';
+      
+      // IMMEDIATE TEAM NAME: If creating a team with an invite, set the name to "Me & You" immediately.
+      if (isDoubles && partnerInfo?.mode === 'invite' && partnerInfo.partnerName) {
+          baseTeamName = `${baseTeamName} & ${partnerInfo.partnerName}`;
+      }
+
+      const teamBase: Omit<Team, 'players'> = {
+        id: teamRef.id,
+        tournamentId: tournament.id,
+        divisionId: divId,
+        type: div.type,
+        teamName: baseTeamName,
+        captainPlayerId: userProfile.id,
+        status: isDoubles ? 'pending_partner' : 'active',
+        // Set isLookingForPartner explicitly:
+        // 'open_team' => true
+        // 'invite' => false (because waiting for specific person)
+        // 'join_open' => false (but this branch is for creation, so likely irrelevant or error state, but default false)
+        isLookingForPartner: isDoubles && partnerInfo?.mode === 'open_team',
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const team: Team = {
+        ...teamBase,
+        players: [userProfile.id],
+      };
+
+      tx.set(teamRef, team);
+
+      // --- DOUBLES, INVITE OR OPEN_TEAM ---
+      if (isDoubles && partnerInfo) {
+        // mode: 'open_team'  -> just leave team as pending_partner, no invite
+        // mode: 'invite'     -> create partner invite
+        if (
+          partnerInfo.mode === 'invite' &&
+          partnerInfo.partnerUserId &&
+          partnerInfo.partnerUserId !== 'tbd'
+        ) {
+          const inviteRef = doc(
+            collection(
+              db,
+              'partnerInvites'
+            )
+          );
+          const invite: PartnerInvite = {
+            id: inviteRef.id,
+            tournamentId: tournament.id,
+            divisionId: divId,
+            teamId: team.id,
+            inviterId: userProfile.id,
+            invitedUserId: partnerInfo.partnerUserId,
+            status: 'pending',
+            inviteToken: null,
+            createdAt: now,
+            respondedAt: null,
+            expiresAt: null,
+          };
+          tx.set(inviteRef, invite);
+        }
+
+        // mode === 'open_team' -> nothing else to do
+      }
+      // singles: already handled
+    }
+  });
+};
+
+export const subscribeToUserPartnerInvites = (
+  userId: string,
+  callback: (invites: PartnerInvite[]) => void
+) => {
+  if (!userId) {
+    callback([]);
+    return () => {};
+  }
+
+  // NOTE: We query root collection to avoid needing complex indexes.
+  // We filter status client-side.
+  const q = query(
+    collection(db, 'partnerInvites'),
+    where('invitedUserId', '==', userId)
+  );
+
+  return onSnapshot(
+    q,
+    (snap) => {
+      const invites: PartnerInvite[] = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as PartnerInvite) }))
+        .filter(invite => invite.status === 'pending');
+      
+      callback(invites);
+    },
+    (err) => {
+      console.error('Error subscribing to partner invites', err);
+      callback([]);
+    }
+  );
+};
+
+export const getUserTeamsForTournament = async (
+  tournamentId: string,
+  userId: string
+): Promise<Team[]> => {
+  if (!tournamentId || !userId) return [];
+
+  const qTeams = query(
+    collection(db, 'tournaments', tournamentId, 'teams'),
+    where('players', 'array-contains', userId)
+  );
+  const snap = await getDocs(qTeams);
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() } as Team))
+    .filter(t => t.status === 'active' || t.status === 'pending_partner');
+};
+
+export const respondToPartnerInvite = async (
+  invite: PartnerInvite,
+  response: 'accepted' | 'declined'
+): Promise<{ tournamentId: string; divisionId: string } | null> => {
+
+  // We may need this in the accepted branch to clean up other teams.
+  let existingTeams: Team[] = [];
+
+  if (response === 'accepted') {
+    // Fetch all teams this invited player is already in for this tournament
+    existingTeams = await getUserTeamsForTournament(
+      invite.tournamentId,
+      invite.invitedUserId
+    );
+
+    // Block only if they are in another ACTIVE/pending team
+    // that is NOT just a solo "pending_partner" team for themselves.
+    const blockingTeams = existingTeams.filter(t =>
+      t.divisionId === invite.divisionId &&
+      t.status !== 'withdrawn' &&
+      t.status !== 'cancelled' &&
+      !(
+        t.status === 'pending_partner' &&
+        (t.players?.length || 0) === 1 &&
+        t.players?.[0] === invite.invitedUserId
+      )
+    );
+
+    if (blockingTeams.length > 0) {
+      throw new Error(
+        'You are already registered in a team for this division.'
+      );
+    }
+  }
+
+  const batch = writeBatch(db);
+
+  // 1) Update invite doc
+  const inviteRef = doc(db, 'partnerInvites', invite.id);
+  batch.update(inviteRef, {
+    status: response,
+    respondedAt: Date.now(),
+  });
+
+  // 2) Update team doc depending on response
+  const teamRef = doc(
+    db,
+    'tournaments',
+    invite.tournamentId,
+    'teams',
+    invite.teamId
+  );
+
+  if (response === 'accepted') {
+    // ACCEPTED: add invited user to this team and activate it
+    const teamSnap = await getDoc(teamRef);
+    if (teamSnap.exists()) {
+      const team = teamSnap.data() as Team;
+
+      // Ensure team is still open for a partner
+      if (team.status !== 'pending_partner') {
+        throw new Error('This team is not accepting partners anymore.');
+      }
+
+      const currentPlayers = team.players || [];
+
+      // Safety check: prevent adding a 3rd player
+      if (currentPlayers.length >= 2) {
+        throw new Error('This team is already full.');
+      }
+
+      // Extra safety: don't add the same player twice
+      if (currentPlayers.includes(invite.invitedUserId)) {
+        throw new Error('You are already on this team.');
+      }
+
+      const players = [...currentPlayers, invite.invitedUserId];
+
+      // Fetch profiles to ensure the team name is correct
+      const inviterProfile = await getUserProfile(invite.inviterId);
+      const invitedProfile = await getUserProfile(invite.invitedUserId);
+
+      let teamName = team.teamName || '';
+
+      // If name is empty OR just equals inviter, update it to "Inviter & Invited"
+      if (inviterProfile && invitedProfile) {
+        const inviterName = inviterProfile.displayName || 'Player 1';
+        const invitedName = invitedProfile.displayName || 'Player 2';
+
+        if (!teamName || teamName === inviterName) {
+          teamName = `${inviterName} & ${invitedName}`;
+        }
+      }
+
+      batch.update(teamRef, {
+        status: 'active',
+        players,
+        teamName,
+        isLookingForPartner: false, // explicitly not looking once team is full
+        updatedAt: Date.now(),
+      });
+
+            // Withdraw any other solo pending_partner teams for this player
+      // in the same division (e.g. their previous solo team).
+      const soloTeamsToWithdraw = existingTeams.filter(t =>
+        t.divisionId === invite.divisionId &&
+        t.id !== invite.teamId &&
+        t.status === 'pending_partner' &&
+        (t.players?.length || 0) === 1 &&
+        t.players?.[0] === invite.invitedUserId
+      );
+
+      for (const solo of soloTeamsToWithdraw) {
+        const soloRef = doc(
+          db,
+          'tournaments',
+          invite.tournamentId,
+          'teams',
+          solo.id
+        );
+        batch.update(soloRef, {
+          status: 'withdrawn',
+          isLookingForPartner: false,
+          updatedAt: Date.now(),
+        });
+      }
+
+      // 🔹 NEW: cancel any *other* pending invites this captain sent
+      // in the SAME tournament + division, and withdraw those extra teams.
+      const otherInvitesSnap = await getDocs(
+        query(
+          collection(db, 'partnerInvites'),
+          where('tournamentId', '==', invite.tournamentId),
+          where('divisionId', '==', invite.divisionId),
+          where('inviterId', '==', invite.inviterId),
+          where('status', '==', 'pending')
+        )
+      );
+
+      otherInvitesSnap.forEach(docSnap => {
+        // Skip the invite we just accepted
+        if (docSnap.id === invite.id) return;
+
+        const otherInvite = docSnap.data() as PartnerInvite;
+
+        // Mark the extra invite as cancelled
+        const otherInviteRef = doc(db, 'partnerInvites', docSnap.id);
+        batch.update(otherInviteRef, {
+          status: 'cancelled',
+          respondedAt: Date.now(),
+        });
+
+        // Withdraw the team that was created for that extra invite
+        const otherTeamRef = doc(
+          db,
+          'tournaments',
+          otherInvite.tournamentId,
+          'teams',
+          otherInvite.teamId
+        );
+        batch.update(otherTeamRef, {
+          status: 'withdrawn',
+          isLookingForPartner: false,
+          updatedAt: Date.now(),
+        });
+      });
+    }
+  } else {
+    // DECLINED: keep captain only, reset name, do NOT auto-open as "looking for partner"
+
+    const teamSnap = await getDoc(teamRef);
+    if (teamSnap.exists()) {
+      const team = teamSnap.data() as Team;
+
+      const currentPlayers = team.players || [];
+      const players = currentPlayers.filter(
+        p => p !== invite.invitedUserId
+      );
+
+      // Fetch captain profile to reset name
+      const captainProfile = await getUserProfile(team.captainPlayerId);
+      const newName = captainProfile
+        ? captainProfile.displayName || 'Player'
+        : 'Player';
+
+      batch.update(teamRef, {
+        status: 'pending_partner',
+        players,
+        teamName: newName,
+        // Keep this team invite-only after a decline.
+        isLookingForPartner: false,
+        updatedAt: Date.now(),
+      });
+    }
+  }
+
+  // 3) Commit all updates
+  await batch.commit();
+
+  // 4) For accepted invites, tell caller where to navigate
+  if (response === 'accepted') {
+    return {
+      tournamentId: invite.tournamentId,
+      divisionId: invite.divisionId,
+    };
+  }
+
+  return null;
 };
 
 
-// --- Scheduler Proxies ---
-export const generatePoolsSchedule = async (tournamentId: string, division: Division, teams: Team[], playersCache: any) => {
-     // Usually this would call a Cloud Function for heavy lifting
-     // For this demo, we assume the logic is imported from a local service or similar.
-     // Since this file is 'services/firebase.ts', and we are separating logic...
-     // We will dynamic import or just assume the caller handles logic and calls batchCreateMatches.
-     // To keep this clean, we export the logic from a scheduler service and use it in the UI component.
-     // BUT the UI component calls `generatePoolsSchedule` from here.
-     // Let's import the local scheduler service.
-     
-     const { generatePools } = await import('./scheduler');
-     const matches = generatePools(tournamentId, division, teams);
-     await batchCreateMatches(tournamentId, matches);
-};
 
-export const generateBracketSchedule = async (tournamentId: string, division: Division, teams: Team[], stageName: string, playersCache: any) => {
-    const { generateBracket } = await import('./scheduler');
-    const matches = generateBracket(tournamentId, division, teams, stageName);
-    await batchCreateMatches(tournamentId, matches);
-};
+export const ensureRegistrationForUser = async (
+  tournamentId: string,
+  playerId: string,
+  divisionId: string
+): Promise<TournamentRegistration> => {
+  const id = `${playerId}_${tournamentId}`;
+  const regRef = doc(db, 'tournament_registrations', id);
+  const snap = await getDoc(regRef);
 
-export const generateFinalsFromPools = async (tournamentId: string, division: Division, standings: StandingsEntry[], teams: Team[], playersCache: any) => {
-    const { generateFinals } = await import('./scheduler');
-    const matches = generateFinals(tournamentId, division, standings, teams);
-    await batchCreateMatches(tournamentId, matches);
+  if (snap.exists()) {
+    const existing = snap.data() as TournamentRegistration;
+    // Make sure the division is included
+    const selectedEventIds = Array.from(new Set([...(existing.selectedEventIds || []), divisionId]));
+    const updated: TournamentRegistration = {
+      ...existing,
+      selectedEventIds,
+      updatedAt: Date.now()
+    };
+    await setDoc(regRef, updated, { merge: true });
+    return updated;
+  }
+
+  const reg: TournamentRegistration = {
+    id,
+    tournamentId,
+    playerId,
+    status: 'in_progress',
+    waiverAccepted: false,
+    selectedEventIds: [divisionId],
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+
+  await setDoc(regRef, reg);
+  return reg;
 };
