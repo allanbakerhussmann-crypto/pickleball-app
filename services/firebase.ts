@@ -76,7 +76,7 @@ try {
 }
 
 const authInstance: Auth = getFirebaseAuth(app);
-const db: Firestore = getFirestore(app);
+export const db: Firestore = getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
 

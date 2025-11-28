@@ -9,7 +9,8 @@ import {
   signInWithEmailAndPassword,
   signOut,
   updateProfile,
-  updateEmail
+  updateEmail,
+  sendPasswordResetEmail
 } from '@firebase/auth';
 import { getAuth, createUserProfile, getUserProfile, updateUserProfileDoc } from '../services/firebase';
 import type { UserProfile, UserRole } from '../types';
@@ -21,6 +22,7 @@ interface AuthContextType {
   signup: (email: string, pass: string, role: UserRole, name: string) => Promise<User | null>;
   login: (email: string, pass: string) => Promise<User | null>;
   logout: () => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   resendVerificationEmail: () => Promise<void>;
   reloadUser: () => Promise<void>;
   updateUserProfile: (displayName: string) => Promise<void>;
@@ -162,6 +164,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const auth = getAuth();
     return signOut(auth);
   }, []);
+    const resetPassword = useCallback(async (email: string) => {
+    const auth = getAuth();
+    // Optionally use the same action code settings as verification;
+    // this helps with handling on mobile.
+    const actionCodeSettings = getActionCodeSettings();
+    await sendPasswordResetEmail(auth, email, actionCodeSettings);
+  }, []);
+
 
   const resendVerificationEmail = useCallback(async () => {
     const auth = getAuth();
@@ -235,6 +245,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     signup,
     login,
     logout,
+    resetPassword,
     resendVerificationEmail,
     reloadUser,
     updateUserProfile,

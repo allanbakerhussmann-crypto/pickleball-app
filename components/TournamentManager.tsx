@@ -2,6 +2,38 @@
 
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
+const validateScoreForDivision = (
+  score1: number,
+  score2: number,
+  division: Division
+): string | null => {
+  if (Number.isNaN(score1) || Number.isNaN(score2)) {
+    return 'Please enter both scores.';
+  }
+  if (score1 === score2) {
+    return 'Scores cannot be tied.';
+  }
+
+  const rules = division.format;
+  const target = rules.pointsPerGame;
+  const winBy = rules.winBy;
+
+  const winnerPoints = Math.max(score1, score2);
+  const loserPoints = Math.min(score1, score2);
+  const diff = winnerPoints - loserPoints;
+
+  // Winner must reach at least target points
+  if (winnerPoints < target) {
+    return `Winner must reach at least ${target} points.`;
+  }
+
+  // Winner must win by required margin
+  if (diff < winBy) {
+    return `Winner must win by at least ${winBy} points.`;
+  }
+
+  return null;
+};
 import { Schedule } from './Schedule';
 import { BracketViewer } from './BracketViewer';
 import { Standings } from './Standings';
@@ -17,7 +49,6 @@ import {
     addCourt,
     updateCourt,
     deleteCourt,
-    updateMatchScore,
     batchCreateMatches,
     createTeam,
     deleteTeam,
@@ -29,6 +60,12 @@ import {
     getRegistration,
     updateDivision          // ✅ add this
 } from '../services/firebase';
+import {
+  submitMatchScore,
+  confirmMatchScore,
+  disputeMatchScore,
+} from '../services/matchService';
+
 import { getScheduledQueue } from '../services/courtAllocator';
 
 const generateId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36);
@@ -316,22 +353,82 @@ useEffect(() => {
          }
     };
 
-    const handleUpdateScore = async (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute') => {
+    const handleUpdateScore = async (
+        matchId: string,
+        score1: number,
+        score2: number,
+        action: 'submit' | 'confirm' | 'dispute',
+        reason?: string
+        ) => {
         const match = matches.find(m => m.id === matchId);
         if (!match) return;
 
-        if (action === 'submit' || action === 'confirm') {
-            const winner = score1 > score2 ? match.teamAId : (score2 > score1 ? match.teamBId : null);
-            await updateMatchScore(tournament.id, matchId, {
-                scoreTeamAGames: [score1],
-                scoreTeamBGames: [score2],
-                winnerTeamId: winner || null,
-                status: 'completed',
-                endTime: Date.now(),
-                court: null // Free up court
-            });
+        if (!currentUser) {
+            alert('You must be logged in to report scores.');
+            return;
         }
-    };
+
+        // Only players in the match or organisers can enter scores
+        const teamA = teams.find(t => t.id === match.teamAId);
+        const teamB = teams.find(t => t.id === match.teamBId);
+
+        const isOnTeamA = teamA?.players?.includes(currentUser.uid);
+        const isOnTeamB = teamB?.players?.includes(currentUser.uid);
+
+        const isPlayerInMatch = isOnTeamA || isOnTeamB;
+
+        if (!isPlayerInMatch && !isOrganizer) {
+            alert('Only players in this match (or organisers) can enter scores.');
+            return;
+        }
+
+        // Get division rules for validation
+        const division = divisions.find(d => d.id === match.divisionId);
+        if (!division) {
+            alert('Could not find division for this match.');
+            return;
+        }
+
+        try {
+            if (action === 'submit') {
+            // Validate against division rules
+            const error = validateScoreForDivision(score1, score2, division);
+            if (error) {
+                alert(error);
+                return;
+            }
+
+            // Submit score and set match to pending_confirmation
+            await submitMatchScore(
+                tournament.id,
+                match,
+                currentUser.uid,
+                score1,
+                score2
+            );
+            } else if (action === 'confirm') {
+            await confirmMatchScore(
+                tournament.id,
+                match,
+                currentUser.uid
+            );
+            } else if (action === 'dispute') {
+            await disputeMatchScore(
+                tournament.id,
+                match,
+                currentUser.uid,
+                reason
+            );
+            }
+        } catch (err) {
+            console.error('Failed to update score', err);
+            alert(
+            'There was a problem saving the score. Please try again or ask the organiser to help.'
+            );
+        }
+        };
+
+
 
     const handleUpdateDivisionSettings = async (updates: Partial<Division>) => {
         if (!activeDivision) return;

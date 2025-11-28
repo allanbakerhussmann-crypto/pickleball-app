@@ -1,8 +1,19 @@
 
-export type TournamentFormat = 'single_elim' | 'double_elim' | 'round_robin' | 'leaderboard' | 'round_robin_knockout';
+export type TournamentFormat =
+  | 'single_elim'
+  | 'double_elim'
+  | 'round_robin'
+  | 'leaderboard'
+  | 'round_robin_knockout'
+  | 'swiss';
+
 export type TournamentStatus = 'draft' | 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
 export type RegistrationMode = 'signup_page' | 'organiser_provided';
 export type Visibility = 'public' | 'private';
+// How matches are allocated to courts:
+// - 'live' = TD uses live court control / queue
+// - 'pre_scheduled' = all matches have times/courts fixed before play starts
+export type SchedulingMode = 'live' | 'pre_scheduled';
 
 export type SeedingMethod = 'random' | 'rating' | 'manual';
 export type TieBreaker = 'match_wins' | 'point_diff' | 'head_to_head';
@@ -129,10 +140,17 @@ export interface Court {
 
 // --- Division Format Types ---
 export type StageMode = 'single_stage' | 'two_stage';
-export type MainFormat = 'round_robin' | 'single_elim' | 'double_elim' | 'ladder';
+export type MainFormat =
+  | 'round_robin'
+  | 'single_elim'
+  | 'double_elim'
+  | 'ladder'
+  | 'leaderboard'
+  | 'swiss';
 export type Stage1Format = 'round_robin_pools';
 export type Stage2Format = 'single_elim' | 'double_elim' | 'medal_rounds';
 export type PlateFormat = 'single_elim' | 'round_robin';
+
 
 export interface DivisionFormat {
   stageMode: StageMode;
@@ -169,6 +187,124 @@ export interface DivisionFormat {
   tieBreakerSecondary?: TieBreaker;
   tieBreakerTertiary?: TieBreaker;
 }
+// --- Stage types (for RR, Bracket, Swiss, Leaderboard, etc.) ---
+
+export type StageType =
+  | 'round_robin'
+  | 'bracket_single_elim'
+  | 'bracket_double_elim'
+  | 'swiss'
+  | 'leaderboard';
+
+/**
+ * Settings for each stage type. This is intentionally separate
+ * from DivisionFormat so we can evolve formats later without
+ * breaking existing divisions.
+ */
+export type StageSettings =
+  | RoundRobinSettings
+  | BracketSettings
+  | SwissSettings
+  | LeaderboardSettings;
+
+export interface RoundRobinSettings {
+  kind: 'round_robin';
+
+  // For future use if you split into groups
+  groups?: number | null;
+
+  // Best-of-X matches within RR (often 1)
+  matchesPerPair?: number | null;
+}
+
+export interface BracketSettings {
+  kind: 'bracket_single_elim' | 'bracket_double_elim';
+
+  seedingMethod: SeedingMethod; // 'rating' | 'random' | 'manual'
+  thirdPlacePlayoff?: boolean;
+}
+
+export interface SwissSettings {
+  kind: 'swiss';
+
+  rounds: number;
+
+  points: {
+    win: number;    // e.g. 1
+    loss: number;   // e.g. 0
+    draw?: number;  // if supported later
+  };
+
+  // Which tie-breakers to apply, in order
+  tieBreakers: string[]; // e.g. ['buchholz', 'point_diff', 'head_to_head']
+}
+
+export interface LeaderboardSettings {
+  kind: 'leaderboard';
+
+  points: {
+    win: number;
+    loss: number;
+    draw?: number;
+  };
+
+  // Optional season window for league / ladder
+  seasonStart?: number; // timestamp ms
+  seasonEnd?: number;   // timestamp ms
+
+  // Optional cap per day to stop spamming
+  maxMatchesPerDay?: number | null;
+}
+
+/**
+ * A Stage is a block of play inside a Division, e.g.
+ * - Pool Play (RR)
+ * - Main Draw (Bracket)
+ * - Swiss Rounds
+ * - A Season Leaderboard
+ */
+export interface Stage {
+  id: string;
+  divisionId: string;
+
+  name: string;         // e.g. "Pool Play", "Main Draw", "Swiss Rounds"
+  type: StageType;
+  order: number;        // 1, 2, 3, ... within the division
+
+  // Which stage decides final rankings for the division
+  isPrimaryRankingStage?: boolean;
+
+  // Matches belonging to this stage
+  matchIds: string[];
+
+  settings: StageSettings;
+}
+
+/**
+ * Standings within a single stage (RR, Swiss, Leaderboard, etc.)
+ * This lets you have clean, separate tables per stage.
+ */
+export interface StageStandingsEntry {
+  id: string;
+  stageId: string;
+  entryId: string; // singles or team entry
+
+  wins: number;
+  losses: number;
+  draws: number;
+
+  points: number;       // based on stage rules (Swiss/leaderboard)
+  gamesWon?: number;
+  gamesLost?: number;
+  pointsFor?: number;
+  pointsAgainst?: number;
+
+  // Useful for Swiss tie-breaks
+  buchholz?: number;
+
+  rank?: number;        // computed after sorting
+}
+
 
 export interface Division {
   id: string;
@@ -238,6 +374,10 @@ export interface Match {
   id: string;
   tournamentId: string;
   divisionId: string;
+
+    // Optional: user currently controlling live scoring for this match
+  scorekeeperUserId?: string | null;
+
   
   teamAId: string;
   teamBId: string;
@@ -249,7 +389,7 @@ export interface Match {
   startTime: number | null;  // timestamp ms
   endTime: number | null;
   
-  status: 'pending' | 'in_progress' | 'completed' | 'disputed';
+    status: 'pending' | 'in_progress' | 'pending_confirmation' | 'completed' | 'disputed';
   
   scoreTeamAGames: number[]; // e.g. [11, 8, 11]
   scoreTeamBGames: number[]; // e.g. [7, 11, 9]
@@ -279,7 +419,7 @@ export interface MatchScoreSubmission {
   };
   
   status: 'pending_opponent' | 'confirmed' | 'rejected';
-  opponentUserId: string;
+  opponentUserId?: string | null;
   respondedAt?: number | null;
   reasonRejected?: string | null;
   
@@ -323,4 +463,31 @@ export interface Tournament {
   clubId: string;
   clubName: string;
   clubLogoUrl?: string | null;
+
+  // Scheduling / behaviour options for this tournament.
+  // These are optional so existing data still works.
+  settings?: TournamentSettings;
 }
+
+/**
+ * Extra configuration for how the tournament runs.
+ * This is where we control:
+ * - live vs pre-scheduled courts
+ * - default match duration
+ * - other global behaviour later
+ */
+export interface TournamentSettings {
+  // 'live' (default in the UI) or 'pre_scheduled'
+  schedulingMode: SchedulingMode;
+
+  // Used by both modes, but especially for pre-scheduled
+  totalCourts?: number;
+
+  // Useful for building pre-scheduled timetables
+  defaultMatchDurationMinutes?: number;
+
+  // In future we can add:
+  // allowPlayersToEnterScores?: boolean;
+  // requireScoreConfirmation?: boolean;
+}
+

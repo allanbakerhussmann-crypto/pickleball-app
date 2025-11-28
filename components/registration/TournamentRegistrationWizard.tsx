@@ -3,7 +3,13 @@
 
 import React, { useState, useEffect } from 'react';
 import type { Tournament, TournamentRegistration, UserProfile, Division, Team } from '../../types';
-import { getRegistration, saveRegistration, finalizeRegistration, subscribeToDivisions, getUserTeamsForTournament } from '../../services/firebase';
+import {
+    getRegistration,
+    saveRegistration,
+    finalizeRegistration,
+    subscribeToDivisions,
+    getUserTeamsForTournament,
+} from '../../services/firebase';
 import { DoublesPartnerStep } from './DoublesPartnerStep';
 
 interface WizardProps {
@@ -51,22 +57,32 @@ const checkEligibility = (div: Division, user: UserProfile): { eligible: boolean
         if (div.maxAge && age > div.maxAge) return { eligible: false, reason: `Too old (Age ${age} > ${div.maxAge})` };
     }
 
-    // 3. Rating Validation
-    // Determine which rating to check based on event type
-    const userRating = div.type === 'doubles' ? user.duprDoublesRating : user.duprSinglesRating;
-    
-    if (div.minRating || div.maxRating) {
-        // If rating requirements exist, user MUST have a rating (unless we allow NR, but strict is safer for "Directors")
-        if (userRating === undefined || userRating === null) {
-            return { eligible: false, reason: 'Profile missing DUPR Rating' };
-        }
-        if (div.minRating && userRating < div.minRating) return { eligible: false, reason: `Rating too low (${userRating.toFixed(2)} < ${div.minRating})` };
-        if (div.maxRating && userRating > div.maxRating) return { eligible: false, reason: `Rating too high (${userRating.toFixed(2)} > ${div.maxRating})` };
-    }
+        // 3. Rating Validation
+        // Determine which rating to check based on event type
+        const userRating =
+            div.type === 'doubles' ? user.duprDoublesRating : user.duprSinglesRating;
 
-    return { eligible: true };
-};
+        if (div.minRating || div.maxRating) {
+            // If rating requirements exist, user MUST have a rating (strict for Directors)
+            if (userRating === undefined || userRating === null) {
+                return { eligible: false, reason: 'Profile missing DUPR Rating' };
+            }
+            if (div.minRating && userRating < div.minRating) {
+                return {
+                    eligible: false,
+                    reason: `Rating too low (${userRating.toFixed(2)} < ${div.minRating})`,
+                };
+            }
+                    if (div.maxRating && userRating > div.maxRating) {
+                        return {
+                            eligible: false,
+                            reason: `Rating too high (${userRating.toFixed(2)} > ${div.maxRating})`,
+                        };
+                    }
+                }
 
+                return { eligible: true };
+            };
 export const TournamentRegistrationWizard: React.FC<WizardProps> = ({ 
     tournament, 
     userProfile, 
@@ -85,6 +101,14 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
     const [error, setError] = useState<string | null>(null);
 
     const isWaiverOnly = mode === 'waiver_only' && !!initialDivisionId;
+    // Do any of the selected events require a partner (doubles)?
+    const hasDoublesSelection =
+    !!regData &&
+    regData.selectedEventIds.some(eventId => {
+        const div = divisions.find(d => d.id === eventId);
+        return div?.type === 'doubles';
+    });
+
 
     useEffect(() => {
         // Load divisions
@@ -137,51 +161,80 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
     const handleFinalize = async () => {
         setError(null);
         if (!regData) return;
-        
-        // Validate Partners for Doubles Events (only if NOT waiver_only)
-        if (!isWaiverOnly) {
-            const missingPartners: string[] = [];
-            regData.selectedEventIds.forEach(divId => {
-                const div = divisions.find(d => d.id === divId);
-                if (div?.type === 'doubles') {
-                    const details = partnerDetails?.[divId];
-                    if (!details) {
-                        missingPartners.push(div.name);
-                        return;
-                    }
-                    if (details.mode === 'invite' && !details.partnerUserId) {
-                         missingPartners.push(div.name);
-                    }
-                    if (details.mode === 'join_open' && !details.openTeamId) {
-                         missingPartners.push(div.name);
-                    }
-                    // 'open_team' is valid by itself
-                }
-            });
 
-            if (missingPartners.length > 0) {
-                setError(`You must select a partner option for: ${missingPartners.join(', ')}`);
+        // 1) Validate partner choices for ALL selected doubles events
+        //    (skip only in the special waiver_only flow)
+        if (!isWaiverOnly) {
+            const missing: string[] = [];
+
+            for (const divId of regData.selectedEventIds) {
+                const div = divisions.find(d => d.id === divId);
+                if (!div || div.type !== 'doubles') continue;
+
+                const details = partnerDetails?.[divId];
+
+                // No partner option chosen at all
+                if (!details) {
+                    missing.push(div.name);
+                    continue;
+                }
+
+                switch (details.mode) {
+                    case 'invite': {
+                        // Must have a concrete user id (not empty / not "tbd")
+                        if (!details.partnerUserId || details.partnerUserId === 'tbd') {
+                            missing.push(div.name);
+                        }
+                        break;
+                    }
+
+                    case 'join_open': {
+                        // Must have selected an open team to join
+                        if (!details.openTeamId) {
+                            missing.push(div.name);
+                        }
+                        break;
+                    }
+
+                    case 'open_team':
+                    default:
+                        // "I don't have a partner yet" is valid on its own.
+                        // No extra fields required here.
+                        break;
+                }
+            }
+
+            if (missing.length > 0) {
+                setError(
+                    `You must select a valid partner option for: ${missing.join(', ')}`
+                );
                 return;
             }
         }
-        
+
+        // 2) Finalise registration in Firestore
         setLoading(true);
         try {
-            // IMPORTANT: merge latest partnerDetails into the payload
+            // Always start from the latest regData in state
+            // and then splice in the current partnerDetails.
             const payload: TournamentRegistration = {
                 ...(regData as TournamentRegistration),
-                partnerDetails: isWaiverOnly ? (regData.partnerDetails || {}) : partnerDetails,
+                partnerDetails: isWaiverOnly
+                    ? (regData.partnerDetails || {}) // waiver_only: keep whatever is already on the doc
+                    : (partnerDetails || {}),        // normal flow: use live wizard state
             };
-            
+
             await finalizeRegistration(payload, tournament, userProfile);
             setLoading(false);
             onComplete();
         } catch (e: any) {
             console.error(e);
-            setError(e.message || "An error occurred during registration.");
+            setError(e?.message || 'An error occurred during registration.');
             setLoading(false);
         }
     };
+
+
 
     if (loading && !regData) return <div className="p-10 text-white text-center">Loading...</div>;
     if (!regData) return null;
@@ -300,30 +353,39 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                         <p>* Eligibility is based on your Profile.</p>
                                     </div>
                                     <button
-                                        onClick={() => (isWaiverOnly ? setStep(3) : setStep(2))}
-                                        disabled={regData.selectedEventIds.length === 0}
-                                        className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-8 py-2 rounded font-bold transition-colors"
+                                    onClick={() => {
+                                        if (isWaiverOnly || !hasDoublesSelection) {
+                                        // Waiver-only OR only singles: skip partner step, go straight to review
+                                        setStep(3);
+                                        } else {
+                                        // At least one doubles event selected: go to partner selection
+                                        setStep(2);
+                                        }
+                                    }}
+                                    disabled={regData.selectedEventIds.length === 0}
+                                    className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-8 py-2 rounded font-bold transition-colors"
                                     >
-                                        Next
+                                    Next
                                     </button>
+
                                 </div>
                             </div>
                         )}
 
                         {/* STEP 2 – Partner Selection (unchanged logic, just always reachable if not waiver_only) */}
-                        {step === 2 && !isWaiverOnly && (
+                        {step === 2 && !isWaiverOnly && hasDoublesSelection && (
                             <div className="space-y-6">
                                 <p className="text-gray-300 font-medium">
-                                    Partner Selection (For doubles events):
+                                Partner Selection (For doubles events):
                                 </p>
 
                                 <DoublesPartnerStep
-                                    tournament={tournament}
-                                    divisions={divisions}
-                                    selectedDivisionIds={regData.selectedEventIds}
-                                    userProfile={userProfile}
-                                    partnerDetails={partnerDetails}
-                                    setPartnerDetails={setPartnerDetails}
+                                tournament={tournament}
+                                divisions={divisions}
+                                selectedDivisionIds={regData.selectedEventIds}
+                                userProfile={userProfile}
+                                partnerDetails={partnerDetails}
+                                setPartnerDetails={setPartnerDetails}
                                 />
 
                                 <div className="flex gap-3 mt-6 pt-4 border-t border-gray-700 justify-end">
@@ -419,9 +481,15 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                     {primaryButtonLabel}
                                 </button>
                                 <button
-                                    onClick={() => (isWaiverOnly ? setStep(1) : setStep(2))}
+                                    onClick={() => {
+                                        if (isWaiverOnly || !hasDoublesSelection) {
+                                        setStep(1);
+                                        } else {
+                                        setStep(2);
+                                        }
+                                    }}
                                     disabled={loading}
-                                    className="w-full text-gray-500 hover:text-gray-300 text-sm mt-2"
+                                    className="w-full text-gray-500 hover:text-gray-300 px-4 py-2"
                                 >
                                     Back
                                 </button>

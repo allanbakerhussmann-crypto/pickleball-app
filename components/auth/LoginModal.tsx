@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { FirebaseError } from '@firebase/app';
 import { useAuth } from '../../contexts/AuthContext';
@@ -34,23 +33,26 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
   const [roleChoice, setRoleChoice] = useState<UserRole>('player');
   
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  const { login, signup } = useAuth();
+  const { login, signup, resetPassword } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setMessage(null);
 
+    // Extra validation for sign-up view
     if (!isLoginView) {
-        if (!name.trim()) {
-            setError('Please enter your name.');
-            return;
-        }
-        if (password !== confirmPassword) {
-            setError('Passwords do not match.');
-            return;
-        }
+      if (!name.trim()) {
+        setError('Please enter your name.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -73,12 +75,34 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
     }
   };
 
+  const handleForgotPassword = async () => {
+    setError(null);
+    setMessage(null);
+
+    if (!email) {
+      setError('Please enter your email address first.');
+      return;
+    }
+
+    try {
+      await resetPassword(email);
+      setMessage('Password reset email sent. Please check your inbox — and don’t forget to check your spam folder.');
+    } catch (err: any) {
+      if (err instanceof FirebaseError) {
+        setError(getFriendlyErrorMessage(err));
+      } else {
+        setError('Unable to send password reset email. Please try again.');
+        console.error(err);
+      }
+    }
+  };
+
   return (
     <div 
-        className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center"
-        aria-modal="true"
-        role="dialog"
-        onClick={onClose}
+      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center"
+      aria-modal="true"
+      role="dialog"
+      onClick={onClose}
     >
       <div 
         className="bg-gray-800 rounded-lg shadow-xl p-8 w-full max-w-md m-4 relative border border-gray-700"
@@ -95,18 +119,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
           {isLoginView ? 'Welcome Back' : 'Create Account'}
         </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
-            {!isLoginView && (
-                <div>
-                    <input
-                        type="text"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="Full Name"
-                        required
-                        className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
-                </div>
-            )}
+          {!isLoginView && (
+            <div>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Full Name"
+                required
+                className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+          )}
           <input
             type="email"
             value={email}
@@ -123,52 +147,75 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
             required
             className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
           />
+
+          {isLoginView && (
+            <div className="flex justify-end mt-1">
+              <button
+                type="button"
+                onClick={handleForgotPassword}
+                className="text-xs text-green-400 hover:text-green-300"
+              >
+                Forgot your password?
+              </button>
+            </div>
+          )}
+
           {!isLoginView && (
             <>
-                <input
+              <input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Confirm Password"
                 required
                 className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
-                />
-                
-                <div className="pt-2">
-                    <p className="text-sm text-gray-300 mb-2">I want to:</p>
-                    <div className="grid grid-cols-2 gap-3">
-                        <button
-                            type="button"
-                            onClick={() => setRoleChoice('player')}
-                            className={`text-sm py-2 px-3 rounded border transition-colors ${
-                                roleChoice === 'player' 
-                                ? 'bg-green-600/20 border-green-500 text-green-400 font-bold' 
-                                : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
-                            }`}
-                        >
-                            Play
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setRoleChoice('organizer')}
-                            className={`text-sm py-2 px-3 rounded border transition-colors ${
-                                roleChoice === 'organizer' 
-                                ? 'bg-green-600/20 border-green-500 text-green-400 font-bold' 
-                                : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
-                            }`}
-                        >
-                            Organize
-                        </button>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                        {roleChoice === 'player' 
-                            ? "Join tournaments and track your stats." 
-                            : "Create and manage your own tournaments."}
-                    </p>
+              />
+              
+              <div className="pt-2">
+                <p className="text-sm text-gray-300 mb-2">I want to:</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setRoleChoice('player')}
+                    className={`text-sm py-2 px-3 rounded border transition-colors ${
+                      roleChoice === 'player' 
+                        ? 'bg-green-600/20 border-green-500 text-green-400 font-bold' 
+                        : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
+                    }`}
+                  >
+                    Play
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRoleChoice('organizer')}
+                    className={`text-sm py-2 px-3 rounded border transition-colors ${
+                      roleChoice === 'organizer' 
+                        ? 'bg-green-600/20 border-green-500 text-green-400 font-bold' 
+                        : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
+                    }`}
+                  >
+                    Organize
+                  </button>
                 </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  {roleChoice === 'player' 
+                    ? 'Join tournaments and track your stats.' 
+                    : 'Create and manage your own tournaments.'}
+                </p>
+              </div>
             </>
           )}
-          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+
+          {error && (
+            <p className="text-red-400 text-sm text-center">{error}</p>
+          )}
+          {message && (
+            <div className="text-green-400 text-sm text-center mt-1 leading-snug">
+              {message}
+            </div>
+          )}
+
+
           <button
             type="submit"
             disabled={isSubmitting}
@@ -180,7 +227,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
         <p className="text-center text-sm text-gray-400 mt-6">
           {isLoginView ? "Don't have an account?" : 'Already have an account?'}
           <button
-            onClick={() => { setIsLoginView(!isLoginView); setError(null); }}
+            onClick={() => { 
+              setIsLoginView(!isLoginView); 
+              setError(null); 
+              setMessage(null);
+            }}
             className="font-semibold text-green-400 hover:text-green-300 ml-2"
           >
             {isLoginView ? 'Sign Up' : 'Login'}
