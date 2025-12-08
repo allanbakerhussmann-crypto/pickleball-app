@@ -1,17 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import type { Match } from '../types';
 
-// UI Model for displaying matches in the Schedule
+/**
+ * Basic structures for displaying a match.
+ * This must line up with what TournamentManager sends in `uiMatches`.
+ */
+
+export interface MatchTeam {
+  id: string;
+  name: string;
+  players: { name: string }[];
+}
+
 export interface MatchDisplay {
   id: string;
-  team1: { id: string; name: string; players: { name: string }[] };
-  team2: { id: string; name: string; players: { name: string }[] };
+  team1: MatchTeam;
+  team2: MatchTeam;
   score1: number | null;
   score2: number | null;
-  status: Match['status'];
-  roundNumber: number;
-  // optional court info if you want to pass it down later
+  status: string;
+  roundNumber?: number;
   court?: string | null;
+  courtName?: string | null;
+  // Optional flags added in TournamentManager
+  isWaitingOnYou?: boolean;
+  canCurrentUserConfirm?: boolean;
 }
 
 interface MatchCardProps {
@@ -25,6 +37,10 @@ interface MatchCardProps {
     reason?: string
   ) => void;
   isVerified: boolean;
+  isWaitingOnYou?: boolean;
+  canCurrentUserConfirm?: boolean;
+  /** NEW: only true if current user is actually in this match */
+  canCurrentUserEdit: boolean;
 }
 
 export const MatchCard: React.FC<MatchCardProps> = ({
@@ -32,205 +48,238 @@ export const MatchCard: React.FC<MatchCardProps> = ({
   matchNumber,
   onUpdateScore,
   isVerified,
+  isWaitingOnYou,
+  canCurrentUserConfirm,
+  canCurrentUserEdit,
 }) => {
-  const [s1, setS1] = useState<string>(match.score1?.toString() ?? '');
-  const [s2, setS2] = useState<string>(match.score2?.toString() ?? '');
+  const [score1, setScore1] = useState<number | ''>(match.score1 ?? '');
+  const [score2, setScore2] = useState<number | ''>(match.score2 ?? '');
 
-  // If the match scores in props change (e.g. after confirmation),
-  // keep the local inputs in sync
+  // If the match scores change from outside (e.g. other player / organiser),
+  // keep local inputs in sync.
   useEffect(() => {
-    setS1(match.score1 != null ? String(match.score1) : '');
-    setS2(match.score2 != null ? String(match.score2) : '');
+    setScore1(match.score1 ?? '');
+    setScore2(match.score2 ?? '');
   }, [match.score1, match.score2]);
 
-  const parsedS1 = s1 === '' ? NaN : parseInt(s1, 10);
-  const parsedS2 = s2 === '' ? NaN : parseInt(s2, 10);
+  const isCompleted = match.status === 'completed';
+  const isPendingConfirmation = match.status === 'pending_confirmation';
+  const isDisputed = match.status === 'disputed';
 
-  const canSubmit =
-    !Number.isNaN(parsedS1) &&
-    !Number.isNaN(parsedS2) &&
-    match.status !== 'completed' &&
-    match.status !== 'disputed' &&
-    match.status !== 'pending_confirmation';
-
-  const hasScore = match.score1 != null && match.score2 != null;
-
-  // Highlight winner/loser based on score
-  const team1IsWinner =
-    hasScore && (match.score1 ?? 0) > (match.score2 ?? 0);
-  const team2IsWinner =
-    hasScore && (match.score2 ?? 0) > (match.score1 ?? 0);
-
-  const statusLabel = (() => {
-    switch (match.status) {
-      case 'pending':
-        return 'Not Started';
-      case 'in_progress':
-        return 'In Progress';
-      case 'pending_confirmation':
-        return 'Awaiting Confirmation';
-      case 'completed':
-        return 'Final';
-      case 'disputed':
-        return 'Disputed';
-      default:
-        return '';
+  const handleSubmit = () => {
+    if (!isVerified) {
+      alert('Only verified organisers/players can submit scores.');
+      return;
     }
-  })();
-
-  const statusColor = (() => {
-    switch (match.status) {
-      case 'pending':
-        return 'text-gray-400';
-      case 'in_progress':
-        return 'text-blue-400';
-      case 'pending_confirmation':
-        return 'text-amber-400';
-      case 'completed':
-        return 'text-green-400';
-      case 'disputed':
-        return 'text-red-400';
-      default:
-        return 'text-gray-400';
+    if (!canCurrentUserEdit) {
+      // Extra defence in UI (server already checks this).
+      alert('Only players in this match can enter scores.');
+      return;
     }
-  })();
 
-  const handleSubmitClick = () => {
-    if (!canSubmit) return;
-    onUpdateScore(match.id, parsedS1, parsedS2, 'submit');
+    const s1 = typeof score1 === 'string' ? parseInt(score1, 10) : score1;
+    const s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
+
+    if (Number.isNaN(s1) || Number.isNaN(s2)) {
+      alert('Please enter scores for both sides.');
+      return;
+    }
+
+    onUpdateScore(match.id, s1, s2, 'submit');
   };
 
-  const handleConfirmClick = () => {
-    if (!hasScore) return;
-    onUpdateScore(
-      match.id,
-      match.score1 ?? 0,
-      match.score2 ?? 0,
-      'confirm'
-    );
+  const handleConfirm = () => {
+    if (!canCurrentUserConfirm) return;
+    const s1 = typeof score1 === 'string' ? parseInt(score1, 10) : score1;
+    const s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
+    onUpdateScore(match.id, s1 || 0, s2 || 0, 'confirm');
   };
 
-  const handleDisputeClick = () => {
-    if (!hasScore) return;
+  const handleDispute = () => {
+    if (!canCurrentUserConfirm) return;
     const reason = window.prompt(
-      'Optional: enter a reason for disputing the score',
-      ''
+      'Describe what is wrong with this score (optional):'
     );
-    onUpdateScore(
-      match.id,
-      match.score1 ?? 0,
-      match.score2 ?? 0,
-      'dispute',
-      reason || undefined
-    );
+    const s1 = typeof score1 === 'string' ? parseInt(score1, 10) : score1;
+    const s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
+    onUpdateScore(match.id, s1 || 0, s2 || 0, 'dispute', reason || undefined);
   };
+
+  const statusLabel =
+    match.status === 'not_started'
+      ? 'Not Started'
+      : match.status === 'in_progress'
+      ? 'In Progress'
+      : match.status === 'completed'
+      ? 'Completed'
+      : match.status === 'pending_confirmation'
+      ? 'Pending Confirmation'
+      : match.status === 'disputed'
+      ? 'Disputed'
+      : match.status;
+
+  const statusColor =
+    match.status === 'in_progress'
+      ? 'text-blue-400'
+      : match.status === 'completed'
+      ? 'text-green-400'
+      : match.status === 'pending_confirmation'
+      ? 'text-yellow-300'
+      : match.status === 'disputed'
+      ? 'text-red-300'
+      : 'text-gray-400';
+
+  const showEditableInputs =
+  !isCompleted && canCurrentUserEdit && isVerified && match.status === 'in_progress';
+
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 flex items-center justify-between gap-3">
-      {/* Left: match info */}
-      <div className="flex-1">
-        <div className="flex items-center justify-between mb-1">
-          <div className="text-xs text-gray-500">
+    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 flex flex-col gap-3">
+      {/* Header line: Match # / Round / Court / Status */}
+      <div className="flex justify-between items-center text-xs text-gray-400">
+        <div>
+          <span className="font-semibold text-gray-200">
             Match #{matchNumber}
-            {match.roundNumber ? ` • Round ${match.roundNumber}` : ''}
-            {match.court ? ` • Court ${match.court}` : ''}
+          </span>
+          {match.roundNumber && (
+            <span className="ml-2">
+              • Round {match.roundNumber}
+            </span>
+          )}
+          {match.courtName && (
+            <span className="ml-2">
+              • Court {match.courtName}
+            </span>
+          )}
+        </div>
+        <div className={`font-semibold ${statusColor}`}>{statusLabel}</div>
+      </div>
+
+      {/* Teams + scores */}
+      <div className="flex justify-between items-center gap-4">
+        <div className="flex-1">
+          <div className="text-sm font-semibold text-white">
+            {match.team1.name}
           </div>
-          <div className={`text-xs font-semibold ${statusColor}`}>
-            {statusLabel}
-            {isVerified && match.status === 'completed' && (
-              <span className="ml-2 text-green-500">✓ Verified</span>
+          <div className="text-xs text-gray-500">
+            {match.team1.players.map(p => p.name).join(' / ')}
+          </div>
+        </div>
+
+        {/* Score inputs (or read-only display) */}
+        <div className="flex items-center gap-2">
+          <div className="flex flex-col items-center">
+            {showEditableInputs ? (
+              <input
+                type="number"
+                value={score1}
+                onChange={e =>
+                  setScore1(e.target.value === '' ? '' : Number(e.target.value))
+                }
+                className="w-12 bg-gray-800 text-white text-center text-sm rounded border border-gray-600 focus:outline-none focus:border-green-500"
+              />
+            ) : (
+              <div className="w-8 text-center text-white text-sm">
+                {match.score1 ?? '-'}
+              </div>
+            )}
+          </div>
+
+          <div className="text-xs text-gray-400">–</div>
+
+          <div className="flex flex-col items-center">
+            {showEditableInputs ? (
+              <input
+                type="number"
+                value={score2}
+                onChange={e =>
+                  setScore2(e.target.value === '' ? '' : Number(e.target.value))
+                }
+                className="w-12 bg-gray-800 text-white text-center text-sm rounded border border-gray-600 focus:outline-none focus:border-green-500"
+              />
+            ) : (
+              <div className="w-8 text-center text-white text-sm">
+                {match.score2 ?? '-'}
+              </div>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex-1">
-            <div
-              className={`font-bold ${
-                team1IsWinner ? 'text-green-300' : 'text-white'
-              }`}
-            >
-              {match.team1.name}
-            </div>
-            <div
-              className={`font-bold ${
-                team2IsWinner ? 'text-green-300' : 'text-white'
-              }`}
-            >
-              {match.team2.name}
-            </div>
+        <div className="flex-1 text-right">
+          <div className="text-sm font-semibold text-white">
+            {match.team2.name}
           </div>
-
-          {/* Score section */}
-          <div className="flex items-center gap-2">
-            {/* If score is pending or in progress, show input fields + submit */}
-            {(match.status === 'pending' ||
-              match.status === 'in_progress') && (
-              <>
-                <input
-                  type="number"
-                  className="w-12 bg-gray-800 border border-gray-700 text-white text-sm rounded px-1 py-0.5 text-center"
-                  value={s1}
-                  onChange={(e) => setS1(e.target.value)}
-                  placeholder="-"
-                />
-                <span className="text-gray-400 text-sm">–</span>
-                <input
-                  type="number"
-                  className="w-12 bg-gray-800 border border-gray-700 text-white text-sm rounded px-1 py-0.5 text-center"
-                  value={s2}
-                  onChange={(e) => setS2(e.target.value)}
-                  placeholder="-"
-                />
-                <button
-                  onClick={handleSubmitClick}
-                  disabled={!canSubmit}
-                  className="bg-green-600 disabled:bg-gray-700 disabled:text-gray-400 text-white text-xs px-2 py-1 rounded"
-                >
-                  ✓
-                </button>
-              </>
-            )}
-
-            {/* Pending confirmation: show submitted score + confirm/dispute */}
-            {match.status === 'pending_confirmation' && hasScore && (
-              <div className="flex items-center gap-2">
-                <div className="text-sm text-amber-300 font-semibold">
-                  {match.score1} – {match.score2}
-                </div>
-                <button
-                  onClick={handleConfirmClick}
-                  className="bg-green-700 text-white text-xs px-2 py-1 rounded"
-                >
-                  Confirm
-                </button>
-                <button
-                  onClick={handleDisputeClick}
-                  className="bg-red-700 text-white text-xs px-2 py-1 rounded"
-                >
-                  Dispute
-                </button>
-              </div>
-            )}
-
-            {/* Completed / Disputed: read-only score */}
-            {(match.status === 'completed' ||
-              match.status === 'disputed') &&
-              hasScore && (
-                <div className="flex flex-col items-end">
-                  <div className="text-sm text-gray-100 font-semibold">
-                    {match.score1} – {match.score2}
-                  </div>
-                  {match.status === 'disputed' && (
-                    <div className="text-xs text-red-400">
-                      Disputed
-                    </div>
-                  )}
-                </div>
-              )}
+          <div className="text-xs text-gray-500">
+            {match.team2.players.map(p => p.name).join(' / ')}
           </div>
         </div>
       </div>
+
+      {/* Info + Actions */}
+      <div className="flex justify-between items-center mt-1 text-xs">
+        <div className="text-gray-400">
+          {isWaitingOnYou && (
+            <span className="text-yellow-300 font-semibold">
+              Waiting for your confirmation
+            </span>
+          )}
+          {!isWaitingOnYou && isPendingConfirmation && (
+            <span className="text-gray-400">
+              Waiting for opponent confirmation
+            </span>
+          )}
+          {isDisputed && (
+            <span className="text-red-300">
+              Score disputed – organiser review needed
+            </span>
+          )}
+          {!isCompleted && !isPendingConfirmation && !isDisputed && !isWaitingOnYou && (
+            <span className="text-gray-500">
+              {showEditableInputs
+                ? 'Enter final score when match is complete.'
+                : 'Scores view only.'}
+            </span>
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          {/* Submit scores */}
+          {showEditableInputs && (
+            <button
+              onClick={handleSubmit}
+              className="px-3 py-1 rounded text-xs font-semibold bg-green-600 hover:bg-green-500 text-white"
+            >
+              Submit Score
+            </button>
+          )}
+
+
+          {/* Confirm / Dispute */}
+          {isPendingConfirmation && canCurrentUserConfirm && (
+            <>
+              <button
+                onClick={handleConfirm}
+                className="px-3 py-1 rounded text-xs font-semibold bg-green-600 hover:bg-green-500 text-white"
+              >
+                Confirm
+              </button>
+              <button
+                onClick={handleDispute}
+                className="px-3 py-1 rounded text-xs font-semibold bg-red-600 hover:bg-red-500 text-white"
+              >
+                Dispute
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* If user cannot edit and card is interactive, give a hint */}
+      {!canCurrentUserEdit && !isCompleted && (
+        <div className="mt-1 text-[11px] text-gray-500">
+          Only players in this match (or the organiser) can enter or confirm scores.
+        </div>
+      )}
     </div>
   );
 };

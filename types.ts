@@ -381,6 +381,25 @@ export interface Match {
   
   teamAId: string;
   teamBId: string;
+
+    /**
+   * Match lifecycle:
+   * - 'scheduled'            = created, not yet played
+   * - 'pending_confirmation' = someone has submitted a result, awaiting opponent confirmation
+   * - 'completed'            = confirmed by both / organiser
+   * - 'disputed'             = result has been disputed
+   */
+  status?: 'scheduled' | 'pending_confirmation' | 'completed' | 'disputed';
+
+  /** User id of the player who submitted the latest score */
+  scoreSubmittedBy?: string | null;
+
+  /** User id of the player who must confirm or dispute the score */
+  pendingConfirmationFor?: string | null;
+
+  /** Optional free-text reason if a dispute was raised */
+  disputeReason?: string | null;
+
   
   roundNumber: number | null;
   stage: string | null; // "Pool A", "Main Bracket", "Bronze Match"

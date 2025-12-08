@@ -1,131 +1,339 @@
-
-
-
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { subscribeToUserPartnerInvites, respondToPartnerInvite, getAllTournaments, getAllUsers, getUsersByIds, ensureRegistrationForUser } from '../services/firebase';
-import type { PartnerInvite, Tournament, Division, UserProfile } from '../types';
+import {
+  subscribeToUserPartnerInvites,
+  respondToPartnerInvite,
+  getAllTournaments,
+  getUsersByIds,
+  ensureRegistrationForUser,
+} from '../services/firebase';
+import type { PartnerInvite, Tournament, UserProfile } from '../types';
 
 interface PartnerInvitesProps {
-    onAcceptInvite?: (tournamentId: string, divisionId: string) => void;
+  // Called when the user has finished handling all invites
+  // and we should move into the "choose events for this tournament" flow.
+  // We pass the tournament id + ALL accepted division ids for that tournament.
+  onAcceptInvites?: (tournamentId: string, divisionIds: string[]) => void;
+
+  // Called when the user has declined everything or there is nothing
+  // to continue with – typically go to dashboard.
+  onCompleteWithoutSelection?: () => void;
 }
 
-export const PartnerInvites: React.FC<PartnerInvitesProps> = ({ onAcceptInvite }) => {
-    const { currentUser } = useAuth();
-    const [invites, setInvites] = useState<PartnerInvite[]>([]);
-    const [tournaments, setTournaments] = useState<Record<string, Tournament>>({});
-    const [inviters, setInviters] = useState<Record<string, UserProfile>>({});
-    const [loading, setLoading] = useState(true);
+/**
+ * PartnerInvites now acts as the "Invite Summary Screen":
+ *
+ *  - Shows ALL partner invites for the current user in one place
+ *  - Accept / Decline every invite
+ *  - When "Done – Continue" is pressed:
+ *      - If at least one invite was accepted for a tournament, we pass the
+ *        tournament id + accepted division ids to the parent so we can
+ *        show the TournamentEventSelection screen.
+ *      - If nothing accepted, we call onCompleteWithoutSelection.
+ */
+export const PartnerInvites: React.FC<PartnerInvitesProps> = ({
+  onAcceptInvites,
+  onCompleteWithoutSelection,
+}) => {
+  const { currentUser } = useAuth();
+  const [invites, setInvites] = useState<PartnerInvite[]>([]);
+  const [tournamentsById, setTournamentsById] = useState<Record<string, Tournament>>({});
+  const [invitersById, setInvitersById] = useState<Record<string, UserProfile>>({});
+  const [loading, setLoading] = useState(true);
+  const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
 
-    useEffect(() => {
-        if (!currentUser) return;
+  // 1. Subscribe to invites for this user
+  useEffect(() => {
+    if (!currentUser) return;
 
-        // 1. Subscribe to invites
-        const unsub = subscribeToUserPartnerInvites(currentUser.uid, (newInvites) => {
-            setInvites(newInvites);
-            setLoading(false);
+    const unsubscribe = subscribeToUserPartnerInvites(currentUser.uid, (incoming) => {
+      setInvites(incoming);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  // 2. Fetch tournaments + inviter profiles whenever invites change
+  useEffect(() => {
+    if (invites.length === 0) return;
+
+    const loadMetadata = async () => {
+      const tournamentIds = Array.from(new Set(invites.map((i) => i.tournamentId))) as string[];
+      const inviterIds = Array.from(new Set(invites.map((i) => i.inviterId))) as string[];
+
+      try {
+        const allTournaments = await getAllTournaments(200);
+        const tMap: Record<string, Tournament> = {};
+        allTournaments.forEach((t) => {
+          if (tournamentIds.includes(t.id)) {
+            tMap[t.id] = t;
+          }
         });
 
-        return () => unsub();
-    }, [currentUser]);
+        const users = await getUsersByIds(inviterIds);
+        const uMap: Record<string, UserProfile> = {};
+        users.forEach((u) => {
+          uMap[u.id] = u;
+        });
 
-    // 2. Fetch metadata (Tournaments & Users) when invites change
-    useEffect(() => {
-        if (invites.length === 0) return;
-
-        const loadMetadata = async () => {
-            // Unique IDs
-            const tIds = Array.from(new Set(invites.map(i => i.tournamentId))) as string[];
-            const uIds = Array.from(new Set(invites.map(i => i.inviterId))) as string[];
-
-            // Fetch Tournaments (Only need names really, but getAll for now or batch get if we had it)
-            // Ideally we'd have getTournamentsByIds, but we can just fetch all tournaments as a cache
-            const allTournaments = await getAllTournaments(100);
-            const tMap: Record<string, Tournament> = {};
-            allTournaments.forEach(t => tMap[t.id] = t);
-            
-            // Fetch Users
-            const users = await getUsersByIds(uIds);
-            const uMap: Record<string, UserProfile> = {};
-            users.forEach(u => uMap[u.id] = u);
-
-            setTournaments(tMap);
-            setInviters(uMap);
-        };
-
-        loadMetadata();
-    }, [invites]);
-
-    const handleRespond = async (invite: PartnerInvite, response: 'accepted' | 'declined') => {
-        try {
-            const result = await respondToPartnerInvite(invite, response);
-            if (response === 'accepted' && result && currentUser && onAcceptInvite) {
-                // Ensure registration exists
-                await ensureRegistrationForUser(result.tournamentId, currentUser.uid, result.divisionId);
-                // Trigger navigation to wizard
-                onAcceptInvite(result.tournamentId, result.divisionId);
-            }
-        } catch (error) {
-            console.error("Failed to respond to invite", error);
-            alert("Failed to process response. Please try again.");
-        }
+        setTournamentsById(tMap);
+        setInvitersById(uMap);
+      } catch (err) {
+        console.error('Failed to load invite metadata', err);
+      }
     };
 
-    if (loading) return <div className="p-8 text-center text-gray-500">Loading invites...</div>;
+    loadMetadata();
+  }, [invites]);
 
+  const hasPending = useMemo(
+    () => invites.some((i) => i.status === 'pending'),
+    [invites],
+  );
+  const acceptedInvites = useMemo(
+    () => invites.filter((i) => i.status === 'accepted'),
+    [invites],
+  );
+
+  const handleRespond = async (invite: PartnerInvite, response: 'accepted' | 'declined') => {
+    try {
+      setBusyInviteId(invite.id);
+      const result = await respondToPartnerInvite(invite, response);
+
+      if (response === 'accepted' && result && currentUser) {
+        // Ensure registration record exists for this tournament/division;
+        // additional accepted divisions can be merged into the same record.
+        await ensureRegistrationForUser(result.tournamentId, currentUser.uid, result.divisionId);
+      }
+    } catch (error) {
+      console.error('Failed to respond to invite', error);
+      alert(
+        error instanceof Error
+          ? error.message
+          : 'Failed to process your response. Please try again.',
+      );
+    } finally {
+      setBusyInviteId(null);
+    }
+  };
+
+  const handleDoneContinue = () => {
+    if (hasPending || invites.length === 0) {
+      return;
+    }
+
+    if (acceptedInvites.length > 0 && onAcceptInvites) {
+      // For now we assume all accepted invites relate to the same tournament.
+      // If you support multiple tournaments at once, you could group by tournamentId
+      // and ask the user which one to proceed with.
+      const firstTournamentId = acceptedInvites[0].tournamentId;
+      const divisionIdsForTournament = acceptedInvites
+        .filter((i) => i.tournamentId === firstTournamentId)
+        .map((i) => i.divisionId);
+
+      onAcceptInvites(firstTournamentId, divisionIdsForTournament);
+      return;
+    }
+
+    if (onCompleteWithoutSelection) {
+      onCompleteWithoutSelection();
+    }
+  };
+
+  if (!currentUser) {
     return (
-        <div className="max-w-4xl mx-auto p-4 animate-fade-in">
-            <h1 className="text-3xl font-bold text-white mb-6">Partner Invites</h1>
-            
-            {invites.length === 0 ? (
-                <div className="bg-gray-800 p-8 rounded-lg border border-gray-700 text-center">
-                    <div className="text-gray-500 mb-2">
-                        <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-                    </div>
-                    <h3 className="text-xl font-bold text-white">No Pending Invites</h3>
-                    <p className="text-gray-400 mt-2">When someone invites you to be their partner, it will show up here.</p>
-                </div>
-            ) : (
-                <div className="grid gap-4">
-                    {invites.map(invite => {
-                        const tournament = tournaments[invite.tournamentId];
-                        const inviter = inviters[invite.inviterId];
-                        
-                        return (
-                            <div key={invite.id} className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg flex flex-col md:flex-row justify-between items-center gap-4">
-                                <div>
-                                    <div className="text-xs font-bold text-green-400 uppercase tracking-wider mb-1">
-                                        Partner Request
-                                    </div>
-                                    <h3 className="text-xl font-bold text-white">
-                                        {inviter?.displayName || 'Unknown Player'}
-                                    </h3>
-                                    <p className="text-gray-300">
-                                        wants to team up for <span className="font-bold text-white">{tournament?.name || 'Unknown Tournament'}</span>
-                                    </p>
-                                    <p className="text-sm text-gray-500 mt-1">
-                                        Sent: {new Date(invite.createdAt).toLocaleDateString()}
-                                    </p>
-                                </div>
-                                <div className="flex gap-3">
-                                    <button 
-                                        onClick={() => handleRespond(invite, 'declined')}
-                                        className="px-4 py-2 rounded border border-red-500/50 text-red-400 hover:bg-red-900/20 font-bold transition-colors"
-                                    >
-                                        Decline
-                                    </button>
-                                    <button 
-                                        onClick={() => handleRespond(invite, 'accepted')}
-                                        className="px-6 py-2 rounded bg-green-600 hover:bg-green-500 text-white font-bold shadow-lg shadow-green-900/20 transition-all transform hover:scale-105"
-                                    >
-                                        Accept & Join
-                                    </button>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-        </div>
+      <div className="max-w-3xl mx-auto p-4 text-center text-gray-400">
+        Please sign in to view your partner invitations.
+      </div>
     );
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-3xl mx-auto p-4 text-center text-gray-400">
+        Loading your invitations...
+      </div>
+    );
+  }
+
+  const hasInvites = invites.length > 0;
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 pb-24 pt-4 animate-fade-in">
+      <div className="mb-6">
+        <p className="text-xs font-semibold tracking-[0.2em] text-green-400 uppercase mb-2">
+          Partner invitations
+        </p>
+        <h1 className="text-2xl sm:text-3xl font-bold text-white">
+          You&apos;ve been invited to play
+        </h1>
+        <p className="mt-2 text-sm sm:text-base text-gray-400">
+          Review each event below. Accept or decline every invite, then continue to choose any
+          additional events (like singles) for this tournament.
+        </p>
+      </div>
+
+      {!hasInvites ? (
+        <div className="bg-gray-900/60 border border-dashed border-gray-700 rounded-2xl p-8 text-center">
+          <div className="mb-3 flex justify-center">
+            <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-gray-800 border border-gray-700">
+              <svg
+                className="h-6 w-6 text-gray-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M12 14l9-5-9-5-9 5 9 5z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M12 14v7m-4 0h8"
+                />
+              </svg>
+            </div>
+          </div>
+          <h2 className="text-lg font-semibold text-white">No pending partner invites</h2>
+          <p className="mt-2 text-sm text-gray-400">
+            When someone invites you to be their doubles partner, the invite will appear here.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {invites
+            .slice()
+            .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+            .map((invite) => {
+              const tournament = tournamentsById[invite.tournamentId];
+              const inviter = invitersById[invite.inviterId];
+
+              const isPending = invite.status === 'pending';
+              const isAccepted = invite.status === 'accepted';
+              const isDeclined = invite.status === 'declined';
+              const isDisabled = !isPending || busyInviteId === invite.id;
+
+              const statusLabel = isPending
+                ? 'Pending response'
+                : isAccepted
+                ? 'Accepted'
+                : isDeclined
+                ? 'Declined'
+                : invite.status === 'expired'
+                ? 'Expired'
+                : invite.status;
+
+              const statusColor =
+                isPending || !invite.status
+                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                  : isAccepted
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                  : isDeclined || invite.status === 'expired'
+                  ? 'bg-red-500/10 text-red-300 border-red-500/30'
+                  : 'bg-gray-700/60 text-gray-300 border-gray-600';
+
+              return (
+                <div
+                  key={invite.id}
+                  className="rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900/80 to-gray-950/90 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+                >
+                  <div className="flex-1 space-y-1">
+                    <div className="flex items-center gap-2 text-xs text-gray-400 flex-wrap">
+                      <span className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-green-400">
+                        Invite
+                      </span>
+                      {tournament && (
+                        <span className="inline-flex items-center gap-1 text-[0.7rem]">
+                          <span className="h-1.5 w-1.5 rounded-full bg-green-400/70" />
+                          {tournament.name}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm sm:text-base text-white">
+                      <span className="font-semibold">
+                        {inviter?.displayName || 'A player'}
+                      </span>{' '}
+                      wants to team up with you.
+                    </p>
+                    <p className="text-xs sm:text-sm text-gray-400">
+                      Division ID:{' '}
+                      <span className="font-mono bg-gray-900/80 px-1.5 py-0.5 rounded-md">
+                        {invite.divisionId}
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col items-stretch sm:items-end gap-2">
+                    <span
+                      className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs font-medium ${statusColor}`}
+                    >
+                      {statusLabel}
+                    </span>
+
+                    <div className="flex flex-row sm:flex-row gap-2">
+                      <button
+                        type="button"
+                        disabled={isDisabled}
+                        onClick={() => handleRespond(invite, 'declined')}
+                        className={`px-3 py-1.5 rounded-full text-xs sm:text-sm border transition ${
+                          isDisabled
+                            ? 'cursor-not-allowed border-gray-700 text-gray-600 bg-gray-900/40'
+                            : 'border-gray-700 text-gray-300 hover:bg-gray-800/80'
+                        }`}
+                      >
+                        Decline
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isDisabled}
+                        onClick={() => handleRespond(invite, 'accepted')}
+                        className={`px-4 py-1.5 rounded-full text-xs sm:text-sm font-semibold shadow-md transition ${
+                          isDisabled
+                            ? 'cursor-not-allowed bg-emerald-900/30 text-emerald-700 border border-emerald-700/40'
+                            : 'bg-emerald-500/90 border border-emerald-400/80 text-gray-900 hover:bg-emerald-400'
+                        }`}
+                      >
+                        {busyInviteId === invite.id && isPending ? 'Saving...' : 'Accept'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      )}
+
+      {/* Sticky footer guidance + primary action */}
+      <div className="fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-gray-950 via-gray-950/98 to-gray-950/90 border-t border-gray-800/80">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
+          <p className="text-xs sm:text-sm text-gray-400 flex-1">
+            {invites.length === 0
+              ? 'No partner invites yet. You can also join events directly from the tournament page.'
+              : hasPending
+              ? 'Please accept or decline each invite before continuing.'
+              : acceptedInvites.length > 0
+              ? 'Great! Continue to choose any additional events (like singles) for this tournament.'
+              : 'You declined all invitations. You can still register for events from the dashboard later.'}
+          </p>
+          <button
+            type="button"
+            disabled={!hasInvites || hasPending}
+            onClick={handleDoneContinue}
+            className={`w-full sm:w-auto inline-flex items-center justify-center rounded-full px-4 sm:px-6 py-2 text-xs sm:text-sm font-semibold tracking-wide transition ${
+              !hasInvites || hasPending
+                ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700'
+                : 'bg-green-500 text-gray-900 hover:bg-green-400 border border-green-400 shadow-lg shadow-green-900/30'
+            }`}
+          >
+            Done – Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };

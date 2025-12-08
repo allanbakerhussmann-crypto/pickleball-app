@@ -11,6 +11,7 @@ import { ClubsList } from './components/ClubsList';
 import { ClubDetailPage } from './components/ClubDetailPage';
 import { PlayerDirectory } from './components/PlayerDirectory';
 import { PartnerInvites } from './components/PartnerInvites';
+import { TournamentEventSelection } from './components/registration/TournamentEventSelection';
 import { AdminUsersPage } from './components/AdminUsersPage';
 import type { Tournament, PartnerInvite, UserProfile } from './types';
 import { useAuth } from './contexts/AuthContext';
@@ -484,8 +485,44 @@ const App: React.FC = () => {
                             onBack={() => setView('dashboard')}
                         />
                     ) : view === 'invites' ? (
-                        <PartnerInvites onAcceptInvite={handleAcceptInvite} />
-                    ) : view === 'myResults' ? (
+                        <PartnerInvites
+                            onAcceptInvites={(tournamentId, divisionIds) => {
+                            // Move to the "choose events for this tournament" screen
+                            setEventSelectionTournamentId(tournamentId);
+                            setEventSelectionPreselectedDivisionIds(divisionIds);
+                            setView('tournamentEvents');
+                            }}
+                            onCompleteWithoutSelection={() => setView('dashboard')}
+                        />
+                        ) : view === 'tournamentEvents' && eventSelectionTournamentId ? (
+                        <TournamentEventSelection
+                            tournamentId={eventSelectionTournamentId}
+                            preselectedDivisionIds={eventSelectionPreselectedDivisionIds}
+                            onBack={() => {
+                            // Go back to the invite summary screen
+                            setView('invites');
+                            }}
+                            onContinue={(selectedDivisionIds) => {
+                            // 🔗 IMPORTANT:
+                            // Here we hand off to your existing registration / waiver flow.
+                            // If you already have a function like `handleAcceptInvite(tournamentId, divisionId)`
+                            // which kicks off the wizard, you can either:
+                            //
+                            //  - For now: just use the first selected division (keeps behaviour identical
+                            //    to before but with a nicer selection screen):
+                            //
+                            if (selectedDivisionIds.length > 0) {
+                                // Existing logic – you should already have something like this:
+                                handleAcceptInvite(eventSelectionTournamentId, selectedDivisionIds[0]);
+                            }
+                            //
+                            //  - Later upgrade: extend your registration wizard to accept an array of
+                            //    division ids so the waiver/registration step covers ALL selected events
+                            //    in one go.
+                            }}
+                        />
+                        ) : view === 'myResults' ? (
+
                         <PlaceholderView 
                             title="My Results" 
                             icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}

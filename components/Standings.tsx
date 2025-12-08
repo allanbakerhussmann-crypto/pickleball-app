@@ -1,90 +1,136 @@
-
 import React from 'react';
-import type { StandingsEntry, TieBreaker } from '../types';
+import type { StandingsEntry } from '../types';
 
-interface StandingsEntryWithTeam extends StandingsEntry {
-    team: {
-        id: string;
-        name: string;
-        players?: string[];
-    };
+type H2HMatrix = Record<string, Record<string, number>>;
+
+interface StandingsTeam {
+  id: string;
+  name: string;
+  players?: string[];
 }
+
+type StandingsRow = StandingsEntry & {
+  team?: StandingsTeam;
+};
 
 interface StandingsProps {
-  standings: StandingsEntryWithTeam[];
-  tieBreakers?: [TieBreaker, TieBreaker?, TieBreaker?]; // Ordered list
-  h2hLookup?: Record<string, Record<string, number>>; // Map of teamId -> opponentId -> wins
+  standings: StandingsRow[];
+  tieBreakers?: string[];
+  h2hLookup?: H2HMatrix;
 }
 
-export const Standings: React.FC<StandingsProps> = ({ standings, tieBreakers, h2hLookup }) => {
-  // Default breakers if not provided
-  const breakers = tieBreakers || ['match_wins', 'point_diff', 'head_to_head'];
+/**
+ * Standings table
+ *
+ * NOTE:
+ * - We now auto-hide the "Player 2" column when all teams only have one player
+ *   (i.e. singles divisions).
+ * - For doubles, where at least one team has 2 players, Player 2 column is shown.
+ */
+export const Standings: React.FC<StandingsProps> = ({
+  standings,
+  tieBreakers,
+  h2hLookup,
+}) => {
+  // Auto-detect if we should show a Player 2 column:
+  // if ANY team has 2 or more players, we treat this as doubles for display.
+  const showPlayer2 = standings.some(
+    row => row.team?.players && row.team.players.length > 1
+  );
 
-  const sortedStandings = [...standings].sort((a, b) => {
-    // Iterate through tie breakers
-    for (const criteria of breakers) {
-        if (!criteria) continue;
-
-        if (criteria === 'match_wins') {
-            if (b.wins !== a.wins) return b.wins - a.wins;
-        } else if (criteria === 'point_diff') {
-            if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
-        } else if (criteria === 'head_to_head') {
-            // Check if one team beat the other
-            const aWinsAgainstB = h2hLookup?.[a.team.id]?.[b.team.id] || 0;
-            const bWinsAgainstA = h2hLookup?.[b.team.id]?.[a.team.id] || 0;
-            
-            if (aWinsAgainstB > bWinsAgainstA) return -1; // A comes first
-            if (bWinsAgainstA > aWinsAgainstB) return 1;  // B comes first
-        }
-    }
-    // Fallback alphabetical
-    return a.teamName.localeCompare(b.teamName);
-  });
+  if (!standings || standings.length === 0) {
+    return (
+      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+        <h2 className="text-xl font-bold mb-4 text-green-400">Standings</h2>
+        <p className="text-gray-400 text-sm italic">
+          No standings available yet. Play some matches first.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
-      <h2 className="text-2xl font-bold mb-4 text-green-400">3. Standings</h2>
-      {standings.length === 0 ? (
-        <div className="text-center text-gray-400 italic py-10">
-            <p>Standings will appear here once the tournament starts.</p>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left text-gray-300">
-            <thead className="text-xs text-green-400 uppercase bg-gray-700">
-              <tr>
-                <th scope="col" className="px-3 py-3 text-center">#</th>
-                <th scope="col" className="px-4 py-3">Team</th>
-                <th scope="col" className="px-4 py-3">Player 1</th>
-                <th scope="col" className="px-4 py-3">Player 2</th>
-                <th scope="col" className="px-2 py-3 text-center">Pld</th>
-                <th scope="col" className="px-2 py-3 text-center">W</th>
-                <th scope="col" className="px-2 py-3 text-center">L</th>
-                <th scope="col" className="px-2 py-3 text-center">PF</th>
-                <th scope="col" className="px-2 py-3 text-center">PA</th>
-                <th scope="col" className="px-2 py-3 text-center">PD</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedStandings.map((entry, index) => (
-                <tr key={entry.team.id} className="border-b border-gray-700 hover:bg-gray-700/50">
-                  <td className="px-3 py-3 font-medium text-center">{index + 1}</td>
-                  <td className="px-4 py-3 font-medium text-white truncate max-w-[150px]">{entry.team.name}</td>
-                  <td className="px-4 py-3 text-gray-400 truncate max-w-[120px]">{entry.team.players?.[0] || '-'}</td>
-                  <td className="px-4 py-3 text-gray-400 truncate max-w-[120px]">{entry.team.players?.[1] || '-'}</td>
-                  <td className="px-2 py-3 text-center">{entry.played}</td>
-                  <td className="px-2 py-3 text-center font-bold text-white">{entry.wins}</td>
-                  <td className="px-2 py-3 text-center">{entry.losses}</td>
-                  <td className="px-2 py-3 text-center">{entry.pointsFor}</td>
-                  <td className="px-2 py-3 text-center">{entry.pointsAgainst}</td>
-                  <td className={`px-2 py-3 text-center font-bold ${entry.pointDifference > 0 ? 'text-green-400' : entry.pointDifference < 0 ? 'text-red-400' : ''}`}>
-                    {entry.pointDifference > 0 ? '+' : ''}{entry.pointDifference}
+    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+      <h2 className="text-xl font-bold mb-4 text-green-400">3. Standings</h2>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left border-collapse">
+          <thead>
+            <tr className="bg-gray-900 text-xs uppercase text-gray-400 border-b border-gray-700">
+              <th className="py-2 px-3 text-center w-10">#</th>
+              <th className="py-2 px-3">Team</th>
+              <th className="py-2 px-3">Player 1</th>
+              {showPlayer2 && <th className="py-2 px-3">Player 2</th>}
+              <th className="py-2 px-3 text-center">PLD</th>
+              <th className="py-2 px-3 text-center">W</th>
+              <th className="py-2 px-3 text-center">L</th>
+              <th className="py-2 px-3 text-center">PF</th>
+              <th className="py-2 px-3 text-center">PA</th>
+              <th className="py-2 px-3 text-center">PD</th>
+            </tr>
+          </thead>
+          <tbody>
+            {standings.map((row, index) => {
+              const players = row.team?.players || [];
+              const pd = row.pointDifference ?? 0;
+
+              return (
+                <tr
+                  key={row.teamId}
+                  className="border-b border-gray-800 hover:bg-gray-900/60"
+                >
+                  <td className="py-2 px-3 text-center text-gray-300 text-xs">
+                    {index + 1}
+                  </td>
+                  <td className="py-2 px-3 font-semibold text-white">
+                    {row.team?.name || row.teamName}
+                  </td>
+                  <td className="py-2 px-3 text-gray-200">
+                    {players[0] || '-'}
+                  </td>
+                  {showPlayer2 && (
+                    <td className="py-2 px-3 text-gray-200">
+                      {players[1] || '-'}
+                    </td>
+                  )}
+                  <td className="py-2 px-3 text-center text-gray-200">
+                    {row.played}
+                  </td>
+                  <td className="py-2 px-3 text-center text-green-400 font-semibold">
+                    {row.wins}
+                  </td>
+                  <td className="py-2 px-3 text-center text-red-400">
+                    {row.losses}
+                  </td>
+                  <td className="py-2 px-3 text-center text-gray-200">
+                    {row.pointsFor}
+                  </td>
+                  <td className="py-2 px-3 text-center text-gray-200">
+                    {row.pointsAgainst}
+                  </td>
+                  <td
+                    className={`py-2 px-3 text-center font-semibold ${
+                      pd > 0
+                        ? 'text-green-400'
+                        : pd < 0
+                        ? 'text-red-400'
+                        : 'text-gray-300'
+                    }`}
+                  >
+                    {pd > 0 ? `+${pd}` : pd}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Optional tie-breaker info (kept simple for now) */}
+      {tieBreakers && tieBreakers.length > 0 && (
+        <div className="mt-4 text-[11px] text-gray-500">
+          <span className="font-semibold text-gray-400">Tie-breakers order:</span>{' '}
+          {tieBreakers.filter(Boolean).join(' → ')}
         </div>
       )}
     </div>
