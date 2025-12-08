@@ -1,4 +1,6 @@
 
+
+
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header'; 
 import { Profile } from './components/Profile';
@@ -161,6 +163,10 @@ const App: React.FC = () => {
     
     // Wizard auto-open state
     const [wizardProps, setWizardProps] = useState<{ isOpen: boolean; mode?: 'full'|'waiver_only'; divisionId?: string } | null>(null);
+
+    // Event Selection State
+    const [eventSelectionTournamentId, setEventSelectionTournamentId] = useState<string | null>(null);
+    const [eventSelectionPreselectedDivisionIds, setEventSelectionPreselectedDivisionIds] = useState<string[]>([]);
 
     // Data
     const [tournaments, setTournaments] = useState<Tournament[]>([]);

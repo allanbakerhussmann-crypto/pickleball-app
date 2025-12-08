@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { getAllTournaments } from '../../services/firebase';
-import type { Tournament } from '../../types';
 
-interface Division {
+import React, { useEffect, useMemo, useState } from 'react';
+import { getAllTournaments, subscribeToDivisions } from '../../services/firebase';
+import type { Tournament, Division } from '../../types';
+
+interface DivisionOption {
   id: string;
   name: string;
   type?: string;
@@ -24,6 +25,7 @@ export const TournamentEventSelection: React.FC<TournamentEventSelectionProps> =
 }) => {
   const [tournament, setTournament] = useState<Tournament | null>(null);
   const [loading, setLoading] = useState(true);
+  const [divisions, setDivisions] = useState<Division[]>([]);
   const [selectedDivisionIds, setSelectedDivisionIds] = useState<string[]>(preselectedDivisionIds);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,15 +46,21 @@ export const TournamentEventSelection: React.FC<TournamentEventSelectionProps> =
     load();
   }, [tournamentId]);
 
-  const divisions: Division[] = useMemo(() => {
-    if (!tournament || !tournament.divisionsById) return [];
-    return Object.entries(tournament.divisionsById).map(([id, div]) => ({
-      id,
+  useEffect(() => {
+    if (tournamentId) {
+        const unsub = subscribeToDivisions(tournamentId, setDivisions);
+        return () => unsub();
+    }
+  }, [tournamentId]);
+
+  const divisionOptions: DivisionOption[] = useMemo(() => {
+    return divisions.map(div => ({
+      id: div.id,
       name: div.name,
       type: div.type,
-      isOpen: div.isOpen,
+      isOpen: div.registrationOpen,
     }));
-  }, [tournament]);
+  }, [divisions]);
 
   const toggleDivision = (id: string) => {
     setSelectedDivisionIds((prev) =>
@@ -81,7 +89,7 @@ export const TournamentEventSelection: React.FC<TournamentEventSelectionProps> =
       </div>
 
       <div className="space-y-3">
-        {divisions.map((division) => (
+        {divisionOptions.map((division) => (
           <button
             key={division.id}
             onClick={() => toggleDivision(division.id)}

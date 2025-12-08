@@ -1,3 +1,5 @@
+
+
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
 import { 
@@ -1126,7 +1128,7 @@ export const finalizeRegistration = async (
         status: isDoubles ? 'pending_partner' : 'active',
         // Set isLookingForPartner explicitly:
         // 'open_team' => true
-        // 'invite' => false (because waiting for specific person)
+        // 'invite' => false (because waiting for specific invite, unless we change logic)
         // 'join_open' => false (but this branch is for creation, so likely irrelevant or error state, but default false)
         isLookingForPartner: isDoubles && partnerInfo?.mode === 'open_team',
         createdAt: now,

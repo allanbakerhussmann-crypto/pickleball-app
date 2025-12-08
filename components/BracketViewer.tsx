@@ -1,6 +1,9 @@
 
+
+
 import React from 'react';
 import { MatchDisplay, MatchCard } from './MatchCard';
+import { useAuth } from '../contexts/AuthContext';
 
 interface BracketViewerProps {
     matches: MatchDisplay[];
@@ -9,6 +12,7 @@ interface BracketViewerProps {
 }
 
 export const BracketViewer: React.FC<BracketViewerProps> = ({ matches, onUpdateScore, isVerified }) => {
+    const { currentUser } = useAuth();
     // Group matches by round
     const rounds: { [key: number]: MatchDisplay[] } = {};
     let maxRound = 0;
@@ -36,20 +40,27 @@ export const BracketViewer: React.FC<BracketViewerProps> = ({ matches, onUpdateS
                               `Round ${roundNum}`}
                          </h3>
                          <div className="flex flex-col justify-around flex-grow gap-6">
-                             {rounds[roundNum].map((match, idx) => (
-                                 <div key={match.id} className="relative">
-                                     {/* Connector Lines (CSS tricks would be better but simplified here) */}
-                                     {roundNum < maxRound && (
-                                         <div className="absolute right-[-32px] top-1/2 w-8 h-[1px] bg-gray-700"></div>
-                                     )}
-                                     <MatchCard 
-                                        match={match} 
-                                        matchNumber={idx + 1} // Just visual index
-                                        onUpdateScore={onUpdateScore}
-                                        isVerified={isVerified}
-                                     />
-                                 </div>
-                             ))}
+                             {rounds[roundNum].map((match, idx) => {
+                                 const isPlayerInThisMatch = !!currentUser && (
+                                     match.team1.players.some(p => p.name === currentUser.displayName) ||
+                                     match.team2.players.some(p => p.name === currentUser.displayName)
+                                 );
+                                 return (
+                                     <div key={match.id} className="relative">
+                                         {/* Connector Lines (CSS tricks would be better but simplified here) */}
+                                         {roundNum < maxRound && (
+                                             <div className="absolute right-[-32px] top-1/2 w-8 h-[1px] bg-gray-700"></div>
+                                         )}
+                                         <MatchCard 
+                                            match={match} 
+                                            matchNumber={idx + 1} // Just visual index
+                                            onUpdateScore={onUpdateScore}
+                                            isVerified={isVerified}
+                                            canCurrentUserEdit={isPlayerInThisMatch}
+                                         />
+                                     </div>
+                                 );
+                             })}
                          </div>
                      </div>
                  ))}

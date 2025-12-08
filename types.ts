@@ -1,4 +1,5 @@
 
+
 export type TournamentFormat =
   | 'single_elim'
   | 'double_elim'
@@ -136,6 +137,7 @@ export interface Court {
   name: string;     // court name, e.g. "Court 1"
   order: number;    // sort order in UI
   active: boolean;  // whether this court is currently in rotation
+  currentMatchId?: string; // Derived state for allocator
 }
 
 // --- Division Format Types ---
@@ -389,7 +391,7 @@ export interface Match {
    * - 'completed'            = confirmed by both / organiser
    * - 'disputed'             = result has been disputed
    */
-  status?: 'scheduled' | 'pending_confirmation' | 'completed' | 'disputed';
+  status?: 'pending' | 'not_started' | 'scheduled' | 'in_progress' | 'pending_confirmation' | 'completed' | 'disputed' | 'cancelled' | 'skipped';
 
   /** User id of the player who submitted the latest score */
   scoreSubmittedBy?: string | null;
@@ -400,15 +402,13 @@ export interface Match {
   /** Optional free-text reason if a dispute was raised */
   disputeReason?: string | null;
 
-  
+  matchNumber?: number;
   roundNumber: number | null;
   stage: string | null; // "Pool A", "Main Bracket", "Bronze Match"
   
   court: string | null;      // court name
   startTime: number | null;  // timestamp ms
   endTime: number | null;
-  
-    status: 'pending' | 'in_progress' | 'pending_confirmation' | 'completed' | 'disputed';
   
   scoreTeamAGames: number[]; // e.g. [11, 8, 11]
   scoreTeamBGames: number[]; // e.g. [7, 11, 9]
@@ -509,4 +509,3 @@ export interface TournamentSettings {
   // allowPlayersToEnterScores?: boolean;
   // requireScoreConfirmation?: boolean;
 }
-

@@ -1,3 +1,5 @@
+
+
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 
 import { Schedule } from './Schedule';
@@ -28,6 +30,7 @@ import {
   addCourt,
   updateCourt,
   deleteCourt,
+  deleteTeam, // Added import
   batchCreateMatches,
   createTeamServer,              // <- renamed wrapper
   getUsersByIds,
@@ -177,6 +180,24 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     {}
   );
 
+  /* -------- Active Division / Tabs -------- */
+
+  const [activeDivisionId, setActiveDivisionId] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<
+    'details' | 'players' | 'bracket' | 'standings'
+  >('details');
+
+  const activeDivision = useMemo(
+    () => divisions.find(d => d.id === activeDivisionId) || divisions[0],
+    [divisions, activeDivisionId]
+  );
+
+  useEffect(() => {
+    if (!activeDivisionId && divisions.length > 0) {
+      setActiveDivisionId(divisions[0].id);
+    }
+  }, [divisions, activeDivisionId]);
+
 
   // Editable division settings (ratings, age, seeding)
   const [divisionSettings, setDivisionSettings] = useState<{
@@ -283,24 +304,6 @@ const handleAddTeam = useCallback(
   }, [computedPhase]);
 
   const tournamentPhase: TournamentPhase = phaseOverride ?? computedPhase;
-
-  /* -------- Active Division / Tabs -------- */
-
-  const [activeDivisionId, setActiveDivisionId] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<
-    'details' | 'players' | 'bracket' | 'standings'
-  >('details');
-
-  const activeDivision = useMemo(
-    () => divisions.find(d => d.id === activeDivisionId) || divisions[0],
-    [divisions, activeDivisionId]
-  );
-
-  useEffect(() => {
-    if (!activeDivisionId && divisions.length > 0) {
-      setActiveDivisionId(divisions[0].id);
-    }
-  }, [divisions, activeDivisionId]);
 
   // Load editable settings when active division changes
   useEffect(() => {
@@ -512,7 +515,7 @@ const handleAddTeam = useCallback(
 
       const isOrganiserUser =
         !!userProfile &&
-        (userProfile.role === 'organiser' || userProfile.role === 'admin');
+        (userProfile.roles.includes('organizer') || userProfile.roles.includes('admin'));
 
       const canCurrentUserConfirm =
         !!currentUser &&
@@ -553,7 +556,7 @@ const handleAddTeam = useCallback(
           },
           score1: m.scoreTeamAGames[0] ?? null,
           score2: m.scoreTeamBGames[0] ?? null,
-          status: m.status,
+          status: m.status || 'not_started',
           roundNumber: m.roundNumber || 1,
           court: m.court,
           courtName: m.court,
@@ -583,7 +586,7 @@ const handleAddTeam = useCallback(
         },
         score1: m.scoreTeamAGames[0] ?? null,
         score2: m.scoreTeamBGames[0] ?? null,
-        status: m.status,
+        status: m.status || 'not_started',
         roundNumber: m.roundNumber || 1,
         court: m.court,
         courtName: m.court,
@@ -673,24 +676,6 @@ const handleAddTeam = useCallback(
   }, [currentUser, myMatchToShow, teams, getTeamDisplayName]);
 
   /* -------- Actions -------- */
-
-  const handleAddTeam = async (data: { name: string; playerIds: string[] }) => {
-    if (!activeDivision) return;
-    const newTeamId = generateId();
-    const newTeam: Team = {
-      id: newTeamId,
-      tournamentId: tournament.id,
-      divisionId: activeDivision.id,
-      type: activeDivision.type,
-      teamName: activeDivision.type === 'doubles' ? data.name : undefined,
-      captainPlayerId: data.playerIds[0],
-      status: 'active',
-      players: data.playerIds,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    await createTeam(tournament.id, newTeam);
-  };
 
   const handleRemoveTeam = async (id: string) => {
     await deleteTeam(tournament.id, id);
@@ -1005,7 +990,7 @@ const handleAddTeam = useCallback(
 
     await updateMatchScore(tournament.id, matchId, {
       court: courtName,
-      status: 'not_started',
+      status: 'scheduled',
     });
   };
 
