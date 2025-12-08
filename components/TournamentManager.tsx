@@ -29,8 +29,7 @@ import {
   updateCourt,
   deleteCourt,
   batchCreateMatches,
-  createTeam,
-  deleteTeam,
+  createTeamServer,              // <- renamed wrapper
   getUsersByIds,
   saveTournament,
   generatePoolsSchedule,
@@ -194,40 +193,80 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     seedingMethod: 'rating',
   });
 
-  /* -------- Subscriptions -------- */
+  /* -------- Subscriptions (only depend on tournament.id) -------- */
+useEffect(() => {
+  const unsubDivs = subscribeToDivisions(tournament.id, setDivisions);
+  const unsubTeams = subscribeToTeams(tournament.id, setTeams);
+  const unsubMatches = subscribeToMatches(tournament.id, setMatches);
+  const unsubCourts = subscribeToCourts(tournament.id, setCourts);
 
-  useEffect(() => {
-    const unsubDivs = subscribeToDivisions(tournament.id, setDivisions);
-    const unsubTeams = subscribeToTeams(tournament.id, async loadedTeams => {
-      setTeams(loadedTeams);
-      const allPlayerIds = Array.from(
-        new Set(loadedTeams.flatMap(t => t.players))
-      );
-      const missing = allPlayerIds.filter(
-        id =>
-          !playersCache[id] &&
-          !id.startsWith('invite_') &&
-          !id.startsWith('tbd')
-      );
-      if (missing.length > 0) {
-        const profiles = await getUsersByIds(missing);
-        setPlayersCache(prev => {
-          const next = { ...prev };
-          profiles.forEach(p => (next[p.id] = p));
-          return next;
-        });
+  return () => {
+    unsubDivs();
+    unsubTeams();
+    unsubMatches();
+    unsubCourts();
+  };
+}, [tournament.id]); // <- only tournament.id, not playersCache
+
+/* -------- Fetch missing player profiles when teams change -------- */
+useEffect(() => {
+  // Build list of all player IDs from the teams and fetch missing profiles
+  const allPlayerIds = Array.from(new Set(teams.flatMap(t => t.players || [])));
+  const missing = allPlayerIds.filter(
+    id => !playersCache[id] && !id.startsWith('invite_') && !id.startsWith('tbd')
+  );
+  if (missing.length === 0) return;
+
+  let cancelled = false;
+  (async () => {
+    try {
+      const profiles = await getUsersByIds(missing);
+      if (cancelled) return;
+      setPlayersCache(prev => {
+        const next = { ...prev };
+        profiles.forEach(p => (next[p.id] = p));
+        return next;
+      });
+    } catch (err) {
+      console.error('Failed to fetch missing player profiles', err);
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [teams]); // depends on teams
+
+/* -------- Handler to add a team via the server createTeam function -------- */
+const handleAddTeam = useCallback(
+  async ({ name, playerIds }: { name: string; playerIds: string[] }) => {
+    if (!activeDivision) {
+      throw new Error('No active division selected');
+    }
+    try {
+      // createTeamServer calls the server-side Cloud Function
+      const res = await createTeamServer({
+        tournamentId: tournament.id,
+        divisionId: activeDivision.id,
+        playerIds,
+        teamName: name || null,
+      });
+
+      if (res?.existed) {
+        // optional UI message: team existed already
+        console.info('Team already existed:', res.teamId);
+      } else {
+        console.info('Team created:', res.teamId);
       }
-    });
-    const unsubMatches = subscribeToMatches(tournament.id, setMatches);
-    const unsubCourts = subscribeToCourts(tournament.id, setCourts);
+      return res;
+    } catch (err) {
+      console.error('Failed to add team', err);
+      throw err;
+    }
+  },
+  [tournament.id, activeDivision?.id]
+);
 
-    return () => {
-      unsubDivs();
-      unsubTeams();
-      unsubMatches();
-      unsubCourts();
-    };
-  }, [tournament.id, playersCache]);
 
   /* -------- Tournament phase derived from matches -------- */
 
