@@ -116,6 +116,13 @@ export const createTeamServer = async (opts: {
  *
  * Returns: { existed: boolean, teamId: string, team: Team|null }
  */
+/**
+ * Ensure a team exists for the given tournament/division + players.
+ * Creates / queries teams under tournaments/{tournamentId}/teams so the UI
+ * can see them. Uses a transaction fallback to avoid duplicates.
+ *
+ * Returns: { existed: boolean, teamId: string, team: Team|null }
+ */
 export const ensureTeamExists = async (
   tournamentId: string,
   divisionId: string,
@@ -127,27 +134,12 @@ export const ensureTeamExists = async (
   // Normalize players to sorted unique array
   const normalizedPlayers = Array.from(new Set(playerIds.map(String))).sort();
 
-  // Try server-side idempotent callable first
+  // 1) Look for an exact-match team (by players) to avoid creating duplicates
   try {
-    if (typeof createTeamServer === 'function') {
-      const resp = await createTeamServer({
-        tournamentId,
-        divisionId,
-        playerIds: normalizedPlayers,
-        teamName,
-      });
-      return { existed: !!resp?.existed, teamId: resp.teamId, team: resp.team ?? null };
-    }
-  } catch (err) {
-    console.warn('createTeamServer failed — falling back to local ensureTeamExists', err);
-  }
-
-  // Fallback: look for an exact-match team (by players) to avoid creating duplicates
-  try {
+    if (!tournamentId) throw new Error('Missing tournamentId for ensureTeamExists');
     const firstPlayer = normalizedPlayers[0];
     const q = query(
-      collection(db, 'teams'),
-      where('tournamentId', '==', tournamentId),
+      collection(db, 'tournaments', tournamentId, 'teams'),
       where('divisionId', '==', divisionId),
       where('players', 'array-contains', firstPlayer)
     );
@@ -160,20 +152,19 @@ export const ensureTeamExists = async (
       }
     }
   } catch (err) {
-    console.error('Fallback: existing team lookup failed', err);
+    console.error('ensureTeamExists: initial lookup failed', err);
   }
 
-  // Final fallback: create the team in a transaction so concurrent attempts race safely
-  const teamRef = doc(collection(db, 'teams'));
+  // 2) Transactional create (ensures only one writer wins)
+  const teamRef = doc(collection(db, 'tournaments', tournamentId, 'teams'));
   const now = Date.now();
 
   try {
     await runTransaction(db, async (tx) => {
-      // Re-check inside transaction
+      // Re-check inside transaction for exact-match by players
       const firstPlayer = normalizedPlayers[0];
       const q = query(
-        collection(db, 'teams'),
-        where('tournamentId', '==', tournamentId),
+        collection(db, 'tournaments', tournamentId, 'teams'),
         where('divisionId', '==', divisionId),
         where('players', 'array-contains', firstPlayer)
       );
@@ -182,20 +173,22 @@ export const ensureTeamExists = async (
         const t = d.data();
         const tPlayers = (t.players || []).map(String).sort();
         if (tPlayers.length === normalizedPlayers.length && normalizedPlayers.every((p, i) => p === tPlayers[i])) {
-          // Another writer created it — throw special object to surface it below
+          // Another writer created it — abort by throwing a special object
           throw { alreadyExists: true, teamId: d.id, team: { id: d.id, ...t } };
         }
       }
 
-      // Create a new team doc
-      const teamDoc = {
+      // Create a new team doc under tournaments/{tournamentId}/teams
+      const teamDoc: any = {
         id: teamRef.id,
         tournamentId,
         divisionId,
         players: normalizedPlayers,
         teamName: teamName || null,
         createdByUserId,
-        status: options?.status || 'active',
+        captainPlayerId: normalizedPlayers[0] || createdByUserId,
+        isLookingForPartner: (options?.status === 'pending_partner') || (normalizedPlayers.length === 1),
+        status: options?.status || (normalizedPlayers.length === 1 ? 'pending_partner' : 'active'),
         createdAt: now,
         updatedAt: now
       };
@@ -212,6 +205,7 @@ export const ensureTeamExists = async (
       });
     });
 
+    // Fetch created doc
     const createdSnap = await getDoc(teamRef);
     return { existed: false, teamId: teamRef.id, team: createdSnap.exists() ? { id: createdSnap.id, ...createdSnap.data() } : null };
   } catch (err: any) {
@@ -223,6 +217,7 @@ export const ensureTeamExists = async (
     throw err;
   }
 };
+
 
 
 export const saveFirebaseConfig = (configJson: string) => {
@@ -1061,6 +1056,19 @@ export const getPendingInvitesForDivision = async (
  * - For each selected event/division, ensure teams exist using ensureTeamExists()
  * - Update registration to completed and attach team ids to partnerDetails when applicable
  */
+/**
+ * Finalize a tournament registration:
+ * - Persist the registration payload
+ * - For each selected event/division, ensure teams exist using ensureTeamExists()
+ * - Update registration to completed and attach team ids to partnerDetails when applicable
+ */
+/**
+ * Finalize a tournament registration:
+ * - Persist the registration payload
+ * - For each selected event/division, ensure teams exist using ensureTeamExists()
+ * - For invite mode, create a partnerInvites doc referencing the new team
+ * - Update registration to completed and attach team ids to partnerDetails when applicable
+ */
 export const finalizeRegistration = async (
   payload: TournamentRegistration,
   tournament: Tournament,
@@ -1070,10 +1078,11 @@ export const finalizeRegistration = async (
     throw new Error('Invalid args to finalizeRegistration');
   }
 
-  const regRef = doc(db, 'registrations', payload.id);
+  // Use the app's tournament_registrations collection (UI expects this)
+  const regRef = doc(db, 'tournament_registrations', payload.id);
   const now = Date.now();
 
-  // Persist registration first
+  // Persist registration first (merge so partial updates don't clobber)
   await setDoc(regRef, { ...payload, updatedAt: now }, { merge: true });
 
   const teamsCreated: Record<string, any> = {};
@@ -1089,7 +1098,7 @@ export const finalizeRegistration = async (
         // Joining existing open team
         const openTeamId = details.openTeamId;
         if (!openTeamId) continue;
-        const teamRef = doc(db, 'teams', openTeamId);
+        const teamRef = doc(db, 'tournaments', tournament.id, 'teams', openTeamId);
         const teamSnap = await getDoc(teamRef);
         if (!teamSnap.exists()) {
           console.warn('open team not found', openTeamId);
@@ -1101,7 +1110,6 @@ export const finalizeRegistration = async (
           await updateDoc(teamRef, { players, updatedAt: Date.now() });
         }
         teamsCreated[divId] = { existed: true, teamId: openTeamId, team: { id: openTeamId, ...teamData } };
-        // ensure partnerDetails stores the team id
         partnerDetails[divId] = { ...details, teamId: openTeamId };
         continue;
       }
@@ -1109,15 +1117,56 @@ export const finalizeRegistration = async (
       if (mode === 'invite') {
         // Invited partner
         const partnerUserId = details.partnerUserId;
+        const existingTeamId = details.teamId;
+
+        // If registration already includes a teamId (e.g., invite accept updated it),
+        // just attach that team and continue — do NOT create a new invite.
+        if (existingTeamId) {
+          const teamRef = doc(db, 'tournaments', tournament.id, 'teams', existingTeamId);
+          const teamSnap = await getDoc(teamRef);
+          if (teamSnap.exists()) {
+            const teamData = teamSnap.data() || {};
+            teamsCreated[divId] = { existed: true, teamId: existingTeamId, team: { id: existingTeamId, ...teamData } };
+            partnerDetails[divId] = { ...details, teamId: existingTeamId, mode: 'invite' };
+          } else {
+            // If team does not exist, fall through to normal invite creation below
+          }
+          continue;
+        }
+
+        // No existing team recorded — this is the inviter flow (creating an invite)
         if (!partnerUserId) continue;
         const teamName = details.teamName || null;
-        const resp = await ensureTeamExists(tournament.id, divId, [userProfile.id, partnerUserId], teamName, userProfile.id);
+
+        // Create solo pending team for inviter, then create invite doc
+        const resp = await ensureTeamExists(tournament.id, divId, [userProfile.id], teamName, userProfile.id, { status: 'pending_partner' });
         teamsCreated[divId] = resp;
-        partnerDetails[divId] = { ...details, teamId: resp.teamId };
+        partnerDetails[divId] = { ...details, teamId: resp.teamId, mode: 'invite' };
+
+        try {
+          const inviteRef = doc(collection(db, 'partnerInvites'));
+          const invite: PartnerInvite = {
+            id: inviteRef.id,
+            tournamentId: tournament.id,
+            divisionId: divId,
+            teamId: resp.teamId,
+            inviterId: userProfile.id,
+            invitedUserId: partnerUserId,
+            status: 'pending',
+            inviteToken: null,
+            createdAt: Date.now(),
+            respondedAt: null,
+            expiresAt: null,
+          };
+          await setDoc(inviteRef, invite);
+        } catch (err) {
+          console.error('Failed to create partner invite', err);
+        }
         continue;
       }
 
-      // Default: open_team (user has no partner yet)
+
+      // Default: open_team (user has no partner yet) -> create solo pending team
       if (mode === 'open_team' || !mode) {
         const teamName = details.teamName || `${userProfile.displayName || userProfile.id} (Looking for partner)`;
         const resp = await ensureTeamExists(tournament.id, divId, [userProfile.id], teamName, userProfile.id, { status: 'pending_partner' });
@@ -1131,20 +1180,30 @@ export const finalizeRegistration = async (
     }
   }
 
-  // Mark registration as completed and save partnerDetails with teamIds
+  // Build the registration object that your UI expects
   const updatedReg: TournamentRegistration = {
+    // preserve incoming fields
     ...payload,
+
+    // ensure core fields exist
+    playerId: payload.playerId || userProfile.id,
+    tournamentId: payload.tournamentId || tournament.id,
     partnerDetails,
+    selectedEventIds: payload.selectedEventIds || [],
     status: 'completed',
     waiverAccepted: !!payload.waiverAccepted,
     updatedAt: Date.now(),
-    completedAt: Date.now()
+    completedAt: Date.now(),
+    createdAt: payload.createdAt || now,
   };
 
+  // Write back to the same tournament_registrations collection
   await setDoc(regRef, updatedReg, { merge: true });
 
   return { teamsCreated };
 };
+
+
 
 
 export const subscribeToUserPartnerInvites = (
@@ -1293,12 +1352,11 @@ export const respondToPartnerInvite = async (
         status: 'active',
         players,
         teamName,
-        isLookingForPartner: false, // explicitly not looking once team is full
+        isLookingForPartner: false,
         updatedAt: Date.now(),
       });
 
-            // Withdraw any other solo pending_partner teams for this player
-      // in the same division (e.g. their previous solo team).
+      // Withdraw any other solo pending_partner teams for this player
       const soloTeamsToWithdraw = existingTeams.filter(t =>
         t.divisionId === invite.divisionId &&
         t.id !== invite.teamId &&
@@ -1322,8 +1380,8 @@ export const respondToPartnerInvite = async (
         });
       }
 
-      // 🔹 NEW: cancel any *other* pending invites this captain sent
-      // in the SAME tournament + division, and withdraw those extra teams.
+      // Cancel any *other* pending invites this captain sent in the same tournament + division
+      // and withdraw those extra teams, BUT only if the team is actually owned by the inviter.
       const otherInvitesSnap = await getDocs(
         query(
           collection(db, 'partnerInvites'),
@@ -1334,20 +1392,16 @@ export const respondToPartnerInvite = async (
         )
       );
 
-      otherInvitesSnap.forEach(docSnap => {
-        // Skip the invite we just accepted
-        if (docSnap.id === invite.id) return;
-
+      for (const docSnap of otherInvitesSnap.docs) {
+        if (docSnap.id === invite.id) continue;
         const otherInvite = docSnap.data() as PartnerInvite;
-
-        // Mark the extra invite as cancelled
         const otherInviteRef = doc(db, 'partnerInvites', docSnap.id);
         batch.update(otherInviteRef, {
           status: 'cancelled',
           respondedAt: Date.now(),
         });
 
-        // Withdraw the team that was created for that extra invite
+        // Safely withdraw only if that team belongs to the same inviter (captain)
         const otherTeamRef = doc(
           db,
           'tournaments',
@@ -1355,16 +1409,23 @@ export const respondToPartnerInvite = async (
           'teams',
           otherInvite.teamId
         );
-        batch.update(otherTeamRef, {
-          status: 'withdrawn',
-          isLookingForPartner: false,
-          updatedAt: Date.now(),
-        });
-      });
+        const otherTeamSnap = await getDoc(otherTeamRef);
+        if (otherTeamSnap.exists()) {
+          const otherTeam = otherTeamSnap.data() as Team;
+          const isOwnedByInviter = otherTeam.captainPlayerId === invite.inviterId || otherTeam.createdByUserId === invite.inviterId;
+          const isPending = otherTeam.status === 'pending_partner';
+          if (isOwnedByInviter && isPending) {
+            batch.update(otherTeamRef, {
+              status: 'withdrawn',
+              isLookingForPartner: false,
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      }
     }
   } else {
-    // DECLINED: keep captain only, reset name, do NOT auto-open as "looking for partner"
-
+    // DECLINED branch (unchanged)
     const teamSnap = await getDoc(teamRef);
     if (teamSnap.exists()) {
       const team = teamSnap.data() as Team;
@@ -1374,7 +1435,6 @@ export const respondToPartnerInvite = async (
         p => p !== invite.invitedUserId
       );
 
-      // Fetch captain profile to reset name
       const captainProfile = await getUserProfile(team.captainPlayerId);
       const newName = captainProfile
         ? captainProfile.displayName || 'Player'
@@ -1384,7 +1444,6 @@ export const respondToPartnerInvite = async (
         status: 'pending_partner',
         players,
         teamName: newName,
-        // Keep this team invite-only after a decline.
         isLookingForPartner: false,
         updatedAt: Date.now(),
       });
@@ -1394,8 +1453,29 @@ export const respondToPartnerInvite = async (
   // 3) Commit all updates
   await batch.commit();
 
-  // 4) For accepted invites, tell caller where to navigate
+  // 4) If accepted, update the invited user's registration so their wizard knows they are invited
   if (response === 'accepted') {
+    try {
+      const regId = `${invite.invitedUserId}_${invite.tournamentId}`;
+      const regRef = doc(db, 'tournament_registrations', regId);
+
+      const updateData: Partial<TournamentRegistration> = {
+        // ensure they see the partnerDetails for the division
+        partnerDetails: {
+          ...( (await (await getDoc(regRef)).data())?.partnerDetails || {} ),
+          [invite.divisionId]: {
+            mode: 'invite',
+            teamId: invite.teamId,
+            partnerUserId: invite.inviterId
+          }
+        }
+      };
+
+      await setDoc(regRef, updateData, { merge: true });
+    } catch (err) {
+      console.error('Failed to update invited user registration after accept', err);
+    }
+
     return {
       tournamentId: invite.tournamentId,
       divisionId: invite.divisionId,
@@ -1404,6 +1484,7 @@ export const respondToPartnerInvite = async (
 
   return null;
 };
+
 
 
 
