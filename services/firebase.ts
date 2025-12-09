@@ -1091,30 +1091,40 @@ export const finalizeRegistration = async (
   // Iterate selected event/divisions (safely handle undefined)
   for (const divId of payload.selectedEventIds || []) {
     // --- NEW: Prevent creating a duplicate team if user already has one for this division ---
-      try {
-        // get teams for this user in this tournament
-        const userTeams = await getUserTeamsForTournament(tournament.id, userProfile.id);
-        const existingTeamForDivision = userTeams.find(t =>
-          t.divisionId === divId &&
-          t.status !== 'withdrawn' &&
-          t.status !== 'cancelled'
-        );
+    // NOTE: If the user is attempting to *invite* someone (mode === 'invite'),
+    // we should NOT `continue` here — we want to allow the invite-creation branch
+    // below to create a partnerInvites doc for the existing team.
+    try {
+      const userTeams = await getUserTeamsForTournament(tournament.id, userProfile.id);
+      const existingTeamForDivision = userTeams.find(t =>
+        t.divisionId === divId &&
+        t.status !== 'withdrawn' &&
+        t.status !== 'cancelled'
+      );
 
-        if (existingTeamForDivision) {
-          // Attach existing team to registration instead of creating a new one
+      if (existingTeamForDivision) {
+        // Attach existing team to registration so we don't create another team.
+        // But *only skip* creating anything if the user isn't trying to invite someone.
+        const currentPartnerInfo = partnerDetails[divId] || {};
+        partnerDetails[divId] = {
+          ...currentPartnerInfo,
+          teamId: existingTeamForDivision.id,
+          mode: currentPartnerInfo.mode || ((existingTeamForDivision.players?.length || 0) === 1 ? 'open_team' : 'invite')
+        };
+
+        // If the user is NOT choosing "invite", we can safely continue (reuse team).
+        // If they are choosing "invite", do NOT continue — fall through so the invite branch
+        // can create the partnerInvites doc referencing the existing team.
+        if (partnerDetails[divId].mode !== 'invite') {
           teamsCreated[divId] = { existed: true, teamId: existingTeamForDivision.id, team: existingTeamForDivision };
-          partnerDetails[divId] = {
-            ...details,
-            teamId: existingTeamForDivision.id,
-            // if existing team is a solo pending team, mark mode as open_team
-            mode: details.mode || ((existingTeamForDivision.players?.length || 0) === 1 ? 'open_team' : 'invite')
-          };
-          continue; // Skip the rest - reuse existing team
+          continue; // Skip the rest - reuse existing team when not inviting
         }
-      } catch (err) {
-        // don't block registration if this check fails; log and continue
-        console.warn('finalizeRegistration: failed to check existing user team for division', divId, err);
+        // else: do NOT continue here; let the invite branch below handle creating the invite
       }
+    } catch (err) {
+      console.warn('finalizeRegistration: failed to check existing user team for division', divId, err);
+    }
+
     // --- NEW: Prevent creating a duplicate team if user already has one for this division ---
     try {
       const userTeams = await getUserTeamsForTournament(tournament.id, userProfile.id);
@@ -1164,55 +1174,85 @@ export const finalizeRegistration = async (
       }
 
       if (mode === 'invite') {
-        // Invited partner
-        const partnerUserId = details.partnerUserId;
-        const existingTeamId = details.teamId;
+  // Invited partner
+  const partnerUserId = details.partnerUserId;
+  const existingTeamId = details.teamId;
 
-        // If registration already includes a teamId (e.g., invite accept updated it),
-        // just attach that team and continue — do NOT create a new invite.
-        if (existingTeamId) {
-          const teamRef = doc(db, 'tournaments', tournament.id, 'teams', existingTeamId);
-          const teamSnap = await getDoc(teamRef);
-          if (teamSnap.exists()) {
-            const teamData = teamSnap.data() || {};
-            teamsCreated[divId] = { existed: true, teamId: existingTeamId, team: { id: existingTeamId, ...teamData } };
-            partnerDetails[divId] = { ...details, teamId: existingTeamId, mode: 'invite' };
-          } else {
-            // If team does not exist, fall through to normal invite creation below
-          }
-          continue;
-        }
+  // If registration already includes a teamId (e.g., invite accept updated it OR
+  // we attached an existingTeam above), and the inviter specified a partner,
+  // create a partnerInvites doc referencing the existing team (if not already present)
+  if (existingTeamId) {
+    const teamRef = doc(db, 'tournaments', tournament.id, 'teams', existingTeamId);
+    const teamSnap = await getDoc(teamRef);
+    if (teamSnap.exists()) {
+      const teamData = teamSnap.data() || {};
+      teamsCreated[divId] = { existed: true, teamId: existingTeamId, team: { id: existingTeamId, ...teamData } };
+      partnerDetails[divId] = { ...details, teamId: existingTeamId, mode: 'invite' };
 
-        // No existing team recorded — this is the inviter flow (creating an invite)
-        if (!partnerUserId) continue;
-        const teamName = details.teamName || null;
-
-        // Create solo pending team for inviter, then create invite doc
-        const resp = await ensureTeamExists(tournament.id, divId, [userProfile.id], teamName, userProfile.id, { status: 'pending_partner' });
-        teamsCreated[divId] = resp;
-        partnerDetails[divId] = { ...details, teamId: resp.teamId, mode: 'invite' };
-
+      // If inviter also selected a partner to invite, create the partnerInvites doc
+      if (partnerUserId) {
         try {
-          const inviteRef = doc(collection(db, 'partnerInvites'));
-          const invite: PartnerInvite = {
-            id: inviteRef.id,
-            tournamentId: tournament.id,
-            divisionId: divId,
-            teamId: resp.teamId,
-            inviterId: userProfile.id,
-            invitedUserId: partnerUserId,
-            status: 'pending',
-            inviteToken: null,
-            createdAt: Date.now(),
-            respondedAt: null,
-            expiresAt: null,
-          };
-          await setDoc(inviteRef, invite);
+          // Avoid creating duplicate pending invites for the same invitedUser/team
+          const pendingInvites = await getPendingInvitesForDivision(tournament.id, divId);
+          const duplicate = pendingInvites.find(pi => pi.teamId === existingTeamId && pi.invitedUserId === partnerUserId && pi.inviterId === userProfile.id);
+          if (!duplicate) {
+            const inviteRef = doc(collection(db, 'partnerInvites'));
+            const invite: PartnerInvite = {
+              id: inviteRef.id,
+              tournamentId: tournament.id,
+              divisionId: divId,
+              teamId: existingTeamId,
+              inviterId: userProfile.id,
+              invitedUserId: partnerUserId,
+              status: 'pending',
+              inviteToken: null,
+              createdAt: Date.now(),
+              respondedAt: null,
+              expiresAt: null,
+            };
+            await setDoc(inviteRef, invite);
+          }
         } catch (err) {
-          console.error('Failed to create partner invite', err);
+          console.error('finalizeRegistration: failed to create partner invite for existing team', err);
         }
-        continue;
       }
+
+      continue;
+    }
+    // If the team record is missing for some reason, fall through to create a new one below.
+  }
+
+  // No existing team recorded — this is the inviter flow (creating an invite)
+  if (!partnerUserId) continue;
+  const teamName = details.teamName || null;
+
+  // Create solo pending team for inviter, then create invite doc
+  const resp = await ensureTeamExists(tournament.id, divId, [userProfile.id], teamName, userProfile.id, { status: 'pending_partner' });
+  teamsCreated[divId] = resp;
+  partnerDetails[divId] = { ...details, teamId: resp.teamId, mode: 'invite' };
+
+  try {
+    const inviteRef = doc(collection(db, 'partnerInvites'));
+    const invite: PartnerInvite = {
+      id: inviteRef.id,
+      tournamentId: tournament.id,
+      divisionId: divId,
+      teamId: resp.teamId,
+      inviterId: userProfile.id,
+      invitedUserId: partnerUserId,
+      status: 'pending',
+      inviteToken: null,
+      createdAt: Date.now(),
+      respondedAt: null,
+      expiresAt: null,
+    };
+    await setDoc(inviteRef, invite);
+  } catch (err) {
+    console.error('Failed to create partner invite', err);
+  }
+  continue;
+}
+
 
 
       // Default: open_team (user has no partner yet) -> create solo pending team
