@@ -1090,6 +1090,55 @@ export const finalizeRegistration = async (
 
   // Iterate selected event/divisions (safely handle undefined)
   for (const divId of payload.selectedEventIds || []) {
+    // --- NEW: Prevent creating a duplicate team if user already has one for this division ---
+      try {
+        // get teams for this user in this tournament
+        const userTeams = await getUserTeamsForTournament(tournament.id, userProfile.id);
+        const existingTeamForDivision = userTeams.find(t =>
+          t.divisionId === divId &&
+          t.status !== 'withdrawn' &&
+          t.status !== 'cancelled'
+        );
+
+        if (existingTeamForDivision) {
+          // Attach existing team to registration instead of creating a new one
+          teamsCreated[divId] = { existed: true, teamId: existingTeamForDivision.id, team: existingTeamForDivision };
+          partnerDetails[divId] = {
+            ...details,
+            teamId: existingTeamForDivision.id,
+            // if existing team is a solo pending team, mark mode as open_team
+            mode: details.mode || ((existingTeamForDivision.players?.length || 0) === 1 ? 'open_team' : 'invite')
+          };
+          continue; // Skip the rest - reuse existing team
+        }
+      } catch (err) {
+        // don't block registration if this check fails; log and continue
+        console.warn('finalizeRegistration: failed to check existing user team for division', divId, err);
+      }
+    // --- NEW: Prevent creating a duplicate team if user already has one for this division ---
+    try {
+      const userTeams = await getUserTeamsForTournament(tournament.id, userProfile.id);
+      const existingTeamForDivision = userTeams.find(t =>
+        t.divisionId === divId &&
+        t.status !== 'withdrawn' &&
+        t.status !== 'cancelled'
+      );
+
+      if (existingTeamForDivision) {
+        // Attach existing team to registration instead of creating a new one
+        teamsCreated[divId] = { existed: true, teamId: existingTeamForDivision.id, team: existingTeamForDivision };
+        partnerDetails[divId] = {
+          ...partnerDetails[divId],
+          teamId: existingTeamForDivision.id,
+          mode: partnerDetails[divId]?.mode || ((existingTeamForDivision.players?.length || 0) === 1 ? 'open_team' : 'invite')
+        };
+        continue; // Skip the rest - reuse existing team
+      }
+    } catch (err) {
+      // don't block registration if this check fails; log and continue
+      console.warn('finalizeRegistration: failed to check existing user team for division', divId, err);
+    }
+
     try {
       const details = partnerDetails[divId] || {};
       const mode = details.mode || 'open_team';
@@ -1450,7 +1499,7 @@ export const respondToPartnerInvite = async (
     }
   }
 
-  // 3) Commit all updates
+    // 3) Commit all updates
   await batch.commit();
 
   // 4) If accepted, update the invited user's registration so their wizard knows they are invited
@@ -1459,19 +1508,28 @@ export const respondToPartnerInvite = async (
       const regId = `${invite.invitedUserId}_${invite.tournamentId}`;
       const regRef = doc(db, 'tournament_registrations', regId);
 
-      const updateData: Partial<TournamentRegistration> = {
-        // ensure they see the partnerDetails for the division
-        partnerDetails: {
-          ...( (await (await getDoc(regRef)).data())?.partnerDetails || {} ),
-          [invite.divisionId]: {
-            mode: 'invite',
-            teamId: invite.teamId,
-            partnerUserId: invite.inviterId
-          }
+      // Ensure the registration exists
+      const regSnap = await getDoc(regRef);
+      if (!regSnap.exists()) {
+        // create base registration so we can attach partnerDetails
+        await ensureRegistrationForUser(invite.tournamentId, invite.invitedUserId, invite.divisionId);
+      }
+
+      // Fetch latest and merge partnerDetails
+      const latestSnap = await getDoc(regRef);
+      const existing = latestSnap.exists() ? (latestSnap.data() as any) : {};
+      const existingPartnerDetails = existing.partnerDetails || {};
+
+      const updatePartnerDetails = {
+        ...existingPartnerDetails,
+        [invite.divisionId]: {
+          mode: 'invite',
+          teamId: invite.teamId,
+          partnerUserId: invite.inviterId
         }
       };
 
-      await setDoc(regRef, updateData, { merge: true });
+      await setDoc(regRef, { partnerDetails: updatePartnerDetails, updatedAt: Date.now() }, { merge: true });
     } catch (err) {
       console.error('Failed to update invited user registration after accept', err);
     }
@@ -1484,6 +1542,7 @@ export const respondToPartnerInvite = async (
 
   return null;
 };
+
 
 
 
