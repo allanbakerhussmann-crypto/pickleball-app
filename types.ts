@@ -1,5 +1,6 @@
 
 
+
 export type TournamentFormat =
   | 'single_elim'
   | 'double_elim'
@@ -116,11 +117,14 @@ export interface TournamentRegistration {
       partnerName?: string;
       id?: string;   // Legacy support if needed, but prefer partnerUserId
       name?: string; // Legacy support
+      teamId?: string;
+      teamName?: string;
     }
   >;
 
   createdAt: number;
   updatedAt: number;
+  completedAt?: number;
 }
 
 export interface CustomField {
@@ -348,6 +352,8 @@ export interface Team {
   
   players: string[]; // List of userIds
   
+  pendingInvitedUserId?: string | null;
+
   createdAt?: number;
   updatedAt?: number;
   

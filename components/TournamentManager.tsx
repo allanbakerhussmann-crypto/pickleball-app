@@ -1,5 +1,4 @@
 
-
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 
 import { Schedule } from './Schedule';
@@ -30,9 +29,8 @@ import {
   addCourt,
   updateCourt,
   deleteCourt,
-  deleteTeam, // Added import
-  batchCreateMatches,
-  createTeamServer,              // <- renamed wrapper
+  deleteTeam,
+  createTeamServer,
   getUsersByIds,
   saveTournament,
   generatePoolsSchedule,
@@ -49,14 +47,7 @@ import {
   disputeMatchScore,
 } from '../services/matchService';
 
-//import { getScheduledQueue } from '../services/courtAllocator';
-
 /* ----------------- Helpers ----------------- */
-
-const generateId = () =>
-  typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : Date.now().toString(36);
 
 // Score validation based on division format
 const validateScoreForDivision = (
@@ -170,7 +161,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     loadRegistration();
   }, [tournament.id, currentUser]);
 
-    // Subcollection Data
+  // Subcollection Data
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
@@ -198,7 +189,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     }
   }, [divisions, activeDivisionId]);
 
-
   // Editable division settings (ratings, age, seeding)
   const [divisionSettings, setDivisionSettings] = useState<{
     minRating: string;
@@ -215,79 +205,75 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   });
 
   /* -------- Subscriptions (only depend on tournament.id) -------- */
-useEffect(() => {
-  const unsubDivs = subscribeToDivisions(tournament.id, setDivisions);
-  const unsubTeams = subscribeToTeams(tournament.id, setTeams);
-  const unsubMatches = subscribeToMatches(tournament.id, setMatches);
-  const unsubCourts = subscribeToCourts(tournament.id, setCourts);
+  useEffect(() => {
+    const unsubDivs = subscribeToDivisions(tournament.id, setDivisions);
+    const unsubTeams = subscribeToTeams(tournament.id, setTeams);
+    const unsubMatches = subscribeToMatches(tournament.id, setMatches);
+    const unsubCourts = subscribeToCourts(tournament.id, setCourts);
 
-  return () => {
-    unsubDivs();
-    unsubTeams();
-    unsubMatches();
-    unsubCourts();
-  };
-}, [tournament.id]); // <- only tournament.id, not playersCache
+    return () => {
+      unsubDivs();
+      unsubTeams();
+      unsubMatches();
+      unsubCourts();
+    };
+  }, [tournament.id]);
 
-/* -------- Fetch missing player profiles when teams change -------- */
-useEffect(() => {
-  // Build list of all player IDs from the teams and fetch missing profiles
-  const allPlayerIds = Array.from(new Set(teams.flatMap(t => t.players || [])));
-  const missing = allPlayerIds.filter(
-    id => !playersCache[id] && !id.startsWith('invite_') && !id.startsWith('tbd')
-  );
-  if (missing.length === 0) return;
+  /* -------- Fetch missing player profiles when teams change -------- */
+  useEffect(() => {
+    const allPlayerIds = Array.from(new Set(teams.flatMap(t => t.players || [])));
+    const missing = allPlayerIds.filter(
+      id => !playersCache[id] && !id.startsWith('invite_') && !id.startsWith('tbd')
+    );
+    if (missing.length === 0) return;
 
-  let cancelled = false;
-  (async () => {
-    try {
-      const profiles = await getUsersByIds(missing);
-      if (cancelled) return;
-      setPlayersCache(prev => {
-        const next = { ...prev };
-        profiles.forEach(p => (next[p.id] = p));
-        return next;
-      });
-    } catch (err) {
-      console.error('Failed to fetch missing player profiles', err);
-    }
-  })();
-
-  return () => {
-    cancelled = true;
-  };
-}, [teams]); // depends on teams
-
-/* -------- Handler to add a team via the server createTeam function -------- */
-const handleAddTeam = useCallback(
-  async ({ name, playerIds }: { name: string; playerIds: string[] }) => {
-    if (!activeDivision) {
-      throw new Error('No active division selected');
-    }
-    try {
-      // createTeamServer calls the server-side Cloud Function
-      const res = await createTeamServer({
-        tournamentId: tournament.id,
-        divisionId: activeDivision.id,
-        playerIds,
-        teamName: name || null,
-      });
-
-      if (res?.existed) {
-        // optional UI message: team existed already
-        console.info('Team already existed:', res.teamId);
-      } else {
-        console.info('Team created:', res.teamId);
+    let cancelled = false;
+    (async () => {
+      try {
+        const profiles = await getUsersByIds(missing);
+        if (cancelled) return;
+        setPlayersCache(prev => {
+          const next = { ...prev };
+          profiles.forEach(p => (next[p.id] = p));
+          return next;
+        });
+      } catch (err) {
+        console.error('Failed to fetch missing player profiles', err);
       }
-      return res;
-    } catch (err) {
-      console.error('Failed to add team', err);
-      throw err;
-    }
-  },
-  [tournament.id, activeDivision?.id]
-);
+    })();
 
+    return () => {
+      cancelled = true;
+    };
+  }, [teams]);
+
+  /* -------- Handler to add a team via the server createTeam function -------- */
+  const handleAddTeam = useCallback(
+    async ({ name, playerIds }: { name: string; playerIds: string[] }) => {
+      if (!activeDivision) {
+        throw new Error('No active division selected');
+      }
+      try {
+        const res = await createTeamServer({
+          tournamentId: tournament.id,
+          divisionId: activeDivision.id,
+          playerIds,
+          teamName: name || null,
+        });
+
+        if (res?.existed) {
+          console.info('Team already existed:', res.teamId);
+        } else {
+          console.info('Team created:', res.teamId);
+        }
+        return res;
+      } catch (err) {
+        console.error('Failed to add team', err);
+        throw err;
+      }
+    },
+    [tournament.id, activeDivision]
+  );
 
   /* -------- Tournament phase derived from matches -------- */
 
@@ -350,14 +336,8 @@ const handleAddTeam = useCallback(
     [divisionMatches]
   );
 
-    /* -------- Court Allocation Data -------- */
-  // Build a "ready" queue of matches that could start as soon as a court is free.
-  // - Only not_started / scheduled matches with no court
-  // - Skip any match where either team is already on a court (non-completed)
-  // - Ensure each team appears at most once in the queue
-
+  /* -------- Court Allocation Data -------- */
   const { rawQueue, waitTimes } = useMemo(() => {
-    // Teams currently busy on a court (any status except completed)
     const busy = new Set<string>();
     matches.forEach(m => {
       if (!m.court) return;
@@ -366,18 +346,15 @@ const handleAddTeam = useCallback(
       busy.add(m.teamBId);
     });
 
-    // Candidate matches that are not yet on a court
-    // Treat "scheduled" (and legacy "not_started"/missing) as "waiting to be played"
     const candidates = matches
       .filter(m => {
         const status = m.status ?? 'scheduled';
         const isWaiting =
-          status === 'scheduled' || status === 'not_started'; // keep 'not_started' for any old data
+          status === 'scheduled' || status === 'not_started';
         return isWaiting && !m.court;
       })
       .slice()
-      .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1)); // earlier rounds first
-
+      .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1));
 
     const queue: Match[] = [];
     const wt: Record<string, number> = {};
@@ -386,9 +363,7 @@ const handleAddTeam = useCallback(
       const isBusy = busy.has(m.teamAId) || busy.has(m.teamBId);
       if (!isBusy) {
         queue.push(m);
-        // simple placeholder wait time; can be improved later
         wt[m.id] = 0;
-        // once we’ve queued this match, treat those teams as "reserved"
         busy.add(m.teamAId);
         busy.add(m.teamBId);
       } else {
@@ -398,7 +373,6 @@ const handleAddTeam = useCallback(
 
     return { rawQueue: queue, waitTimes: wt };
   }, [matches, courts]);
-
 
   /* -------- Helpers -------- */
 
@@ -445,7 +419,6 @@ const handleAddTeam = useCallback(
       } else {
         status = 'ASSIGNED';
       }
-
 
       return {
         id: court.id,
@@ -620,7 +593,7 @@ const handleAddTeam = useCallback(
     [myDivisionMatches]
   );
 
-    const myNextMatch = useMemo(() => {
+  const myNextMatch = useMemo(() => {
     const waiting = myDivisionMatches.filter(m => {
       const status = m.status ?? 'scheduled';
       return status === 'scheduled' || status === 'not_started';
@@ -628,7 +601,6 @@ const handleAddTeam = useCallback(
     if (waiting.length === 0) return undefined;
     return waiting.sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1))[0];
   }, [myDivisionMatches]);
-
 
   const myMatchToShow = useMemo(
     () =>
@@ -647,7 +619,6 @@ const handleAddTeam = useCallback(
     const teamB = teams.find(t => t.id === match.teamBId);
 
     const isOnTeamA = teamA?.players?.includes(currentUser.uid);
-    const isOnTeamB = teamB?.players?.includes(currentUser.uid);
 
     const mySideName = isOnTeamA
       ? getTeamDisplayName(match.teamAId)
@@ -659,9 +630,8 @@ const handleAddTeam = useCallback(
 
     let statusLabel = '';
     if (match.status === 'in_progress') statusLabel = 'In Progress';
-        else if (!match.status || match.status === 'scheduled' || match.status === 'not_started')
+    else if (!match.status || match.status === 'scheduled' || match.status === 'not_started')
       statusLabel = 'Up Next';
-
     else if (match.status === 'pending_confirmation')
       statusLabel = 'Awaiting Score Confirmation';
     else if (match.status === 'disputed') statusLabel = 'Disputed Score';
@@ -943,7 +913,6 @@ const handleAddTeam = useCallback(
   /**
    * Simple "Assign" used from the Courts tab queue
    * - Immediately starts the match (in_progress) on a free active court
-   *   (kept so your existing Assign button keeps working)
    */
   const handleAssignCourt = async (matchId: string) => {
     const match = matches.find(m => m.id === matchId);
@@ -1010,110 +979,101 @@ const handleAddTeam = useCallback(
     });
   };
 
-// When finishing a match on a court:
-// - Require that a score has been entered
-// - Mark the match completed & free the court
-// - Auto-assign the next waiting match (if any) to this court
-const finishMatchOnCourt = async (
-  courtId: string,
-  scoreTeamA?: number,
-  scoreTeamB?: number
-) => {
-  const court = courts.find(c => c.id === courtId);
-  if (!court) return;
+  // When finishing a match on a court:
+  const finishMatchOnCourt = async (
+    courtId: string,
+    scoreTeamA?: number,
+    scoreTeamB?: number
+  ) => {
+    const court = courts.find(c => c.id === courtId);
+    if (!court) return;
 
-  const currentMatch = matches.find(
-    m => m.court === court.name && m.status !== 'completed'
-  );
-  if (!currentMatch) {
-    alert('No active match found on this court.');
-    return;
-  }
-
-  const division =
-    divisions.find(d => d.id === currentMatch.divisionId) || null;
-
-  const existingHasScores =
-    Array.isArray(currentMatch.scoreTeamAGames) &&
-    currentMatch.scoreTeamAGames.length > 0 &&
-    Array.isArray(currentMatch.scoreTeamBGames) &&
-    currentMatch.scoreTeamBGames.length > 0;
-
-  const inlineHasScores =
-    typeof scoreTeamA === 'number' &&
-    !Number.isNaN(scoreTeamA) &&
-    typeof scoreTeamB === 'number' &&
-    !Number.isNaN(scoreTeamB);
-
-  // If there are no scores recorded anywhere, require inline scores.
-  if (!existingHasScores && !inlineHasScores) {
-    alert('Please enter scores for both teams before finishing this match.');
-    return;
-  }
-
-  // When using the inline scores, validate them against the division rules.
-  if (!existingHasScores && inlineHasScores && division) {
-    const validationError = validateScoreForDivision(
-      scoreTeamA as number,
-      scoreTeamB as number,
-      division
+    const currentMatch = matches.find(
+      m => m.court === court.name && m.status !== 'completed'
     );
-    if (validationError) {
-      alert(validationError);
+    if (!currentMatch) {
+      alert('No active match found on this court.');
       return;
     }
-  }
 
-  const updates: Partial<Match> = {
-    status: 'completed',
-    endTime: Date.now(),
-    court: '',
-  };
+    const division =
+      divisions.find(d => d.id === currentMatch.divisionId) || null;
 
-  // If scores were not already stored on the match, write the inline ones.
-  if (!existingHasScores && inlineHasScores) {
-    const sA = scoreTeamA as number;
-    const sB = scoreTeamB as number;
+    const existingHasScores =
+      Array.isArray(currentMatch.scoreTeamAGames) &&
+      currentMatch.scoreTeamAGames.length > 0 &&
+      Array.isArray(currentMatch.scoreTeamBGames) &&
+      currentMatch.scoreTeamBGames.length > 0;
 
-    updates.scoreTeamAGames = [sA];
-    updates.scoreTeamBGames = [sB];
-    updates.winnerTeamId =
-      sA > sB ? currentMatch.teamAId : currentMatch.teamBId;
-  }
+    const inlineHasScores =
+      typeof scoreTeamA === 'number' &&
+      !Number.isNaN(scoreTeamA) &&
+      typeof scoreTeamB === 'number' &&
+      !Number.isNaN(scoreTeamB);
 
-  await updateMatchScore(tournament.id, currentMatch.id, updates);
+    if (!existingHasScores && !inlineHasScores) {
+      alert('Please enter scores for both teams before finishing this match.');
+      return;
+    }
 
-  // Find next waiting match (prefer same division, earliest round)
-  const nextSameDivision = matches
-    .filter(
-      m =>
-        (m.status === 'not_started' ||
-          m.status === 'scheduled' ||
-          !m.status) &&
-        !m.court &&
-        m.divisionId === currentMatch.divisionId
-    )
-    .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1))[0];
+    if (!existingHasScores && inlineHasScores && division) {
+      const validationError = validateScoreForDivision(
+        scoreTeamA as number,
+        scoreTeamB as number,
+        division
+      );
+      if (validationError) {
+        alert(validationError);
+        return;
+      }
+    }
 
-  const nextAnyDivision =
-    nextSameDivision ||
-    matches
+    const updates: Partial<Match> = {
+      status: 'completed',
+      endTime: Date.now(),
+      court: '',
+    };
+
+    if (!existingHasScores && inlineHasScores) {
+      const sA = scoreTeamA as number;
+      const sB = scoreTeamB as number;
+
+      updates.scoreTeamAGames = [sA];
+      updates.scoreTeamBGames = [sB];
+      updates.winnerTeamId =
+        sA > sB ? currentMatch.teamAId : currentMatch.teamBId;
+    }
+
+    await updateMatchScore(tournament.id, currentMatch.id, updates);
+
+    // Find next waiting match (prefer same division, earliest round)
+    const nextSameDivision = matches
       .filter(
         m =>
           (m.status === 'not_started' ||
             m.status === 'scheduled' ||
             !m.status) &&
-          !m.court
+          !m.court &&
+          m.divisionId === currentMatch.divisionId
       )
       .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1))[0];
 
-  if (nextAnyDivision) {
-    await assignMatchToCourt(nextAnyDivision.id, court.name);
-  }
-};
-;
+    const nextAnyDivision =
+      nextSameDivision ||
+      matches
+        .filter(
+          m =>
+            (m.status === 'not_started' ||
+              m.status === 'scheduled' ||
+              !m.status) &&
+            !m.court
+        )
+        .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1))[0];
 
-
+    if (nextAnyDivision) {
+      await assignMatchToCourt(nextAnyDivision.id, court.name);
+    }
+  };
 
   // Helper: list of team IDs that are currently busy on a court
   const getBusyTeamIds = () => {
@@ -1151,7 +1111,6 @@ const finishMatchOnCourt = async (
       return;
     }
 
-    // Start with the teams that are already busy on courts
     const busy = getBusyTeamIds();
     const updates: Promise<any>[] = [];
     let queueIndex = 0;
@@ -1159,8 +1118,6 @@ const finishMatchOnCourt = async (
     for (const court of freeCourts) {
       let matchToAssign: Match | undefined;
 
-      // Walk through the ready queue and find the next match
-      // whose teams are not already used in this auto-fill pass.
       while (queueIndex < rawQueue.length && !matchToAssign) {
         const candidate = rawQueue[queueIndex++];
 
@@ -1176,10 +1133,9 @@ const finishMatchOnCourt = async (
       updates.push(
         updateMatchScore(tournament.id, matchToAssign.id, {
           court: court.name,
-          status: 'scheduled', // match is scheduled on a court, not yet played
+          status: 'scheduled',
         })
       );
-
     }
 
     if (updates.length === 0) {
@@ -1193,8 +1149,6 @@ const finishMatchOnCourt = async (
 
     await Promise.all(updates);
   };
-
-
 
   /* -------- Tournament phase helpers (UI) -------- */
 
@@ -1252,8 +1206,6 @@ const finishMatchOnCourt = async (
 
   if (!activeDivision)
     return <div className="p-8 text-center">Loading...</div>;
-
-  /* -------- Render -------- */
 
   return (
     <div className="animate-fade-in relative">
@@ -1497,6 +1449,12 @@ const finishMatchOnCourt = async (
                   value={newCourtName}
                   onChange={e => setNewCourtName(e.target.value)}
                 />
+                <button
+                  onClick={handleAddCourt}
+                  className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold"
+                >
+                  Add
+                </button>
               </div>
 
               <div className="grid gap-2">
@@ -1829,7 +1787,6 @@ const finishMatchOnCourt = async (
                 </div>
               </div>
 
-
               <CourtAllocation
                 courts={courtViewModels}
                 matches={courtMatchModels}
@@ -1843,7 +1800,6 @@ const finishMatchOnCourt = async (
                 }}
                 onFinishMatchOnCourt={finishMatchOnCourt}
               />
-
             </div>
           )}
         </div>
@@ -2009,7 +1965,6 @@ const finishMatchOnCourt = async (
                   myMatchSummary.match.status === 'not_started') &&
                   myMatchSummary.match.court && (
                     <button
-
                       onClick={() =>
                         handlePlayerStartMatch(myMatchSummary.match.id)
                       }

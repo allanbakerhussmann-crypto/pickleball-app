@@ -1,3 +1,4 @@
+/* ---- START Standings.tsx ---- */
 import React from 'react';
 import type { StandingsEntry } from '../types';
 
@@ -7,6 +8,8 @@ interface StandingsTeam {
   id: string;
   name: string;
   players?: string[];
+  pendingInvitedUserId?: string | null;
+  pendingInvitedUserDisplayName?: string | null;
 }
 
 type StandingsRow = StandingsEntry & {
@@ -19,32 +22,14 @@ interface StandingsProps {
   h2hLookup?: H2HMatrix;
 }
 
-/**
- * Standings table
- *
- * NOTE:
- * - We now auto-hide the "Player 2" column when all teams only have one player
- *   (i.e. singles divisions).
- * - For doubles, where at least one team has 2 players, Player 2 column is shown.
- */
-export const Standings: React.FC<StandingsProps> = ({
-  standings,
-  tieBreakers,
-  h2hLookup,
-}) => {
-  // Auto-detect if we should show a Player 2 column:
-  // if ANY team has 2 or more players, we treat this as doubles for display.
-  const showPlayer2 = standings.some(
-    row => row.team?.players && row.team.players.length > 1
-  );
+export const Standings: React.FC<StandingsProps> = ({ standings, tieBreakers, h2hLookup }) => {
+  const showPlayer2 = standings.some(row => row.team?.players && row.team.players.length > 1 || row.team?.pendingInvitedUserId);
 
   if (!standings || standings.length === 0) {
     return (
       <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
         <h2 className="text-xl font-bold mb-4 text-green-400">Standings</h2>
-        <p className="text-gray-400 text-sm italic">
-          No standings available yet. Play some matches first.
-        </p>
+        <p className="text-gray-400 text-sm italic">No standings available yet. Play some matches first.</p>
       </div>
     );
   }
@@ -72,51 +57,22 @@ export const Standings: React.FC<StandingsProps> = ({
           <tbody>
             {standings.map((row, index) => {
               const players = row.team?.players || [];
+              const p1 = players[0] || '-';
+              const p2 = players[1] || row.team?.pendingInvitedUserDisplayName || row.team?.pendingInvitedUserId || '-';
               const pd = row.pointDifference ?? 0;
 
               return (
-                <tr
-                  key={row.teamId}
-                  className="border-b border-gray-800 hover:bg-gray-900/60"
-                >
-                  <td className="py-2 px-3 text-center text-gray-300 text-xs">
-                    {index + 1}
-                  </td>
-                  <td className="py-2 px-3 font-semibold text-white">
-                    {row.team?.name || row.teamName}
-                  </td>
-                  <td className="py-2 px-3 text-gray-200">
-                    {players[0] || '-'}
-                  </td>
-                  {showPlayer2 && (
-                    <td className="py-2 px-3 text-gray-200">
-                      {players[1] || '-'}
-                    </td>
-                  )}
-                  <td className="py-2 px-3 text-center text-gray-200">
-                    {row.played}
-                  </td>
-                  <td className="py-2 px-3 text-center text-green-400 font-semibold">
-                    {row.wins}
-                  </td>
-                  <td className="py-2 px-3 text-center text-red-400">
-                    {row.losses}
-                  </td>
-                  <td className="py-2 px-3 text-center text-gray-200">
-                    {row.pointsFor}
-                  </td>
-                  <td className="py-2 px-3 text-center text-gray-200">
-                    {row.pointsAgainst}
-                  </td>
-                  <td
-                    className={`py-2 px-3 text-center font-semibold ${
-                      pd > 0
-                        ? 'text-green-400'
-                        : pd < 0
-                        ? 'text-red-400'
-                        : 'text-gray-300'
-                    }`}
-                  >
+                <tr key={row.teamId} className="border-b border-gray-800 hover:bg-gray-900/60">
+                  <td className="py-2 px-3 text-center text-gray-300 text-xs">{index + 1}</td>
+                  <td className="py-2 px-3 font-semibold text-white">{row.team?.name || row.teamName}</td>
+                  <td className="py-2 px-3 text-gray-200">{p1}</td>
+                  {showPlayer2 && <td className="py-2 px-3 text-gray-200">{p2}</td>}
+                  <td className="py-2 px-3 text-center text-gray-200">{row.played}</td>
+                  <td className="py-2 px-3 text-center text-green-400 font-semibold">{row.wins}</td>
+                  <td className="py-2 px-3 text-center text-red-400">{row.losses}</td>
+                  <td className="py-2 px-3 text-center text-gray-200">{row.pointsFor}</td>
+                  <td className="py-2 px-3 text-center text-gray-200">{row.pointsAgainst}</td>
+                  <td className={`py-2 px-3 text-center font-semibold ${pd > 0 ? 'text-green-400' : pd < 0 ? 'text-red-400' : 'text-gray-300'}`}>
                     {pd > 0 ? `+${pd}` : pd}
                   </td>
                 </tr>
@@ -126,7 +82,6 @@ export const Standings: React.FC<StandingsProps> = ({
         </table>
       </div>
 
-      {/* Optional tie-breaker info (kept simple for now) */}
       {tieBreakers && tieBreakers.length > 0 && (
         <div className="mt-4 text-[11px] text-gray-500">
           <span className="font-semibold text-gray-400">Tie-breakers order:</span>{' '}
@@ -136,3 +91,4 @@ export const Standings: React.FC<StandingsProps> = ({
     </div>
   );
 };
+/* ---- END Standings.tsx ---- */
