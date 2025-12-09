@@ -1107,33 +1107,70 @@ export const finalizeRegistration = async (
           continue;
         }
         const teamData = teamSnap.data() || {};
-        const players = Array.from(new Set([...(teamData.players || []).map(String), userProfile.id]));
         
-        // Only update if not already in team
-        if (!teamData.players || !teamData.players.includes(userProfile.id)) {
-            // Calculate new team name
-            let newTeamName = teamData.teamName || 'Doubles Team';
+        // Check if user is already in the team to avoid duplicates
+        const currentPlayers = teamData.players || [];
+        if (!currentPlayers.includes(userProfile.id)) {
+            const players = [...currentPlayers, userProfile.id];
+            
+            let newTeamName = teamData.teamName;
+            
+            // If team becomes full (2 players), rename it
             if (players.length === 2) {
-                // Fetch name of existing captain
-                const existingPlayerId = teamData.captainPlayerId || teamData.players[0];
-                const existingUserSnap = await getDoc(doc(db, 'users', existingPlayerId));
-                const existingUserData = existingUserSnap.data();
-                
-                const p1Name = existingUserData?.displayName || 'Player 1';
+                const existingPlayerId = teamData.captainPlayerId || currentPlayers[0];
+                let p1Name = 'Player 1';
+                if (existingPlayerId) {
+                    const existingUserSnap = await getDoc(doc(db, 'users', existingPlayerId));
+                    if (existingUserSnap.exists()) {
+                        p1Name = existingUserSnap.data().displayName || 'Player 1';
+                    }
+                }
                 const p2Name = userProfile.displayName || 'Player 2';
-                
                 newTeamName = `${p1Name} & ${p2Name}`;
             }
 
             await updateDoc(teamRef, { 
                 players,
                 teamName: newTeamName,
-                status: 'active', // Make active immediately
-                isLookingForPartner: false, // No longer looking
+                status: 'active',
+                isLookingForPartner: false,
                 updatedAt: Date.now() 
             });
+
+            // CLEANUP: If user has a solo team pending in this division (because they were "looking for partner"), withdraw it.
+            const oldSoloTeam = userTeams.find(t => 
+                t.divisionId === divId && 
+                t.id !== openTeamId && 
+                t.status === 'pending_partner' && 
+                t.players.length === 1 && 
+                t.players[0] === userProfile.id
+            );
+
+            if (oldSoloTeam) {
+                const oldTeamRef = doc(db, 'tournaments', tournament.id, 'teams', oldSoloTeam.id);
+                await updateDoc(oldTeamRef, {
+                    status: 'withdrawn',
+                    isLookingForPartner: false,
+                    updatedAt: Date.now()
+                });
+            }
+            
+            // Update local object for return
+            teamsCreated[divId] = { 
+                existed: true, 
+                teamId: openTeamId, 
+                team: { 
+                    id: openTeamId, 
+                    ...teamData, 
+                    players, 
+                    teamName: newTeamName,
+                    status: 'active'
+                } 
+            };
+        } else {
+             teamsCreated[divId] = { existed: true, teamId: openTeamId, team: { id: openTeamId, ...teamData } };
         }
-        teamsCreated[divId] = { existed: true, teamId: openTeamId, team: { id: openTeamId, ...teamData } };
+        
         partnerDetails[divId] = { ...details, teamId: openTeamId, mode: 'join_open' };
         continue;
       }
@@ -1372,8 +1409,9 @@ export const respondToPartnerInvite = async (
       if (inviterProfile && invitedProfile) {
         const inviterName = inviterProfile.displayName || 'Player 1';
         const invitedName = invitedProfile.displayName || 'Player 2';
-        // Logic updated: overwrite name if it was a pending placeholder OR "Looking for partner"
-        if (!teamName || teamName === inviterName || teamName.endsWith('(Pending)') || teamName.includes('Looking for partner')) {
+        // Logic updated: overwrite name if it was a pending placeholder OR "Looking for partner" (case insensitive)
+        const nameLower = teamName.toLowerCase();
+        if (!teamName || teamName === inviterName || teamName.endsWith('(Pending)') || nameLower.includes('looking for partner')) {
           teamName = `${inviterName} & ${invitedName}`;
         }
       }
