@@ -1,5 +1,3 @@
-/* Paste the full new TournamentRegistrationWizard.tsx here (exact replacement) */
-/* ---- START TournamentRegistrationWizard.tsx ---- */
 import React, { useState, useEffect } from 'react';
 import type { Tournament, TournamentRegistration, UserProfile, Division, Team } from '../../types';
 import {
@@ -8,6 +6,7 @@ import {
     finalizeRegistration,
     subscribeToDivisions,
     getUserTeamsForTournament,
+    withdrawPlayerFromDivision
 } from '../../services/firebase';
 import { DoublesPartnerStep } from './DoublesPartnerStep';
 
@@ -69,6 +68,9 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
     const [partnerDetails, setPartnerDetails] = useState<TournamentRegistration['partnerDetails']>({});
     const [existingTeamsByDivision, setExistingTeamsByDivision] = useState<Record<string, Team>>({});
     const [error, setError] = useState<string | null>(null);
+    
+    // Modal state for confirmation
+    const [withdrawConfirmationId, setWithdrawConfirmationId] = useState<string | null>(null);
 
     const isWaiverOnly = mode === 'waiver_only' && !!initialDivisionId;
 
@@ -114,6 +116,50 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         await saveRegistration(updated);
     };
 
+    const executeWithdraw = async () => {
+        if (!withdrawConfirmationId) return;
+        const divisionId = withdrawConfirmationId;
+        setWithdrawConfirmationId(null); // Close modal
+        
+        setLoading(true);
+        try {
+            await withdrawPlayerFromDivision(tournament.id, divisionId, userProfile.id);
+            
+            // Optimistic update: Remove from local state immediately to reflect in UI
+            setExistingTeamsByDivision(prev => {
+                const next = { ...prev };
+                delete next[divisionId];
+                return next;
+            });
+            
+            setRegData(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    selectedEventIds: prev.selectedEventIds.filter(id => id !== divisionId),
+                    partnerDetails: { ...prev.partnerDetails, [divisionId]: undefined } // clear partner details
+                };
+            });
+
+            // Re-fetch to be safe
+            const teams = await getUserTeamsForTournament(tournament.id, userProfile.id);
+            const map: Record<string, Team> = {};
+            teams.forEach(t => { map[t.divisionId] = t; });
+            setExistingTeamsByDivision(map);
+
+            const updatedReg = await getRegistration(tournament.id, userProfile.id);
+            if (updatedReg) {
+                 setRegData(updatedReg);
+                 setPartnerDetails(updatedReg.partnerDetails || {});
+            }
+        } catch (e) {
+            console.error(e);
+            setError("Failed to withdraw.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
     // Validate partner choices: return array of division names missing options
     const validatePartnerChoices = (): string[] => {
         if (!regData) return [];
@@ -123,6 +169,11 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         for (const divId of regData.selectedEventIds) {
             const div = divisions.find(d => d.id === divId);
             if (!div || div.type !== 'doubles') continue;
+            
+            // If user is already in a full team for this division, they don't need to select a partner
+            const existingTeam = existingTeamsByDivision[div.id];
+            if (existingTeam && existingTeam.players.length >= 2) continue;
+
             const details = partnerDetails?.[divId];
             if (!details) {
                 missing.push(div.name);
@@ -184,6 +235,32 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
 
     return (
         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
+            {/* Modal Overlay for Withdrawal Confirmation */}
+            {withdrawConfirmationId && (
+                <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-[60] rounded-lg p-4 backdrop-blur-sm">
+                    <div className="bg-gray-800 p-6 rounded-lg border border-gray-600 shadow-2xl max-w-sm w-full text-center animate-fade-in-up">
+                        <h3 className="text-lg font-bold text-white mb-2">Confirm Withdrawal</h3>
+                        <p className="text-gray-300 mb-6 text-sm">
+                            Are you sure you want to withdraw from <span className="text-white font-semibold">{divisions.find(d => d.id === withdrawConfirmationId)?.name}</span>?
+                        </p>
+                        <div className="flex justify-center gap-4">
+                            <button 
+                                onClick={() => setWithdrawConfirmationId(null)}
+                                className="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={executeWithdraw}
+                                className="px-4 py-2 rounded bg-red-600 hover:bg-red-500 text-white text-sm font-bold shadow-lg transition-colors"
+                            >
+                                Yes, Withdraw
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="bg-gray-800 w-full max-w-2xl p-6 rounded-lg border border-gray-700 relative flex flex-col max-h-[90vh]">
                 <h2 className="text-2xl text-white font-bold mb-4 flex-shrink-0">
                     {isWaiverOnly ? 'Complete Registration' : isRegistrationComplete ? 'Manage Registration' : `Registration: ${tournament.name}`}
@@ -211,6 +288,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                 onClick={() => {
                                                     if (isWaiverOnly) return;
                                                     if (!eligible) return;
+                                                    if (hasExistingTeam) return; // Prevent deselecting if they have a team, must use withdraw button
                                                     const current = regData.selectedEventIds;
                                                     const next = current.includes(div.id) ? current.filter(x => x !== div.id) : [...current, div.id];
                                                     handleSave({ selectedEventIds: next });
@@ -231,7 +309,20 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                 {!eligible ? (
                                                     <div className="text-xs font-bold text-red-400 border border-red-900 bg-red-900/20 px-2 py-1 rounded whitespace-nowrap">{reason}</div>
                                                 ) : hasExistingTeam ? (
-                                                    <div className="text-xs font-bold text-gray-300 border border-gray-600 bg-gray-900 px-2 py-1 rounded whitespace-nowrap">Currently Registered</div>
+                                                    <div className="text-xs font-bold text-gray-300 border border-gray-600 bg-gray-900 px-2 py-1 rounded whitespace-nowrap flex items-center gap-2">
+                                                        Currently Registered
+                                                        <button
+                                                            type="button"
+                                                            onMouseDown={(e) => e.stopPropagation()}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setWithdrawConfirmationId(div.id);
+                                                            }}
+                                                            className="text-red-400 hover:text-red-300 hover:underline ml-1 cursor-pointer z-10 relative isolate"
+                                                        >
+                                                            Withdraw
+                                                        </button>
+                                                    </div>
                                                 ) : isSelected ? (
                                                     <div className="text-green-500 font-bold text-xl">✓</div>
                                                 ) : null}
@@ -241,8 +332,14 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                 </div>
 
                                 <div className="flex justify-between items-center mt-6 border-t border-gray-700 pt-4">
-                                    <div className="text-xs text-gray-500"><p>* Eligibility is based on your Profile.</p></div>
-                                    <button onClick={() => { if (isWaiverOnly || !regData.selectedEventIds.some(id => divisions.find(d => d.id === id && d.type === 'doubles'))) { setStep(3); } else { setStep(2); } }} className="bg-blue-600 text-white px-4 py-2 rounded">
+                                    <button 
+                                        onClick={onClose} 
+                                        className="bg-gray-700 border border-gray-600 text-white px-4 py-2 rounded hover:bg-gray-600"
+                                    >
+                                        Back
+                                    </button>
+                                    <div className="text-xs text-gray-500 hidden sm:block"><p>* Eligibility is based on your Profile.</p></div>
+                                    <button onClick={() => { if (isWaiverOnly || !regData.selectedEventIds.some(id => divisions.find(d => d.id === id && d.type === 'doubles'))) { setStep(3); } else { setStep(2); } }} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-500">
                                         Next
                                     </button>
                                 </div>
@@ -258,6 +355,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                     userProfile={userProfile}
                                     partnerDetails={partnerDetails}
                                     setPartnerDetails={setPartnerDetails}
+                                    existingTeams={existingTeamsByDivision}
                                 />
 
                                 <div className="flex justify-between items-center mt-6 border-t border-gray-700 pt-4">
@@ -293,4 +391,3 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         </div>
     );
 };
-/* ---- END TournamentRegistrationWizard.tsx ---- */

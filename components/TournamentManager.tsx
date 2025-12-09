@@ -1,99 +1,61 @@
-
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
-
-import { Schedule } from './Schedule';
-import { BracketViewer } from './BracketViewer';
-import { Standings } from './Standings';
-import { TeamSetup } from './TeamSetup';
-import { TournamentRegistrationWizard } from './registration/TournamentRegistrationWizard';
-import CourtAllocation from './CourtAllocation';
-
-import type {
-  Tournament,
-  Match,
-  Team,
-  Division,
-  StandingsEntry,
-  UserProfile,
-  Court,
-  SeedingMethod,
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import type { 
+  Tournament, 
+  Division, 
+  Team, 
+  Match, 
+  Court, 
+  UserProfile, 
+  SeedingMethod, 
+  StandingsEntry
 } from '../types';
-
 import { useAuth } from '../contexts/AuthContext';
-
-import {
+import { 
+  getRegistration,
   subscribeToDivisions,
   subscribeToTeams,
   subscribeToMatches,
   subscribeToCourts,
+  createTeamServer,
+  getUsersByIds,
+  deleteTeam,
+  updateDivision,
+  saveTournament,
   addCourt,
   updateCourt,
   deleteCourt,
-  deleteTeam,
-  createTeamServer,
-  getUsersByIds,
-  saveTournament,
+  updateMatchScore,
   generatePoolsSchedule,
   generateBracketSchedule,
-  generateFinalsFromPools,
-  getRegistration,
-  updateDivision,
-  updateMatchScore,
+  generateFinalsFromPools
 } from '../services/firebase';
-
-import {
-  submitMatchScore,
-  confirmMatchScore,
-  disputeMatchScore,
+import { 
+  submitMatchScore, 
+  confirmMatchScore, 
+  disputeMatchScore 
 } from '../services/matchService';
-
-/* ----------------- Helpers ----------------- */
-
-// Score validation based on division format
-const validateScoreForDivision = (
-  score1: number,
-  score2: number,
-  division: Division
-): string | null => {
-  if (Number.isNaN(score1) || Number.isNaN(score2)) {
-    return 'Please enter both scores.';
-  }
-  if (score1 === score2) {
-    return 'Scores cannot be tied.';
-  }
-
-  const rules = division.format;
-  const target = rules.pointsPerGame;
-  const winBy = rules.winBy;
-
-  const winnerPoints = Math.max(score1, score2);
-  const loserPoints = Math.min(score1, score2);
-  const diff = winnerPoints - loserPoints;
-
-  // Winner must reach at least target points and win by the required margin
-  if (winnerPoints < target || diff < winBy) {
-    return `Score not valid for this division. Games are to at least ${target} points and the winner must lead by at least ${winBy} points (for example ${target}-${target - winBy} or higher).`;
-  }
-
-  return null;
-};
-
-type TournamentPhase = 'registration' | 'in_progress' | 'completed';
-
-/* ----------------- Props ----------------- */
+import { TeamSetup } from './TeamSetup';
+import { CourtAllocation } from './CourtAllocation';
+import { Schedule } from './Schedule';
+import { BracketViewer } from './BracketViewer';
+import { Standings } from './Standings';
+import { TournamentRegistrationWizard } from './registration/TournamentRegistrationWizard';
 
 interface TournamentManagerProps {
   tournament: Tournament;
-  onUpdateTournament: (updatedTournament: Tournament) => void;
+  onUpdateTournament: (t: Tournament) => Promise<void>;
   isVerified: boolean;
   onBack: () => void;
-  initialWizardState?:
-    | { isOpen: boolean; mode?: 'full' | 'waiver_only'; divisionId?: string }
-    | null;
+  initialWizardState?: { isOpen: boolean; mode?: 'full'|'waiver_only'; divisionId?: string } | null;
   clearWizardState?: () => void;
 }
 
-/* ----------------- Component ----------------- */
+type TournamentPhase = 'registration' | 'in_progress' | 'completed';
+
+const validateScoreForDivision = (score1: number, score2: number, division: Division): string | null => {
+  if (score1 < 0 || score2 < 0) return 'Scores cannot be negative.';
+  return null;
+};
 
 export const TournamentManager: React.FC<TournamentManagerProps> = ({
   tournament,
@@ -1806,7 +1768,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       ) : (
         /* PUBLIC VIEW */
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-2 space-y-6 min-w-0">
             <div className="flex border-b border-gray-700">
               {['details', 'bracket', 'players', 'standings'].map(t => (
                 <button
@@ -1933,7 +1895,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           </div>
 
           {/* Sidebar */}
-          <div>
+          <div className="min-w-0">
             {/* Your Match – BIG and FIRST */}
             {currentUser && myMatchSummary && (
               <div className="bg-gray-800 p-6 rounded border border-green-600 mb-4">

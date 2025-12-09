@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 
-
 /**
  * Shared status types for courts and matches in the allocation view.
  * We keep them narrow and focused on what the court board needs.
@@ -59,7 +58,7 @@ interface CourtAllocationProps {
  * - Hold the state
  * - Pass down courts + matches + handlers
  */
-const CourtAllocation: React.FC<CourtAllocationProps> = ({
+export const CourtAllocation: React.FC<CourtAllocationProps> = ({
   courts,
   matches,
   onAssignMatchToCourt,
@@ -325,7 +324,7 @@ const CourtAllocation: React.FC<CourtAllocationProps> = ({
 
                   {court.status === "IN_USE" && match && (
                     <button
-                      className="px-2 py-1 text-xs border border...0 rounded text-gray-200 hover:bg-blue-700 hover:border-blue-500"
+                      className="px-2 py-1 text-xs border border-blue-600 rounded text-gray-200 hover:bg-blue-700 hover:border-blue-500"
                       onClick={() => {
                         const scores = getScoresForMatch(match.id);
                         const scoreA = parseInt(scores.teamA, 10);
@@ -352,7 +351,4 @@ const CourtAllocation: React.FC<CourtAllocationProps> = ({
     </div>
   </div>
 );
-
 };
-
-export default CourtAllocation;

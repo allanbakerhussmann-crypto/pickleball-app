@@ -134,7 +134,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
 
 
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 flex flex-col gap-3">
+    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 flex flex-col gap-3 min-w-0">
       {/* Header line: Match # / Round / Court / Status */}
       <div className="flex justify-between items-center text-xs text-gray-400">
         <div>
@@ -157,17 +157,17 @@ export const MatchCard: React.FC<MatchCardProps> = ({
 
       {/* Teams + scores */}
       <div className="flex justify-between items-center gap-4">
-        <div className="flex-1">
-          <div className="text-sm font-semibold text-white">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-white truncate">
             {match.team1.name}
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-gray-500 truncate">
             {match.team1.players.map(p => p.name).join(' / ')}
           </div>
         </div>
 
         {/* Score inputs (or read-only display) */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <div className="flex flex-col items-center">
             {showEditableInputs ? (
               <input
@@ -205,11 +205,11 @@ export const MatchCard: React.FC<MatchCardProps> = ({
           </div>
         </div>
 
-        <div className="flex-1 text-right">
-          <div className="text-sm font-semibold text-white">
+        <div className="flex-1 text-right min-w-0">
+          <div className="text-sm font-semibold text-white truncate">
             {match.team2.name}
           </div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-gray-500 truncate">
             {match.team2.players.map(p => p.name).join(' / ')}
           </div>
         </div>
@@ -217,7 +217,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
 
       {/* Info + Actions */}
       <div className="flex justify-between items-center mt-1 text-xs">
-        <div className="text-gray-400">
+        <div className="text-gray-400 truncate mr-2">
           {isWaitingOnYou && (
             <span className="text-yellow-300 font-semibold">
               Waiting for your confirmation
@@ -242,7 +242,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
           )}
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-shrink-0">
           {/* Submit scores */}
           {showEditableInputs && (
             <button

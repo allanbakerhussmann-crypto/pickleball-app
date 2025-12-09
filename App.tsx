@@ -1,6 +1,3 @@
-
-
-
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header'; 
 import { Profile } from './components/Profile';
@@ -333,7 +330,7 @@ const App: React.FC = () => {
 
     // -- Main Authenticated Layout --
     return (
-        <div className="min-h-screen bg-gray-900 flex flex-col font-sans text-gray-100 relative">
+        <div className="min-h-screen bg-gray-900 flex flex-col font-sans text-gray-100 relative w-full overflow-x-hidden">
             {/* Navigation Header */}
             <Header 
                 activeView={view}
@@ -420,7 +417,7 @@ const App: React.FC = () => {
             {currentUser && !currentUser.emailVerified && <VerificationBanner />}
 
             {/* Main Content Area */}
-            <main className="flex-grow p-4 md:p-8 overflow-y-auto">
+            <main className="flex-grow p-4 md:p-8 overflow-y-auto w-full">
                 <div className="container mx-auto">
                     {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
 

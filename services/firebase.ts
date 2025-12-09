@@ -1,3 +1,4 @@
+// ... (imports)
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
 import { 
@@ -19,15 +20,11 @@ import {
   orderBy, // Added
   type Firestore
 } from '@firebase/firestore';
-import { 
-    getStorage, 
-    ref, 
-    uploadBytes, 
-    getDownloadURL 
-} from '@firebase/storage';
+import { getStorage, ref, uploadBytes, getDownloadURL } from '@firebase/storage';
 import { getFunctions, httpsCallable } from '@firebase/functions';
 import type { Tournament, UserProfile, TournamentRegistration, Team, Division, Match, PartnerInvite, Club, UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, GenderCategory } from '../types';
 
+// ... (config and init code remains same) ...
 const STORAGE_KEY = 'pickleball_firebase_config';
 
 const getStoredConfig = () => {
@@ -82,6 +79,7 @@ const functions = getFunctions(app);
 
 export const getAuth = (): Auth => authInstance;
 
+// ... (createTeamServer and ensureTeamExists remain same) ...
 /**
  * Client wrapper to call the createTeam Cloud Function.
  * Returns { existed: boolean, teamId, team } on success.
@@ -218,6 +216,88 @@ export const saveFirebaseConfig = (configJson: string) => {
 };
 export const hasCustomConfig = () => !!getStoredConfig() || !!getEnvConfig();
 
+// --- Helper: Get User Teams (Moved up for use in finalizeRegistration) ---
+export const getUserTeamsForTournament = async (
+  tournamentId: string,
+  userId: string
+): Promise<Team[]> => {
+  if (!tournamentId || !userId) return [];
+
+  const qTeams = query(
+    collection(db, 'tournaments', tournamentId, 'teams'),
+    where('players', 'array-contains', userId)
+  );
+  const snap = await getDocs(qTeams);
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() } as Team))
+    .filter(t => t.status === 'active' || t.status === 'pending_partner');
+};
+
+export const withdrawPlayerFromDivision = async (
+  tournamentId: string,
+  divisionId: string,
+  userId: string
+): Promise<void> => {
+  // 1. Find the team
+  const teams = await getUserTeamsForTournament(tournamentId, userId);
+  const team = teams.find(t => t.divisionId === divisionId);
+
+  const batch = writeBatch(db);
+
+  if (team) {
+    const newPlayers = team.players.filter(p => p !== userId);
+    const teamRef = doc(db, 'tournaments', tournamentId, 'teams', team.id);
+
+    if (newPlayers.length === 0) {
+      // Team is empty -> withdraw it
+      batch.update(teamRef, {
+        status: 'withdrawn',
+        isLookingForPartner: false,
+        players: [],
+        updatedAt: Date.now()
+      });
+    } else {
+      // Team has remaining player -> revert to pending_partner
+      // We need to fetch the remaining player's name to update the team name properly
+      const remainingUserId = newPlayers[0];
+      const remainingUserDoc = await getDoc(doc(db, 'users', remainingUserId));
+      const remainingUserData = remainingUserDoc.exists() ? remainingUserDoc.data() as UserProfile : null;
+      
+      const newTeamName = remainingUserData?.displayName 
+        ? `${remainingUserData.displayName} (Looking for partner)` 
+        : 'Player (Looking for partner)';
+
+      batch.update(teamRef, {
+        status: 'pending_partner',
+        players: newPlayers,
+        teamName: newTeamName, // Renaming team for solo player
+        isLookingForPartner: true, // Remaining player is now looking
+        pendingInvitedUserId: null, // Clear any pending invite state if half the team left
+        updatedAt: Date.now()
+      });
+    }
+  }
+
+  // 2. Update Registration
+  const regRef = doc(db, 'tournament_registrations', `${userId}_${tournamentId}`);
+  const regSnap = await getDoc(regRef);
+  if (regSnap.exists()) {
+    const data = regSnap.data() as TournamentRegistration;
+    const newSelectedIds = (data.selectedEventIds || []).filter(id => id !== divisionId);
+    const newPartnerDetails = { ...(data.partnerDetails || {}) };
+    delete newPartnerDetails[divisionId];
+
+    batch.update(regRef, {
+      selectedEventIds: newSelectedIds,
+      partnerDetails: newPartnerDetails,
+      updatedAt: Date.now()
+    });
+  }
+
+  await batch.commit();
+};
+
+// ... (rest of the file: user profiles, roles, clubs, courts, scheduling, etc.) ...
 // --- User Profiles ---
 export const createUserProfile = async (userId: string, data: Partial<UserProfile>) => {
   const userRef = doc(db, 'users', userId);
@@ -353,7 +433,7 @@ export const uploadProfileImage = async (userId: string, file: File): Promise<st
     return getDownloadURL(snapshot.ref);
 };
 
-// --- Admin Role Management ---
+// ... (rest of admin role management) ...
 const addRole = async (userId: string, role: UserRole) => {
   const ref = doc(db, 'users', userId);
   await runTransaction(db, async tx => {
@@ -980,23 +1060,6 @@ export const getPendingInvitesForDivision = async (
   );
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() } as PartnerInvite));
-};
-
-// --- Helper: Get User Teams (Moved up for use in finalizeRegistration) ---
-export const getUserTeamsForTournament = async (
-  tournamentId: string,
-  userId: string
-): Promise<Team[]> => {
-  if (!tournamentId || !userId) return [];
-
-  const qTeams = query(
-    collection(db, 'tournaments', tournamentId, 'teams'),
-    where('players', 'array-contains', userId)
-  );
-  const snap = await getDocs(qTeams);
-  return snap.docs
-    .map(d => ({ id: d.id, ...d.data() } as Team))
-    .filter(t => t.status === 'active' || t.status === 'pending_partner');
 };
 
 /**

@@ -1,5 +1,3 @@
-/* Paste the full new DoublesPartnerStep.tsx here (exact replacement) */
-/* ---- START DoublesPartnerStep.tsx ---- */
 import React, { useEffect, useState } from 'react';
 import type {
   Tournament,
@@ -27,6 +25,7 @@ interface DoublesPartnerStepProps {
       | TournamentRegistration['partnerDetails']
       | ((prev: TournamentRegistration['partnerDetails']) => TournamentRegistration['partnerDetails'])
   ) => void;
+  existingTeams: Record<string, Team>;
 }
 
 interface OpenTeamWithOwner {
@@ -95,6 +94,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
   userProfile,
   partnerDetails,
   setPartnerDetails,
+  existingTeams
 }) => {
   const [openTeamsByDivision, setOpenTeamsByDivision] = useState<Record<string, OpenTeamWithOwner[]>>({});
   const [searchResults, setSearchResults] = useState<Record<string, UserProfile[]>>({});
@@ -138,6 +138,10 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
           const div = divisions.find(d => d.id === divId);
           if (!div || div.type !== 'doubles') continue;
 
+          // If user is already in a full team, we don't need to load open teams for them
+          const existingTeam = existingTeams[divId];
+          if (existingTeam && existingTeam.players.length >= 2) continue;
+
           const teams = await getOpenTeamsForDivision(tournament.id, divId);
 
           const ownerIds = Array.from(new Set(teams.map(t => t.players?.[0]).filter(id => !!id)));
@@ -179,7 +183,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     };
 
     if (selectedDivisionIds.length > 0) load();
-  }, [selectedDivisionIds.join(','), divisions.length, tournament.id, userProfile.id]);
+  }, [selectedDivisionIds.join(','), divisions.length, tournament.id, userProfile.id, existingTeams]);
 
   const handleModeChange = (divId: string, mode: 'invite' | 'open_team' | 'join_open') => {
     setPartnerDetails(prev => {
@@ -249,6 +253,22 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
         .map(id => divisions.find(d => d.id === id))
         .filter((d): d is Division => !!d && d.type === 'doubles')
         .map(div => {
+          const existingTeam = existingTeams[div.id];
+          const isFullTeam = existingTeam && existingTeam.players.length >= 2;
+
+          if (isFullTeam) {
+            return (
+                <div key={div.id} className="bg-gray-800 p-4 rounded border border-gray-700 space-y-3">
+                     <h3 className="text-white font-bold text-sm">{div.name} – Doubles Partner</h3>
+                     <div className="text-sm text-green-400 p-3 bg-green-900/20 border border-green-800 rounded">
+                         You are currently registered with a partner.
+                         <br/>
+                         <span className="text-xs text-gray-400">To change partners, please go back and withdraw from this division.</span>
+                     </div>
+                </div>
+            );
+          }
+
           const partnerInfo = partnerDetails?.[div.id];
           const mode = partnerInfo?.mode || 'invite';
           const openTeams = openTeamsByDivision[div.id] || [];
@@ -344,4 +364,3 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     </div>
   );
 };
-/* ---- END DoublesPartnerStep.tsx ---- */
