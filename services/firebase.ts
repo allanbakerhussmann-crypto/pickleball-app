@@ -1,6 +1,9 @@
 
 
 
+
+
+
 // ... (imports)
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
@@ -193,7 +196,7 @@ export const ensureTeamExists = async (
         teamName: teamName || null,
         createdByUserId,
         captainPlayerId: normalizedPlayers[0] || createdByUserId,
-        isLookingForPartner: (options?.status === 'pending_partner') || (normalizedPlayers.length === 1),
+        isLookingForPartner: (options?.status === 'pending_partner') || (normalizedPlayers.length === 1 && options?.status !== 'active'),
         status: options?.status || (normalizedPlayers.length === 1 ? 'pending_partner' : 'active'),
         createdAt: now,
         updatedAt: now
@@ -1157,6 +1160,37 @@ export const finalizeRegistration = async (
   // Iterate selected event/divisions (safe for undefined)
   for (const divId of payload.selectedEventIds || []) {
     try {
+      // NEW: Fetch division to check type
+      const divRef = doc(db, 'tournaments', tournament.id, 'divisions', divId);
+      const divSnap = await getDoc(divRef);
+      if (!divSnap.exists()) continue;
+      const division = divSnap.data() as Division;
+      const isSingles = division.type === 'singles';
+
+      // --- SINGLES LOGIC ---
+      if (isSingles) {
+          const existingTeam = userTeams.find(t => t.divisionId === divId);
+          if (existingTeam) {
+             teamsCreated[divId] = { existed: true, teamId: existingTeam.id, team: existingTeam };
+          } else {
+             // Create Active Team for Singles - No partner search state
+             const teamName = userProfile.displayName || 'Player';
+             const resp = await ensureTeamExists(
+                 tournament.id, 
+                 divId, 
+                 [userProfile.id], 
+                 teamName, 
+                 userProfile.id, 
+                 { status: 'active' } 
+             );
+             teamsCreated[divId] = resp;
+          }
+          // Remove any partner details that might have accidentally been set for a singles division
+          if (partnerDetails[divId]) delete partnerDetails[divId];
+          continue; 
+      }
+
+      // --- DOUBLES LOGIC (Existing) ---
       const details: any = partnerDetails[divId] || {};
       const mode = details.mode || 'open_team';
 
