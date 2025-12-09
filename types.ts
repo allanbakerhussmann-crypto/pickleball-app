@@ -1,6 +1,8 @@
 
 
 
+
+
 export type TournamentFormat =
   | 'single_elim'
   | 'double_elim'
@@ -484,9 +486,9 @@ export interface Tournament {
   registrationOpen?: boolean;
   maxParticipants?: number;
   
-  // Club Info (Required)
-  clubId: string;
-  clubName: string;
+  // Club Info (Optional for independent competitions)
+  clubId?: string; // Made optional
+  clubName?: string; // Made optional
   clubLogoUrl?: string | null;
 
   // Scheduling / behaviour options for this tournament.
@@ -514,4 +516,60 @@ export interface TournamentSettings {
   // In future we can add:
   // allowPlayersToEnterScores?: boolean;
   // requireScoreConfirmation?: boolean;
+}
+
+/**
+ * NEW: The umbrella container for different types of competitive events.
+ * Wraps existing tournaments and future leagues.
+ */
+export interface Competition {
+  id: string;
+  type: 'tournament' | 'league' | 'team_league';
+  name: string;
+  
+  // Optional host club (allows independent competitions)
+  hostClubId?: string | null;
+  organizerId: string;
+  
+  seasonId?: string | null;
+  
+  // IDs of divisions (currently stored in subcollections for tournaments,
+  // but good to track here for leagues).
+  divisions?: string[]; 
+  
+  schedulingMode: 'live' | 'pre_scheduled' | 'round_robin';
+  status: 'draft' | 'registration_open' | 'in_progress' | 'completed';
+  
+  startDate?: string;
+  endDate?: string;
+  
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * NEW: Generic entry record.
+ * Maps a user (or pair/team) to a specific competition division.
+ */
+export interface CompetitionEntry {
+  id: string;
+  competitionId: string;
+  competitionType: 'tournament' | 'league' | 'team_league';
+  divisionId: string;
+  
+  entryType: 'individual' | 'pair' | 'team';
+  
+  // Who is in this entry?
+  playerIds: string[]; 
+  
+  // If team league, which team entity?
+  teamId?: string | null; 
+  
+  status: 'pending' | 'confirmed' | 'withdrawn';
+  
+  // Link back to the legacy registration object if needed
+  registrationId?: string;
+  
+  createdAt: number;
+  updatedAt: number;
 }

@@ -1,3 +1,5 @@
+
+
 // ... (imports)
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
@@ -22,7 +24,25 @@ import {
 } from '@firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from '@firebase/storage';
 import { getFunctions, httpsCallable } from '@firebase/functions';
-import type { Tournament, UserProfile, TournamentRegistration, Team, Division, Match, PartnerInvite, Club, UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, GenderCategory } from '../types';
+import type { 
+  Tournament, 
+  UserProfile, 
+  TournamentRegistration, 
+  Team, 
+  Division, 
+  Match, 
+  PartnerInvite, 
+  Club, 
+  UserRole, 
+  ClubJoinRequest, 
+  Court, 
+  StandingsEntry, 
+  SeedingMethod, 
+  TieBreaker, 
+  GenderCategory,
+  Competition,
+  CompetitionEntry
+} from '../types';
 
 // ... (config and init code remains same) ...
 const STORAGE_KEY = 'pickleball_firebase_config';
@@ -140,7 +160,7 @@ export const ensureTeamExists = async (
     console.error('ensureTeamExists: initial lookup failed', err);
   }
 
-  // 2) Transactional create (ensures only one writer wins)
+  // 2. Transactional create (ensures only one writer wins)
   const teamRef = doc(collection(db, 'tournaments', tournamentId, 'teams'));
   const now = Date.now();
 
@@ -589,6 +609,39 @@ export const bulkImportClubMembers = async (params: any): Promise<any[]> => {
     return result.data as any[];
 };
 
+// --- COMPETITIONS (New Umbrella Model) ---
+
+export const saveCompetition = async (comp: Competition) => {
+  const ref = doc(db, 'competitions', comp.id);
+  // Use merge to avoid overwriting unrelated fields if they exist
+  await setDoc(ref, comp, { merge: true });
+};
+
+export const saveCompetitionEntry = async (entry: CompetitionEntry) => {
+  const ref = doc(db, 'competitionEntries', entry.id);
+  await setDoc(ref, entry, { merge: true });
+};
+
+/**
+ * Helper to map legacy Tournament to new Competition
+ */
+const mapTournamentToCompetition = (t: Tournament, divisions: Division[] = []): Competition => {
+  return {
+    id: t.id,
+    type: 'tournament',
+    name: t.name,
+    hostClubId: t.clubId || null,
+    organizerId: t.createdByUserId,
+    // Collect division IDs
+    divisions: divisions.map(d => d.id),
+    schedulingMode: t.settings?.schedulingMode === 'pre_scheduled' ? 'pre_scheduled' : 'live',
+    status: t.status === 'scheduled' || t.status === 'draft' ? 'draft' : t.status === 'in_progress' ? 'in_progress' : 'completed',
+    startDate: t.startDatetime,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+};
+
 // --- COURTS ---
 
 export const subscribeToCourts = (tournamentId: string, callback: (courts: Court[]) => void) => {
@@ -906,6 +959,16 @@ export const saveTournament = async (tournament: Tournament, divisions?: Divisio
             batch.set(divRef, { ...div, tournamentId: tournament.id });
         });
         await batch.commit();
+    }
+
+    // DUAL WRITE: Create corresponding Competition record
+    // We do this silently so errors don't block the main flow, 
+    // but in production you might want stronger consistency.
+    try {
+        const comp = mapTournamentToCompetition(tournament, divisions || []);
+        await saveCompetition(comp);
+    } catch (e) {
+        console.warn("Dual-write to Competition failed:", e);
     }
 };
 
@@ -1305,6 +1368,44 @@ export const finalizeRegistration = async (
 
   // Persist the final registration
   await setDoc(regRef, updatedReg, { merge: true });
+
+  // DUAL WRITE: Save CompetitionEntries for the new "competition" model
+  try {
+      const selectedDivs = updatedReg.selectedEventIds || [];
+      const batch = writeBatch(db);
+      
+      selectedDivs.forEach(divId => {
+          // Construct entry ID based on user + division to enforce uniqueness per division
+          const entryId = `${userProfile.id}_${divId}`;
+          const entryRef = doc(db, 'competitionEntries', entryId);
+          
+          const details = partnerDetails[divId];
+          const entryType = details?.mode === 'open_team' || details?.mode === 'invite' || details?.mode === 'join_open' 
+              ? 'pair' // Assumption: if using partnerDetails it is doubles/pair
+              : 'individual'; 
+
+          const entryData: CompetitionEntry = {
+              id: entryId,
+              competitionId: tournament.id,
+              competitionType: 'tournament',
+              divisionId: divId,
+              entryType: entryType,
+              playerIds: [userProfile.id], // Note: We only add SELF here initially. 
+                                           // A separate logic would be needed to merge players into a single entry if it's a team entry.
+                                           // For now, mirroring registration 1:1 is safest.
+              teamId: details?.teamId || details?.openTeamId || null,
+              status: 'confirmed',
+              registrationId: updatedReg.id,
+              createdAt: now,
+              updatedAt: now
+          };
+          batch.set(entryRef, entryData, { merge: true });
+      });
+      
+      await batch.commit();
+  } catch (e) {
+      console.warn("Dual-write to CompetitionEntry failed:", e);
+  }
 
   return { teamsCreated };
 };

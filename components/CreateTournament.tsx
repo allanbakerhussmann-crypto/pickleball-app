@@ -1,4 +1,8 @@
 
+
+
+
+
 import React, { useState, useEffect } from 'react';
 import type { 
     Tournament, 
@@ -66,7 +70,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     status: 'draft',
     registrationMode: 'organiser_provided',
     createdByUserId: userId,
-    clubId: '' // Required
+    clubId: '' // Optional now
   });
 
   // Divisions List
@@ -212,7 +216,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
   const handleNext = () => {
       if (!formData.name) return setErrorMessage("Name is required");
-      if (!formData.clubId) return setErrorMessage("Please select a club to host this tournament.");
+      // Club ID is now optional, so no check needed here.
       setStep(2);
       setErrorMessage(null);
   };
@@ -239,35 +243,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       }
   };
 
-  if (loadingClubs) return <div className="p-8 text-center">Loading Clubs...</div>;
-
-  if (availableClubs.length === 0) {
-      return (
-          <div className="max-w-4xl mx-auto bg-gray-800 rounded-lg p-8 border border-gray-700 text-center mt-10">
-              <div className="mb-6">
-                 <svg className="w-16 h-16 mx-auto text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-              </div>
-              <h2 className="text-2xl text-white font-bold mb-4">
-                  {isAppAdmin ? "No Clubs Found" : "You need to be a Club Admin"}
-              </h2>
-              <p className="text-gray-400 mb-8 max-w-lg mx-auto">
-                  To host tournaments, you must manage a Club.
-                  {isAppAdmin ? " Create one to get started." : " Ask an admin to add you or create your own club."}
-              </p>
-              <div className="flex justify-center gap-4">
-                  <button onClick={onCancel} className="text-gray-400 hover:text-white px-4 py-2">Back</button>
-                  {isAppAdmin && (
-                      <button 
-                          onClick={onCreateClub}
-                          className="bg-green-600 hover:bg-green-500 text-white font-bold px-6 py-2 rounded shadow-lg transition-colors"
-                      >
-                          Create Club
-                      </button>
-                  )}
-              </div>
-          </div>
-      );
-  }
+  if (loadingClubs) return <div className="p-8 text-center">Loading Data...</div>;
 
   return (
       <div className="max-w-4xl mx-auto bg-gray-800 rounded-lg p-8 border border-gray-700 mb-10">
@@ -288,7 +264,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
                   <div>
                       <div className="flex justify-between items-end mb-1">
-                          <label className="block text-sm font-medium text-gray-400">Hosting Club</label>
+                          <label className="block text-sm font-medium text-gray-400">Hosting Club (Optional)</label>
                           {isAppAdmin && (
                               <button onClick={onCreateClub} className="text-xs text-green-400 hover:underline">
                                   + New Club
@@ -298,14 +274,15 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                       
                       <select 
                         className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
-                        value={formData.clubId}
+                        value={formData.clubId || ''}
                         onChange={e => setFormData({...formData, clubId: e.target.value})}
                       >
-                          <option value="">-- Select Club --</option>
+                          <option value="">-- Independent / No Club --</option>
                           {availableClubs.map(c => (
                               <option key={c.id} value={c.id}>{c.name}</option>
                           ))}
                       </select>
+                      <p className="text-xs text-gray-500 mt-1">Select a club if this is an official club event.</p>
                   </div>
 
                   <div>
