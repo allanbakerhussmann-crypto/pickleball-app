@@ -1108,8 +1108,30 @@ export const finalizeRegistration = async (
         }
         const teamData = teamSnap.data() || {};
         const players = Array.from(new Set([...(teamData.players || []).map(String), userProfile.id]));
+        
+        // Only update if not already in team
         if (!teamData.players || !teamData.players.includes(userProfile.id)) {
-          await updateDoc(teamRef, { players, updatedAt: Date.now() });
+            // Calculate new team name
+            let newTeamName = teamData.teamName || 'Doubles Team';
+            if (players.length === 2) {
+                // Fetch name of existing captain
+                const existingPlayerId = teamData.captainPlayerId || teamData.players[0];
+                const existingUserSnap = await getDoc(doc(db, 'users', existingPlayerId));
+                const existingUserData = existingUserSnap.data();
+                
+                const p1Name = existingUserData?.displayName || 'Player 1';
+                const p2Name = userProfile.displayName || 'Player 2';
+                
+                newTeamName = `${p1Name} & ${p2Name}`;
+            }
+
+            await updateDoc(teamRef, { 
+                players,
+                teamName: newTeamName,
+                status: 'active', // Make active immediately
+                isLookingForPartner: false, // No longer looking
+                updatedAt: Date.now() 
+            });
         }
         teamsCreated[divId] = { existed: true, teamId: openTeamId, team: { id: openTeamId, ...teamData } };
         partnerDetails[divId] = { ...details, teamId: openTeamId, mode: 'join_open' };
@@ -1350,7 +1372,8 @@ export const respondToPartnerInvite = async (
       if (inviterProfile && invitedProfile) {
         const inviterName = inviterProfile.displayName || 'Player 1';
         const invitedName = invitedProfile.displayName || 'Player 2';
-        if (!teamName || teamName === inviterName || teamName.endsWith('(Pending)')) {
+        // Logic updated: overwrite name if it was a pending placeholder OR "Looking for partner"
+        if (!teamName || teamName === inviterName || teamName.endsWith('(Pending)') || teamName.includes('Looking for partner')) {
           teamName = `${inviterName} & ${invitedName}`;
         }
       }

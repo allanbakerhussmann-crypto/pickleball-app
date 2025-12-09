@@ -1223,21 +1223,39 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         )}
       </div>
 
-      {/* Division Tabs */}
-      <div className="flex overflow-x-auto gap-2 mb-6 pb-2">
-        {divisions.map(div => (
-          <button
-            key={div.id}
-            onClick={() => setActiveDivisionId(div.id)}
-            className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-bold border ${
-              activeDivisionId === div.id
-                ? 'bg-white text-gray-900 border-white'
-                : 'bg-gray-800 text-gray-400 border-gray-700'
-            }`}
+      {/* Division Selector */}
+      <div className="mb-6">
+        {/* Mobile Dropdown */}
+        <div className="md:hidden">
+          <label htmlFor="division-select" className="sr-only">Select Division</label>
+          <select
+            id="division-select"
+            value={activeDivisionId}
+            onChange={(e) => setActiveDivisionId(e.target.value)}
+            className="w-full bg-gray-800 text-white border border-gray-700 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-green-500"
           >
-            {div.name}
-          </button>
-        ))}
+            {divisions.map((div) => (
+              <option key={div.id} value={div.id}>{div.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Desktop Tabs */}
+        <div className="hidden md:flex overflow-x-auto gap-2 pb-2">
+          {divisions.map(div => (
+            <button
+              key={div.id}
+              onClick={() => setActiveDivisionId(div.id)}
+              className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-colors ${
+                activeDivisionId === div.id
+                  ? 'bg-white text-gray-900 border-white'
+                  : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-500'
+              }`}
+            >
+              {div.name}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ADMIN VIEW */}
@@ -1247,7 +1265,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             <h2 className="text-xl font-bold text-white">
               Manage: {activeDivision.name}
             </h2>
-            <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-col items-end gap-2 w-full md:w-auto">
               <div className="flex items-center gap-2">
                 <span
                   className={`px-3 py-1 rounded-full text-xs font-semibold uppercase ${tournamentPhaseClass}`}
@@ -1263,47 +1281,64 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   </button>
                 )}
               </div>
-              <div className="flex gap-2 flex-wrap text-sm">
-                <button
-                  onClick={() => setAdminTab('participants')}
-                  className={`px-3 py-1 rounded ${
-                    adminTab === 'participants'
-                      ? 'bg-gray-600 text-white'
-                      : 'text-gray-400'
-                  }`}
+              
+              {/* Admin Tabs */}
+              <div className="w-full md:w-auto">
+                {/* Mobile Admin Dropdown */}
+                <select
+                  value={adminTab}
+                  onChange={(e) => setAdminTab(e.target.value as any)}
+                  className="md:hidden w-full bg-gray-700 text-white border border-gray-600 rounded p-2 text-sm mt-2 focus:ring-2 focus:ring-green-500"
                 >
-                  Participants
-                </button>
-                <button
-                  onClick={() => setAdminTab('courts')}
-                  className={`px-3 py-1 rounded ${
-                    adminTab === 'courts'
-                      ? 'bg-gray-600 text-white'
-                      : 'text-gray-400'
-                  }`}
-                >
-                  Courts
-                </button>
-                <button
-                  onClick={() => setAdminTab('settings')}
-                  className={`px-3 py-1 rounded ${
-                    adminTab === 'settings'
-                      ? 'bg-gray-600 text-white'
-                      : 'text-gray-400'
-                  }`}
-                >
-                  Settings
-                </button>
-                <button
-                  onClick={() => setAdminTab('livecourts')}
-                  className={`px-3 py-1 rounded ${
-                    adminTab === 'livecourts'
-                      ? 'bg-gray-600 text-white'
-                      : 'text-gray-400'
-                  }`}
-                >
-                  Live Courts
-                </button>
+                  <option value="livecourts">Live Courts</option>
+                  <option value="participants">Participants</option>
+                  <option value="courts">Courts</option>
+                  <option value="settings">Settings</option>
+                </select>
+
+                {/* Desktop Admin Buttons */}
+                <div className="hidden md:flex gap-2 text-sm">
+                  <button
+                    onClick={() => setAdminTab('participants')}
+                    className={`px-3 py-1 rounded transition-colors ${
+                      adminTab === 'participants'
+                        ? 'bg-gray-600 text-white'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Participants
+                  </button>
+                  <button
+                    onClick={() => setAdminTab('courts')}
+                    className={`px-3 py-1 rounded transition-colors ${
+                      adminTab === 'courts'
+                        ? 'bg-gray-600 text-white'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Courts
+                  </button>
+                  <button
+                    onClick={() => setAdminTab('settings')}
+                    className={`px-3 py-1 rounded transition-colors ${
+                      adminTab === 'settings'
+                        ? 'bg-gray-600 text-white'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Settings
+                  </button>
+                  <button
+                    onClick={() => setAdminTab('livecourts')}
+                    className={`px-3 py-1 rounded transition-colors ${
+                      adminTab === 'livecourts'
+                        ? 'bg-gray-600 text-white'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Live Courts
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1769,20 +1804,40 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         /* PUBLIC VIEW */
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-6 min-w-0">
-            <div className="flex border-b border-gray-700">
-              {['details', 'bracket', 'players', 'standings'].map(t => (
-                <button
-                  key={t}
-                  onClick={() => setActiveTab(t as any)}
-                  className={`px-6 py-3 text-sm font-bold uppercase ${
-                    activeTab === t
-                      ? 'text-green-400 border-b-2 border-green-400'
-                      : 'text-gray-500'
-                  }`}
+            {/* View Tabs / Dropdown */}
+            <div>
+              {/* Mobile View Selector */}
+              <div className="md:hidden border-b border-gray-700 pb-2 mb-2">
+                <label htmlFor="view-select" className="sr-only">Select View</label>
+                <select
+                  id="view-select"
+                  value={activeTab}
+                  onChange={(e) => setActiveTab(e.target.value as any)}
+                  className="w-full bg-gray-800 text-white border border-gray-700 rounded p-2 focus:ring-2 focus:ring-green-500"
                 >
-                  {t}
-                </button>
-              ))}
+                  <option value="details">Details</option>
+                  <option value="bracket">Bracket</option>
+                  <option value="players">Players</option>
+                  <option value="standings">Standings</option>
+                </select>
+              </div>
+
+              {/* Desktop View Tabs */}
+              <div className="hidden md:flex border-b border-gray-700">
+                {['details', 'bracket', 'players', 'standings'].map(t => (
+                  <button
+                    key={t}
+                    onClick={() => setActiveTab(t as any)}
+                    className={`px-6 py-3 text-sm font-bold uppercase hover:text-gray-300 transition-colors ${
+                      activeTab === t
+                        ? 'text-green-400 border-b-2 border-green-400'
+                        : 'text-gray-500'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {activeTab === 'details' && (
