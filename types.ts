@@ -1,8 +1,4 @@
 
-
-
-
-
 export type TournamentFormat =
   | 'single_elim'
   | 'double_elim'
@@ -487,8 +483,8 @@ export interface Tournament {
   maxParticipants?: number;
   
   // Club Info (Optional for independent competitions)
-  clubId?: string; // Made optional
-  clubName?: string; // Made optional
+  clubId?: string;
+  clubName?: string;
   clubLogoUrl?: string | null;
 
   // Scheduling / behaviour options for this tournament.

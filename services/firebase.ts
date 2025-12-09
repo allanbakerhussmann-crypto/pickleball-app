@@ -1,5 +1,6 @@
 
 
+
 // ... (imports)
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
