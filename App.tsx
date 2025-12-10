@@ -35,6 +35,7 @@ import {
 import { PickleballDirectorLogo } from './components/icons/PickleballDirectorLogo';
 import { PickleballIcon } from './components/icons/PickleballIcon';
 import { FEATURE_FLAGS } from './config/featureFlags';
+import { HelpPage } from './components/HelpPage';
 
 const VerificationBanner: React.FC = () => {
     const { resendVerificationEmail, reloadUser } = useAuth();
@@ -572,6 +573,8 @@ const App: React.FC = () => {
                         />
                     ) : view === 'players' ? (
                         <PlayerDirectory onBack={() => setView('dashboard')} />
+                    ) : view === 'help' ? (
+                        <HelpPage onBack={() => setView('dashboard')} />
                     ) : view === 'myLeagues' && FEATURE_FLAGS.ENABLE_LEAGUES ? (
                         <PlaceholderView 
                             title="My Leagues" 

@@ -39,7 +39,9 @@ export const DevTools: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 startDate: '2024-01-01',
                 endDate: '2024-01-02',
                 status: 'draft',
-                settings: { points: { win: 3, loss: 0, draw: 1 }, tieBreaker: 'point_diff' }
+                settings: { points: { win: 3, loss: 0, draw: 1 }, tieBreaker: 'point_diff' },
+                visibility: 'private',
+                registrationOpen: false
             };
             await createCompetition(comp);
             log("✓ Competition created.");

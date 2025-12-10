@@ -17,6 +17,7 @@ import {
   runTransaction,
   deleteDoc,
   orderBy, 
+  addDoc,
   type Firestore
 } from '@firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from '@firebase/storage';
@@ -24,7 +25,8 @@ import { getFunctions, httpsCallable } from '@firebase/functions';
 import type { 
     Tournament, UserProfile, Registration, Team, Division, Match, PartnerInvite, Club, 
     UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, 
-    GenderCategory, TeamPlayer, MatchTeam, Competition, CompetitionEntry, CompetitionType
+    GenderCategory, TeamPlayer, MatchTeam, Competition, CompetitionEntry, CompetitionType,
+    Notification, AuditLog
 } from '../types';
 
 const STORAGE_KEY = 'pickleball_firebase_config';
@@ -1009,13 +1011,18 @@ export const finalizeRegistration = async (payload: Registration, tournament: To
 export const saveStandings = async (tournamentId: string | undefined, divisionId: string | undefined, standings: StandingsEntry[]) => {
     const batch = writeBatch(db);
     standings.forEach(s => {
-        // Use composite ID based on context
-        const id = s.competitionId 
-            ? `${s.competitionId}_${s.teamId}`
-            : `${tournamentId}_${divisionId}_${s.teamId}`;
+        let id = '';
+        if (s.competitionId) {
+             // If divisionId exists, include it to allow same player in multiple divisions
+             id = s.divisionId 
+                ? `${s.competitionId}_${s.divisionId}_${s.teamId}` 
+                : `${s.competitionId}_${s.teamId}`;
+        } else {
+             id = `${tournamentId}_${divisionId}_${s.teamId}`;
+        }
             
         const ref = doc(db, 'standings', id);
-        batch.set(ref, { ...s, updatedAt: Date.now() });
+        batch.set(ref, { ...s, updatedAt: Date.now() }, { merge: true });
     });
     await batch.commit();
 };
@@ -1090,46 +1097,99 @@ export const subscribeToCompetitionEntries = (competitionId: string, callback: (
 };
 
 export const generateLeagueSchedule = async (compId: string): Promise<void> => {
+  const comp = await getCompetition(compId);
+  if (!comp) throw new Error("Competition not found");
+
   const entries = await listCompetitionEntries(compId);
-  if (entries.length < 2) return;
+  
+  // Group by division
+  const entriesByDivision: Record<string, CompetitionEntry[]> = {};
+  
+  if (comp.divisions && comp.divisions.length > 0) {
+      comp.divisions.forEach(d => entriesByDivision[d.id] = []);
+      entries.forEach(e => {
+          if (e.divisionId && entriesByDivision[e.divisionId]) {
+              entriesByDivision[e.divisionId].push(e);
+          }
+      });
+  } else {
+      entriesByDivision['default'] = entries;
+  }
 
-  const matches: Match[] = [];
-  // Simple Round Robin Logic
-  for (let i = 0; i < entries.length; i++) {
-    for (let j = i + 1; j < entries.length; j++) {
-      const entryA = entries[i];
-      const entryB = entries[j];
-      
-      const teamAId = entryA.teamId || entryA.playerId || 'unknown';
-      const teamBId = entryB.teamId || entryB.playerId || 'unknown';
+  const newMatches: Match[] = [];
+  const newStandings: StandingsEntry[] = [];
 
-      const matchId = `match_${compId}_${Date.now()}_${i}_${j}`;
-      const match: Match = {
-        id: matchId,
-        competitionId: compId,
-        divisionId: entryA.divisionId || 'default',
-        teamAId,
-        teamBId,
-        status: 'scheduled',
-        roundNumber: 1,
-        scoreTeamAGames: [],
-        scoreTeamBGames: [],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        // Required legacy fields - handling as optional or nullable
-        stage: 'League Round',
-        lastUpdatedBy: 'system',
-        lastUpdatedAt: Date.now(),
-        winnerTeamId: null,
-        court: null,
-        startTime: null,
-        endTime: null
-      } as any;
-      matches.push(match);
-    }
+  for (const [divId, divEntries] of Object.entries(entriesByDivision)) {
+      if (divEntries.length < 2) continue;
+
+      // Initialize Standings
+      divEntries.forEach(e => {
+          const teamId = e.teamId || e.playerId || 'unknown';
+          
+          newStandings.push({
+              competitionId: compId,
+              divisionId: divId === 'default' ? undefined : divId,
+              teamId: teamId,
+              teamName: teamId, // Fallback, UI should resolve
+              played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0, pointDifference: 0, points: 0
+          });
+      });
+
+      // Round Robin Algorithm
+      const participants = divEntries.map(e => e.teamId || e.playerId || 'unknown');
+      if (participants.length % 2 !== 0) {
+          participants.push('BYE');
+      }
+
+      const numRounds = participants.length - 1;
+      const halfSize = participants.length / 2;
+      const teams = [...participants];
+
+      for (let round = 0; round < numRounds; round++) {
+          for (let i = 0; i < halfSize; i++) {
+              const teamA = teams[i];
+              const teamB = teams[teams.length - 1 - i];
+
+              if (teamA !== 'BYE' && teamB !== 'BYE') {
+                  const matchId = `match_${compId}_${divId}_${Date.now()}_${round}_${i}`;
+                  newMatches.push({
+                      id: matchId,
+                      competitionId: compId,
+                      divisionId: divId === 'default' ? '' : divId,
+                      teamAId: teamA,
+                      teamBId: teamB,
+                      status: 'scheduled',
+                      roundNumber: round + 1,
+                      stage: `Round ${round + 1}`,
+                      scoreTeamAGames: [],
+                      scoreTeamBGames: [],
+                      createdAt: Date.now(),
+                      updatedAt: Date.now(),
+                      lastUpdatedBy: 'system',
+                      lastUpdatedAt: Date.now(),
+                      winnerTeamId: null,
+                      court: null,
+                      startTime: null,
+                      endTime: null
+                  } as any);
+              }
+          }
+          
+          // Rotate
+          const first = teams[0];
+          const rest = teams.slice(1);
+          const last = rest.pop();
+          if (last) rest.unshift(last);
+          teams.splice(0, teams.length, first, ...rest);
+      }
   }
   
-  await batchCreateMatches(null, matches);
+  if (newMatches.length > 0) {
+      await batchCreateMatches(null, newMatches);
+  }
+  if (newStandings.length > 0) {
+      await saveStandings(undefined, undefined, newStandings);
+  }
 };
 
 export const updateLeagueStandings = async (matchId: string): Promise<void> => {
@@ -1144,23 +1204,23 @@ export const updateLeagueStandings = async (matchId: string): Promise<void> => {
     
     const pointsSettings = comp.settings?.points || { win: 3, loss: 0, draw: 1 };
     
-    // We need to fetch current standings for these teams to update them
-    // or calculate from scratch. For simplicity/efficiency in this snippet, 
-    // we assume an aggregation or read-modify-write.
-    // NOTE: In a real system, you'd likely use a transaction or cloud function trigger.
-    
     const teamAId = match.teamAId!;
     const teamBId = match.teamBId!;
+    const divisionId = match.divisionId;
     
-    // Helper to get or init standing
     const getStanding = async (teamId: string) => {
-        const id = `${match.competitionId}_${teamId}`;
+        const id = divisionId 
+            ? `${match.competitionId}_${divisionId}_${teamId}`
+            : `${match.competitionId}_${teamId}`;
+            
         const sSnap = await getDoc(doc(db, 'standings', id));
         if (sSnap.exists()) return sSnap.data() as StandingsEntry;
+        
         return {
             competitionId: match.competitionId,
+            divisionId: divisionId || undefined,
             teamId,
-            teamName: 'Team ' + teamId, // Ideally fetch name
+            teamName: teamId,
             played: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0, pointDifference: 0, points: 0
         } as StandingsEntry;
     };
@@ -1197,4 +1257,62 @@ export const updateLeagueStandings = async (matchId: string): Promise<void> => {
     }
     
     await saveStandings(undefined, undefined, [sA, sB]);
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                NOTIFICATIONS & AUDIT                       */
+/* -------------------------------------------------------------------------- */
+
+export const sendNotification = async (
+  userId: string,
+  title: string,
+  message: string,
+  type: 'info' | 'action_required' | 'success' | 'error' = 'info',
+  link?: string
+) => {
+  const notifRef = doc(collection(db, 'users', userId, 'notifications'));
+  const notification: Notification = {
+    id: notifRef.id,
+    userId,
+    title,
+    message,
+    type,
+    link,
+    read: false,
+    createdAt: Date.now()
+  };
+  await setDoc(notifRef, notification);
+};
+
+export const subscribeToNotifications = (userId: string, callback: (notifications: Notification[]) => void) => {
+  const q = query(
+    collection(db, 'users', userId, 'notifications'),
+    orderBy('createdAt', 'desc'),
+    limit(50)
+  );
+  return onSnapshot(q, (snap) => {
+    callback(snap.docs.map(d => d.data() as Notification));
+  });
+};
+
+export const markNotificationAsRead = async (userId: string, notificationId: string) => {
+  await updateDoc(doc(db, 'users', userId, 'notifications', notificationId), { read: true });
+};
+
+export const logAudit = async (
+  actorId: string,
+  action: string,
+  entityId?: string,
+  details?: any
+) => {
+  const logRef = doc(collection(db, 'auditLogs'));
+  const log: AuditLog = {
+    id: logRef.id,
+    actorId,
+    action,
+    entityId,
+    details,
+    timestamp: Date.now()
+  };
+  await setDoc(logRef, log);
 };

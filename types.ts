@@ -279,7 +279,8 @@ export interface MatchTeam {
 
 export interface MatchScoreSubmission {
   id: string;
-  tournamentId: string;
+  tournamentId?: string;
+  competitionId?: string;
   matchId: string;
   
   submittedBy: string;
@@ -355,6 +356,14 @@ export interface TournamentSettings {
 
 export type CompetitionType = 'league' | 'team_league' | 'tournament';
 
+export interface CompetitionDivision {
+  id: string;
+  name: string;
+  minRating?: number;
+  maxRating?: number;
+  gender?: GenderCategory;
+}
+
 export interface Competition {
   id: string;
   type: CompetitionType;
@@ -364,15 +373,26 @@ export interface Competition {
   startDate: string;
   endDate: string;
   status: 'draft' | 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+  country?: string;
+  region?: string;
   settings?: {
     points: {
       win: number;
       loss: number;
       draw?: number;
+      bonus?: number; 
     };
     tieBreaker?: 'match_wins' | 'point_diff' | 'head_to_head';
-    // add any league‑specific settings here (maxTeams, rounds, etc.)
+    waitlist?: boolean;
+    teamRegistrationMode?: 'pre_registered' | 'on_entry';
   };
+  // Expanded Metadata
+  description?: string;
+  venue?: string;
+  maxEntrants?: number;
+  visibility: Visibility;
+  registrationOpen: boolean;
+  divisions?: CompetitionDivision[];
 }
 
 export interface CompetitionEntry {
@@ -381,7 +401,7 @@ export interface CompetitionEntry {
   entryType: 'team' | 'individual';
   teamId?: string;
   playerId?: string;
-  divisionId?: string;       // optional if your leagues have divisions
+  divisionId?: string;       
   status: 'pending' | 'active' | 'withdrawn';
   createdAt: number;
 }
@@ -396,4 +416,28 @@ export interface CompetitionStage {
   type: 'round_robin' | 'single_elim' | 'double_elim' | 'swiss';
   order: number;
   settings: StageSettings;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                               MESSAGING                                    */
+/* -------------------------------------------------------------------------- */
+
+export interface Notification {
+  id: string;
+  userId: string;
+  title: string;
+  message: string;
+  type: 'info' | 'action_required' | 'success' | 'error';
+  link?: string;
+  read: boolean;
+  createdAt: number;
+}
+
+export interface AuditLog {
+  id: string;
+  actorId: string;
+  action: string;
+  entityId?: string;
+  details?: any;
+  timestamp: number;
 }

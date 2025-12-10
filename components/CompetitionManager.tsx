@@ -6,13 +6,19 @@ import {
     subscribeToCompetitionEntries,
     subscribeToStandings,
     generateLeagueSchedule, 
-    updateMatchScore, 
     updateLeagueStandings,
     createCompetitionEntry,
     updateCompetition,
-    getUsersByIds
+    getUsersByIds,
+    searchUsers,
+    logAudit
 } from '../services/firebase';
-import type { Competition, Match, CompetitionEntry, StandingsEntry, UserProfile } from '../types';
+import { 
+    submitMatchScore, 
+    confirmMatchScore, 
+    disputeMatchScore 
+} from '../services/matchService';
+import type { Competition, Match, CompetitionEntry, StandingsEntry, UserProfile, CompetitionDivision } from '../types';
 import { Schedule } from './Schedule';
 import { LeagueStandings } from './LeagueStandings';
 import { useAuth } from '../contexts/AuthContext';
@@ -23,7 +29,7 @@ interface CompetitionManagerProps {
 }
 
 export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competitionId, onBack }) => {
-    const { isOrganizer } = useAuth();
+    const { isOrganizer, currentUser } = useAuth();
     const [competition, setCompetition] = useState<Competition | null>(null);
     const [matches, setMatches] = useState<Match[]>([]);
     const [entries, setEntries] = useState<CompetitionEntry[]>([]);
@@ -31,8 +37,14 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     const [activeTab, setActiveTab] = useState<'standings' | 'schedule' | 'entrants'>('standings');
     const [playersCache, setPlayersCache] = useState<Record<string, UserProfile>>({});
 
-    // New Entry State
-    const [newEntryName, setNewEntryName] = useState('');
+    // Entry Management State
+    const [isAddingEntry, setIsAddingEntry] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
+    const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
+    const [manualName, setManualName] = useState('');
+    const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
+    const [entryError, setEntryError] = useState<string | null>(null);
 
     useEffect(() => {
         getCompetition(competitionId).then(setCompetition);
@@ -56,9 +68,6 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                 .filter((id): id is string => !!id && !playersCache[id]);
             
             if (ids.length > 0) {
-                // Optimization: In real app, check if ID looks like a user ID before fetching
-                // For simplicity assuming entries might use user IDs or manual strings.
-                // If using manual strings, this fetch will just return empty for them.
                 try {
                     const profiles = await getUsersByIds(ids);
                     setPlayersCache(prev => {
@@ -74,12 +83,96 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         if (entries.length > 0) fetchNames();
     }, [entries]);
 
+    const handleSearch = async (term: string) => {
+        setSearchTerm(term);
+        if (term.length < 2) {
+            setSearchResults([]);
+            return;
+        }
+        const results = await searchUsers(term);
+        setSearchResults(results);
+    };
+
+    const handleSelectUser = (user: UserProfile) => {
+        setSelectedUser(user);
+        setSearchTerm('');
+        setSearchResults([]);
+        setManualName('');
+    };
+
+    const handleAddEntry = async () => {
+        setEntryError(null);
+        if (!selectedUser && !manualName.trim()) {
+            setEntryError("Please select a user or enter a manual name.");
+            return;
+        }
+
+        if (competition?.divisions && competition.divisions.length > 0 && !selectedDivisionId) {
+            setEntryError("Please select a division.");
+            return;
+        }
+
+        const idToCheck = selectedUser ? selectedUser.id : manualName.trim();
+        
+        // Duplicate Check
+        const isDuplicate = entries.some(e => e.playerId === idToCheck || e.teamId === idToCheck);
+        if (isDuplicate) {
+            setEntryError("This user/team is already entered.");
+            return;
+        }
+
+        // Division Validation
+        if (selectedDivisionId && selectedUser) {
+            const div = competition?.divisions?.find(d => d.id === selectedDivisionId);
+            if (div) {
+                const rating = competition?.type === 'league' ? selectedUser.duprSinglesRating : selectedUser.duprDoublesRating;
+                // Basic rating check if user has rating
+                if (rating) {
+                    if (div.minRating && rating < div.minRating) {
+                        setEntryError(`User rating (${rating}) is below minimum (${div.minRating}) for this division.`);
+                        return;
+                    }
+                    if (div.maxRating && rating > div.maxRating) {
+                        setEntryError(`User rating (${rating}) is above maximum (${div.maxRating}) for this division.`);
+                        return;
+                    }
+                }
+            }
+        }
+
+        const entry: CompetitionEntry = {
+            id: `entry_${Date.now()}`,
+            competitionId,
+            entryType: selectedUser ? 'individual' : 'team', // Simplification
+            playerId: selectedUser ? selectedUser.id : undefined,
+            teamId: !selectedUser ? manualName.trim() : undefined, 
+            divisionId: selectedDivisionId || undefined,
+            status: 'active',
+            createdAt: Date.now()
+        };
+
+        try {
+            await createCompetitionEntry(entry);
+            // Reset form
+            setSelectedUser(null);
+            setManualName('');
+            setSearchTerm('');
+            setIsAddingEntry(false);
+        } catch (e: any) {
+            console.error(e);
+            setEntryError("Failed to add entry.");
+        }
+    };
+
     const handleGenerateSchedule = async () => {
         if (!confirm("Generate schedule? This will create matches for all current entrants.")) return;
+        if (!currentUser) return;
         try {
             await generateLeagueSchedule(competitionId);
             await updateCompetition({ ...competition!, status: 'in_progress' });
-            // Re-fetch local competition state to update status UI
+            
+            await logAudit(currentUser.uid, "generate_schedule", competitionId, { entrantCount: entries.length });
+
             const updated = await getCompetition(competitionId);
             setCompetition(updated);
             alert("Schedule generated!");
@@ -89,67 +182,61 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         }
     };
 
-    const handleAddEntry = async () => {
-        if (!newEntryName.trim()) return;
-        // Basic manual entry for now. In real app, search for users.
-        const entry: CompetitionEntry = {
-            id: `entry_${Date.now()}`,
-            competitionId,
-            entryType: 'individual',
-            teamId: newEntryName, // Using name as ID for manual entries for simplicity
-            playerId: newEntryName, // or store name elsewhere
-            status: 'active',
-            createdAt: Date.now()
-        };
-        await createCompetitionEntry(entry);
-        setNewEntryName('');
-    };
+    const handleUpdateScore = async (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute', reason?: string) => {
+        if (!currentUser) {
+            alert("Please log in to submit scores.");
+            return;
+        }
 
-    const handleUpdateScore = async (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute') => {
-        if (action !== 'submit' && action !== 'confirm') return; // Only simple submission for now
-        
+        const match = matches.find(m => m.id === matchId);
+        if (!match) return;
+
         try {
-            const match = matches.find(m => m.id === matchId);
-            if (!match) return;
-
-            const winnerId = score1 > score2 ? match.teamAId : score2 > score1 ? match.teamBId : null;
-
-            // 1. Update Match
-            await updateMatchScore(undefined, matchId, {
-                scoreTeamAGames: [score1],
-                scoreTeamBGames: [score2],
-                winnerTeamId: winnerId,
-                status: 'completed'
-            });
-
-            // 2. Update League Standings
-            await updateLeagueStandings(matchId);
-
-        } catch (e) {
+            if (action === 'submit') {
+                await submitMatchScore(competitionId, match, currentUser.uid, score1, score2);
+            } else if (action === 'confirm') {
+                await confirmMatchScore(competitionId, match, currentUser.uid);
+            } else if (action === 'dispute') {
+                await disputeMatchScore(competitionId, match, currentUser.uid, reason);
+            }
+        } catch (e: any) {
             console.error(e);
-            alert("Failed to update score.");
+            alert("Action failed: " + e.message);
         }
     };
 
     if (!competition) return <div className="p-10 text-center">Loading...</div>;
 
     const uiMatches = matches.map(m => {
-        // Resolve names
         const nameA = playersCache[m.teamAId || '']?.displayName || m.teamAId || 'Unknown';
         const nameB = playersCache[m.teamBId || '']?.displayName || m.teamBId || 'Unknown';
         
+        // Basic Permissions check for UI flags
+        // For individual leagues, teamAId is often the playerId.
+        // For team leagues, we'd need more complex logic to check team membership.
+        const isParticipant = currentUser && (m.teamAId === currentUser.uid || m.teamBId === currentUser.uid);
+        const canEdit = isOrganizer || isParticipant;
+        const isPending = m.status === 'pending_confirmation';
+        
+        // Waiting on YOU if: match is pending, you are a participant, and YOU didn't submit the last update
+        const isWaitingOnYou = isPending && isParticipant && m.lastUpdatedBy !== currentUser.uid;
+        
+        // Can confirm if: Organizer OR (Participant AND Waiting on you)
+        const canConfirm = isOrganizer || isWaitingOnYou;
+
         return {
             id: m.id,
-            team1: { id: m.teamAId || '', name: nameA, players: [] },
-            team2: { id: m.teamBId || '', name: nameB, players: [] },
+            team1: { id: m.teamAId || '', name: nameA, players: [{ name: nameA }] },
+            team2: { id: m.teamBId || '', name: nameB, players: [{ name: nameB }] },
             score1: m.scoreTeamAGames?.[0] ?? null,
             score2: m.scoreTeamBGames?.[0] ?? null,
             status: m.status || 'scheduled',
-            roundNumber: m.roundNumber || 1
+            roundNumber: m.roundNumber || 1,
+            isWaitingOnYou: !!isWaitingOnYou,
+            canCurrentUserConfirm: !!canConfirm
         };
     });
 
-    // Hydrate standings names
     const uiStandings = standings.map(s => ({
         ...s,
         teamName: playersCache[s.teamId]?.displayName || s.teamId || s.teamName
@@ -162,11 +249,19 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
             <div className="flex justify-between items-start mb-6">
                 <div>
                     <h1 className="text-3xl font-bold text-white mb-1">{competition.name}</h1>
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${
-                        competition.status === 'in_progress' ? 'bg-green-900 text-green-300' : 'bg-gray-700 text-gray-400'
-                    }`}>
-                        {competition.status.replace('_', ' ')}
-                    </span>
+                    <div className="flex flex-wrap gap-2 text-sm text-gray-400 mt-1">
+                        <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${
+                            competition.status === 'in_progress' ? 'bg-green-900 text-green-300' : 'bg-gray-700 text-gray-400'
+                        }`}>
+                            {competition.status.replace('_', ' ')}
+                        </span>
+                        {competition.venue && <span>• {competition.venue}</span>}
+                        {competition.visibility === 'private' && <span className="text-yellow-500">• Private</span>}
+                        {competition.registrationOpen && <span className="text-green-400">• Registration Open</span>}
+                    </div>
+                    {competition.description && (
+                        <p className="text-gray-300 text-sm mt-3 max-w-2xl">{competition.description}</p>
+                    )}
                 </div>
                 {isOrganizer && competition.status === 'draft' && (
                     <button 
@@ -192,33 +287,106 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                 <Schedule 
                     matches={uiMatches} 
                     onUpdateScore={handleUpdateScore}
-                    isVerified={true} // Allow edits for now if verified
+                    isVerified={true}
                 />
             )}
 
             {activeTab === 'entrants' && (
                 <div className="bg-gray-800 rounded p-6 border border-gray-700">
-                    <h2 className="text-xl font-bold text-white mb-4">League Entrants</h2>
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-bold text-white">League Entrants</h2>
+                        {competition.maxEntrants && (
+                            <span className="text-sm text-gray-400">Max: {competition.maxEntrants}</span>
+                        )}
+                    </div>
                     
                     {isOrganizer && competition.status === 'draft' && (
-                        <div className="flex gap-2 mb-6">
-                            <input 
-                                className="bg-gray-900 text-white p-2 rounded border border-gray-600"
-                                placeholder="Team/Player Name"
-                                value={newEntryName}
-                                onChange={e => setNewEntryName(e.target.value)}
-                            />
-                            <button onClick={handleAddEntry} className="bg-blue-600 text-white px-4 py-2 rounded font-bold">Add</button>
+                        <div className="mb-6">
+                            {!isAddingEntry ? (
+                                <button onClick={() => setIsAddingEntry(true)} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold text-sm">
+                                    + Add Entrant
+                                </button>
+                            ) : (
+                                <div className="bg-gray-900 p-4 rounded border border-gray-600 animate-fade-in-up">
+                                    <h3 className="text-white font-bold mb-3">Add Entrant</h3>
+                                    
+                                    {entryError && <div className="text-red-400 text-sm mb-3">{entryError}</div>}
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">Search User</label>
+                                            <input 
+                                                className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 text-sm"
+                                                placeholder="Search by name/email..."
+                                                value={selectedUser ? selectedUser.displayName : searchTerm}
+                                                onChange={e => !selectedUser && handleSearch(e.target.value)}
+                                                readOnly={!!selectedUser}
+                                            />
+                                            {selectedUser && (
+                                                <button onClick={() => { setSelectedUser(null); setSearchTerm(''); }} className="text-xs text-blue-400 mt-1">Clear Selection</button>
+                                            )}
+                                            {searchResults.length > 0 && !selectedUser && (
+                                                <div className="bg-gray-800 border border-gray-600 mt-1 rounded max-h-40 overflow-y-auto">
+                                                    {searchResults.map(u => (
+                                                        <div key={u.id} onClick={() => handleSelectUser(u)} className="p-2 hover:bg-gray-700 cursor-pointer text-sm text-white">
+                                                            {u.displayName} ({u.email})
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        
+                                        {!selectedUser && (
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Or Manual Name</label>
+                                                <input 
+                                                    className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 text-sm"
+                                                    placeholder="Team/Player Name"
+                                                    value={manualName}
+                                                    onChange={e => setManualName(e.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {competition.divisions && competition.divisions.length > 0 && (
+                                        <div className="mb-4">
+                                            <label className="block text-xs text-gray-400 mb-1">Division</label>
+                                            <select 
+                                                className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 text-sm"
+                                                value={selectedDivisionId}
+                                                onChange={e => setSelectedDivisionId(e.target.value)}
+                                            >
+                                                <option value="">Select Division...</option>
+                                                {competition.divisions.map(d => (
+                                                    <option key={d.id} value={d.id}>{d.name} {d.minRating ? `(${d.minRating}+)` : ''}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    <div className="flex gap-2">
+                                        <button onClick={handleAddEntry} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded text-sm font-bold">Add</button>
+                                        <button onClick={() => { setIsAddingEntry(false); setEntryError(null); }} className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded text-sm">Cancel</button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
                     <div className="space-y-2">
-                        {entries.length === 0 ? <p className="text-gray-500">No entrants yet.</p> : entries.map(e => (
-                            <div key={e.id} className="bg-gray-900 p-3 rounded flex justify-between items-center">
-                                <span className="text-white font-medium">{playersCache[e.playerId || '']?.displayName || e.playerId || e.teamId}</span>
-                                <span className="text-xs text-gray-500 capitalize">{e.entryType}</span>
-                            </div>
-                        ))}
+                        {entries.length === 0 ? <p className="text-gray-500 italic">No entrants yet.</p> : entries.map(e => {
+                            const division = competition.divisions?.find(d => d.id === e.divisionId);
+                            return (
+                                <div key={e.id} className="bg-gray-900 p-3 rounded flex justify-between items-center border border-gray-800">
+                                    <div>
+                                        <div className="text-white font-medium">{playersCache[e.playerId || '']?.displayName || e.playerId || e.teamId}</div>
+                                        {division && <div className="text-xs text-green-400">{division.name}</div>}
+                                    </div>
+                                    <span className="text-xs text-gray-500 capitalize bg-gray-800 px-2 py-1 rounded border border-gray-700">{e.entryType}</span>
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             )}
