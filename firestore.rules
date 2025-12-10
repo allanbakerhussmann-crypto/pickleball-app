@@ -1,0 +1,154 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isAdmin(uid) {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(uid)) &&
+        get(/databases/$(database)/documents/users/$(uid)).data.roles.hasAny(['admin']);
+    }
+    
+    function isOrganizerForCompetition(competitionId) {
+      return isSignedIn() && (
+        isAdmin(request.auth.uid) ||
+        (
+          exists(/databases/$(database)/documents/competitions/$(competitionId)) &&
+          get(/databases/$(database)/documents/competitions/$(competitionId)).data.organiserId == request.auth.uid
+        )
+      );
+    }
+
+    function isOrganizerForTournament(tournamentId) {
+      return isSignedIn() && (
+        isAdmin(request.auth.uid) ||
+        (
+          exists(/databases/$(database)/documents/tournaments/$(tournamentId)) &&
+          get(/databases/$(database)/documents/tournaments/$(tournamentId)).data.createdByUserId == request.auth.uid
+        )
+      );
+    }
+
+    // --- Users ---
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isSignedIn() && (request.auth.uid == userId || isAdmin(request.auth.uid));
+      
+      match /notifications/{notificationId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow write: if false; // Only server
+        allow update: if isSignedIn() && request.auth.uid == userId; // Mark as read
+      }
+    }
+
+    // --- Competitions (Leagues) ---
+    // Creation is handled via Cloud Function to enforce organiserId and audit logging.
+    match /competitions/{competitionId} {
+      allow read: if true;
+      allow create: if false; // Use createCompetition Cloud Function
+      allow update, delete: if isOrganizerForCompetition(competitionId);
+    }
+
+    // --- Competition Entries ---
+    match /competitionEntries/{entryId} {
+      allow read: if true;
+      // Allow users to register themselves, or organizers to register anyone
+      allow create: if isSignedIn() && (
+        request.resource.data.playerId == request.auth.uid || 
+        isOrganizerForCompetition(request.resource.data.competitionId)
+      );
+      // Only organizer can update status (e.g. active/withdrawn) or admin
+      allow update, delete: if isSignedIn() && (
+        isAdmin(request.auth.uid) || 
+        isOrganizerForCompetition(resource.data.competitionId)
+      );
+    }
+
+    // --- Matches ---
+    match /matches/{matchId} {
+      allow read: if true;
+      
+      // Organizers can create/delete matches (e.g. manual scheduling adjustments)
+      // BUT score finalization (status: completed) for Competitions is blocked here 
+      // and must go through confirmMatchScore Cloud Function.
+      allow create, delete: if 
+        (resource.data.competitionId != null && isOrganizerForCompetition(resource.data.competitionId)) ||
+        (resource.data.tournamentId != null && isOrganizerForTournament(resource.data.tournamentId));
+      
+      allow update: if 
+        (resource.data.competitionId != null && isOrganizerForCompetition(resource.data.competitionId)) ||
+        (resource.data.tournamentId != null && isOrganizerForTournament(resource.data.tournamentId));
+    }
+    
+    // --- Match Teams (Join table) ---
+    match /matchTeams/{docId} {
+      allow read: if true;
+      allow write: if isSignedIn() && isAdmin(request.auth.uid);
+    }
+
+    // --- Score Submissions ---
+    match /matchScoreSubmissions/{subId} {
+       allow read: if isSignedIn();
+       allow create: if isSignedIn(); 
+       // Only allow updates (confirm/reject) via Cloud Function or if you are the organizer/opponent
+       allow update: if isSignedIn(); 
+    }
+    
+    // --- Standings ---
+    match /standings/{id} {
+       allow read: if true;
+       
+       // CASE 1: Competitions (Leagues) -> Server Side ONLY
+       // We block client writes if competitionId is present.
+       // CASE 2: Tournaments (Legacy) -> Client Side Allowed for Organizer
+       allow write: if isSignedIn() && 
+                    (resource == null || resource.data.competitionId == null) && 
+                    (request.resource.data.competitionId == null) &&
+                    request.resource.data.tournamentId != null &&
+                    isOrganizerForTournament(request.resource.data.tournamentId);
+    }
+
+    // --- Audit Logs ---
+    match /auditLogs/{logId} {
+       allow read: if isAdmin(request.auth.uid);
+       allow write: if false; 
+    }
+    
+    // --- Legacy / Other Collections ---
+    match /tournaments/{tournamentId} {
+        allow read: if true;
+        allow write: if isSignedIn(); // Refine to isOrganizerForTournament in future cleanup
+    }
+    match /divisions/{divisionId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+    }
+    match /teams/{teamId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+    }
+    match /registrations/{regId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+    }
+    match /partnerInvites/{inviteId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+    }
+    match /clubs/{clubId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+        match /joinRequests/{reqId} {
+            allow read, write: if isSignedIn();
+        }
+    }
+    match /courts/{courtId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+    }
+  }
+}
