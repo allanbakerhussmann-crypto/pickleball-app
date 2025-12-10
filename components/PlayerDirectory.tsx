@@ -1,6 +1,5 @@
-
 import React, { useEffect, useState } from 'react';
-import { getAllUsers, getAllTournaments, getAllRegistrations } from '../services/firebase';
+import { getAllUsers, getAllTournaments } from '../services/firebase';
 import type { UserProfile, Tournament, Registration } from '../types';
 
 interface PlayerDirectoryProps {

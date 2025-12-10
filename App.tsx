@@ -309,7 +309,7 @@ const App: React.FC = () => {
             const result = await respondToPartnerInvite(invite, 'accepted');
             if (result && currentUser) {
                 // Explicitly cast result to ensure it's treated as the correct type
-                const res = result as unknown as { tournamentId: string; divisionId: string };
+                const res = result as { tournamentId: string; divisionId: string };
                 await ensureRegistrationForUser(res.tournamentId, currentUser.uid, res.divisionId);
                 handleAcceptInvite(res.tournamentId, res.divisionId);
             }

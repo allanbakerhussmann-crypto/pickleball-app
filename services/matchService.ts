@@ -8,14 +8,12 @@ import {
   getDocs,
   query,
   where,
+  writeBatch
 } from '@firebase/firestore';
-import type { Match, MatchScoreSubmission } from '../types';
+import type { Match, MatchScoreSubmission, MatchTeam } from '../types';
 
 /**
  * Player submits a score for a match.
- * - Creates a MatchScoreSubmission document in root collection
- * - Writes the proposed score to the Match in root 'matches' collection
- * - Sets the match status to 'pending_confirmation'
  */
 export async function submitMatchScore(
   tournamentId: string,
@@ -31,9 +29,13 @@ export async function submitMatchScore(
     throw new Error('Scores cannot be tied. Please enter a winner.');
   }
 
+  // Hydrated match has teamAId/teamBId
+  const teamAId = match.teamAId!;
+  const teamBId = match.teamBId!;
+
   const winnerTeamId =
-    score1 > score2 ? match.teamAId :
-    score2 > score1 ? match.teamBId :
+    score1 > score2 ? teamAId :
+    score2 > score1 ? teamBId :
     null;
 
   if (!winnerTeamId) {
@@ -44,31 +46,28 @@ export async function submitMatchScore(
     tournamentId,
     matchId: match.id,
     submittedBy: submittedByUserId,
-    teamAId: match.teamAId,
-    teamBId: match.teamBId,
+    teamAId: teamAId,
+    teamBId: teamBId,
     submittedScore: {
-      // For now, a single game match [score1], [score2]
       scoreTeamAGames: [score1],
       scoreTeamBGames: [score2],
       winnerTeamId,
     },
     status: 'pending_opponent',
-    opponentUserId: null, // we will wire this later
+    opponentUserId: null, 
     respondedAt: null,
     reasonRejected: null,
     createdAt: Date.now(),
   };
 
-  // Save the submission to root 'matchScoreSubmissions'
-  const submissionsRef = collection(db, 'matchScoreSubmissions');
-  await addDoc(submissionsRef, submission);
+  await addDoc(collection(db, 'matchScoreSubmissions'), submission);
 
-  // Update the match with the proposed score + pending status
+  // Update match status
+  // Note: We do NOT write scores to `matchTeams` yet. We wait for confirmation.
+  // But we might want to update `match` doc with status.
   const matchRef = doc(db, 'matches', match.id);
   await updateDoc(matchRef, {
     status: 'pending_confirmation',
-    scoreTeamAGames: [score1],
-    scoreTeamBGames: [score2],
     winnerTeamId,
     lastUpdatedBy: submittedByUserId,
     lastUpdatedAt: Date.now(),
@@ -76,9 +75,7 @@ export async function submitMatchScore(
 }
 
 /**
- * Opponent (or organiser) confirms the pending score.
- * - Marks submission as confirmed
- * - Marks the match as 'completed'
+ * Confirm score. Writes final scores to MatchTeams.
  */
 export async function confirmMatchScore(
   tournamentId: string,
@@ -86,74 +83,64 @@ export async function confirmMatchScore(
   confirmingUserId: string
 ) {
   const submissionsRef = collection(db, 'matchScoreSubmissions');
-
-  // Find the latest pending submission for this match
-  const q = query(
-    submissionsRef,
-    where('matchId', '==', match.id),
-    where('status', '==', 'pending_opponent')
-  );
+  const q = query(submissionsRef, where('matchId', '==', match.id), where('status', '==', 'pending_opponent'));
   const snapshot = await getDocs(q);
 
-  if (snapshot.empty) {
-    throw new Error('No pending score submission found for this match.');
-  }
+  if (snapshot.empty) throw new Error('No pending score submission.');
+  const submissionDoc = snapshot.docs[0];
+  const submissionData = submissionDoc.data() as MatchScoreSubmission;
 
-  const docSnap = snapshot.docs[0];
+  const batch = writeBatch(db);
 
-  // Confirm the submission
-  await updateDoc(docSnap.ref, {
-    status: 'confirmed',
-    respondedAt: Date.now(),
-  });
+  // 1. Confirm submission
+  batch.update(submissionDoc.ref, { status: 'confirmed', respondedAt: Date.now() });
 
-  // Mark the match as completed (scores were already written on submit)
+  // 2. Update Match
   const matchRef = doc(db, 'matches', match.id);
-  await updateDoc(matchRef, {
+  batch.update(matchRef, {
     status: 'completed',
     endTime: Date.now(),
     lastUpdatedBy: confirmingUserId,
     lastUpdatedAt: Date.now(),
-    court: null, // free court
+    court: null,
+    winnerTeamId: submissionData.submittedScore.winnerTeamId
   });
+
+  // 3. Update MatchTeams
+  // Need to find the matchTeam docs.
+  const qMt = query(collection(db, 'matchTeams'), where('matchId', '==', match.id));
+  const mtSnap = await getDocs(qMt);
+  
+  // We assume 2 docs. Map teamAId -> scoreA, teamBId -> scoreB
+  const scores = submissionData.submittedScore;
+  const teamAId = submissionData.teamAId;
+  const teamBId = submissionData.teamBId;
+
+  mtSnap.forEach(d => {
+      const mt = d.data() as MatchTeam;
+      if (mt.teamId === teamAId) {
+          batch.update(d.ref, { scoreGames: scores.scoreTeamAGames });
+      } else if (mt.teamId === teamBId) {
+          batch.update(d.ref, { scoreGames: scores.scoreTeamBGames });
+      }
+  });
+
+  await batch.commit();
 }
 
-/**
- * Opponent disputes the submitted score.
- * - Marks submission as rejected
- * - Flags the match as 'disputed'
- */
 export async function disputeMatchScore(
   tournamentId: string,
   match: Match,
   disputingUserId: string,
   reason?: string
 ) {
+  // ... similar to before, update submission to rejected, match to disputed
   const submissionsRef = collection(db, 'matchScoreSubmissions');
-
-  const q = query(
-    submissionsRef,
-    where('matchId', '==', match.id),
-    where('status', '==', 'pending_opponent')
-  );
+  const q = query(submissionsRef, where('matchId', '==', match.id), where('status', '==', 'pending_opponent'));
   const snapshot = await getDocs(q);
-
-  if (snapshot.empty) {
-    throw new Error('No pending score submission found to dispute.');
+  if (!snapshot.empty) {
+      await updateDoc(snapshot.docs[0].ref, { status: 'rejected', respondedAt: Date.now(), reasonRejected: reason || null });
   }
-
-  const docSnap = snapshot.docs[0];
-
-  await updateDoc(docSnap.ref, {
-    status: 'rejected',
-    respondedAt: Date.now(),
-    reasonRejected: reason ?? null,
-  });
-
   const matchRef = doc(db, 'matches', match.id);
-  await updateDoc(matchRef, {
-    status: 'disputed',
-    lastUpdatedBy: disputingUserId,
-    lastUpdatedAt: Date.now(),
-  });
+  await updateDoc(matchRef, { status: 'disputed', lastUpdatedBy: disputingUserId, lastUpdatedAt: Date.now() });
 }

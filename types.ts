@@ -21,6 +21,7 @@ export type GenderCategory = 'men' | 'women' | 'mixed' | 'open';
 export type UserRole = 'player' | 'organizer' | 'admin';
 export type UserGender = 'male' | 'female';
 
+// Replaces UserProfile conceptually, maps to 'players' collection or 'users'
 export interface UserProfile {
   id: string;
   displayName: string;
@@ -112,7 +113,6 @@ export interface Registration {
   completedAt?: number;
 }
 
-// Alias for backward compatibility during refactor
 export type TournamentRegistration = Registration;
 
 export interface CustomField {
@@ -133,17 +133,10 @@ export interface Court {
 }
 
 export type StageMode = 'single_stage' | 'two_stage';
-export type MainFormat =
-  | 'round_robin'
-  | 'single_elim'
-  | 'double_elim'
-  | 'ladder'
-  | 'leaderboard'
-  | 'swiss';
+export type MainFormat = 'round_robin' | 'single_elim' | 'double_elim' | 'ladder' | 'leaderboard' | 'swiss';
 export type Stage1Format = 'round_robin_pools';
 export type Stage2Format = 'single_elim' | 'double_elim' | 'medal_rounds';
 export type PlateFormat = 'single_elim' | 'round_robin';
-
 
 export interface DivisionFormat {
   stageMode: StageMode;
@@ -166,82 +159,6 @@ export interface DivisionFormat {
   tieBreakerSecondary?: TieBreaker;
   tieBreakerTertiary?: TieBreaker;
 }
-
-export type StageType =
-  | 'round_robin'
-  | 'bracket_single_elim'
-  | 'bracket_double_elim'
-  | 'swiss'
-  | 'leaderboard';
-
-export type StageSettings =
-  | RoundRobinSettings
-  | BracketSettings
-  | SwissSettings
-  | LeaderboardSettings;
-
-export interface RoundRobinSettings {
-  kind: 'round_robin';
-  groups?: number | null;
-  matchesPerPair?: number | null;
-}
-
-export interface BracketSettings {
-  kind: 'bracket_single_elim' | 'bracket_double_elim';
-  seedingMethod: SeedingMethod;
-  thirdPlacePlayoff?: boolean;
-}
-
-export interface SwissSettings {
-  kind: 'swiss';
-  rounds: number;
-  points: {
-    win: number;
-    loss: number;
-    draw?: number;
-  };
-  tieBreakers: string[];
-}
-
-export interface LeaderboardSettings {
-  kind: 'leaderboard';
-  points: {
-    win: number;
-    loss: number;
-    draw?: number;
-  };
-  seasonStart?: number;
-  seasonEnd?: number;
-  maxMatchesPerDay?: number | null;
-}
-
-export interface Stage {
-  id: string;
-  divisionId: string;
-  name: string;
-  type: StageType;
-  order: number;
-  isPrimaryRankingStage?: boolean;
-  matchIds: string[];
-  settings: StageSettings;
-}
-
-export interface StageStandingsEntry {
-  id: string;
-  stageId: string;
-  entryId: string;
-  wins: number;
-  losses: number;
-  draws: number;
-  points: number;
-  gamesWon?: number;
-  gamesLost?: number;
-  pointsFor?: number;
-  pointsAgainst?: number;
-  buchholz?: number;
-  rank?: number;
-}
-
 
 export interface Division {
   id: string;
@@ -269,26 +186,33 @@ export interface Division {
   updatedAt?: number;
 }
 
+// Normalized Team (No players array)
 export interface Team {
   id: string;
   tournamentId: string;
   divisionId: string;
-  type: EventType;
-  
   teamName?: string | null; 
   captainPlayerId: string;
   
   status: 'pending_partner' | 'active' | 'cancelled' | 'withdrawn';
   isLookingForPartner?: boolean;
   
-  players: string[];
-  
-  pendingInvitedUserId?: string | null;
+  pendingInvitedUserId?: string | null; // Kept for invite logic convenience
 
   createdAt?: number;
   updatedAt?: number;
   
+  // Optional for UI convenience when hydrated, but not in DB schema
+  players?: string[]; 
   participants?: UserProfile[]; 
+}
+
+// Join collection linking Players to Teams
+export interface TeamPlayer {
+  id: string;
+  teamId: string;
+  playerId: string;
+  role: 'captain' | 'member';
 }
 
 export interface PartnerInvite {
@@ -300,7 +224,7 @@ export interface PartnerInvite {
   inviterId: string;
   invitedUserId: string;
   
-  status: 'pending' | 'accepted' | 'declined' | 'expired';
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
   inviteToken?: string | null;
   
   createdAt: number;
@@ -308,15 +232,13 @@ export interface PartnerInvite {
   expiresAt?: number | null;
 }
 
+// Normalized Match
 export interface Match {
   id: string;
   tournamentId: string;
   divisionId: string;
   scorekeeperUserId?: string | null;
   
-  teamAId: string;
-  teamBId: string;
-
   status?: 'pending' | 'not_started' | 'scheduled' | 'in_progress' | 'pending_confirmation' | 'completed' | 'disputed' | 'cancelled' | 'skipped';
 
   scoreSubmittedBy?: string | null;
@@ -331,15 +253,27 @@ export interface Match {
   startTime: number | null;
   endTime: number | null;
   
-  scoreTeamAGames: number[];
-  scoreTeamBGames: number[];
   winnerTeamId: string | null;
   
   lastUpdatedBy: string | null;
   lastUpdatedAt: number | null;
-  
+
+  // Hydrated properties for UI (not in DB match doc)
+  teamAId?: string;
+  teamBId?: string;
+  scoreTeamAGames?: number[];
+  scoreTeamBGames?: number[];
   teamA?: Team;
   teamB?: Team;
+}
+
+// Join collection linking Matches to Teams
+export interface MatchTeam {
+  id: string;
+  matchId: string;
+  teamId: string;
+  isHomeTeam?: boolean; // Can be used to distinguish Team A vs Team B if needed, or rely on sorting
+  scoreGames: number[]; // Array of scores for this team [game1, game2, ...]
 }
 
 export interface MatchScoreSubmission {
@@ -366,8 +300,8 @@ export interface MatchScoreSubmission {
 }
 
 export interface StandingsEntry {
-  tournamentId?: string; // Added for flat structure compliance
-  divisionId?: string;   // Added for flat structure compliance
+  tournamentId?: string;
+  divisionId?: string;
   teamId: string;
   teamName: string;
   played: number;
