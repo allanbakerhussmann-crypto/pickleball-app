@@ -1,3 +1,4 @@
+
 import { db } from './firebase';
 import {
   collection,
@@ -12,8 +13,8 @@ import type { Match, MatchScoreSubmission } from '../types';
 
 /**
  * Player submits a score for a match.
- * - Creates a MatchScoreSubmission document
- * - Writes the proposed score to the Match
+ * - Creates a MatchScoreSubmission document in root collection
+ * - Writes the proposed score to the Match in root 'matches' collection
  * - Sets the match status to 'pending_confirmation'
  */
 export async function submitMatchScore(
@@ -58,17 +59,12 @@ export async function submitMatchScore(
     createdAt: Date.now(),
   };
 
-  // Save the submission
-  const submissionsRef = collection(
-    db,
-    'tournaments',
-    tournamentId,
-    'scoreSubmissions'
-  );
+  // Save the submission to root 'matchScoreSubmissions'
+  const submissionsRef = collection(db, 'matchScoreSubmissions');
   await addDoc(submissionsRef, submission);
 
   // Update the match with the proposed score + pending status
-  const matchRef = doc(db, 'tournaments', tournamentId, 'matches', match.id);
+  const matchRef = doc(db, 'matches', match.id);
   await updateDoc(matchRef, {
     status: 'pending_confirmation',
     scoreTeamAGames: [score1],
@@ -89,12 +85,7 @@ export async function confirmMatchScore(
   match: Match,
   confirmingUserId: string
 ) {
-  const submissionsRef = collection(
-    db,
-    'tournaments',
-    tournamentId,
-    'scoreSubmissions'
-  );
+  const submissionsRef = collection(db, 'matchScoreSubmissions');
 
   // Find the latest pending submission for this match
   const q = query(
@@ -109,7 +100,6 @@ export async function confirmMatchScore(
   }
 
   const docSnap = snapshot.docs[0];
-  const data = docSnap.data() as MatchScoreSubmission;
 
   // Confirm the submission
   await updateDoc(docSnap.ref, {
@@ -118,7 +108,7 @@ export async function confirmMatchScore(
   });
 
   // Mark the match as completed (scores were already written on submit)
-  const matchRef = doc(db, 'tournaments', tournamentId, 'matches', match.id);
+  const matchRef = doc(db, 'matches', match.id);
   await updateDoc(matchRef, {
     status: 'completed',
     endTime: Date.now(),
@@ -139,12 +129,7 @@ export async function disputeMatchScore(
   disputingUserId: string,
   reason?: string
 ) {
-  const submissionsRef = collection(
-    db,
-    'tournaments',
-    tournamentId,
-    'scoreSubmissions'
-  );
+  const submissionsRef = collection(db, 'matchScoreSubmissions');
 
   const q = query(
     submissionsRef,
@@ -165,7 +150,7 @@ export async function disputeMatchScore(
     reasonRejected: reason ?? null,
   });
 
-  const matchRef = doc(db, 'tournaments', tournamentId, 'matches', match.id);
+  const matchRef = doc(db, 'matches', match.id);
   await updateDoc(matchRef, {
     status: 'disputed',
     lastUpdatedBy: disputingUserId,

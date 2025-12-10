@@ -104,8 +104,8 @@ export const createTeamServer = async (opts: {
 
 /**
  * Ensure a team exists for the given tournament/division + players.
- * Creates / queries teams under tournaments/{tournamentId}/teams so the UI
- * can see them. Uses a transaction fallback to avoid duplicates.
+ * Creates / queries teams under root 'teams' collection.
+ * Uses a transaction fallback to avoid duplicates.
  *
  * Returns: { existed: boolean, teamId: string, team: Team|null }
  */
@@ -125,7 +125,8 @@ export const ensureTeamExists = async (
     if (!tournamentId) throw new Error('Missing tournamentId for ensureTeamExists');
     const firstPlayer = normalizedPlayers[0];
     const q = query(
-      collection(db, 'tournaments', tournamentId, 'teams'),
+      collection(db, 'teams'),
+      where('tournamentId', '==', tournamentId),
       where('divisionId', '==', divisionId),
       where('players', 'array-contains', firstPlayer)
     );
@@ -142,7 +143,7 @@ export const ensureTeamExists = async (
   }
 
   // 2) Transactional create (ensures only one writer wins)
-  const teamRef = doc(collection(db, 'tournaments', tournamentId, 'teams'));
+  const teamRef = doc(collection(db, 'teams'));
   const now = Date.now();
 
   try {
@@ -150,7 +151,8 @@ export const ensureTeamExists = async (
       // Re-check inside transaction for exact-match by players
       const firstPlayer = normalizedPlayers[0];
       const q = query(
-        collection(db, 'tournaments', tournamentId, 'teams'),
+        collection(db, 'teams'),
+        where('tournamentId', '==', tournamentId),
         where('divisionId', '==', divisionId),
         where('players', 'array-contains', firstPlayer)
       );
@@ -164,7 +166,7 @@ export const ensureTeamExists = async (
         }
       }
 
-      // Create a new team doc under tournaments/{tournamentId}/teams
+      // Create a new team doc under root 'teams'
       const teamDoc: any = {
         id: teamRef.id,
         tournamentId,
@@ -227,7 +229,8 @@ export const getUserTeamsForTournament = async (
   if (!tournamentId || !userId) return [];
 
   const qTeams = query(
-    collection(db, 'tournaments', tournamentId, 'teams'),
+    collection(db, 'teams'),
+    where('tournamentId', '==', tournamentId),
     where('players', 'array-contains', userId)
   );
   const snap = await getDocs(qTeams);
@@ -249,7 +252,7 @@ export const withdrawPlayerFromDivision = async (
 
   if (team) {
     const newPlayers = team.players.filter(p => p !== userId);
-    const teamRef = doc(db, 'tournaments', tournamentId, 'teams', team.id);
+    const teamRef = doc(db, 'teams', team.id);
 
     if (newPlayers.length === 0) {
       // Team is empty -> withdraw it
@@ -595,23 +598,27 @@ export const bulkImportClubMembers = async (params: any): Promise<any[]> => {
 // --- COURTS ---
 
 export const subscribeToCourts = (tournamentId: string, callback: (courts: Court[]) => void) => {
-    return onSnapshot(query(collection(db, 'tournaments', tournamentId, 'courts')), (snap) => {
+    const q = query(
+        collection(db, 'courts'),
+        where('tournamentId', '==', tournamentId)
+    );
+    return onSnapshot(q, (snap) => {
         const courts = snap.docs.map(d => ({ id: d.id, ...d.data() } as Court));
         callback(courts.sort((a,b) => a.order - b.order));
     });
 };
 
 export const addCourt = async (tournamentId: string, name: string, order: number) => {
-    const ref = doc(collection(db, 'tournaments', tournamentId, 'courts'));
+    const ref = doc(collection(db, 'courts'));
     await setDoc(ref, { id: ref.id, tournamentId, name, order, active: true });
 };
 
 export const updateCourt = async (tournamentId: string, courtId: string, data: Partial<Court>) => {
-    await updateDoc(doc(db, 'tournaments', tournamentId, 'courts', courtId), data);
+    await updateDoc(doc(db, 'courts', courtId), data);
 };
 
 export const deleteCourt = async (tournamentId: string, courtId: string) => {
-    await deleteDoc(doc(db, 'tournaments', tournamentId, 'courts', courtId));
+    await deleteDoc(doc(db, 'courts', courtId));
 };
 
 
@@ -790,7 +797,13 @@ export const generateFinalsFromPools = async (
     teams: Team[],
     playersCache: Record<string, UserProfile>
 ) => {
-    const matchesSnap = await getDocs(query(collection(db, 'tournaments', tournamentId, 'matches'), where('divisionId', '==', division.id)));
+    // Read from root 'matches'
+    const q = query(
+        collection(db, 'matches'),
+        where('tournamentId', '==', tournamentId),
+        where('divisionId', '==', division.id)
+    );
+    const matchesSnap = await getDocs(q);
     const matches = matchesSnap.docs.map(d => d.data() as Match).filter(m => m.stage?.startsWith('Pool'));
     
     const teamPoolMap: Record<string, string> = {};
@@ -905,7 +918,7 @@ export const saveTournament = async (tournament: Tournament, divisions?: Divisio
     if (divisions && divisions.length > 0) {
         const batch = writeBatch(db);
         divisions.forEach(div => {
-            const divRef = doc(db, 'tournaments', tournament.id, 'divisions', div.id);
+            const divRef = doc(db, 'divisions', div.id);
             batch.set(divRef, { ...div, tournamentId: tournament.id });
         });
         await batch.commit();
@@ -943,7 +956,11 @@ export const getTournament = async (id: string): Promise<Tournament | null> => {
 };
 
 export const subscribeToDivisions = (tournamentId: string, callback: (divisions: Division[]) => void) => {
-    return onSnapshot(collection(db, 'tournaments', tournamentId, 'divisions'), (snap) => {
+    const q = query(
+        collection(db, 'divisions'),
+        where('tournamentId', '==', tournamentId)
+    );
+    return onSnapshot(q, (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Division)));
     });
 };
@@ -953,7 +970,7 @@ export const updateDivision = async (
     divisionId: string,
     data: Partial<Division>
 ) => {
-    const divRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
+    const divRef = doc(db, 'divisions', divisionId);
     await setDoc(
         divRef,
         { 
@@ -965,37 +982,45 @@ export const updateDivision = async (
 };
 
 export const subscribeToTeams = (tournamentId: string, callback: (teams: Team[]) => void) => {
-    return onSnapshot(collection(db, 'tournaments', tournamentId, 'teams'), (snap) => {
+    const q = query(
+        collection(db, 'teams'),
+        where('tournamentId', '==', tournamentId)
+    );
+    return onSnapshot(q, (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Team)));
     });
 };
 
 export const subscribeToMatches = (tournamentId: string, callback: (matches: Match[]) => void) => {
-    return onSnapshot(collection(db, 'tournaments', tournamentId, 'matches'), (snap) => {
+    const q = query(
+        collection(db, 'matches'),
+        where('tournamentId', '==', tournamentId)
+    );
+    return onSnapshot(q, (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Match)));
     });
 };
 
 export const createTeam = async (tournamentId: string, team: Team) => {
-    await setDoc(doc(db, 'tournaments', tournamentId, 'teams', team.id), team);
+    await setDoc(doc(db, 'teams', team.id), team);
 };
 
 export const deleteTeam = async (tournamentId: string, teamId: string) => {
-    await setDoc(doc(db, 'tournaments', tournamentId, 'teams', teamId), { status: 'withdrawn' }, { merge: true });
+    await setDoc(doc(db, 'teams', teamId), { status: 'withdrawn' }, { merge: true });
 };
 
 export const createMatch = async (tournamentId: string, match: Match) => {
-    await setDoc(doc(db, 'tournaments', tournamentId, 'matches', match.id), match);
+    await setDoc(doc(db, 'matches', match.id), match);
 };
 
 export const updateMatchScore = async (tournamentId: string, matchId: string, updates: Partial<Match>) => {
-    await setDoc(doc(db, 'tournaments', tournamentId, 'matches', matchId), { ...updates, lastUpdatedAt: Date.now() }, { merge: true });
+    await setDoc(doc(db, 'matches', matchId), { ...updates, lastUpdatedAt: Date.now() }, { merge: true });
 };
 
 export const batchCreateMatches = async (tournamentId: string, matches: Match[]) => {
     const batch = writeBatch(db);
     matches.forEach(m => {
-        const ref = doc(db, 'tournaments', tournamentId, 'matches', m.id);
+        const ref = doc(db, 'matches', m.id);
         batch.set(ref, m);
     });
     await batch.commit();
@@ -1031,7 +1056,8 @@ export const getOpenTeamsForDivision = async (
   divisionId: string
 ): Promise<Team[]> => {
   const q = query(
-    collection(db, 'tournaments', tournamentId, 'teams'),
+    collection(db, 'teams'),
+    where('tournamentId', '==', tournamentId),
     where('divisionId', '==', divisionId),
     where('status', '==', 'pending_partner'),
     where('isLookingForPartner', '==', true) 
@@ -1044,7 +1070,8 @@ export const getOpenTeamsForDivision = async (
 
 export const getTeamsForDivision = async (tournamentId: string, divisionId: string): Promise<Team[]> => {
     const q = query(
-        collection(db, 'tournaments', tournamentId, 'teams'),
+        collection(db, 'teams'),
+        where('tournamentId', '==', tournamentId),
         where('divisionId', '==', divisionId)
     );
     const snap = await getDocs(q);
@@ -1097,7 +1124,7 @@ export const finalizeRegistration = async (
   for (const divId of payload.selectedEventIds || []) {
     try {
         // 1. Fetch Division to determine type
-        const divRef = doc(db, 'tournaments', tournament.id, 'divisions', divId);
+        const divRef = doc(db, 'divisions', divId);
         const divSnap = await getDoc(divRef);
         if (!divSnap.exists()) {
             console.warn(`Division ${divId} not found`);
@@ -1126,7 +1153,7 @@ export const finalizeRegistration = async (
                      // Fallback
                      if (!newName) newName = userProfile.displayName || 'Player';
 
-                     await updateDoc(doc(db, 'tournaments', tournament.id, 'teams', existingTeam.id), {
+                     await updateDoc(doc(db, 'teams', existingTeam.id), {
                          status: 'active',
                          isLookingForPartner: false,
                          teamName: newName,
@@ -1157,7 +1184,7 @@ export const finalizeRegistration = async (
       if (mode === 'join_open') {
         const openTeamId = details.openTeamId;
         if (!openTeamId) continue;
-        const teamRef = doc(db, 'tournaments', tournament.id, 'teams', openTeamId);
+        const teamRef = doc(db, 'teams', openTeamId);
         const teamSnap = await getDoc(teamRef);
         if (!teamSnap.exists()) {
           console.warn('open team not found', openTeamId);
@@ -1217,7 +1244,7 @@ export const finalizeRegistration = async (
             );
 
             if (oldSoloTeam) {
-                const oldTeamRef = doc(db, 'tournaments', tournament.id, 'teams', oldSoloTeam.id);
+                const oldTeamRef = doc(db, 'teams', oldSoloTeam.id);
                 await updateDoc(oldTeamRef, {
                     status: 'withdrawn',
                     isLookingForPartner: false,
@@ -1312,7 +1339,7 @@ export const finalizeRegistration = async (
                     pendingTeamName = `${inviterProfile?.displayName || userProfile.id} (Pending)`;
                 }
 
-                const teamRef = doc(db, 'tournaments', tournament.id, 'teams', resp.teamId);
+                const teamRef = doc(db, 'teams', resp.teamId);
                 await updateDoc(teamRef, {
                     teamName: pendingTeamName,
                     pendingInvitedUserId: partnerUserId,
@@ -1443,13 +1470,7 @@ export const respondToPartnerInvite = async (
     respondedAt: Date.now(),
   });
 
-  const teamRef = doc(
-    db,
-    'tournaments',
-    invite.tournamentId,
-    'teams',
-    invite.teamId
-  );
+  const teamRef = doc(db, 'teams', invite.teamId);
 
   if (response === 'accepted') {
     const teamSnap = await getDoc(teamRef);
@@ -1517,13 +1538,7 @@ export const respondToPartnerInvite = async (
       );
 
       for (const solo of soloTeamsToWithdraw) {
-        const soloRef = doc(
-          db,
-          'tournaments',
-          invite.tournamentId,
-          'teams',
-          solo.id
-        );
+        const soloRef = doc(db, 'teams', solo.id);
         batch.update(soloRef, {
           status: 'withdrawn',
           isLookingForPartner: false,
@@ -1549,13 +1564,7 @@ export const respondToPartnerInvite = async (
           status: 'cancelled',
           respondedAt: Date.now(),
         });
-        const otherTeamRef = doc(
-          db,
-          'tournaments',
-          otherInvite.tournamentId,
-          'teams',
-          otherInvite.teamId
-        );
+        const otherTeamRef = doc(db, 'teams', otherInvite.teamId);
         batch.update(otherTeamRef, {
           status: 'withdrawn',
           isLookingForPartner: false,
