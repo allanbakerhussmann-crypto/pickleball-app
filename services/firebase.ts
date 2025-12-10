@@ -23,7 +23,7 @@ import {
 } from '@firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from '@firebase/storage';
 import { getFunctions, httpsCallable } from '@firebase/functions';
-import type { Tournament, UserProfile, TournamentRegistration, Team, Division, Match, PartnerInvite, Club, UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, GenderCategory } from '../types';
+import type { Tournament, UserProfile, Registration, Team, Division, Match, PartnerInvite, Club, UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, GenderCategory } from '../types';
 
 // ... (config and init code remains same) ...
 const STORAGE_KEY = 'pickleball_firebase_config';
@@ -285,10 +285,10 @@ export const withdrawPlayerFromDivision = async (
   }
 
   // 2. Update Registration
-  const regRef = doc(db, 'tournament_registrations', `${userId}_${tournamentId}`);
+  const regRef = doc(db, 'registrations', `${userId}_${tournamentId}`);
   const regSnap = await getDoc(regRef);
   if (regSnap.exists()) {
-    const data = regSnap.data() as TournamentRegistration;
+    const data = regSnap.data() as Registration;
     const newSelectedIds = (data.selectedEventIds || []).filter(id => id !== divisionId);
     const newPartnerDetails = { ...(data.partnerDetails || {}) };
     delete newPartnerDetails[divisionId];
@@ -1029,26 +1029,28 @@ export const batchCreateMatches = async (tournamentId: string, matches: Match[])
 export const getRegistration = async (
   tournamentId: string,
   playerId: string
-): Promise<TournamentRegistration | null> => {
+): Promise<Registration | null> => {
   if (!tournamentId || !playerId) return null;
-  const docRef = doc(db, 'tournament_registrations', `${playerId}_${tournamentId}`);
+  // Use new 'registrations' collection
+  const docRef = doc(db, 'registrations', `${playerId}_${tournamentId}`);
   const snap = await getDoc(docRef);
   return snap.exists()
-    ? ({ id: snap.id, ...(snap.data() as any) } as TournamentRegistration)
+    ? ({ id: snap.id, ...(snap.data() as any) } as Registration)
     : null;
 };
 
-export const saveRegistration = async (reg: TournamentRegistration) => {
+export const saveRegistration = async (reg: Registration) => {
+  // Use new 'registrations' collection
   await setDoc(
-    doc(db, 'tournament_registrations', reg.id),
+    doc(db, 'registrations', reg.id),
     JSON.parse(JSON.stringify(reg)),
     { merge: true }
   );
 };
 
-export const getAllRegistrations = async (limitCount = 100): Promise<TournamentRegistration[]> => {
-    const snapshot = await getDocs(query(collection(db, 'tournament_registrations'), limit(limitCount)));
-    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TournamentRegistration));
+export const getAllRegistrations = async (limitCount = 100): Promise<Registration[]> => {
+    const snapshot = await getDocs(query(collection(db, 'registrations'), limit(limitCount)));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Registration));
 };
 
 export const getOpenTeamsForDivision = async (
@@ -1100,7 +1102,7 @@ export const getPendingInvitesForDivision = async (
  * - Update registration to completed and attach team ids to partnerDetails when applicable
  */
 export const finalizeRegistration = async (
-  payload: TournamentRegistration,
+  payload: Registration,
   tournament: Tournament,
   userProfile: UserProfile
 ): Promise<{ teamsCreated: Record<string, any> }> => {
@@ -1108,7 +1110,7 @@ export const finalizeRegistration = async (
     throw new Error('Invalid args to finalizeRegistration');
   }
 
-  const regRef = doc(db, 'tournament_registrations', payload.id);
+  const regRef = doc(db, 'registrations', payload.id);
   const now = Date.now();
 
   // Persist the incoming registration early (merge so partial updates don't clobber)
@@ -1387,7 +1389,7 @@ export const finalizeRegistration = async (
   }
 
   // Build the registration object that the UI expects and mark completed
-  const updatedReg: TournamentRegistration = {
+  const updatedReg: Registration = {
     ...payload,
     playerId: payload.playerId || userProfile.id,
     tournamentId: payload.tournamentId || tournament.id,
@@ -1606,15 +1608,15 @@ export const ensureRegistrationForUser = async (
   tournamentId: string,
   playerId: string,
   divisionId: string
-): Promise<TournamentRegistration> => {
+): Promise<Registration> => {
   const id = `${playerId}_${tournamentId}`;
-  const regRef = doc(db, 'tournament_registrations', id);
+  const regRef = doc(db, 'registrations', id);
   const snap = await getDoc(regRef);
 
   if (snap.exists()) {
-    const existing = snap.data() as TournamentRegistration;
+    const existing = snap.data() as Registration;
     const selectedEventIds = Array.from(new Set([...(existing.selectedEventIds || []), divisionId]));
-    const updated: TournamentRegistration = {
+    const updated: Registration = {
       ...existing,
       selectedEventIds,
       updatedAt: Date.now()
@@ -1623,7 +1625,7 @@ export const ensureRegistrationForUser = async (
     return updated;
   }
 
-  const reg: TournamentRegistration = {
+  const reg: Registration = {
     id,
     tournamentId,
     playerId,
@@ -1637,3 +1639,18 @@ export const ensureRegistrationForUser = async (
   await setDoc(regRef, reg);
   return reg;
 };
+
+export const saveStandings = async (tournamentId: string, divisionId: string, standings: StandingsEntry[]) => {
+    const batch = writeBatch(db);
+    standings.forEach(s => {
+        const id = `${tournamentId}_${divisionId}_${s.teamId}`;
+        const ref = doc(db, 'standings', id);
+        batch.set(ref, {
+            ...s,
+            tournamentId,
+            divisionId,
+            updatedAt: Date.now()
+        });
+    });
+    await batch.commit();
+}

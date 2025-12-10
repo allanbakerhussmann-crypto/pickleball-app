@@ -1,9 +1,10 @@
+
 import React, { useEffect, useState } from 'react';
 import type {
   Tournament,
   Division,
   Team,
-  TournamentRegistration,
+  Registration,
   UserProfile,
 } from '../../types';
 import {
@@ -19,11 +20,11 @@ interface DoublesPartnerStepProps {
   divisions: Division[];
   selectedDivisionIds: string[];
   userProfile: UserProfile;
-  partnerDetails: TournamentRegistration['partnerDetails'];
+  partnerDetails: Registration['partnerDetails'];
   setPartnerDetails: (
     updater:
-      | TournamentRegistration['partnerDetails']
-      | ((prev: TournamentRegistration['partnerDetails']) => TournamentRegistration['partnerDetails'])
+      | Registration['partnerDetails']
+      | ((prev: Registration['partnerDetails']) => Registration['partnerDetails'])
   ) => void;
   existingTeams: Record<string, Team>;
 }
@@ -139,7 +140,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
           if (!div || div.type !== 'doubles') continue;
 
           // If user is already in a full team, we don't need to load open teams for them
-          const existingTeam = existingTeams[divId];
+          const existingTeam = existingTeams[div.id];
           if (existingTeam && existingTeam.players.length >= 2) continue;
 
           const teams = await getOpenTeamsForDivision(tournament.id, divId);

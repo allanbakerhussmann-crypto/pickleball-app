@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import type { Tournament, TournamentRegistration, UserProfile, Division, Team } from '../../types';
+import type { Tournament, Registration, UserProfile, Division, Team } from '../../types';
 import {
     getRegistration,
     saveRegistration,
@@ -63,9 +64,9 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
 }) => {
     const [step, setStep] = useState(1);
     const [loading, setLoading] = useState(true);
-    const [regData, setRegData] = useState<TournamentRegistration | null>(null);
+    const [regData, setRegData] = useState<Registration | null>(null);
     const [divisions, setDivisions] = useState<Division[]>([]);
-    const [partnerDetails, setPartnerDetails] = useState<TournamentRegistration['partnerDetails']>({});
+    const [partnerDetails, setPartnerDetails] = useState<Registration['partnerDetails']>({});
     const [existingTeamsByDivision, setExistingTeamsByDivision] = useState<Record<string, Team>>({});
     const [error, setError] = useState<string | null>(null);
     
@@ -109,7 +110,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         return () => unsub();
     }, [tournament.id, userProfile.id, initialDivisionId]);
 
-    const handleSave = async (updates: Partial<TournamentRegistration>) => {
+    const handleSave = async (updates: Partial<Registration>) => {
         if (!regData) return;
         const updated = { ...regData, ...updates };
         setRegData(updated);
@@ -209,8 +210,8 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
 
         setLoading(true);
         try {
-            const payload: TournamentRegistration = {
-                ...(regData as TournamentRegistration),
+            const payload: Registration = {
+                ...(regData as Registration),
                 partnerDetails: isWaiverOnly ? (regData.partnerDetails || {}) : (partnerDetails || {}),
             };
             await finalizeRegistration(payload, tournament, userProfile);

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { 
   Tournament, 
@@ -27,7 +28,8 @@ import {
   updateMatchScore,
   generatePoolsSchedule,
   generateBracketSchedule,
-  generateFinalsFromPools
+  generateFinalsFromPools,
+  saveStandings
 } from '../services/firebase';
 import { 
   submitMatchScore, 
@@ -713,6 +715,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     );
     return { standings: Object.values(stats), h2hMatrix: h2h };
   }, [divisionTeams, divisionMatches, getTeamDisplayName]);
+
+  // EFFECT: Auto-save standings whenever they change (e.g. after a match completes)
+  useEffect(() => {
+      if (standings.length > 0 && activeDivision) {
+          // Debounce could be good here, but for now simple check
+          saveStandings(tournament.id, activeDivision.id, standings).catch(console.error);
+      }
+  }, [standings, tournament.id, activeDivision]);
 
   const handleGenerateFinals = async () => {
     if (!activeDivision || activeDivision.format.stageMode !== 'two_stage')
