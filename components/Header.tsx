@@ -1,11 +1,10 @@
 
-
-
 import React, { useState, useRef, useEffect } from 'react';
 import { PickleballDirectorLogo } from './icons/PickleballDirectorLogo';
 import type { UserProfile } from '../types';
 import { usePartnerInvites } from '../hooks/usePartnerInvites';
 import { respondToPartnerInvite, getTournament, getUserProfile, ensureRegistrationForUser } from '../services/firebase';
+import { FEATURE_FLAGS } from '../config/featureFlags';
 
 interface HeaderProps {
     activeView: string;
@@ -55,12 +54,12 @@ export const Header: React.FC<HeaderProps> = ({
   }, [invites]);
 
   const navLinks = [
-      { id: 'tournaments', label: 'Tournaments' },
-      { id: 'results', label: 'Results' },
-      { id: 'leagues', label: 'Leagues' },
-      { id: 'teamLeagues', label: 'Team Leagues' },
-      { id: 'clubs', label: 'Clubs' },
-      { id: 'players', label: 'Players' },
+      { id: 'tournaments', label: 'Tournaments', visible: true },
+      { id: 'results', label: 'Results', visible: true },
+      { id: 'leagues', label: 'Leagues', visible: FEATURE_FLAGS.ENABLE_LEAGUES },
+      { id: 'teamLeagues', label: 'Team Leagues', visible: FEATURE_FLAGS.ENABLE_TEAM_LEAGUES },
+      { id: 'clubs', label: 'Clubs', visible: true },
+      { id: 'players', label: 'Players', visible: true },
   ];
 
   // Close menus when clicking outside
@@ -114,7 +113,7 @@ export const Header: React.FC<HeaderProps> = ({
                 {/* Desktop Navigation */}
                 {currentUser && (
                     <nav className="hidden md:flex items-center gap-1">
-                        {navLinks.map(link => (
+                        {navLinks.filter(l => l.visible).map(link => (
                             <button
                                 key={link.id}
                                 onClick={() => onNavigate(link.id)}
@@ -207,6 +206,15 @@ export const Header: React.FC<HeaderProps> = ({
                                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
                                                 Admin Users
                                             </button>
+                                            {FEATURE_FLAGS.ENABLE_DEV_TOOLS && (
+                                                <button 
+                                                    onClick={() => { onNavigate('devTools'); setIsProfileMenuOpen(false); }}
+                                                    className="w-full text-left px-4 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300 flex items-center gap-2 font-bold"
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+                                                    Dev Tools
+                                                </button>
+                                            )}
                                         </>
                                     )}
 
@@ -307,7 +315,7 @@ export const Header: React.FC<HeaderProps> = ({
       {currentUser && isMobileNavOpen && (
         <div className="md:hidden bg-gray-800 border-b border-gray-700 animate-fade-in">
             <nav className="px-4 pt-2 pb-4 space-y-1">
-                {navLinks.map(link => (
+                {navLinks.filter(l => l.visible).map(link => (
                     <button
                         key={link.id}
                         onClick={() => { onNavigate(link.id); setIsMobileNavOpen(false); }}

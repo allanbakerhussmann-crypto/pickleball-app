@@ -1,6 +1,9 @@
 
 
 
+
+
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { 
   Tournament, 
@@ -221,19 +224,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         throw new Error('No active division selected');
       }
       try {
-        const res = await createTeamServer({
+        await createTeamServer({
           tournamentId: tournament.id,
           divisionId: activeDivision.id,
           playerIds,
           teamName: name || null,
         });
 
-        if (res?.existed) {
-          console.info('Team already existed:', res.teamId);
-        } else {
-          console.info('Team created:', res.teamId);
-        }
-        return res;
+        console.info('Team created via transaction');
       } catch (err) {
         console.error('Failed to add team', err);
         throw err;

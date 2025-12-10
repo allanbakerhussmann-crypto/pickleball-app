@@ -13,6 +13,10 @@ import { PlayerDirectory } from './components/PlayerDirectory';
 import { PartnerInvites } from './components/PartnerInvites';
 import { TournamentEventSelection } from './components/registration/TournamentEventSelection';
 import { AdminUsersPage } from './components/AdminUsersPage';
+import { CompetitionDashboard } from './components/CompetitionDashboard';
+import { CreateCompetition } from './components/CreateCompetition';
+import { CompetitionManager } from './components/CompetitionManager';
+import { DevTools } from './components/DevTools';
 import type { Tournament, PartnerInvite, UserProfile } from './types';
 import { useAuth } from './contexts/AuthContext';
 import { LoginModal } from './components/auth/LoginModal';
@@ -30,6 +34,7 @@ import {
 } from './services/firebase';
 import { PickleballDirectorLogo } from './components/icons/PickleballDirectorLogo';
 import { PickleballIcon } from './components/icons/PickleballIcon';
+import { FEATURE_FLAGS } from './config/featureFlags';
 
 const VerificationBanner: React.FC = () => {
     const { resendVerificationEmail, reloadUser } = useAuth();
@@ -158,6 +163,7 @@ const App: React.FC = () => {
     const [view, setView] = useState<string>('dashboard');
     const [activeTournamentId, setActiveTournamentId] = useState<string | null>(null);
     const [activeClubId, setActiveClubId] = useState<string | null>(null);
+    const [activeCompetitionId, setActiveCompetitionId] = useState<string | null>(null);
     
     // Wizard auto-open state
     const [wizardProps, setWizardProps] = useState<{ isOpen: boolean; mode?: 'full'|'waiver_only'; divisionId?: string } | null>(null);
@@ -274,13 +280,19 @@ const App: React.FC = () => {
     };
 
     const handleNavigate = (newView: string) => {
+        // Feature Flag Guards
+        if (newView === 'leagues' && !FEATURE_FLAGS.ENABLE_LEAGUES) return;
+        if (newView === 'teamLeagues' && !FEATURE_FLAGS.ENABLE_TEAM_LEAGUES) return;
+
         // Security check for organizer-only views
-        if (newView === 'createTournament' && !isOrganizer) return;
+        if ((newView === 'createTournament' || newView === 'createLeague') && !isOrganizer) return;
         if (newView === 'adminUsers' && !isAppAdmin) return;
+        if (newView === 'devTools' && !isAppAdmin) return;
         
         setView(newView);
         setActiveTournamentId(null);
         setActiveClubId(null);
+        setActiveCompetitionId(null);
         setWizardProps(null);
     };
 
@@ -474,6 +486,8 @@ const App: React.FC = () => {
                         <Profile onBack={() => setView('dashboard')} />
                     ) : view === 'adminUsers' && isAppAdmin ? (
                         <AdminUsersPage onBack={() => setView('dashboard')} />
+                    ) : view === 'devTools' && isAppAdmin ? (
+                        <DevTools onBack={() => setView('dashboard')} />
                     ) : view === 'tournaments' ? (
                         <TournamentDashboard 
                             tournaments={tournaments}
@@ -493,42 +507,24 @@ const App: React.FC = () => {
                     ) : view === 'invites' ? (
                         <PartnerInvites
                             onAcceptInvites={(tournamentId, divisionIds) => {
-                            // Move to the "choose events for this tournament" screen
                             setEventSelectionTournamentId(tournamentId);
                             setEventSelectionPreselectedDivisionIds(divisionIds);
                             setView('tournamentEvents');
                             }}
                             onCompleteWithoutSelection={() => setView('dashboard')}
                         />
-                        ) : view === 'tournamentEvents' && eventSelectionTournamentId ? (
+                    ) : view === 'tournamentEvents' && eventSelectionTournamentId ? (
                         <TournamentEventSelection
                             tournamentId={eventSelectionTournamentId}
                             preselectedDivisionIds={eventSelectionPreselectedDivisionIds}
-                            onBack={() => {
-                            // Go back to the invite summary screen
-                            setView('invites');
-                            }}
+                            onBack={() => setView('invites')}
                             onContinue={(selectedDivisionIds) => {
-                            // 🔗 IMPORTANT:
-                            // Here we hand off to your existing registration / waiver flow.
-                            // If you already have a function like `handleAcceptInvite(tournamentId, divisionId)`
-                            // which kicks off the wizard, you can either:
-                            //
-                            //  - For now: just use the first selected division (keeps behaviour identical
-                            //    to before but with a nicer selection screen):
-                            //
-                            if (selectedDivisionIds.length > 0) {
-                                // Existing logic – you should already have something like this:
-                                handleAcceptInvite(eventSelectionTournamentId, selectedDivisionIds[0]);
-                            }
-                            //
-                            //  - Later upgrade: extend your registration wizard to accept an array of
-                            //    division ids so the waiver/registration step covers ALL selected events
-                            //    in one go.
+                                if (selectedDivisionIds.length > 0) {
+                                    handleAcceptInvite(eventSelectionTournamentId, selectedDivisionIds[0]);
+                                }
                             }}
                         />
-                        ) : view === 'myResults' ? (
-
+                    ) : view === 'myResults' ? (
                         <PlaceholderView 
                             title="My Results" 
                             icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
@@ -541,17 +537,32 @@ const App: React.FC = () => {
                             message="View recent match scores and tournament outcomes here soon." 
                             onBack={() => setView('dashboard')}
                         />
-                    ) : view === 'leagues' ? (
-                        <PlaceholderView 
-                            title="Leagues" 
-                            message="Join ladder leagues and season-long competitions." 
-                            onBack={() => setView('dashboard')}
+                    ) : view === 'leagues' && FEATURE_FLAGS.ENABLE_LEAGUES ? (
+                        <CompetitionDashboard 
+                            type="league" 
+                            onCreateClick={() => setView('createLeague')}
+                            onSelect={(id) => { setActiveCompetitionId(id); setView('competitionManager'); }}
                         />
-                    ) : view === 'teamLeagues' ? (
-                        <PlaceholderView 
-                            title="Team Leagues" 
-                            message="Manage team rosters and league fixtures." 
-                            onBack={() => setView('dashboard')}
+                    ) : view === 'createLeague' && FEATURE_FLAGS.ENABLE_LEAGUES ? (
+                        <CreateCompetition 
+                            onCancel={() => setView('leagues')} 
+                            onCreate={() => setView('leagues')}
+                        />
+                    ) : view === 'competitionManager' && activeCompetitionId ? (
+                        <CompetitionManager 
+                            competitionId={activeCompetitionId}
+                            onBack={() => { setActiveCompetitionId(null); setView('leagues'); }}
+                        />
+                    ) : view === 'teamLeagues' && FEATURE_FLAGS.ENABLE_TEAM_LEAGUES ? (
+                        <CompetitionDashboard 
+                            type="team_league" 
+                            onCreateClick={() => setView('createTeamLeague')}
+                            onSelect={(id) => { setActiveCompetitionId(id); setView('competitionManager'); }}
+                        />
+                    ) : view === 'createTeamLeague' && FEATURE_FLAGS.ENABLE_TEAM_LEAGUES ? (
+                        <CreateCompetition 
+                            onCancel={() => setView('teamLeagues')} 
+                            onCreate={() => setView('teamLeagues')}
                         />
                     ) : view === 'clubs' ? (
                         <ClubsList 
@@ -561,14 +572,14 @@ const App: React.FC = () => {
                         />
                     ) : view === 'players' ? (
                         <PlayerDirectory onBack={() => setView('dashboard')} />
-                    ) : view === 'myLeagues' ? (
+                    ) : view === 'myLeagues' && FEATURE_FLAGS.ENABLE_LEAGUES ? (
                         <PlaceholderView 
                             title="My Leagues" 
                             icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>}
                             message="Join ladder leagues and season-long competitions." 
                             onBack={() => setView('dashboard')}
                         />
-                    ) : view === 'myTeamLeagues' ? (
+                    ) : view === 'myTeamLeagues' && FEATURE_FLAGS.ENABLE_TEAM_LEAGUES ? (
                         <PlaceholderView 
                             title="My Team Leagues" 
                             icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>}

@@ -235,7 +235,8 @@ export interface PartnerInvite {
 // Normalized Match
 export interface Match {
   id: string;
-  tournamentId: string;
+  tournamentId?: string; // Optional for league matches
+  competitionId?: string; // Added for leagues
   divisionId: string;
   scorekeeperUserId?: string | null;
   
@@ -301,6 +302,7 @@ export interface MatchScoreSubmission {
 
 export interface StandingsEntry {
   tournamentId?: string;
+  competitionId?: string;
   divisionId?: string;
   teamId: string;
   teamName: string;
@@ -311,6 +313,7 @@ export interface StandingsEntry {
   pointsAgainst: number;
   pointDifference: number;
   headToHeadWins?: number;
+  points?: number; // League points
 }
 
 export interface Tournament {
@@ -344,4 +347,53 @@ export interface TournamentSettings {
   schedulingMode: SchedulingMode;
   totalCourts?: number;
   defaultMatchDurationMinutes?: number;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                               COMPETITIONS                                 */
+/* -------------------------------------------------------------------------- */
+
+export type CompetitionType = 'league' | 'team_league' | 'tournament';
+
+export interface Competition {
+  id: string;
+  type: CompetitionType;
+  name: string;
+  hostClubId?: string;
+  organiserId: string;
+  startDate: string;
+  endDate: string;
+  status: 'draft' | 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+  settings?: {
+    points: {
+      win: number;
+      loss: number;
+      draw?: number;
+    };
+    tieBreaker?: 'match_wins' | 'point_diff' | 'head_to_head';
+    // add any league‑specific settings here (maxTeams, rounds, etc.)
+  };
+}
+
+export interface CompetitionEntry {
+  id: string;
+  competitionId: string;
+  entryType: 'team' | 'individual';
+  teamId?: string;
+  playerId?: string;
+  divisionId?: string;       // optional if your leagues have divisions
+  status: 'pending' | 'active' | 'withdrawn';
+  createdAt: number;
+}
+
+export type StageSettings = DivisionFormat;
+
+// Optional: if you want multi-stage leagues (e.g. round robin + playoffs)
+export interface CompetitionStage {
+  id: string;
+  competitionId: string;
+  name: string;
+  type: 'round_robin' | 'single_elim' | 'double_elim' | 'swiss';
+  order: number;
+  settings: StageSettings;
 }
