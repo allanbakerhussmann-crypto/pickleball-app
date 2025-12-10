@@ -308,8 +308,10 @@ const App: React.FC = () => {
         try {
             const result = await respondToPartnerInvite(invite, 'accepted');
             if (result && currentUser) {
-                await ensureRegistrationForUser(result.tournamentId, currentUser.uid, result.divisionId);
-                handleAcceptInvite(result.tournamentId, result.divisionId);
+                // Explicitly cast result to ensure it's treated as the correct type
+                const res = result as unknown as { tournamentId: string; divisionId: string };
+                await ensureRegistrationForUser(res.tournamentId, currentUser.uid, res.divisionId);
+                handleAcceptInvite(res.tournamentId, res.divisionId);
             }
         } catch (e) {
             console.error("Accept invite failed", e);

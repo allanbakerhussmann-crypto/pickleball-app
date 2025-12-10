@@ -1,4 +1,6 @@
 
+
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { 
   Tournament, 
@@ -185,9 +187,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   /* -------- Fetch missing player profiles when teams change -------- */
   useEffect(() => {
-    const allPlayerIds = Array.from(new Set(teams.flatMap(t => t.players || [])));
+    // Explicitly cast to string[] to resolve 'unknown' type error
+    const allPlayerIds = Array.from(new Set(teams.flatMap(t => t.players || []))) as string[];
     const missing = allPlayerIds.filter(
-      id => !playersCache[id] && !id.startsWith('invite_') && !id.startsWith('tbd')
+      (id: string) => !playersCache[id] && !id.startsWith('invite_') && !id.startsWith('tbd')
     );
     if (missing.length === 0) return;
 
@@ -1235,36 +1238,27 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
       {/* Division Selector */}
       <div className="mb-6">
-        {/* Mobile Dropdown */}
-        <div className="md:hidden">
-          <label htmlFor="division-select" className="sr-only">Select Division</label>
+        <label htmlFor="division-select" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+          Select Division
+        </label>
+        <div className="relative">
           <select
             id="division-select"
             value={activeDivisionId}
             onChange={(e) => setActiveDivisionId(e.target.value)}
-            className="w-full bg-gray-800 text-white border border-gray-700 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+            className="w-full appearance-none bg-gray-800 text-white font-bold border border-gray-700 rounded-lg py-3 px-4 pr-10 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all hover:border-gray-600"
           >
             {divisions.map((div) => (
-              <option key={div.id} value={div.id}>{div.name}</option>
+              <option key={div.id} value={div.id}>
+                {div.name}
+              </option>
             ))}
           </select>
-        </div>
-
-        {/* Desktop Tabs */}
-        <div className="hidden md:flex overflow-x-auto gap-2 pb-2">
-          {divisions.map(div => (
-            <button
-              key={div.id}
-              onClick={() => setActiveDivisionId(div.id)}
-              className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-colors ${
-                activeDivisionId === div.id
-                  ? 'bg-white text-gray-900 border-white'
-                  : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-500'
-              }`}
-            >
-              {div.name}
-            </button>
-          ))}
+          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-400">
+            <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+              <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+            </svg>
+          </div>
         </div>
       </div>
 

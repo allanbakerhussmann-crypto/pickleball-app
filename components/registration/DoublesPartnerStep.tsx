@@ -278,20 +278,50 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
             <div key={div.id} className="bg-gray-800 p-4 rounded border border-gray-700 space-y-3">
               <h3 className="text-white font-bold text-sm">{div.name} – Doubles Partner</h3>
 
-              <div className="flex flex-col md:flex-row gap-3 text-sm">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" checked={mode === 'invite'} onChange={() => handleModeChange(div.id, 'invite')} />
-                  <span>Invite a specific partner</span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                {/* Invite Option */}
+                <label 
+                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    mode === 'invite' 
+                      ? 'bg-green-600/20 border-green-500 text-white' 
+                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-800'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${mode === 'invite' ? 'border-green-400' : 'border-gray-500'}`}>
+                      {mode === 'invite' && <div className="w-2 h-2 rounded-full bg-green-400" />}
+                  </div>
+                  <input type="radio" className="hidden" checked={mode === 'invite'} onChange={() => handleModeChange(div.id, 'invite')} />
+                  <span className="font-semibold text-sm">Invite a specific partner</span>
                 </label>
 
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" checked={mode === 'open_team'} onChange={() => handleModeChange(div.id, 'open_team')} />
-                  <span>I don&apos;t have a partner yet</span>
+                {/* Open Team Option */}
+                <label 
+                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    mode === 'open_team' 
+                      ? 'bg-green-600/20 border-green-500 text-white' 
+                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-800'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${mode === 'open_team' ? 'border-green-400' : 'border-gray-500'}`}>
+                      {mode === 'open_team' && <div className="w-2 h-2 rounded-full bg-green-400" />}
+                  </div>
+                  <input type="radio" className="hidden" checked={mode === 'open_team'} onChange={() => handleModeChange(div.id, 'open_team')} />
+                  <span className="font-semibold text-sm">I don&apos;t have a partner yet</span>
                 </label>
 
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" checked={mode === 'join_open'} onChange={() => handleModeChange(div.id, 'join_open')} />
-                  <span>Join a player looking for a partner</span>
+                {/* Join Open Option */}
+                <label 
+                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    mode === 'join_open' 
+                      ? 'bg-green-600/20 border-green-500 text-white' 
+                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-800'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${mode === 'join_open' ? 'border-green-400' : 'border-gray-500'}`}>
+                      {mode === 'join_open' && <div className="w-2 h-2 rounded-full bg-green-400" />}
+                  </div>
+                  <input type="radio" className="hidden" checked={mode === 'join_open'} onChange={() => handleModeChange(div.id, 'join_open')} />
+                  <span className="font-semibold text-sm">Join a player looking</span>
                 </label>
               </div>
 
@@ -351,12 +381,34 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
               {mode === 'join_open' && (
                 <div className="space-y-2">
                   <p className="text-xs text-gray-400">Available open teams:</p>
-                  {openTeams.length === 0 ? <div className="text-gray-500">No open teams</div> : openTeams.map(ot => (
-                    <div key={ot.team.id} className="p-2 border border-gray-700 rounded cursor-pointer" onClick={() => handleSelectOpenTeam(div.id, ot.team)}>
-                      <div className="font-semibold text-white">{ot.owner.displayName || ot.owner.email}</div>
-                      <div className="text-xs text-gray-400">{ot.team.teamName}</div>
-                    </div>
-                  ))}
+                  {openTeams.length === 0 ? <div className="text-gray-500">No open teams</div> : openTeams.map(ot => {
+                    const isSelected = partnerInfo?.openTeamId === ot.team.id;
+                    return (
+                      <div 
+                        key={ot.team.id} 
+                        className={`p-3 border rounded-lg cursor-pointer transition-all flex justify-between items-center ${
+                          isSelected 
+                            ? 'bg-green-900/30 border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.1)]' 
+                            : 'bg-gray-900 border-gray-700 hover:bg-gray-800'
+                        }`}
+                        onClick={() => handleSelectOpenTeam(div.id, ot.team)}
+                      >
+                        <div>
+                          <div className={`font-semibold ${isSelected ? 'text-white' : 'text-gray-200'}`}>
+                            {ot.owner.displayName || ot.owner.email}
+                          </div>
+                          <div className="text-xs text-gray-400">{ot.team.teamName}</div>
+                        </div>
+                        {isSelected && (
+                          <div className="text-green-500">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
