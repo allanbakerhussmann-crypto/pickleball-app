@@ -2,9 +2,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 
-if (admin.apps.length === 0) {
-  admin.initializeApp();
-}
+admin.initializeApp();
 const db = admin.firestore();
 
 /**
@@ -38,8 +36,7 @@ exports.createTeam = functions.https.onCall(async (data, context) => {
 
   try {
     const result = await db.runTransaction(async (tx) => {
-      // Use correct path: tournaments/{tournamentId}/teams/{teamId}
-      const teamRef = db.collection('tournaments').doc(tournamentId).collection('teams').doc(teamId);
+      const teamRef = db.collection('teams').doc(teamId);
       const teamSnap = await tx.get(teamRef);
 
       if (teamSnap.exists) {
