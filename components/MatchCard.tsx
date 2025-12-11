@@ -68,12 +68,12 @@ export const MatchCard: React.FC<MatchCardProps> = ({
 
   const handleSubmit = () => {
     if (!isVerified) {
-      alert('Only verified organisers/players can submit scores.');
+      console.warn('Only verified organisers/players can submit scores.');
       return;
     }
     if (!canCurrentUserEdit) {
       // Extra defence in UI (server already checks this).
-      alert('Only players in this match can enter scores.');
+      console.warn('Only players in this match can enter scores.');
       return;
     }
 
@@ -81,7 +81,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
     const s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
 
     if (Number.isNaN(s1) || Number.isNaN(s2)) {
-      alert('Please enter scores for both sides.');
+      // alert('Please enter scores for both sides.'); // Removed alert
       return;
     }
 
@@ -97,12 +97,11 @@ export const MatchCard: React.FC<MatchCardProps> = ({
 
   const handleDispute = () => {
     if (!canCurrentUserConfirm) return;
-    const reason = window.prompt(
-      'Describe what is wrong with this score (optional):'
-    );
+    // Removed prompt to comply with sandbox restriction
+    const reason = 'Disputed by user';
     const s1 = typeof score1 === 'string' ? parseInt(score1, 10) : score1;
     const s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
-    onUpdateScore(match.id, s1 || 0, s2 || 0, 'dispute', reason || undefined);
+    onUpdateScore(match.id, s1 || 0, s2 || 0, 'dispute', reason);
   };
 
   const statusLabel =

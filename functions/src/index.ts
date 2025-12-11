@@ -22,23 +22,41 @@ async function getUserProfile(uid: string) {
 async function isOrganizerOrAdmin(uid: string) {
   const profile = await getUserProfile(uid);
   const roles = profile?.roles || [];
-  return roles.includes('organizer') || roles.includes('admin') || profile?.isRootAdmin;
+  return roles.includes('organizer') || roles.includes('admin') || profile?.isRootAdmin === true;
 }
 
 async function isParticipantOrOrganizer(uid: string, matchData: any) {
     if (await isOrganizerOrAdmin(uid)) return true;
     
+    const tA = matchData?.teamAId;
+    const tB = matchData?.teamBId;
+
+    if (!tA || !tB) {
+        // If team IDs are missing, only admins/organizers can touch this match.
+        // Returning false here prevents the subsequent doc() call from crashing.
+        return false; 
+    }
+    
     // Check if uid is directly in teamA or teamB (e.g. singles or cached id)
-    if (matchData.teamAId === uid || matchData.teamBId === uid) return true;
+    if (tA === uid || tB === uid) return true;
     
-    // Check Team collections
-    const teamA = await db.collection('teams').doc(matchData.teamAId).get();
-    const teamB = await db.collection('teams').doc(matchData.teamBId).get();
-    
-    const playersA = teamA.exists ? (teamA.data()?.players || []) : [];
-    const playersB = teamB.exists ? (teamB.data()?.players || []) : [];
-    
-    return playersA.includes(uid) || playersB.includes(uid);
+    try {
+        // Check Team collections
+        const teamA = await db.collection('teams').doc(tA).get();
+        const teamB = await db.collection('teams').doc(tB).get();
+        
+        const playersA = teamA.exists ? (teamA.data()?.players || []) : [];
+        const playersB = teamB.exists ? (teamB.data()?.players || []) : [];
+        
+        // Ensure arrays
+        const pA = Array.isArray(playersA) ? playersA : [];
+        const pB = Array.isArray(playersB) ? playersB : [];
+
+        return pA.includes(uid) || pB.includes(uid);
+    } catch (e) {
+        console.error("Error checking participation:", e);
+        return false;
+    }
 }
 
 // --- Functions ---
@@ -97,13 +115,17 @@ export const createTeam = functions.https.onCall(async (data, context) => {
   }
 });
 
-export const bulkImportClubMembers = functions.https.onCall(async (request) => {
-  if (!request.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required");
-  // ... existing implementation kept for brevity, assuming standard imports ...
-  const { rows } = request.data;
+export const bulkImportClubMembers = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Auth required");
+  
+  const { rows } = data;
+  if (!Array.isArray(rows)) {
+      throw new functions.https.HttpsError("invalid-argument", "Rows must be an array");
+  }
+
   const results = [];
+  // Mock implementation for bulk import processing
   for (const row of rows) {
-    // simplified mock for context retention
     results.push({ email: row.email, status: "Processed" }); 
   }
   return { results };
@@ -265,6 +287,8 @@ export const submitMatchScore = functions.https.onCall(async (data, context) => 
     const uid = context.auth.uid;
     const { matchId, score1, score2 } = data;
     
+    if (!matchId) throw new functions.https.HttpsError('invalid-argument', 'matchId required');
+
     const matchRef = db.collection('matches').doc(matchId);
     const matchSnap = await matchRef.get();
     if (!matchSnap.exists) throw new functions.https.HttpsError('not-found', 'Match not found');
@@ -316,6 +340,8 @@ export const confirmMatchScore = functions.https.onCall(async (data, context) =>
   if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
   const uid = context.auth.uid;
   const { matchId, submissionId } = data;
+
+  if (!matchId) throw new functions.https.HttpsError('invalid-argument', 'matchId required');
 
   const matchRef = db.collection('matches').doc(matchId);
   const matchSnap = await matchRef.get();
@@ -436,6 +462,8 @@ export const disputeMatchScore = functions.https.onCall(async (data, context) =>
     const uid = context.auth.uid;
     const { matchId, reason } = data;
     
+    if (!matchId) throw new functions.https.HttpsError('invalid-argument', 'matchId required');
+
     const matchRef = db.collection('matches').doc(matchId);
     const matchSnap = await matchRef.get();
     if (!matchSnap.exists) throw new functions.https.HttpsError('not-found', 'Match not found');

@@ -72,7 +72,6 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
             setHasPendingRequest(true); 
         } catch (e) {
             console.error(e);
-            alert("Failed to send request.");
         } finally {
             setPendingJoin(false);
         }

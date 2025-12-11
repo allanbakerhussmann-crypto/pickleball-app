@@ -262,7 +262,6 @@ const App: React.FC = () => {
             await saveTournament(newTournament);
         } catch (e) {
             console.error("Failed to create tournament", e);
-            alert("Failed to save tournament. Please check your connection.");
         }
     };
 
@@ -271,7 +270,6 @@ const App: React.FC = () => {
             await saveTournament(updatedTournament);
         } catch (e) {
             console.error("Failed to update tournament", e);
-            alert("Failed to save changes. Please check your connection.");
         }
     };
 
@@ -321,10 +319,11 @@ const App: React.FC = () => {
         try {
             const result = await respondToPartnerInvite(invite, 'accepted');
             if (result && currentUser) {
-                // Explicitly cast result to ensure it's treated as the correct type
-                const res = result as { tournamentId: string; divisionId: string };
-                await ensureRegistrationForUser(res.tournamentId, currentUser.uid, res.divisionId);
-                handleAcceptInvite(res.tournamentId, res.divisionId);
+                // Explicit cast to 'any' to ensure properties are accessible
+                // The result is actually { tournamentId, divisionId }
+                const r = result as any;
+                await ensureRegistrationForUser(r.tournamentId, currentUser.uid, r.divisionId);
+                handleAcceptInvite(r.tournamentId, r.divisionId);
             }
         } catch (e) {
             console.error("Accept invite failed", e);

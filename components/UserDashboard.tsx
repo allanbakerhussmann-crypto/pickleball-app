@@ -68,7 +68,7 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({ userProfile, onEdi
 
   const handleSyncDupr = async () => {
       if (!userProfile.duprId) {
-          alert("Please add your DUPR ID in your profile first.");
+          console.warn("Please add your DUPR ID in your profile first.");
           onEditProfile();
           return;
       }
@@ -83,7 +83,6 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({ userProfile, onEdi
           });
       } catch (error) {
           console.error("Error syncing DUPR:", error);
-          alert("Failed to sync DUPR ratings. Please try again later.");
       } finally {
           setIsSyncingDupr(false);
       }

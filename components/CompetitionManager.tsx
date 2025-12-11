@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
     getCompetition, 
@@ -165,7 +164,7 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     };
 
     const handleGenerateSchedule = async () => {
-        if (!confirm("Generate schedule? This will create matches for all current entrants.")) return;
+        // Confirmation prompt removed due to iframe sandbox restrictions
         if (!currentUser) return;
         try {
             await generateLeagueSchedule(competitionId);
@@ -175,16 +174,16 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
 
             const updated = await getCompetition(competitionId);
             setCompetition(updated);
-            alert("Schedule generated!");
+            console.info("Schedule generated!");
         } catch (e) {
             console.error(e);
-            alert("Failed to generate schedule.");
+            console.error("Failed to generate schedule.");
         }
     };
 
     const handleUpdateScore = async (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute', reason?: string) => {
         if (!currentUser) {
-            alert("Please log in to submit scores.");
+            console.warn("Please log in to submit scores.");
             return;
         }
 
@@ -201,7 +200,7 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
             }
         } catch (e: any) {
             console.error(e);
-            alert("Action failed: " + e.message);
+            console.error("Action failed: " + e.message);
         }
     };
 

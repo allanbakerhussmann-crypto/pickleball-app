@@ -1,4 +1,3 @@
-
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
 import { 
@@ -21,7 +20,8 @@ import {
   type Firestore
 } from '@firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from '@firebase/storage';
-import { getFunctions, httpsCallable } from '@firebase/functions';
+// Removed httpsCallable imports as we are switching to fetch
+// import { getFunctions, httpsCallable } from '@firebase/functions';
 import type { 
     Tournament, UserProfile, Registration, Team, Division, Match, PartnerInvite, Club, 
     UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, 
@@ -79,9 +79,48 @@ try {
 const authInstance: Auth = getFirebaseAuth(app);
 export const db: Firestore = getFirestore(app);
 const storage = getStorage(app);
-const functions = getFunctions(app);
+// const functions = getFunctions(app); // No longer needed for fetch based calls
 
 export const getAuth = (): Auth => authInstance;
+
+/* -------------------------------------------------------------------------- */
+/*                                HELPERS                                     */
+/* -------------------------------------------------------------------------- */
+
+const callCloudFunction = async (name: string, data: any): Promise<any> => {
+    const auth = getAuth();
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) {
+        throw new Error("You must be logged in to perform this action.");
+    }
+
+    const projectId = firebaseConfig.projectId || defaultConfig.projectId;
+    // Default to us-central1 unless specified otherwise
+    const region = "us-central1"; 
+    const url = `https://${region}-${projectId}.cloudfunctions.net/${name}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(data)
+        });
+
+        const json = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(json.error || `Function ${name} failed with status ${response.status}`);
+        }
+        
+        return json;
+    } catch (e: any) {
+        console.error(`Error calling ${name}:`, e);
+        throw e;
+    }
+};
 
 /* -------------------------------------------------------------------------- */
 /*                                TEAM LOGIC                                  */
@@ -95,16 +134,13 @@ export const createTeamServer = async (opts: {
 }) => {
   if (!authInstance.currentUser) throw new Error("Must be logged in");
   
-  // Try cloud function first (if implemented), otherwise fallback to client txn
-  // For now, client txn is still safe as rules enforce participation
-  return await ensureTeamExists(
-      opts.tournamentId, 
-      opts.divisionId, 
-      opts.playerIds, 
-      opts.teamName || null, 
-      authInstance.currentUser.uid, 
-      { status: 'active' }
-  );
+  // Now using HTTP function via fetch instead of client-side transaction to avoid complex permission issues
+  return await callCloudFunction('createTeam', {
+      tournamentId: opts.tournamentId, 
+      divisionId: opts.divisionId, 
+      playerIds: opts.playerIds, 
+      teamName: opts.teamName || null
+  });
 };
 
 export const ensureTeamExists = async (
@@ -115,7 +151,7 @@ export const ensureTeamExists = async (
   createdByUserId: string,
   options?: { status?: string; isLookingForPartner?: boolean }
 ): Promise<{ existed: boolean; teamId: string; team: any | null }> => {
-  
+  // Legacy client-side version kept for fallback or specific uses where server function is overkill
   const normalizedPlayers = Array.from(new Set(playerIds.map(String))).sort();
   if (normalizedPlayers.length === 0) throw new Error("No players provided");
 
@@ -391,10 +427,6 @@ export const updateMatchScore = async (tournamentId: string | undefined, matchId
 /*                               SCHEDULING                                   */
 /* -------------------------------------------------------------------------- */
 
-// ... (Existing helper functions like getSeededTeams, generatePoolsSchedule, generateBracketSchedule remain unchanged) ...
-// Included them in the full file return for clarity if needed, but omitted for brevity as they are client-side tournament logic. 
-// Assuming they are preserved.
-
 const getSeededTeams = (teams: Team[], method: SeedingMethod = 'random', playersCache: Record<string, UserProfile>): Team[] => {
     if (method === 'manual') return [...teams];
     if (method === 'random') return [...teams].sort(() => Math.random() - 0.5);
@@ -656,9 +688,8 @@ export const requestJoinClub = async (clubId: string, userId: string) => { /* ..
 export const approveClubJoinRequest = async (clubId: string, requestId: string, userId: string) => { /* ... */ };
 export const declineClubJoinRequest = async (clubId: string, requestId: string) => { /* ... */ };
 export const bulkImportClubMembers = async (params: any): Promise<any[]> => {
-    const func = httpsCallable(functions, 'bulkImportClubMembers');
-    const result = await func(params);
-    return result.data as any[];
+    const result = await callCloudFunction('bulkImportClubMembers', params);
+    return result.results as any[];
 };
 
 // Courts (existing functions preserved)
@@ -856,8 +887,7 @@ export const subscribeToStandings = (competitionId: string, callback: (standings
 /* -------------------------------------------------------------------------- */
 
 export const createCompetition = async (comp: Competition): Promise<void> => {
-  const createFn = httpsCallable(functions, 'createCompetition');
-  await createFn({ competition: comp });
+  await callCloudFunction('createCompetition', { competition: comp });
 };
 
 export const updateCompetition = async (comp: Competition): Promise<void> => {
@@ -916,9 +946,7 @@ export const subscribeToCompetitionEntries = (competitionId: string, callback: (
 };
 
 export const generateLeagueSchedule = async (compId: string): Promise<void> => {
-  // Use Cloud Function for atomic scheduling
-  const scheduleFn = httpsCallable(functions, 'generateLeagueSchedule');
-  await scheduleFn({ competitionId: compId });
+  await callCloudFunction('generateLeagueSchedule', { competitionId: compId });
 };
 
 // Update Standings is now handled atomically by confirmMatchScore cloud function

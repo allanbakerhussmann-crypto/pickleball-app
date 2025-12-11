@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { 
     createCompetition, 
@@ -19,8 +18,11 @@ export const DevTools: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     const log = (msg: string) => setTestLog(prev => [...prev, `${new Date().toLocaleTimeString()} - ${msg}`]);
 
     const runLeagueIntegrationTest = async () => {
-        if (!confirm("Run Integration Test? This will create and delete data in Firestore.")) return;
-        if (!currentUser) { alert("Must be logged in."); return; }
+        // Confirmation prompt removed due to iframe sandbox restrictions
+        if (!currentUser) { 
+            console.warn("Must be logged in."); 
+            return; 
+        }
         
         setIsRunning(true);
         setTestLog([]);

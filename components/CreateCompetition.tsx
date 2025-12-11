@@ -98,7 +98,7 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
         const max = newDivMaxRating ? parseFloat(newDivMaxRating) : undefined;
 
         if (min && max && min > max) {
-            alert("Min rating cannot be greater than max rating");
+            setError("Min rating cannot be greater than max rating");
             return;
         }
 
@@ -113,6 +113,7 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
         setNewDivName('');
         setNewDivMinRating('');
         setNewDivMaxRating('');
+        setError(null); // Clear error if successful
     };
 
     const handleRemoveDivision = (id: string) => {

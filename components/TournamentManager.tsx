@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { 
   Tournament, 
@@ -618,7 +612,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const handleGenerateSchedule = async () => {
     if (!activeDivision) return;
-    if (divisionTeams.length < 2) return alert('Need at least 2 teams.');
+    if (divisionTeams.length < 2) {
+      console.warn('Need at least 2 teams.');
+      return;
+    }
 
     try {
       if (activeDivision.format.stageMode === 'single_stage') {
@@ -652,9 +649,9 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           playersCache
         );
       }
-      alert('Schedule Generated!');
+      console.info('Schedule Generated!');
     } catch (e: any) {
-      alert('Error: ' + e.message);
+      console.error('Error: ' + e.message);
     }
   };
 
@@ -736,9 +733,9 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         divisionTeams,
         playersCache
       );
-      alert('Finals Bracket Generated!');
+      console.info('Finals Bracket Generated!');
     } catch (e: any) {
-      alert('Error: ' + e.message);
+      console.error('Error: ' + e.message);
     }
   };
 
@@ -753,7 +750,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     if (!match) return;
 
     if (!currentUser) {
-      alert('You must be logged in to report scores.');
+      console.warn('You must be logged in to report scores.');
       return;
     }
 
@@ -767,13 +764,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     const isPlayerInMatch = isOnTeamA || isOnTeamB;
 
     if (!isPlayerInMatch && !isOrganizer) {
-      alert('Only players in this match (or organisers) can enter scores.');
+      console.warn('Only players in this match (or organisers) can enter scores.');
       return;
     }
 
     const division = divisions.find(d => d.id === match.divisionId);
     if (!division) {
-      alert('Could not find division for this match.');
+      console.error('Could not find division for this match.');
       return;
     }
 
@@ -781,7 +778,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       if (action === 'submit') {
         const error = validateScoreForDivision(score1, score2, division);
         if (error) {
-          alert(error);
+          console.warn(error);
           return;
         }
 
@@ -804,9 +801,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       }
     } catch (err) {
       console.error('Failed to update score', err);
-      alert(
-        'There was a problem saving the score. Please try again or ask the organiser to help.'
-      );
     }
   };
 
@@ -817,7 +811,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       await saveTournament(tournament, [updatedDiv]);
     } catch (e) {
       console.error('Failed to update division', e);
-      alert('Failed to save settings.');
     }
   };
 
@@ -852,7 +845,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       },
     });
 
-    alert('Division settings updated');
+    console.info('Division settings updated');
   };
 
   /* -------- Conflict helper (same team on multiple courts) -------- */
@@ -894,7 +887,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     // Check for conflict
     const conflict = findActiveConflictMatch(match);
     if (conflict) {
-      alert(
+      console.warn(
         `Cannot assign this match: one of the teams is already playing or waiting on court ${conflict.court}. Finish that match first.`
       );
       return;
@@ -906,7 +899,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         !matches.some(m => m.status !== 'completed' && m.court === c.name)
     );
     if (!freeCourt) {
-      alert('No active courts available.');
+      console.warn('No active courts available.');
       return;
     }
 
@@ -924,7 +917,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
     const conflict = findActiveConflictMatch(match);
     if (conflict) {
-      alert(
+      console.warn(
         `Cannot assign this match: one of the teams is already playing or waiting on court ${conflict.court}. Finish that match first.`
       );
       return;
@@ -965,7 +958,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       m => m.court === court.name && m.status !== 'completed'
     );
     if (!currentMatch) {
-      alert('No active match found on this court.');
+      console.warn('No active match found on this court.');
       return;
     }
 
@@ -985,7 +978,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       !Number.isNaN(scoreTeamB);
 
     if (!existingHasScores && !inlineHasScores) {
-      alert('Please enter scores for both teams before finishing this match.');
+      console.warn('Please enter scores for both teams before finishing this match.');
       return;
     }
 
@@ -996,7 +989,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         division
       );
       if (validationError) {
-        alert(validationError);
+        console.warn(validationError);
         return;
       }
     }
@@ -1072,14 +1065,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
     if (freeCourts.length === 0) {
       if (!silent) {
-        alert('No free courts available to auto-assign.');
+        console.warn('No free courts available to auto-assign.');
       }
       return;
     }
 
     if (rawQueue.length === 0) {
       if (!silent) {
-        alert('No waiting matches available for auto-assignment.');
+        console.warn('No waiting matches available for auto-assignment.');
       }
       return;
     }
@@ -1113,7 +1106,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
     if (updates.length === 0) {
       if (!silent) {
-        alert(
+        console.warn(
           'All waiting matches either conflict with players already on court or have already been assigned.'
         );
       }
@@ -1150,7 +1143,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     if (!match) return;
 
     if (!currentUser) {
-      alert('You must be logged in to start the match.');
+      console.warn('You must be logged in to start the match.');
       return;
     }
 
@@ -1162,12 +1155,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       teamB?.players?.includes(currentUser.uid);
 
     if (!isOnTeam && !isOrganizer) {
-      alert('Only players in this match (or organisers) can start the match.');
+      console.warn('Only players in this match (or organisers) can start the match.');
       return;
     }
 
     if (!match.court) {
-      alert('This match has not been assigned to a court yet.');
+      console.warn('This match has not been assigned to a court yet.');
       return;
     }
 

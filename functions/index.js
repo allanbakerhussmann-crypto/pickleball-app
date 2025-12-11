@@ -1,9 +1,13 @@
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
+const cors = require('cors')({ origin: true });
 
 admin.initializeApp();
 const db = admin.firestore();
+
+// --- Helpers ---
 
 /**
  * Deterministic team id based on tournamentId|divisionId|sorted(playerIds)
@@ -16,7 +20,6 @@ function deterministicTeamId(tournamentId, divisionId, playerIds) {
   return `team_${hash}`;
 }
 
-// Helper to check roles
 async function isOrganizerOrAdmin(uid) {
   const snap = await db.collection('users').doc(uid).get();
   if (!snap.exists) return false;
@@ -25,7 +28,6 @@ async function isOrganizerOrAdmin(uid) {
   return roles.includes('organizer') || roles.includes('admin') || data.isRootAdmin === true;
 }
 
-// Helper to check participation
 async function isParticipantOrOrganizer(uid, matchData) {
     if (await isOrganizerOrAdmin(uid)) return true;
     
@@ -33,7 +35,6 @@ async function isParticipantOrOrganizer(uid, matchData) {
     if (matchData.teamAId === uid || matchData.teamBId === uid) return true;
     
     // Check Team collections
-    // We fetch both teams to see if user is in players array
     const teamA = await db.collection('teams').doc(matchData.teamAId).get();
     const teamB = await db.collection('teams').doc(matchData.teamBId).get();
     
@@ -43,75 +44,134 @@ async function isParticipantOrOrganizer(uid, matchData) {
     return playersA.includes(uid) || playersB.includes(uid);
 }
 
-exports.createTeam = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
-  }
-  const uid = context.auth.uid;
+// --- Auth Helper ---
 
+async function validateAuth(req, res) {
+  if (!req.headers.authorization || !req.headers.authorization.startsWith('Bearer ')) {
+    res.status(401).send({ error: 'Unauthorized' });
+    return null;
+  }
+  try {
+    const idToken = req.headers.authorization.split('Bearer ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    return decodedToken.uid;
+  } catch (error) {
+    console.error("Auth verification failed:", error);
+    res.status(401).send({ error: 'Unauthorized' });
+    return null;
+  }
+}
+
+// --- Request Handler Wrapper (Manual CORS + Auth) ---
+
+const createHandler = (handler) => {
+  return functions.https.onRequest((req, res) => {
+    // Log for debugging - Cloud Functions logs
+    console.log(`Request -> method=${req.method} path=${req.path} origin=${req.headers.origin} userAgent=${req.headers['user-agent']}`);
+    console.log('Request headers:', JSON.stringify(req.headers));
+
+    // Ensure CORS middleware runs first
+    cors(req, res, async () => {
+      // IMPORTANT: handle preflight before ANY auth logic
+      if (req.method === 'OPTIONS') {
+        // Echo back origin or use wildcard while debugging
+        const origin = req.headers.origin || '*';
+        res.set('Access-Control-Allow-Origin', origin);
+        res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+        res.set('Access-Control-Max-Age', '3600'); // cache preflight for 1 hour
+        console.log('Preflight handled -> responding with CORS headers');
+        return res.status(204).send('');
+      }
+
+      // Only accept POST for these endpoints (keep same logic)
+      if (req.method !== 'POST') {
+        return res.status(405).send({ error: 'Method Not Allowed' });
+      }
+
+      // Now run auth and handler
+      try {
+        const uid = await validateAuth(req, res);
+        if (!uid) return; // validateAuth already sent 401 if null
+
+        const result = await handler(req.body, uid);
+        
+        // Ensure success responses include CORS header too (middleware usually handles this, but safe to be explicit)
+        res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
+        return res.status(200).json(result || { success: true });
+      } catch (err) {
+        console.error("Function error:", err);
+        const status = err.httpStatus || 500;
+        // Ensure error responses include CORS header too
+        res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
+        return res.status(status).json({ error: err.message || 'Internal Server Error' });
+      }
+    });
+  });
+};
+
+// --- Functions ---
+
+exports.createTeam = createHandler(async (data, uid) => {
   const tournamentId = data?.tournamentId;
   const divisionId = data?.divisionId;
   const playerIds = data?.playerIds;
   const teamName = data?.teamName || null;
 
   if (!tournamentId || !divisionId || !Array.isArray(playerIds) || playerIds.length === 0) {
-    throw new functions.https.HttpsError('invalid-argument', 'tournamentId, divisionId and playerIds are required.');
+    const e = new Error('tournamentId, divisionId and playerIds are required.');
+    e.httpStatus = 400; throw e;
   }
 
   const teamId = deterministicTeamId(tournamentId, divisionId, playerIds);
 
-  try {
-    const result = await db.runTransaction(async (tx) => {
-      const teamRef = db.collection('teams').doc(teamId);
-      const teamSnap = await tx.get(teamRef);
+  const result = await db.runTransaction(async (tx) => {
+    const teamRef = db.collection('teams').doc(teamId);
+    const teamSnap = await tx.get(teamRef);
 
-      if (teamSnap.exists) {
-        return { existed: true, teamId, team: teamSnap.data() };
-      }
+    if (teamSnap.exists) {
+      return { existed: true, teamId, team: teamSnap.data() };
+    }
 
-      const now = Date.now();
-      const teamDoc = {
-        id: teamId,
-        tournamentId,
-        divisionId,
-        players: playerIds.slice().sort(),
-        teamName,
-        createdByUserId: uid,
-        status: 'active',
-        createdAt: now,
-        updatedAt: now
-      };
+    const now = Date.now();
+    const teamDoc = {
+      id: teamId,
+      tournamentId,
+      divisionId,
+      players: playerIds.slice().sort(),
+      teamName,
+      createdByUserId: uid,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now
+    };
 
-      tx.set(teamRef, teamDoc);
+    tx.set(teamRef, teamDoc);
 
-      const auditRef = db.collection('auditLogs').doc();
-      tx.set(auditRef, {
-        action: 'create_team',
-        actorId: uid,
-        timestamp: now,
-        details: { teamId, tournamentId }
-      });
-
-      return { existed: false, teamId, team: teamDoc };
+    const auditRef = db.collection('auditLogs').doc();
+    tx.set(auditRef, {
+      action: 'create_team',
+      actorId: uid,
+      timestamp: now,
+      details: { teamId, tournamentId }
     });
 
-    return result;
-  } catch (err) {
-    console.error('createTeam failed', err);
-    throw new functions.https.HttpsError('internal', 'Failed to create team', { message: err?.message });
-  }
+    return { existed: false, teamId, team: teamDoc };
+  });
+
+  return result;
 });
 
-exports.createCompetition = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
-  const uid = context.auth.uid;
-
+exports.createCompetition = createHandler(async (data, uid) => {
   if (!(await isOrganizerOrAdmin(uid))) {
-    throw new functions.https.HttpsError('permission-denied', 'Must be organiser or admin');
+    const e = new Error('Must be organiser or admin');
+    e.httpStatus = 403; throw e;
   }
 
   const comp = data.competition;
-  // Secure overrides
+  if (!comp) throw new Error("Missing competition data");
+
+  // Force system fields
   comp.organiserId = uid;
   comp.createdAt = Date.now();
   comp.status = 'draft';
@@ -130,18 +190,20 @@ exports.createCompetition = functions.https.onCall(async (data, context) => {
   return { id: docRef.id };
 });
 
-exports.generateLeagueSchedule = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
-  const uid = context.auth.uid;
+exports.generateLeagueSchedule = createHandler(async (data, uid) => {
   const competitionId = data.competitionId;
-
   const compRef = db.collection('competitions').doc(competitionId);
   const compSnap = await compRef.get();
-  if (!compSnap.exists) throw new functions.https.HttpsError('not-found', 'Competition not found');
+  
+  if (!compSnap.exists) {
+      const e = new Error('Competition not found');
+      e.httpStatus = 404; throw e;
+  }
   
   const comp = compSnap.data();
   if (comp.organiserId !== uid && !(await isOrganizerOrAdmin(uid))) {
-    throw new functions.https.HttpsError('permission-denied', 'Not authorised');
+    const e = new Error('Not authorised');
+    e.httpStatus = 403; throw e;
   }
 
   // 1. Fetch Entries
@@ -183,7 +245,7 @@ exports.generateLeagueSchedule = functions.https.onCall(async (data, context) =>
               competitionId,
               divisionId: divId === 'default' ? null : divId,
               teamId,
-              teamName: teamId, // UI resolves name later
+              teamName: teamId,
               played: 0, wins: 0, losses: 0, draws: 0, 
               pointsFor: 0, pointsAgainst: 0, pointDifference: 0, 
               points: 0,
@@ -224,6 +286,12 @@ exports.generateLeagueSchedule = functions.https.onCall(async (data, context) =>
                       createdAt: Date.now()
                   });
                   matchesCount++;
+                  
+                  // Create MatchTeams
+                  const mtARef = db.collection('matchTeams').doc();
+                  batch.set(mtARef, { matchId, teamId: teamA, isHomeTeam: true, scoreGames: [] });
+                  const mtBRef = db.collection('matchTeams').doc();
+                  batch.set(mtBRef, { matchId, teamId: teamB, isHomeTeam: false, scoreGames: [] });
               }
           }
           // Rotate array
@@ -246,19 +314,25 @@ exports.generateLeagueSchedule = functions.https.onCall(async (data, context) =>
   return { success: true, matchesGenerated: matchesCount };
 });
 
-exports.submitMatchScore = functions.https.onCall(async (data, context) => {
-    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
-    const uid = context.auth.uid;
+exports.submitMatchScore = createHandler(async (data, uid) => {
     const { matchId, score1, score2 } = data;
     
+    if (typeof score1 !== 'number' || typeof score2 !== 'number') {
+        const e = new Error('Scores must be numbers');
+        e.httpStatus = 400; throw e;
+    }
+
     const matchRef = db.collection('matches').doc(matchId);
     const matchSnap = await matchRef.get();
-    if (!matchSnap.exists) throw new functions.https.HttpsError('not-found', 'Match not found');
+    if (!matchSnap.exists) {
+        const e = new Error('Match not found');
+        e.httpStatus = 404; throw e;
+    }
     const match = matchSnap.data();
     
-    // Check permission
     if (!(await isParticipantOrOrganizer(uid, match))) {
-         throw new functions.https.HttpsError('permission-denied', 'User is not a participant or organizer');
+         const e = new Error('User is not a participant or organizer');
+         e.httpStatus = 403; throw e;
     }
     
     // Determine winner
@@ -298,31 +372,57 @@ exports.submitMatchScore = functions.https.onCall(async (data, context) => {
     return { success: true, submissionId: subRef.id };
 });
 
-exports.confirmMatchScore = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
-  const uid = context.auth.uid;
+exports.confirmMatchScore = createHandler(async (data, uid) => {
   const { matchId, submissionId } = data;
 
   const matchRef = db.collection('matches').doc(matchId);
   const matchSnap = await matchRef.get();
-  if (!matchSnap.exists) throw new functions.https.HttpsError('not-found', 'Match not found');
+  if (!matchSnap.exists) {
+      const e = new Error('Match not found');
+      e.httpStatus = 404; throw e;
+  }
   const match = matchSnap.data();
 
-  // Validate Participant (Opponent check logic)
   if (!(await isParticipantOrOrganizer(uid, match))) {
-      throw new functions.https.HttpsError('permission-denied', 'Not a participant');
+      const e = new Error('Not a participant');
+      e.httpStatus = 403; throw e;
   }
 
-  const subRef = db.collection('matchScoreSubmissions').doc(submissionId);
-  const subSnap = await subRef.get();
-  if (!subSnap.exists) throw new functions.https.HttpsError('not-found', 'Submission not found');
-  const sub = subSnap.data();
+  // If no submissionId provided, try to find one
+  let subRef;
+  let sub;
+  
+  if (submissionId) {
+      subRef = db.collection('matchScoreSubmissions').doc(submissionId);
+      const subSnap = await subRef.get();
+      if (!subSnap.exists) {
+          const e = new Error('Submission not found');
+          e.httpStatus = 404; throw e;
+      }
+      sub = subSnap.data();
+  } else {
+      const q = await db.collection('matchScoreSubmissions')
+        .where('matchId', '==', matchId)
+        .where('status', '==', 'pending_opponent')
+        .limit(1)
+        .get();
+      if (q.empty) {
+          const e = new Error('No pending submission found');
+          e.httpStatus = 404; throw e;
+      }
+      sub = q.docs[0].data();
+      subRef = q.docs[0].ref;
+  }
 
-  if (sub.status !== 'pending_opponent') throw new functions.https.HttpsError('failed-precondition', 'Submission not pending');
+  if (sub.status !== 'pending_opponent') {
+      const e = new Error('Submission not pending');
+      e.httpStatus = 400; throw e;
+  }
 
   // Strict check: Cannot confirm own submission unless admin/organizer
   if (sub.submittedBy === uid && !(await isOrganizerOrAdmin(uid))) {
-      throw new functions.https.HttpsError('permission-denied', 'Cannot confirm your own submission');
+      const e = new Error('Cannot confirm your own submission');
+      e.httpStatus = 403; throw e;
   }
 
   const batch = db.batch();
@@ -418,18 +518,20 @@ exports.confirmMatchScore = functions.https.onCall(async (data, context) => {
   return { success: true };
 });
 
-exports.disputeMatchScore = functions.https.onCall(async (data, context) => {
-    if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Auth required');
-    const uid = context.auth.uid;
+exports.disputeMatchScore = createHandler(async (data, uid) => {
     const { matchId, reason } = data;
     
     const matchRef = db.collection('matches').doc(matchId);
     const matchSnap = await matchRef.get();
-    if (!matchSnap.exists) throw new functions.https.HttpsError('not-found', 'Match not found');
+    if (!matchSnap.exists) {
+        const e = new Error('Match not found');
+        e.httpStatus = 404; throw e;
+    }
     const match = matchSnap.data();
     
     if (!(await isParticipantOrOrganizer(uid, match))) {
-         throw new functions.https.HttpsError('permission-denied', 'User is not a participant or organizer');
+         const e = new Error('User is not a participant or organizer');
+         e.httpStatus = 403; throw e;
     }
     
     const subsQuery = await db.collection('matchScoreSubmissions')
@@ -462,7 +564,14 @@ exports.disputeMatchScore = functions.https.onCall(async (data, context) => {
     return { success: true };
 });
 
-exports.bulkImportClubMembers = functions.https.onCall(async (request) => {
-  // Placeholder for existing bulk import logic
-  return { results: [] }; 
+exports.bulkImportClubMembers = createHandler(async (data, uid) => {
+  // Placeholder logic for bulk import
+  const { rows } = data;
+  if (!Array.isArray(rows)) {
+      const e = new Error("Rows must be an array");
+      e.httpStatus = 400; throw e;
+  }
+  const results = rows.map(r => ({ email: r.email, status: 'Processed', notes: 'Simulated Import' }));
+  return { results }; 
 });
+    
