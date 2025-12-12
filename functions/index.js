@@ -2,7 +2,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
-const cors = require('cors')({ origin: true });
+const cors = require('cors');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -35,21 +35,27 @@ async function isParticipantOrOrganizer(uid, matchData) {
     if (matchData.teamAId === uid || matchData.teamBId === uid) return true;
     
     // Check Team collections
-    const teamA = await db.collection('teams').doc(matchData.teamAId).get();
-    const teamB = await db.collection('teams').doc(matchData.teamBId).get();
-    
-    const playersA = teamA.exists ? (teamA.data().players || []) : [];
-    const playersB = teamB.exists ? (teamB.data().players || []) : [];
-    
-    return playersA.includes(uid) || playersB.includes(uid);
+    try {
+      const teamA = await db.collection('teams').doc(matchData.teamAId).get();
+      const teamB = await db.collection('teams').doc(matchData.teamBId).get();
+      
+      const playersA = teamA.exists ? (teamA.data().players || []) : [];
+      const playersB = teamB.exists ? (teamB.data().players || []) : [];
+      
+      return playersA.includes(uid) || playersB.includes(uid);
+    } catch (e) {
+      console.warn('Error checking participation', e);
+      return false;
+    }
 }
 
 // --- Auth Helper ---
 
-async function validateAuth(req, res) {
+async function validateAuth(req) {
   if (!req.headers.authorization || !req.headers.authorization.startsWith('Bearer ')) {
-    res.status(401).send({ error: 'Unauthorized' });
-    return null;
+    const e = new Error('Unauthorized: No token provided');
+    e.httpStatus = 401;
+    throw e;
   }
   try {
     const idToken = req.headers.authorization.split('Bearer ')[1];
@@ -57,54 +63,71 @@ async function validateAuth(req, res) {
     return decodedToken.uid;
   } catch (error) {
     console.error("Auth verification failed:", error);
-    res.status(401).send({ error: 'Unauthorized' });
-    return null;
+    const e = new Error('Unauthorized: Invalid token');
+    e.httpStatus = 401;
+    throw e;
   }
 }
 
 // --- Request Handler Wrapper (Manual CORS + Auth) ---
 
+const DEBUG_BYPASS_AUTH = (process.env.DEBUG_BYPASS_AUTH === '1' || process.env.DEBUG_BYPASS_AUTH === 'true');
+
+// Reusable CORS middleware (we'll also handle OPTIONS explicitly below)
+const corsMiddleware = cors({ origin: true, credentials: true });
+
 const createHandler = (handler) => {
   return functions.https.onRequest((req, res) => {
-    // Log for debugging - Cloud Functions logs
-    console.log(`Request -> method=${req.method} path=${req.path} origin=${req.headers.origin} userAgent=${req.headers['user-agent']}`);
-    console.log('Request headers:', JSON.stringify(req.headers));
+    // Log incoming request for debugging
+    console.info('request method=', req.method, 'origin=', req.get('Origin'));
 
-    // Ensure CORS middleware runs first
-    cors(req, res, async () => {
-      // IMPORTANT: handle preflight before ANY auth logic
-      if (req.method === 'OPTIONS') {
-        // Echo back origin or use wildcard while debugging
-        const origin = req.headers.origin || '*';
-        res.set('Access-Control-Allow-Origin', origin);
-        res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-        res.set('Access-Control-Max-Age', '3600'); // cache preflight for 1 hour
-        console.log('Preflight handled -> responding with CORS headers');
-        return res.status(204).send('');
-      }
+    // 1) Handle preflight explicitly and *immediately* with correct headers
+    if (req.method === 'OPTIONS') {
+      const origin = req.get('Origin') || '*';
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+      res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.set('Access-Control-Max-Age', '3600');
+      // If your client uses credentials (cookies / Authorization), include this:
+      res.set('Access-Control-Allow-Credentials', 'true');
+      return res.status(204).send('');
+    }
 
-      // Only accept POST for these endpoints (keep same logic)
+    // 2) For real requests use the CORS middleware to set headers and then run handler
+    corsMiddleware(req, res, async () => {
+      // Only allow POST in this API
       if (req.method !== 'POST') {
         return res.status(405).send({ error: 'Method Not Allowed' });
       }
 
-      // Now run auth and handler
       try {
-        const uid = await validateAuth(req, res);
-        if (!uid) return; // validateAuth already sent 401 if null
+        let uid;
+        if (DEBUG_BYPASS_AUTH) {
+          uid = 'debug-bypass-uid';
+          console.log('DEBUG_BYPASS_AUTH enabled - skipping real auth, uid=', uid);
+        } else {
+          // Validate auth (your existing validateAuth). 
+          uid = await validateAuth(req);
+        }
+        
+        if (!uid) {
+            // Should be handled by validateAuth throwing, but just in case
+            throw new Error('Authentication failed');
+        }
 
         const result = await handler(req.body, uid);
         
-        // Ensure success responses include CORS header too (middleware usually handles this, but safe to be explicit)
-        res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
+        // Echo origin to be safe (cors middleware already sets a header but this ensures it)
+        res.set('Access-Control-Allow-Origin', req.get('Origin') || '*');
+        res.set('Access-Control-Allow-Credentials', 'true');
         return res.status(200).json(result || { success: true });
       } catch (err) {
-        console.error("Function error:", err);
+        console.error('Function error:', err);
         const status = err.httpStatus || 500;
-        // Ensure error responses include CORS header too
-        res.set('Access-Control-Allow-Origin', req.headers.origin || '*');
-        return res.status(status).json({ error: err.message || 'Internal Server Error' });
+        // Ensure headers are set on error too so browser can read the error message
+        res.set('Access-Control-Allow-Origin', req.get('Origin') || '*');
+        res.set('Access-Control-Allow-Credentials', 'true');
+        return res.status(status).json({ error: err.message || 'Internal error' });
       }
     });
   });
@@ -574,4 +597,3 @@ exports.bulkImportClubMembers = createHandler(async (data, uid) => {
   const results = rows.map(r => ({ email: r.email, status: 'Processed', notes: 'Simulated Import' }));
   return { results }; 
 });
-    
