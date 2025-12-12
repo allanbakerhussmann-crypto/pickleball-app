@@ -2,10 +2,12 @@
 import React, { useEffect, useState } from 'react';
 import type {
   Tournament,
+  Competition,
   Division,
   Team,
   Registration,
   UserProfile,
+  CompetitionDivision,
 } from '../../types';
 import {
   getOpenTeamsForDivision,
@@ -16,8 +18,9 @@ import {
 } from '../../services/firebase';
 
 interface DoublesPartnerStepProps {
-  tournament: Tournament;
-  divisions: Division[];
+  eventId: string; // was tournamentId
+  eventContext: 'tournament' | 'competition'; // new
+  divisions: (Division | CompetitionDivision)[]; // support both types
   selectedDivisionIds: string[];
   userProfile: UserProfile;
   partnerDetails: Registration['partnerDetails'];
@@ -45,7 +48,7 @@ const getAge = (birthDate?: string | null): number | null => {
   return age;
 };
 
-const checkPartnerEligibility = (division: Division, player: UserProfile): { eligible: boolean; reason?: string } => {
+const checkPartnerEligibility = (division: Division | CompetitionDivision, player: UserProfile): { eligible: boolean; reason?: string } => {
   const rating =
     player.duprDoublesRating ??
     player.ratingDoubles ??
@@ -64,7 +67,7 @@ const checkPartnerEligibility = (division: Division, player: UserProfile): { eli
 };
 
 const checkGenderCompatibility = (
-  division: Division,
+  division: Division | CompetitionDivision,
   p1: UserProfile,
   p2: UserProfile
 ): { allowed: boolean; reason?: string } => {
@@ -89,7 +92,8 @@ const checkGenderCompatibility = (
 };
 
 export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
-  tournament,
+  eventId,
+  eventContext,
   divisions,
   selectedDivisionIds,
   userProfile,
@@ -108,7 +112,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
       const statusMap = new Map<string, string>();
 
       for (const divId of selectedDivisionIds) {
-        const teams = await getTeamsForDivision(tournament.id, divId);
+        const teams = await getTeamsForDivision(eventId, divId, eventContext);
         teams.forEach(t => {
           const isWithdrawn = t.status === 'withdrawn' || t.status === 'cancelled';
           const isSoloPending = t.status === 'pending_partner' && Array.isArray(t.players) && t.players.length === 1;
@@ -118,7 +122,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
           }
         });
 
-        const invites = await getPendingInvitesForDivision(tournament.id, divId);
+        const invites = await getPendingInvitesForDivision(eventId, divId, eventContext);
         invites.forEach(inv => {
           if (!statusMap.has(inv.invitedUserId)) statusMap.set(inv.invitedUserId, 'Has Pending Invite');
         });
@@ -127,7 +131,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
       setUnavailableUsers(statusMap);
     };
     if (selectedDivisionIds.length > 0) loadUnavailable();
-  }, [selectedDivisionIds, tournament.id]);
+  }, [selectedDivisionIds, eventId, eventContext]);
 
   useEffect(() => {
     const load = async () => {
@@ -141,14 +145,14 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
 
           // If user is already in a full team, we don't need to load open teams for them
           const existingTeam = existingTeams[div.id];
-          if (existingTeam && existingTeam.players.length >= 2) continue;
+          if (existingTeam && existingTeam.players && existingTeam.players.length >= 2) continue;
 
-          const teams = await getOpenTeamsForDivision(tournament.id, divId);
+          const teams = await getOpenTeamsForDivision(eventId, divId, eventContext);
 
           const ownerIds = Array.from(new Set(teams.map(t => t.players?.[0]).filter(id => !!id)));
           let ownersById: Record<string, UserProfile> = {};
           if (ownerIds.length > 0) {
-            const owners = await getUsersByIds(ownerIds);
+            const owners = await getUsersByIds(ownerIds as string[]);
             ownersById = owners.reduce<Record<string, UserProfile>>((acc, u) => { acc[u.id] = u; return acc; }, {});
           }
 
@@ -167,8 +171,8 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
           }
 
           enriched.sort((a, b) => {
-            const nameA = (a.owner.displayName || a.owner.email || '').toLowerCase();
-            const nameB = (b.owner.displayName || b.owner.email || '').toLowerCase();
+            const nameA = (a.owner?.displayName || a.owner?.email || '').toLowerCase();
+            const nameB = (b.owner?.displayName || b.owner?.email || '').toLowerCase();
             if (nameA < nameB) return -1;
             if (nameA > nameB) return 1;
             return 0;
@@ -184,7 +188,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     };
 
     if (selectedDivisionIds.length > 0) load();
-  }, [selectedDivisionIds.join(','), divisions.length, tournament.id, userProfile.id, existingTeams]);
+  }, [selectedDivisionIds.join(','), divisions.length, eventId, userProfile.id, existingTeams, eventContext]);
 
   const handleModeChange = (divId: string, mode: 'invite' | 'open_team' | 'join_open') => {
     setPartnerDetails(prev => {
@@ -252,10 +256,10 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     <div className="space-y-6">
       {selectedDivisionIds
         .map(id => divisions.find(d => d.id === id))
-        .filter((d): d is Division => !!d && d.type === 'doubles')
+        .filter((d): d is Division | CompetitionDivision => !!d && d.type === 'doubles')
         .map(div => {
           const existingTeam = existingTeams[div.id];
-          const isFullTeam = existingTeam && existingTeam.players.length >= 2;
+          const isFullTeam = existingTeam && existingTeam.players && existingTeam.players.length >= 2;
 
           if (isFullTeam) {
             return (
@@ -264,7 +268,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                      <div className="text-sm text-green-400 p-3 bg-green-900/20 border border-green-800 rounded">
                          You are currently registered with a partner.
                          <br/>
-                         <span className="text-xs text-gray-400">To change partners, please go back and withdraw from this division.</span>
+                         <span className="text-xs text-gray-400">To change partners, please withdraw from this division and rejoin.</span>
                      </div>
                 </div>
             );
@@ -395,7 +399,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                       >
                         <div>
                           <div className={`font-semibold ${isSelected ? 'text-white' : 'text-gray-200'}`}>
-                            {ot.owner.displayName || ot.owner.email}
+                            {ot.owner?.displayName || ot.owner?.email}
                           </div>
                           <div className="text-xs text-gray-400">{ot.team.teamName}</div>
                         </div>

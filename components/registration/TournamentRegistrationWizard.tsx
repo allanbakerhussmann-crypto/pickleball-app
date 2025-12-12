@@ -79,7 +79,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         const unsub = subscribeToDivisions(tournament.id, setDivisions);
 
         const loadExisting = async () => {
-            const teams = await getUserTeamsForTournament(tournament.id, userProfile.id);
+            const teams = await getUserTeamsForTournament(tournament.id, userProfile.id, 'tournament');
             const map: Record<string, Team> = {};
             teams.forEach(t => { map[t.divisionId] = t; });
             setExistingTeamsByDivision(map);
@@ -143,7 +143,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
             });
 
             // Re-fetch to be safe
-            const teams = await getUserTeamsForTournament(tournament.id, userProfile.id);
+            const teams = await getUserTeamsForTournament(tournament.id, userProfile.id, 'tournament');
             const map: Record<string, Team> = {};
             teams.forEach(t => { map[t.divisionId] = t; });
             setExistingTeamsByDivision(map);
@@ -173,7 +173,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
             
             // If user is already in a full team for this division, they don't need to select a partner
             const existingTeam = existingTeamsByDivision[div.id];
-            if (existingTeam && existingTeam.players.length >= 2) continue;
+            if (existingTeam && existingTeam.players && existingTeam.players.length >= 2) continue;
 
             const details = partnerDetails?.[divId];
             if (!details) {
@@ -350,7 +350,8 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                         {step === 2 && (
                             <>
                                 <DoublesPartnerStep
-                                    tournament={tournament}
+                                    eventId={tournament.id}
+                                    eventContext="tournament"
                                     divisions={divisions}
                                     selectedDivisionIds={regData.selectedEventIds}
                                     userProfile={userProfile}

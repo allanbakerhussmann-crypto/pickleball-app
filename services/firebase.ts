@@ -1,3 +1,4 @@
+
 import { initializeApp } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
 import { 
@@ -122,12 +123,19 @@ const callCloudFunction = async (name: string, data: any): Promise<any> => {
     }
 };
 
+// Helper to remove undefined values before saving to Firestore
+// Firestore throws an error if a field is explicitly undefined.
+export const removeUndefined = <T>(obj: T): T => {
+    return JSON.parse(JSON.stringify(obj));
+};
+
 /* -------------------------------------------------------------------------- */
 /*                                TEAM LOGIC                                  */
 /* -------------------------------------------------------------------------- */
 
 export const createTeamServer = async (opts: {
-  tournamentId: string;
+  tournamentId?: string;
+  competitionId?: string;
   divisionId: string;
   playerIds: string[];
   teamName?: string | null;
@@ -137,6 +145,7 @@ export const createTeamServer = async (opts: {
   // Now using HTTP function via fetch instead of client-side transaction to avoid complex permission issues
   return await callCloudFunction('createTeam', {
       tournamentId: opts.tournamentId, 
+      competitionId: opts.competitionId,
       divisionId: opts.divisionId, 
       playerIds: opts.playerIds, 
       teamName: opts.teamName || null
@@ -144,16 +153,19 @@ export const createTeamServer = async (opts: {
 };
 
 export const ensureTeamExists = async (
-  tournamentId: string,
+  eventId: string, // Can be tournamentId or competitionId
   divisionId: string,
   playerIds: string[],
   teamName: string | null,
   createdByUserId: string,
-  options?: { status?: string; isLookingForPartner?: boolean }
+  options?: { status?: string; isLookingForPartner?: boolean; eventType?: 'tournament' | 'competition' }
 ): Promise<{ existed: boolean; teamId: string; team: any | null }> => {
   // Legacy client-side version kept for fallback or specific uses where server function is overkill
   const normalizedPlayers = Array.from(new Set(playerIds.map(String))).sort();
   if (normalizedPlayers.length === 0) throw new Error("No players provided");
+
+  const eventType = options?.eventType || 'tournament';
+  const eventField = eventType === 'tournament' ? 'tournamentId' : 'competitionId';
 
   const firstPlayerId = normalizedPlayers[0];
   const qTp = query(
@@ -169,7 +181,7 @@ export const ensureTeamExists = async (
   if (candidateTeamIds.length > 0) {
       const qTeams = query(
           collection(db, 'teams'),
-          where('tournamentId', '==', tournamentId),
+          where(eventField, '==', eventId),
           where('divisionId', '==', divisionId),
           where('id', 'in', candidateTeamIds.slice(0, 30))
       );
@@ -202,9 +214,8 @@ export const ensureTeamExists = async (
       ? options.isLookingForPartner 
       : ((options?.status === 'pending_partner') || (normalizedPlayers.length === 1));
 
-  const teamDoc: Team = {
+  const teamDoc: any = {
     id: teamRef.id,
-    tournamentId,
     divisionId,
     teamName: teamName || null,
     createdByUserId: createdByUserId, 
@@ -213,7 +224,10 @@ export const ensureTeamExists = async (
     status: (options?.status as any) || (normalizedPlayers.length === 1 ? 'pending_partner' : 'active'),
     createdAt: now,
     updatedAt: now
-  } as any;
+  };
+  
+  // Assign correct ID field
+  teamDoc[eventField] = eventId;
 
   await runTransaction(db, async (tx) => {
       tx.set(teamRef, teamDoc);
@@ -262,8 +276,10 @@ export const subscribeToTeams = (tournamentId: string, callback: (teams: Team[])
     });
 };
 
-export const getUserTeamsForTournament = async (tournamentId: string, userId: string): Promise<Team[]> => {
-  if (!tournamentId || !userId) return [];
+export const getUserTeamsForTournament = async (eventId: string, userId: string, eventType: 'tournament' | 'competition' = 'tournament'): Promise<Team[]> => {
+  if (!eventId || !userId) return [];
+  const eventField = eventType === 'tournament' ? 'tournamentId' : 'competitionId';
+  
   const qTp = query(collection(db, 'teamPlayers'), where('playerId', '==', userId));
   const tpSnap = await getDocs(qTp);
   const teamIds = tpSnap.docs.map(d => d.data().teamId);
@@ -273,7 +289,7 @@ export const getUserTeamsForTournament = async (tournamentId: string, userId: st
   const chunkSize = 30;
   for (let i = 0; i < teamIds.length; i += chunkSize) {
       const chunk = teamIds.slice(i, i + chunkSize);
-      const qTeams = query(collection(db, 'teams'), where('id', 'in', chunk), where('tournamentId', '==', tournamentId));
+      const qTeams = query(collection(db, 'teams'), where('id', 'in', chunk), where(eventField, '==', eventId));
       const snap = await getDocs(qTeams);
       snap.docs.forEach(d => { teams.push({ ...d.data(), players: [userId] } as Team); });
   }
@@ -763,7 +779,7 @@ export const getRegistration = async (tournamentId: string, playerId: string): P
   return snap.exists() ? ({ id: snap.id, ...snap.data() } as Registration) : null;
 };
 export const saveRegistration = async (reg: Registration) => {
-  await setDoc(doc(db, 'registrations', reg.id), JSON.parse(JSON.stringify(reg)), { merge: true });
+  await setDoc(doc(db, 'registrations', reg.id), removeUndefined(reg), { merge: true });
 };
 export const ensureRegistrationForUser = async (tournamentId: string, playerId: string, divisionId: string): Promise<Registration> => {
   const id = `${playerId}_${tournamentId}`;
@@ -784,10 +800,11 @@ export const ensureRegistrationForUser = async (tournamentId: string, playerId: 
   return reg;
 };
 
-export const getOpenTeamsForDivision = async (tournamentId: string, divisionId: string): Promise<Team[]> => {
+export const getOpenTeamsForDivision = async (eventId: string, divisionId: string, eventType: 'tournament' | 'competition' = 'tournament'): Promise<Team[]> => {
+  const eventField = eventType === 'tournament' ? 'tournamentId' : 'competitionId';
   const q = query(
     collection(db, 'teams'),
-    where('tournamentId', '==', tournamentId),
+    where(eventField, '==', eventId),
     where('divisionId', '==', divisionId),
     where('status', '==', 'pending_partner'),
     where('isLookingForPartner', '==', true) 
@@ -802,8 +819,9 @@ export const getOpenTeamsForDivision = async (tournamentId: string, divisionId: 
   return rawTeams.filter(t => (t.players?.length || 0) === 1); 
 };
 
-export const getTeamsForDivision = async (tournamentId: string, divisionId: string): Promise<Team[]> => {
-    const q = query(collection(db, 'teams'), where('tournamentId', '==', tournamentId), where('divisionId', '==', divisionId));
+export const getTeamsForDivision = async (eventId: string, divisionId: string, eventType: 'tournament' | 'competition' = 'tournament'): Promise<Team[]> => {
+    const eventField = eventType === 'tournament' ? 'tournamentId' : 'competitionId';
+    const q = query(collection(db, 'teams'), where(eventField, '==', eventId), where('divisionId', '==', divisionId));
     const snap = await getDocs(q);
     const teams = snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
     for (const t of teams) {
@@ -814,8 +832,11 @@ export const getTeamsForDivision = async (tournamentId: string, divisionId: stri
     return teams;
 };
 
-export const getPendingInvitesForDivision = async (tournamentId: string, divisionId: string): Promise<PartnerInvite[]> => {
-  const q = query(collection(db, 'partnerInvites'), where('tournamentId', '==', tournamentId), where('divisionId', '==', divisionId), where('status', '==', 'pending'));
+export const getPendingInvitesForDivision = async (eventId: string, divisionId: string, eventType: 'tournament' | 'competition' = 'tournament'): Promise<PartnerInvite[]> => {
+  // Currently PartnerInvite has tournamentId. For competitions we might need to adjust or reuse tournamentId as generic eventId.
+  // Assuming we reuse tournamentId field for competitionId as well in invites for now, or update invites to support competitionId.
+  // Given current types, let's assume tournamentId field holds the ID.
+  const q = query(collection(db, 'partnerInvites'), where('tournamentId', '==', eventId), where('divisionId', '==', divisionId), where('status', '==', 'pending'));
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() } as PartnerInvite));
 };
@@ -851,12 +872,136 @@ export const finalizeRegistration = async (payload: Registration, tournament: To
     for (const divId of payload.selectedEventIds) {
         const detail = payload.partnerDetails?.[divId];
         if (detail) {
-            await ensureTeamExists(tournament.id, divId, [userProfile.id], null, userProfile.id, { status: 'pending_partner' });
+            // This is the logic for TOURNAMENTS (legacy function)
+            // It creates a pending team, but it doesn't currently create a partnerInvite document in this specific function
+            // because invites were handled separately in previous iteration.
+            // However, to align with the new robust Competition logic, we should rely on the generic ensureTeamExists
+            await ensureTeamExists(tournament.id, divId, [userProfile.id], null, userProfile.id, { status: 'pending_partner', eventType: 'tournament' });
+            
+            if (detail.mode === 'invite' && detail.partnerUserId) {
+                 // Create invite
+                 const result = await ensureTeamExists(tournament.id, divId, [userProfile.id], null, userProfile.id, { status: 'pending_partner', eventType: 'tournament' });
+                 const inviteRef = doc(collection(db, 'partnerInvites'));
+                 await setDoc(inviteRef, {
+                    id: inviteRef.id,
+                    tournamentId: tournament.id,
+                    divisionId: divId,
+                    teamId: result.teamId,
+                    inviterId: userProfile.id,
+                    invitedUserId: detail.partnerUserId,
+                    status: 'pending',
+                    createdAt: Date.now()
+                 });
+            }
         } else {
-            await ensureTeamExists(tournament.id, divId, [userProfile.id], null, userProfile.id, { status: 'active' });
+            await ensureTeamExists(tournament.id, divId, [userProfile.id], null, userProfile.id, { status: 'active', eventType: 'tournament' });
         }
     }
     return { teamsCreated: created };
+};
+
+export const finalizeCompetitionRegistration = async (
+    competition: Competition,
+    userProfile: UserProfile,
+    divisionId: string,
+    partnerDetails?: any
+): Promise<void> => {
+    const div = competition.divisions?.find(d => d.id === divisionId);
+    let teamId: string | undefined;
+
+    // 1. Handle Team Creation / Joining Logic for Doubles
+    if (div?.type === 'doubles') {
+        const details = partnerDetails?.[divisionId];
+        
+        if (details?.mode === 'invite' && details.partnerUserId) {
+            // Case 1: INVITE PARTNER
+            // Create a pending team with just me
+            const result = await ensureTeamExists(
+                competition.id, 
+                divisionId, 
+                [userProfile.id], 
+                null, 
+                userProfile.id, 
+                { status: 'pending_partner', eventType: 'competition' }
+            );
+            teamId = result.teamId;
+
+            // Create the Invite Document
+            const inviteRef = doc(collection(db, 'partnerInvites'));
+            await setDoc(inviteRef, {
+                id: inviteRef.id,
+                tournamentId: competition.id, // Legacy compatibility
+                competitionId: competition.id, 
+                divisionId: divisionId,
+                teamId: teamId,
+                inviterId: userProfile.id,
+                invitedUserId: details.partnerUserId,
+                status: 'pending',
+                createdAt: Date.now()
+            });
+
+        } else if (details?.mode === 'open_team') {
+            // Case 2: LOOKING FOR PARTNER
+            const result = await ensureTeamExists(
+                competition.id,
+                divisionId,
+                [userProfile.id],
+                null,
+                userProfile.id,
+                { status: 'pending_partner', isLookingForPartner: true, eventType: 'competition' }
+            );
+            teamId = result.teamId;
+
+        } else if (details?.mode === 'join_open' && details.openTeamId) {
+            // Case 3: JOIN EXISTING OPEN TEAM
+            teamId = details.openTeamId;
+            // Add myself to that team
+            const tpRef = doc(collection(db, 'teamPlayers'));
+            await setDoc(tpRef, { 
+                id: tpRef.id, 
+                teamId: teamId, 
+                playerId: userProfile.id, 
+                role: 'member' 
+            });
+            // Update team status to active
+            await updateDoc(doc(db, 'teams', teamId!), { 
+                status: 'active', 
+                isLookingForPartner: false, 
+                updatedAt: Date.now() 
+            });
+
+        } else {
+            // Case 4: ALREADY IN TEAM OR FALLBACK
+            // Check if I already have a team (handled by ensureTeamExists which checks teamPlayers)
+            // Or create a fresh active team if this is just a quick placeholder logic
+             const result = await ensureTeamExists(
+                competition.id, 
+                divisionId, 
+                [userProfile.id], 
+                null, 
+                userProfile.id, 
+                { status: 'pending_partner', eventType: 'competition' }
+            );
+            teamId = result.teamId;
+        }
+    } 
+    
+    // 2. Create the Entry Record
+    const entryId = `entry_${Date.now()}`;
+    const entry: CompetitionEntry = {
+        id: entryId,
+        competitionId: competition.id,
+        entryType: div?.type === 'doubles' ? 'team' : 'individual',
+        playerId: userProfile.id,
+        teamId: teamId, // Linked to the team created above
+        divisionId: divisionId,
+        status: 'active',
+        createdAt: Date.now(),
+        partnerDetails: partnerDetails // Store for reference
+    };
+
+    // Sanitize before saving
+    await setDoc(doc(db, 'competitionEntries', entryId), removeUndefined(entry));
 };
 
 export const saveStandings = async (tournamentId: string | undefined, divisionId: string | undefined, standings: StandingsEntry[]) => {
@@ -925,11 +1070,26 @@ export const subscribeToCompetitions = (callback: (competitions: Competition[]) 
 
 export const createCompetitionEntry = async (entry: CompetitionEntry): Promise<void> => {
   // Entries are created client side by players (self) or organisers
-  await setDoc(doc(db, 'competitionEntries', entry.id), entry);
+  // Deep clone and remove undefined values to satisfy Firestore
+  await setDoc(doc(db, 'competitionEntries', entry.id), removeUndefined(entry));
 };
 
 export const saveCompetitionEntry = async (entry: CompetitionEntry) => {
-    await setDoc(doc(db, 'competitionEntries', entry.id), entry, { merge: true });
+    await setDoc(doc(db, 'competitionEntries', entry.id), removeUndefined(entry), { merge: true });
+};
+
+export const getCompetitionEntry = async (competitionId: string, userId: string): Promise<CompetitionEntry | null> => {
+    const q = query(
+        collection(db, 'competitionEntries'), 
+        where('competitionId', '==', competitionId),
+        where('playerId', '==', userId)
+    );
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+        const doc = snapshot.docs[0];
+        return { id: doc.id, ...doc.data() } as CompetitionEntry;
+    }
+    return null;
 };
 
 export const listCompetitionEntries = async (competitionId: string): Promise<CompetitionEntry[]> => {

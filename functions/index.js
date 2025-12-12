@@ -137,16 +137,19 @@ const createHandler = (handler) => {
 
 exports.createTeam = createHandler(async (data, uid) => {
   const tournamentId = data?.tournamentId;
+  const competitionId = data?.competitionId;
   const divisionId = data?.divisionId;
   const playerIds = data?.playerIds;
   const teamName = data?.teamName || null;
 
-  if (!tournamentId || !divisionId || !Array.isArray(playerIds) || playerIds.length === 0) {
-    const e = new Error('tournamentId, divisionId and playerIds are required.');
+  const eventId = tournamentId || competitionId;
+
+  if (!eventId || !divisionId || !Array.isArray(playerIds) || playerIds.length === 0) {
+    const e = new Error('tournamentId/competitionId, divisionId and playerIds are required.');
     e.httpStatus = 400; throw e;
   }
 
-  const teamId = deterministicTeamId(tournamentId, divisionId, playerIds);
+  const teamId = deterministicTeamId(eventId, divisionId, playerIds);
 
   const result = await db.runTransaction(async (tx) => {
     const teamRef = db.collection('teams').doc(teamId);
@@ -159,7 +162,6 @@ exports.createTeam = createHandler(async (data, uid) => {
     const now = Date.now();
     const teamDoc = {
       id: teamId,
-      tournamentId,
       divisionId,
       players: playerIds.slice().sort(),
       teamName,
@@ -168,6 +170,9 @@ exports.createTeam = createHandler(async (data, uid) => {
       createdAt: now,
       updatedAt: now
     };
+    
+    if (tournamentId) teamDoc.tournamentId = tournamentId;
+    if (competitionId) teamDoc.competitionId = competitionId;
 
     tx.set(teamRef, teamDoc);
 
@@ -176,7 +181,7 @@ exports.createTeam = createHandler(async (data, uid) => {
       action: 'create_team',
       actorId: uid,
       timestamp: now,
-      details: { teamId, tournamentId }
+      details: { teamId, eventId }
     });
 
     return { existed: false, teamId, team: teamDoc };

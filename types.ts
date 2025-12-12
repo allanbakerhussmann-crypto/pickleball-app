@@ -189,7 +189,8 @@ export interface Division {
 // Normalized Team (No players array)
 export interface Team {
   id: string;
-  tournamentId: string;
+  tournamentId?: string; // Optional if competitionId is present
+  competitionId?: string; // NEW: Support for Leagues
   divisionId: string;
   teamName?: string | null; 
   captainPlayerId: string;
@@ -217,7 +218,8 @@ export interface TeamPlayer {
 
 export interface PartnerInvite {
   id: string;
-  tournamentId: string;
+  tournamentId: string; // If legacy or tournament
+  competitionId?: string; // NEW: If league
   divisionId: string;
   teamId: string;
   
@@ -359,9 +361,12 @@ export type CompetitionType = 'league' | 'team_league' | 'tournament';
 export interface CompetitionDivision {
   id: string;
   name: string;
+  type: EventType; // NEW: Added to support singles/doubles logic in leagues
+  gender: GenderCategory;
   minRating?: number;
   maxRating?: number;
-  gender?: GenderCategory;
+  minAge?: number;
+  maxAge?: number;
 }
 
 export interface Competition {
@@ -404,6 +409,8 @@ export interface CompetitionEntry {
   divisionId?: string;       
   status: 'pending' | 'active' | 'withdrawn';
   createdAt: number;
+  // NEW: To store partner details temporarily during wizard steps or for reference
+  partnerDetails?: any; 
 }
 
 export type StageSettings = DivisionFormat;

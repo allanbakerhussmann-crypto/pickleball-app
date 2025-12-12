@@ -2,11 +2,12 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { createCompetition, listCompetitions, logAudit } from '../services/firebase';
-import type { Competition, CompetitionType, Visibility, TieBreaker, CompetitionDivision } from '../types';
+import type { Competition, CompetitionType, Visibility, TieBreaker, CompetitionDivision, EventType, GenderCategory } from '../types';
 
 interface CreateCompetitionProps {
     onCancel: () => void;
     onCreate: () => void;
+    initialType?: CompetitionType;
 }
 
 const COUNTRIES = [
@@ -51,12 +52,12 @@ const COUNTRY_REGIONS: Record<string, string[]> = {
     MEX: ["Aguascalientes", "Baja California", "Baja California Sur", "Campeche", "Chiapas", "Chihuahua", "Coahuila", "Colima", "Durango", "Guanajuato", "Guerrero", "Hidalgo", "Jalisco", "Mexico City", "Mexico State", "Michoacán", "Morelos", "Nayarit", "Nuevo León", "Oaxaca", "Puebla", "Querétaro", "Quintana Roo", "San Luis Potosí", "Sinaloa", "Sonora", "Tabasco", "Tamaulipas", "Tlaxcala", "Veracruz", "Yucatán", "Zacatecas"],
 };
 
-export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, onCreate }) => {
+export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, onCreate, initialType = 'league' }) => {
     const { currentUser } = useAuth();
     
     // Basic Info
     const [name, setName] = useState('');
-    const [type, setType] = useState<CompetitionType>('league');
+    const [type, setType] = useState<CompetitionType>(initialType);
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     
@@ -81,6 +82,8 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
     
     // Temp division input
     const [newDivName, setNewDivName] = useState('');
+    const [newDivType, setNewDivType] = useState<EventType>('doubles');
+    const [newDivGender, setNewDivGender] = useState<GenderCategory>('mixed');
     const [newDivMinRating, setNewDivMinRating] = useState('');
     const [newDivMaxRating, setNewDivMaxRating] = useState('');
 
@@ -105,6 +108,8 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
         const newDiv: CompetitionDivision = {
             id: `div_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
             name: newDivName.trim(),
+            type: newDivType,
+            gender: newDivGender,
             minRating: min,
             maxRating: max
         };
@@ -162,7 +167,7 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                     points: { 
                         win: winPoints, 
                         draw: drawPoints, 
-                        loss: lossPoints,
+                        loss: lossPoints, 
                         bonus: bonusPoints 
                     },
                     tieBreaker,
@@ -224,13 +229,15 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                         <div>
                             <label className="block text-sm font-medium text-gray-300 mb-1">Type</label>
                             <select 
-                                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none disabled:opacity-50"
                                 value={type}
                                 onChange={e => setType(e.target.value as CompetitionType)}
+                                disabled={!!initialType}
                             >
                                 <option value="league">Singles/Doubles League</option>
                                 <option value="team_league">Team League</option>
                             </select>
+                            {initialType && <p className="text-xs text-gray-500 mt-1">Locked to current view context.</p>}
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-300 mb-1">Visibility</label>
@@ -407,6 +414,26 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                                 value={newDivName}
                                 onChange={e => setNewDivName(e.target.value)}
                             />
+                            <div className="flex gap-2">
+                                <select
+                                    className="bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm w-1/2"
+                                    value={newDivType}
+                                    onChange={e => setNewDivType(e.target.value as EventType)}
+                                >
+                                    <option value="singles">Singles</option>
+                                    <option value="doubles">Doubles</option>
+                                </select>
+                                <select
+                                    className="bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm w-1/2"
+                                    value={newDivGender}
+                                    onChange={e => setNewDivGender(e.target.value as GenderCategory)}
+                                >
+                                    <option value="mixed">Mixed</option>
+                                    <option value="men">Men</option>
+                                    <option value="women">Women</option>
+                                    <option value="open">Open</option>
+                                </select>
+                            </div>
                             <input 
                                 type="number" step="0.1"
                                 className="bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
@@ -436,6 +463,7 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                                     <div key={div.id} className="bg-gray-800 border border-gray-600 text-gray-200 px-3 py-2 rounded text-sm flex justify-between items-center">
                                         <div className="flex flex-col">
                                             <span className="font-bold text-white">{div.name}</span>
+                                            <span className="text-xs text-gray-400 capitalize">{div.type} • {div.gender}</span>
                                             {(div.minRating || div.maxRating) && (
                                                 <span className="text-xs text-gray-400">
                                                     Rating: {div.minRating || 0} - {div.maxRating || 'Any'}

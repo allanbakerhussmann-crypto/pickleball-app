@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
     getCompetition, 
@@ -5,12 +6,12 @@ import {
     subscribeToCompetitionEntries,
     subscribeToStandings,
     generateLeagueSchedule, 
-    updateLeagueStandings,
     createCompetitionEntry,
     updateCompetition,
     getUsersByIds,
     searchUsers,
-    logAudit
+    logAudit,
+    getCompetitionEntry
 } from '../services/firebase';
 import { 
     submitMatchScore, 
@@ -21,6 +22,7 @@ import type { Competition, Match, CompetitionEntry, StandingsEntry, UserProfile,
 import { Schedule } from './Schedule';
 import { LeagueStandings } from './LeagueStandings';
 import { useAuth } from '../contexts/AuthContext';
+import { CompetitionRegistrationWizard } from './registration/CompetitionRegistrationWizard';
 
 interface CompetitionManagerProps {
     competitionId: string;
@@ -28,7 +30,7 @@ interface CompetitionManagerProps {
 }
 
 export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competitionId, onBack }) => {
-    const { isOrganizer, currentUser } = useAuth();
+    const { isOrganizer, currentUser, userProfile } = useAuth();
     const [competition, setCompetition] = useState<Competition | null>(null);
     const [matches, setMatches] = useState<Match[]>([]);
     const [entries, setEntries] = useState<CompetitionEntry[]>([]);
@@ -45,6 +47,10 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
     const [entryError, setEntryError] = useState<string | null>(null);
 
+    // Wizard State
+    const [showWizard, setShowWizard] = useState(false);
+    const [hasEntry, setHasEntry] = useState(false);
+
     useEffect(() => {
         getCompetition(competitionId).then(setCompetition);
         
@@ -58,6 +64,13 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
             unsubStandings();
         };
     }, [competitionId]);
+
+    // Check my entry status
+    useEffect(() => {
+        if (currentUser && competitionId) {
+            getCompetitionEntry(competitionId, currentUser.uid).then(e => setHasEntry(!!e));
+        }
+    }, [currentUser, competitionId, entries.length]); // Re-check when entries list updates
 
     // Fetch player names for UI
     useEffect(() => {
@@ -142,7 +155,7 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         const entry: CompetitionEntry = {
             id: `entry_${Date.now()}`,
             competitionId,
-            entryType: selectedUser ? 'individual' : 'team', // Simplification
+            entryType: selectedUser ? 'individual' : 'team', 
             playerId: selectedUser ? selectedUser.id : undefined,
             teamId: !selectedUser ? manualName.trim() : undefined, 
             divisionId: selectedDivisionId || undefined,
@@ -164,7 +177,6 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     };
 
     const handleGenerateSchedule = async () => {
-        // Confirmation prompt removed due to iframe sandbox restrictions
         if (!currentUser) return;
         try {
             await generateLeagueSchedule(competitionId);
@@ -210,17 +222,10 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         const nameA = playersCache[m.teamAId || '']?.displayName || m.teamAId || 'Unknown';
         const nameB = playersCache[m.teamBId || '']?.displayName || m.teamBId || 'Unknown';
         
-        // Basic Permissions check for UI flags
-        // For individual leagues, teamAId is often the playerId.
-        // For team leagues, we'd need more complex logic to check team membership.
         const isParticipant = currentUser && (m.teamAId === currentUser.uid || m.teamBId === currentUser.uid);
-        const canEdit = isOrganizer || isParticipant;
         const isPending = m.status === 'pending_confirmation';
         
-        // Waiting on YOU if: match is pending, you are a participant, and YOU didn't submit the last update
         const isWaitingOnYou = isPending && isParticipant && m.lastUpdatedBy !== currentUser.uid;
-        
-        // Can confirm if: Organizer OR (Participant AND Waiting on you)
         const canConfirm = isOrganizer || isWaitingOnYou;
 
         return {
@@ -242,7 +247,16 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     }));
 
     return (
-        <div className="max-w-6xl mx-auto p-4 animate-fade-in">
+        <div className="max-w-6xl mx-auto p-4 animate-fade-in relative">
+            {showWizard && userProfile && (
+                <CompetitionRegistrationWizard 
+                    competition={competition}
+                    userProfile={userProfile}
+                    onClose={() => setShowWizard(false)}
+                    onComplete={() => { setShowWizard(false); setHasEntry(true); }}
+                />
+            )}
+
             <button onClick={onBack} className="text-sm text-gray-400 hover:text-white mb-4">← Back to Dashboard</button>
             
             <div className="flex justify-between items-start mb-6">
@@ -262,14 +276,25 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                         <p className="text-gray-300 text-sm mt-3 max-w-2xl">{competition.description}</p>
                     )}
                 </div>
-                {isOrganizer && competition.status === 'draft' && (
-                    <button 
-                        onClick={handleGenerateSchedule}
-                        className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold shadow"
-                    >
-                        Start League & Generate Schedule
-                    </button>
-                )}
+                <div className="flex flex-col gap-2 items-end">
+                    {competition.status === 'draft' && competition.registrationOpen && !isOrganizer && (
+                        <button 
+                            onClick={() => setShowWizard(true)}
+                            className={`px-6 py-2 rounded font-bold shadow ${hasEntry ? 'bg-gray-700 text-gray-300' : 'bg-green-600 hover:bg-green-500 text-white'}`}
+                        >
+                            {hasEntry ? 'Edit Registration' : 'Join League'}
+                        </button>
+                    )}
+                    
+                    {isOrganizer && competition.status === 'draft' && (
+                        <button 
+                            onClick={handleGenerateSchedule}
+                            className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold shadow"
+                        >
+                            Start League & Generate Schedule
+                        </button>
+                    )}
+                </div>
             </div>
 
             <div className="flex gap-4 border-b border-gray-700 mb-6">
@@ -303,7 +328,7 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                         <div className="mb-6">
                             {!isAddingEntry ? (
                                 <button onClick={() => setIsAddingEntry(true)} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold text-sm">
-                                    + Add Entrant
+                                    + Add Entrant (Manual)
                                 </button>
                             ) : (
                                 <div className="bg-gray-900 p-4 rounded border border-gray-600 animate-fade-in-up">

@@ -47,7 +47,7 @@ const VerificationBanner: React.FC = () => {
         try {
             await resendVerificationEmail();
             setMessage('Email sent! If the link is not clickable, please copy/paste it.');
-        } catch (error) {
+        } catch (error: any) {
             setMessage('Failed to send verification email.');
             console.error(error);
         }
@@ -58,7 +58,7 @@ const VerificationBanner: React.FC = () => {
         setMessage('');
         try {
             await reloadUser();
-        } catch (error) {
+        } catch (error: any) {
             setMessage('Error checking status. Please try again.');
             console.error(error);
         } finally {
@@ -226,7 +226,7 @@ const App: React.FC = () => {
                     .map(i => i.inviterId)
                     .filter(id => id && !usersById[id])
                 )
-            );
+            ) as string[];
             if (missingIds.length === 0) return;
             
             const profiles = await Promise.all(missingIds.map(id => getUserProfile(id)));
@@ -260,7 +260,7 @@ const App: React.FC = () => {
             setActiveTournamentId(newTournament.id);
             setView('tournaments'); 
             await saveTournament(newTournament);
-        } catch (e) {
+        } catch (e: any) {
             console.error("Failed to create tournament", e);
         }
     };
@@ -268,7 +268,7 @@ const App: React.FC = () => {
     const handleUpdateTournament = async (updatedTournament: Tournament) => {
         try {
             await saveTournament(updatedTournament);
-        } catch (e) {
+        } catch (e: any) {
             console.error("Failed to update tournament", e);
         }
     };
@@ -325,7 +325,7 @@ const App: React.FC = () => {
                 await ensureRegistrationForUser(r.tournamentId, currentUser.uid, r.divisionId);
                 handleAcceptInvite(r.tournamentId, r.divisionId);
             }
-        } catch (e) {
+        } catch (e: any) {
             console.error("Accept invite failed", e);
         }
     };
@@ -547,6 +547,7 @@ const App: React.FC = () => {
                         <CreateCompetition 
                             onCancel={() => setView('leagues')} 
                             onCreate={() => setView('leagues')}
+                            initialType="league"
                         />
                     ) : view === 'competitionManager' && activeCompetitionId ? (
                         <CompetitionManager 
@@ -563,6 +564,7 @@ const App: React.FC = () => {
                         <CreateCompetition 
                             onCancel={() => setView('teamLeagues')} 
                             onCreate={() => setView('teamLeagues')}
+                            initialType="team_league"
                         />
                     ) : view === 'clubs' ? (
                         <ClubsList 
