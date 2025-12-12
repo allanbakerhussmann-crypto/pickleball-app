@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FirebaseError } from '@firebase/app';
+import { FirebaseError } from 'firebase/app';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
 

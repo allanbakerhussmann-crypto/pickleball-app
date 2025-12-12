@@ -11,18 +11,21 @@ import {
     getUsersByIds,
     searchUsers,
     logAudit,
-    getCompetitionEntry
+    getCompetitionEntry,
+    getUserTeamsForTournament,
+    syncPlayerRatings
 } from '../services/firebase';
 import { 
     submitMatchScore, 
     confirmMatchScore, 
     disputeMatchScore 
 } from '../services/matchService';
-import type { Competition, Match, CompetitionEntry, StandingsEntry, UserProfile, CompetitionDivision } from '../types';
+import type { Competition, Match, CompetitionEntry, StandingsEntry, UserProfile, CompetitionDivision, Team } from '../types';
 import { Schedule } from './Schedule';
 import { LeagueStandings } from './LeagueStandings';
 import { useAuth } from '../contexts/AuthContext';
 import { CompetitionRegistrationWizard } from './registration/CompetitionRegistrationWizard';
+import { TeamRosterManager } from './TeamRosterManager';
 
 interface CompetitionManagerProps {
     competitionId: string;
@@ -35,7 +38,7 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     const [matches, setMatches] = useState<Match[]>([]);
     const [entries, setEntries] = useState<CompetitionEntry[]>([]);
     const [standings, setStandings] = useState<StandingsEntry[]>([]);
-    const [activeTab, setActiveTab] = useState<'standings' | 'schedule' | 'entrants'>('standings');
+    const [activeTab, setActiveTab] = useState<'standings' | 'schedule' | 'entrants' | 'my_team'>('standings');
     const [playersCache, setPlayersCache] = useState<Record<string, UserProfile>>({});
 
     // Entry Management State
@@ -46,10 +49,15 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     const [manualName, setManualName] = useState('');
     const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
     const [entryError, setEntryError] = useState<string | null>(null);
+    const [isSyncing, setIsSyncing] = useState(false);
 
     // Wizard State
     const [showWizard, setShowWizard] = useState(false);
     const [hasEntry, setHasEntry] = useState(false);
+
+    // Team Management
+    const [myTeam, setMyTeam] = useState<Team | null>(null);
+    const [showRosterManager, setShowRosterManager] = useState(false);
 
     useEffect(() => {
         getCompetition(competitionId).then(setCompetition);
@@ -65,12 +73,16 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         };
     }, [competitionId]);
 
-    // Check my entry status
+    // Check my entry status and team
     useEffect(() => {
         if (currentUser && competitionId) {
             getCompetitionEntry(competitionId, currentUser.uid).then(e => setHasEntry(!!e));
+            // Find my team
+            getUserTeamsForTournament(competitionId, currentUser.uid, 'competition').then(teams => {
+                if (teams.length > 0) setMyTeam(teams[0]);
+            });
         }
-    }, [currentUser, competitionId, entries.length]); // Re-check when entries list updates
+    }, [currentUser, competitionId, entries.length]);
 
     // Fetch player names for UI
     useEffect(() => {
@@ -133,25 +145,6 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
             return;
         }
 
-        // Division Validation
-        if (selectedDivisionId && selectedUser) {
-            const div = competition?.divisions?.find(d => d.id === selectedDivisionId);
-            if (div) {
-                const rating = competition?.type === 'league' ? selectedUser.duprSinglesRating : selectedUser.duprDoublesRating;
-                // Basic rating check if user has rating
-                if (rating) {
-                    if (div.minRating && rating < div.minRating) {
-                        setEntryError(`User rating (${rating}) is below minimum (${div.minRating}) for this division.`);
-                        return;
-                    }
-                    if (div.maxRating && rating > div.maxRating) {
-                        setEntryError(`User rating (${rating}) is above maximum (${div.maxRating}) for this division.`);
-                        return;
-                    }
-                }
-            }
-        }
-
         const entry: CompetitionEntry = {
             id: `entry_${Date.now()}`,
             competitionId,
@@ -193,18 +186,50 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         }
     };
 
+    const handleSyncRatings = async () => {
+        if (!entries.length) return;
+        setIsSyncing(true);
+        try {
+            const playerIds = entries
+                .map(e => e.playerId)
+                .filter((id): id is string => !!id);
+            
+            if (playerIds.length > 0) {
+                await syncPlayerRatings(playerIds);
+                alert("Player ratings synced successfully.");
+                // Refresh local cache logic if needed, or rely on next fetch
+            } else {
+                alert("No individual players found to sync.");
+            }
+        } catch (e) {
+            console.error("Sync failed", e);
+            alert("Failed to sync ratings.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
     const handleUpdateScore = async (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute', reason?: string) => {
         if (!currentUser) {
             console.warn("Please log in to submit scores.");
             return;
         }
 
-        const match = matches.find(m => m.id === matchId);
+        let realMatchId = matchId;
+        let boardIdx: number | undefined;
+
+        if (matchId.includes(':')) {
+            const parts = matchId.split(':');
+            realMatchId = parts[0];
+            boardIdx = parseInt(parts[1], 10);
+        }
+
+        const match = matches.find(m => m.id === realMatchId);
         if (!match) return;
 
         try {
             if (action === 'submit') {
-                await submitMatchScore(competitionId, match, currentUser.uid, score1, score2);
+                await submitMatchScore(competitionId, match, currentUser.uid, score1, score2, boardIdx);
             } else if (action === 'confirm') {
                 await confirmMatchScore(competitionId, match, currentUser.uid);
             } else if (action === 'dispute') {
@@ -223,21 +248,29 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         const nameB = playersCache[m.teamBId || '']?.displayName || m.teamBId || 'Unknown';
         
         const isParticipant = currentUser && (m.teamAId === currentUser.uid || m.teamBId === currentUser.uid);
+        // Better check: is user in team roster?
+        // For UI simplicity, assume yes if simple league, or if myTeam ID matches.
+        const isMyMatch = myTeam && (m.teamAId === myTeam.id || m.teamBId === myTeam.id);
+
         const isPending = m.status === 'pending_confirmation';
         
-        const isWaitingOnYou = isPending && isParticipant && m.lastUpdatedBy !== currentUser.uid;
+        const isWaitingOnYou = isPending && isMyMatch && m.lastUpdatedBy !== currentUser?.uid;
         const canConfirm = isOrganizer || isWaitingOnYou;
+
+        const s1 = m.aggregate ? m.aggregate.teamAPoints : (m.scoreTeamAGames?.[0] ?? null);
+        const s2 = m.aggregate ? m.aggregate.teamBPoints : (m.scoreTeamBGames?.[0] ?? null);
 
         return {
             id: m.id,
             team1: { id: m.teamAId || '', name: nameA, players: [{ name: nameA }] },
             team2: { id: m.teamBId || '', name: nameB, players: [{ name: nameB }] },
-            score1: m.scoreTeamAGames?.[0] ?? null,
-            score2: m.scoreTeamBGames?.[0] ?? null,
+            score1: s1,
+            score2: s2,
             status: m.status || 'scheduled',
             roundNumber: m.roundNumber || 1,
             isWaitingOnYou: !!isWaitingOnYou,
-            canCurrentUserConfirm: !!canConfirm
+            canCurrentUserConfirm: !!canConfirm,
+            boards: m.boards
         };
     });
 
@@ -257,6 +290,14 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                 />
             )}
 
+            {showRosterManager && myTeam && currentUser && (
+                <TeamRosterManager 
+                    team={myTeam}
+                    isCaptain={myTeam.captainPlayerId === currentUser.uid || !!isOrganizer}
+                    onClose={() => setShowRosterManager(false)}
+                />
+            )}
+
             <button onClick={onBack} className="text-sm text-gray-400 hover:text-white mb-4">← Back to Dashboard</button>
             
             <div className="flex justify-between items-start mb-6">
@@ -268,13 +309,8 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                         }`}>
                             {competition.status.replace('_', ' ')}
                         </span>
-                        {competition.venue && <span>• {competition.venue}</span>}
-                        {competition.visibility === 'private' && <span className="text-yellow-500">• Private</span>}
-                        {competition.registrationOpen && <span className="text-green-400">• Registration Open</span>}
+                        {competition.type === 'team_league' && <span className="text-blue-400">• Team League</span>}
                     </div>
-                    {competition.description && (
-                        <p className="text-gray-300 text-sm mt-3 max-w-2xl">{competition.description}</p>
-                    )}
                 </div>
                 <div className="flex flex-col gap-2 items-end">
                     {competition.status === 'draft' && competition.registrationOpen && !isOrganizer && (
@@ -297,10 +333,13 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                 </div>
             </div>
 
-            <div className="flex gap-4 border-b border-gray-700 mb-6">
-                <button onClick={() => setActiveTab('standings')} className={`pb-2 px-2 font-bold ${activeTab === 'standings' ? 'text-green-400 border-b-2 border-green-400' : 'text-gray-400'}`}>Standings</button>
-                <button onClick={() => setActiveTab('schedule')} className={`pb-2 px-2 font-bold ${activeTab === 'schedule' ? 'text-green-400 border-b-2 border-green-400' : 'text-gray-400'}`}>Schedule</button>
-                <button onClick={() => setActiveTab('entrants')} className={`pb-2 px-2 font-bold ${activeTab === 'entrants' ? 'text-green-400 border-b-2 border-green-400' : 'text-gray-400'}`}>Entrants</button>
+            <div className="flex gap-4 border-b border-gray-700 mb-6 overflow-x-auto">
+                <button onClick={() => setActiveTab('standings')} className={`pb-2 px-2 font-bold whitespace-nowrap ${activeTab === 'standings' ? 'text-green-400 border-b-2 border-green-400' : 'text-gray-400'}`}>Standings</button>
+                <button onClick={() => setActiveTab('schedule')} className={`pb-2 px-2 font-bold whitespace-nowrap ${activeTab === 'schedule' ? 'text-green-400 border-b-2 border-green-400' : 'text-gray-400'}`}>Schedule</button>
+                <button onClick={() => setActiveTab('entrants')} className={`pb-2 px-2 font-bold whitespace-nowrap ${activeTab === 'entrants' ? 'text-green-400 border-b-2 border-green-400' : 'text-gray-400'}`}>Entrants</button>
+                {myTeam && competition.type === 'team_league' && (
+                    <button onClick={() => setActiveTab('my_team')} className={`pb-2 px-2 font-bold whitespace-nowrap ${activeTab === 'my_team' ? 'text-green-400 border-b-2 border-green-400' : 'text-gray-400'}`}>My Team</button>
+                )}
             </div>
 
             {activeTab === 'standings' && (
@@ -315,13 +354,52 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                 />
             )}
 
+            {activeTab === 'my_team' && myTeam && (
+                <div className="bg-gray-800 rounded p-6 border border-gray-700">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-xl font-bold text-white">Team Management: {myTeam.teamName}</h2>
+                        <button 
+                            onClick={() => setShowRosterManager(true)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold text-sm"
+                        >
+                            Manage Roster
+                        </button>
+                    </div>
+                    <p className="text-gray-400 text-sm">
+                        As a captain or team member, you can view your roster here. 
+                        Captains can add or remove eligible players to the roster for match lineups.
+                    </p>
+                </div>
+            )}
+
             {activeTab === 'entrants' && (
                 <div className="bg-gray-800 rounded p-6 border border-gray-700">
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold text-white">League Entrants</h2>
-                        {competition.maxEntrants && (
-                            <span className="text-sm text-gray-400">Max: {competition.maxEntrants}</span>
-                        )}
+                        <div className="flex items-center gap-3">
+                            {isOrganizer && (
+                                <button 
+                                    onClick={handleSyncRatings}
+                                    disabled={isSyncing}
+                                    className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded border border-gray-600 flex items-center gap-2"
+                                >
+                                    {isSyncing ? (
+                                        <>
+                                            <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                            Syncing...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                            Sync DUPR
+                                        </>
+                                    )}
+                                </button>
+                            )}
+                            {competition.maxEntrants && (
+                                <span className="text-sm text-gray-400">Max: {competition.maxEntrants}</span>
+                            )}
+                        </div>
                     </div>
                     
                     {isOrganizer && competition.status === 'draft' && (
@@ -401,10 +479,18 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                     <div className="space-y-2">
                         {entries.length === 0 ? <p className="text-gray-500 italic">No entrants yet.</p> : entries.map(e => {
                             const division = competition.divisions?.find(d => d.id === e.divisionId);
+                            const playerProfile = e.playerId ? playersCache[e.playerId] : null;
+                            const rating = playerProfile 
+                                ? (division?.type === 'singles' ? playerProfile.duprSinglesRating : playerProfile.duprDoublesRating) 
+                                : 0;
+
                             return (
                                 <div key={e.id} className="bg-gray-900 p-3 rounded flex justify-between items-center border border-gray-800">
                                     <div>
-                                        <div className="text-white font-medium">{playersCache[e.playerId || '']?.displayName || e.playerId || e.teamId}</div>
+                                        <div className="text-white font-medium">
+                                            {playerProfile?.displayName || e.playerId || e.teamId}
+                                            {rating ? <span className="ml-2 text-xs text-gray-500 font-mono">({rating.toFixed(2)})</span> : ''}
+                                        </div>
                                         {division && <div className="text-xs text-green-400">{division.name}</div>}
                                     </div>
                                     <span className="text-xs text-gray-500 capitalize bg-gray-800 px-2 py-1 rounded border border-gray-700">{e.entryType}</span>

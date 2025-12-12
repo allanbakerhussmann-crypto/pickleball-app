@@ -1,59 +1,34 @@
 
-export type TournamentFormat =
-  | 'single_elim'
-  | 'double_elim'
-  | 'round_robin'
-  | 'leaderboard'
-  | 'round_robin_knockout'
-  | 'swiss';
-
-export type TournamentStatus = 'draft' | 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
-export type RegistrationMode = 'signup_page' | 'organiser_provided';
-export type Visibility = 'public' | 'private';
-export type SchedulingMode = 'live' | 'pre_scheduled';
-
-export type SeedingMethod = 'random' | 'rating' | 'manual';
-export type TieBreaker = 'match_wins' | 'point_diff' | 'head_to_head';
-
-export type EventType = 'singles' | 'doubles';
-export type GenderCategory = 'men' | 'women' | 'mixed' | 'open';
-
 export type UserRole = 'player' | 'organizer' | 'admin';
-export type UserGender = 'male' | 'female';
+export type UserGender = 'male' | 'female' | '';
 
-// Replaces UserProfile conceptually, maps to 'players' collection or 'users'
 export interface UserProfile {
   id: string;
-  displayName: string;
-  email: string;
+  email?: string;
+  displayName?: string;
+  photoURL?: string;
+  photoData?: string;
+  photoMimeType?: string;
   roles: UserRole[];
-  isRootAdmin?: boolean; 
-  
-  createdAt?: number;
-  updatedAt?: number;
-  
-  photoURL?: string; 
-  photoData?: string; 
-  photoMimeType?: string; 
-
+  isRootAdmin?: boolean;
+  birthDate?: string;
+  gender?: UserGender;
+  country?: string;
+  region?: string;
+  phone?: string;
+  duprId?: string;
+  duprProfileUrl?: string;
+  duprSinglesRating?: number | null;
+  duprDoublesRating?: number | null;
+  duprRating?: number;
   ratingSingles?: number;
   ratingDoubles?: number;
-  region?: string;
-  country?: string;
-  clubId?: string;
-  phone?: string;
-  gender?: UserGender;
-  birthDate?: string;
-  height?: string;
-  playsHand?: 'right' | 'left';
-  duprId?: string;
-  
-  duprProfileUrl?: string;
-  duprSinglesRating?: number;
-  duprDoublesRating?: number;
   duprLastUpdatedManually?: number;
-  
-  duprRating?: string; 
+  duprLastUpdatedAt?: number; // System sync timestamp
+  playsHand?: 'right' | 'left' | '';
+  height?: string;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface Club {
@@ -64,11 +39,9 @@ export interface Club {
   logoUrl?: string;
   region?: string;
   country?: string;
-  
   createdByUserId: string;
   admins: string[];
   members: string[];
-
   createdAt: number;
   updatedAt: number;
 }
@@ -79,48 +52,174 @@ export interface ClubJoinRequest {
   userId: string;
   status: 'pending' | 'approved' | 'declined';
   createdAt: number;
+}
+
+export type EventType = 'singles' | 'doubles';
+export type GenderCategory = 'men' | 'women' | 'mixed' | 'open';
+export type MainFormat = 'round_robin' | 'single_elim' | 'double_elim' | 'ladder';
+export type Stage2Format = 'single_elim' | 'double_elim' | 'medal_rounds';
+export type PlateFormat = 'single_elim' | 'round_robin';
+export type SeedingMethod = 'rating' | 'random' | 'manual';
+export type TieBreaker = 'match_wins' | 'point_diff' | 'head_to_head';
+
+export interface DivisionFormat {
+  stageMode: 'single_stage' | 'two_stage';
+  mainFormat?: MainFormat;
+  stage1Format?: string;
+  stage2Format?: Stage2Format;
+  numberOfPools?: number;
+  teamsPerPool?: number;
+  advanceToMainPerPool?: number;
+  advanceToPlatePerPool?: number;
+  plateEnabled?: boolean;
+  plateFormat?: PlateFormat;
+  plateName?: string;
+  bestOfGames: 1 | 3 | 5;
+  pointsPerGame: 11 | 15 | 21;
+  winBy: 1 | 2;
+  hasBronzeMatch: boolean;
+  seedingMethod: SeedingMethod;
+  tieBreakerPrimary: TieBreaker;
+  tieBreakerSecondary: TieBreaker;
+  tieBreakerTertiary: TieBreaker;
+}
+
+export interface Division {
+  id: string;
+  tournamentId: string;
+  name: string;
+  type: EventType;
+  gender: GenderCategory;
+  minRating?: number | null;
+  maxRating?: number | null;
+  minAge?: number | null;
+  maxAge?: number | null;
+  registrationOpen: boolean;
+  format: DivisionFormat;
+  createdByUserId: string;
+  createdAt: number;
   updatedAt: number;
+}
+
+export interface Tournament {
+  id: string;
+  name: string;
+  description?: string;
+  bannerUrl?: string;
+  visibility: 'public' | 'private';
+  sport: string;
+  status: string;
+  registrationMode: string;
+  createdByUserId: string;
+  clubId?: string;
+  clubName?: string;
+  clubLogoUrl?: string;
+  startDatetime: string;
+  endDate?: string;
+  venue?: string;
+  slug?: string;
+}
+
+export interface Team {
+  id: string;
+  tournamentId?: string;
+  competitionId?: string;
+  divisionId: string;
+  teamName?: string | null;
+  players: string[];
+  captainPlayerId?: string;
+  status: 'active' | 'pending_partner' | 'withdrawn' | 'cancelled';
+  isLookingForPartner?: boolean;
+  pendingInvitedUserId?: string | null;
+  createdByUserId?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface TeamPlayer {
+  id: string;
+  teamId: string;
+  playerId: string;
+  role: 'captain' | 'member';
+}
+
+export interface PartnerInvite {
+  id: string;
+  tournamentId: string;
+  competitionId?: string;
+  divisionId: string;
+  teamId: string;
+  inviterId: string;
+  invitedUserId: string;
+  status: 'pending' | 'accepted' | 'declined' | 'expired';
+  createdAt: number;
+  respondedAt?: number;
 }
 
 export interface Registration {
   id: string;
   tournamentId: string;
   playerId: string;
-  status: 'in_progress' | 'completed' | 'withdrawn';
-  
+  status: 'in_progress' | 'completed' | 'cancelled';
   waiverAccepted: boolean;
-  emergencyContactName?: string;
-  emergencyContactPhone?: string;
-  
-  selectedEventIds: string[]; 
-  
-  partnerDetails?: Record<
-    string,
-    {
+  selectedEventIds: string[];
+  partnerDetails?: Record<string, {
       mode: 'invite' | 'open_team' | 'join_open';
       partnerUserId?: string;
-      openTeamId?: string;
       partnerName?: string;
-      id?: string;
-      name?: string;
       teamId?: string;
-      teamName?: string;
-    }
-  >;
-
+      openTeamId?: string;
+  }>;
   createdAt: number;
   updatedAt: number;
-  completedAt?: number;
 }
 
-export type TournamentRegistration = Registration;
+export interface Board {
+  boardNumber: number;
+  boardType: string;
+  weight?: number;
+  teamAPlayers?: { id: string; name: string }[];
+  teamBPlayers?: { id: string; name: string }[];
+  scoreTeamAGames?: number[];
+  scoreTeamBGames?: number[];
+  status: string;
+  winnerTeamId?: string | null;
+}
 
-export interface CustomField {
+export interface Match {
   id: string;
-  label: string;
-  type: 'text' | 'dropdown';
-  required: boolean;
-  options?: string[];
+  tournamentId?: string;
+  competitionId?: string;
+  divisionId: string;
+  teamAId: string;
+  teamBId: string;
+  status: string;
+  roundNumber?: number;
+  stage?: string;
+  court?: string | null;
+  matchNumber?: number;
+  startTime?: number | null;
+  endTime?: number | null;
+  winnerTeamId?: string | null;
+  scoreTeamAGames: number[];
+  scoreTeamBGames: number[];
+  lastUpdatedBy?: string;
+  lastUpdatedAt?: number;
+  disputeReason?: string | null;
+  boards?: Board[];
+  aggregate?: {
+      teamAPoints: number;
+      teamBPoints: number;
+      winnerTeamId: string | null;
+  };
+}
+
+export interface MatchTeam {
+  id: string;
+  matchId: string;
+  teamId: string;
+  isHomeTeam: boolean;
+  scoreGames: number[];
 }
 
 export interface Court {
@@ -132,177 +231,6 @@ export interface Court {
   currentMatchId?: string;
 }
 
-export type StageMode = 'single_stage' | 'two_stage';
-export type MainFormat = 'round_robin' | 'single_elim' | 'double_elim' | 'ladder' | 'leaderboard' | 'swiss';
-export type Stage1Format = 'round_robin_pools';
-export type Stage2Format = 'single_elim' | 'double_elim' | 'medal_rounds';
-export type PlateFormat = 'single_elim' | 'round_robin';
-
-export interface DivisionFormat {
-  stageMode: StageMode;
-  mainFormat?: MainFormat | null;
-  stage1Format?: Stage1Format | null;
-  stage2Format?: Stage2Format | null;
-  numberOfPools?: number | null;
-  teamsPerPool?: number | null;
-  advanceToMainPerPool?: number | null;
-  advanceToPlatePerPool?: number | null;
-  plateEnabled: boolean;
-  plateFormat?: PlateFormat | null;
-  plateName?: string | null;
-  bestOfGames: 1 | 3 | 5;
-  pointsPerGame: 11 | 15 | 21;
-  winBy: 1 | 2;
-  hasBronzeMatch: boolean;
-  seedingMethod?: SeedingMethod;
-  tieBreakerPrimary?: TieBreaker;
-  tieBreakerSecondary?: TieBreaker;
-  tieBreakerTertiary?: TieBreaker;
-}
-
-export interface Division {
-  id: string;
-  tournamentId: string;
-  name: string; 
-  type: EventType;
-  gender: GenderCategory;
-  
-  minRating?: number | null;
-  maxRating?: number | null;
-  
-  minAge?: number | null;
-  maxAge?: number | null;
-
-  maxParticipants?: number | null;
-  registrationOpen: boolean;
-  registrationMode?: RegistrationMode;
-  
-  format: DivisionFormat;
-  
-  customFields?: CustomField[];
-  
-  createdByUserId?: string;
-  createdAt?: number;
-  updatedAt?: number;
-}
-
-// Normalized Team (No players array)
-export interface Team {
-  id: string;
-  tournamentId?: string; // Optional if competitionId is present
-  competitionId?: string; // NEW: Support for Leagues
-  divisionId: string;
-  teamName?: string | null; 
-  captainPlayerId: string;
-  
-  status: 'pending_partner' | 'active' | 'cancelled' | 'withdrawn';
-  isLookingForPartner?: boolean;
-  
-  pendingInvitedUserId?: string | null; // Kept for invite logic convenience
-
-  createdAt?: number;
-  updatedAt?: number;
-  
-  // Optional for UI convenience when hydrated, but not in DB schema
-  players?: string[]; 
-  participants?: UserProfile[]; 
-}
-
-// Join collection linking Players to Teams
-export interface TeamPlayer {
-  id: string;
-  teamId: string;
-  playerId: string;
-  role: 'captain' | 'member';
-}
-
-export interface PartnerInvite {
-  id: string;
-  tournamentId: string; // If legacy or tournament
-  competitionId?: string; // NEW: If league
-  divisionId: string;
-  teamId: string;
-  
-  inviterId: string;
-  invitedUserId: string;
-  
-  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
-  inviteToken?: string | null;
-  
-  createdAt: number;
-  respondedAt?: number | null;
-  expiresAt?: number | null;
-}
-
-// Normalized Match
-export interface Match {
-  id: string;
-  tournamentId?: string; // Optional for league matches
-  competitionId?: string; // Added for leagues
-  divisionId: string;
-  scorekeeperUserId?: string | null;
-  
-  status?: 'pending' | 'not_started' | 'scheduled' | 'in_progress' | 'pending_confirmation' | 'completed' | 'disputed' | 'cancelled' | 'skipped';
-
-  scoreSubmittedBy?: string | null;
-  pendingConfirmationFor?: string | null;
-  disputeReason?: string | null;
-
-  matchNumber?: number;
-  roundNumber: number | null;
-  stage: string | null;
-  
-  court: string | null;
-  startTime: number | null;
-  endTime: number | null;
-  
-  winnerTeamId: string | null;
-  
-  lastUpdatedBy: string | null;
-  lastUpdatedAt: number | null;
-
-  // Hydrated properties for UI (not in DB match doc)
-  teamAId?: string;
-  teamBId?: string;
-  scoreTeamAGames?: number[];
-  scoreTeamBGames?: number[];
-  teamA?: Team;
-  teamB?: Team;
-}
-
-// Join collection linking Matches to Teams
-export interface MatchTeam {
-  id: string;
-  matchId: string;
-  teamId: string;
-  isHomeTeam?: boolean; // Can be used to distinguish Team A vs Team B if needed, or rely on sorting
-  scoreGames: number[]; // Array of scores for this team [game1, game2, ...]
-}
-
-export interface MatchScoreSubmission {
-  id: string;
-  tournamentId?: string;
-  competitionId?: string;
-  matchId: string;
-  
-  submittedBy: string;
-  teamAId: string;
-  teamBId: string;
-  
-  submittedScore: {
-    scoreTeamAGames: number[];
-    scoreTeamBGames: number[];
-    winnerTeamId: string;
-  };
-  
-  status: 'pending_opponent' | 'confirmed' | 'rejected';
-  opponentUserId?: string | null;
-  respondedAt?: number | null;
-  reasonRejected?: string | null;
-  
-  createdAt: number;
-}
-
 export interface StandingsEntry {
   tournamentId?: string;
   competitionId?: string;
@@ -312,56 +240,42 @@ export interface StandingsEntry {
   played: number;
   wins: number;
   losses: number;
+  draws?: number; 
   pointsFor: number;
   pointsAgainst: number;
   pointDifference: number;
   headToHeadWins?: number;
-  points?: number; // League points
+  points?: number;
+  boardWins?: number;
+  boardLosses?: number;
+  updatedAt?: number;
 }
 
-export interface Tournament {
-  id: string;
-  name: string;
-  slug: string;
-  description: string;
-  bannerUrl?: string; 
-  logoUrl?: string;   
-  sport: string;
-  
-  startDatetime: string;
-  venue: string;
-  
-  visibility: Visibility;
-  status: TournamentStatus;
-  createdByUserId: string;
+// Competition / League specific
+export type CompetitionType = 'league' | 'team_league';
+export type Visibility = 'public' | 'private';
 
-  registrationMode?: RegistrationMode;
-  registrationOpen?: boolean;
-  maxParticipants?: number;
-  
-  clubId: string;
-  clubName: string;
-  clubLogoUrl?: string | null;
-
-  settings?: TournamentSettings;
+export interface TeamLeagueBoardConfig {
+  boardNumber: number;
+  boardType: string;
+  type?: string; 
+  weight: number;
 }
 
-export interface TournamentSettings {
-  schedulingMode: SchedulingMode;
-  totalCourts?: number;
-  defaultMatchDurationMinutes?: number;
+export interface TeamLeagueSettings {
+  boards: TeamLeagueBoardConfig[];
+  rosterMin: number;
+  rosterMax: number;
+  lineupLockMinutesBeforeMatch: number;
+  pointsPerBoardWin: number;
+  pointsPerMatchWin: number;
+  tieBreakerOrder: string[];
 }
-
-/* -------------------------------------------------------------------------- */
-/*                               COMPETITIONS                                 */
-/* -------------------------------------------------------------------------- */
-
-export type CompetitionType = 'league' | 'team_league' | 'tournament';
 
 export interface CompetitionDivision {
   id: string;
   name: string;
-  type: EventType; // NEW: Added to support singles/doubles logic in leagues
+  type: EventType;
   gender: GenderCategory;
   minRating?: number;
   maxRating?: number;
@@ -373,61 +287,70 @@ export interface Competition {
   id: string;
   type: CompetitionType;
   name: string;
-  hostClubId?: string;
   organiserId: string;
   startDate: string;
   endDate: string;
-  status: 'draft' | 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
-  country?: string;
-  region?: string;
-  settings?: {
-    points: {
-      win: number;
-      loss: number;
-      draw?: number;
-      bonus?: number; 
-    };
-    tieBreaker?: 'match_wins' | 'point_diff' | 'head_to_head';
-    waitlist?: boolean;
-    teamRegistrationMode?: 'pre_registered' | 'on_entry';
+  status: string;
+  settings: {
+      points: { win: number; draw: number; loss: number; bonus?: number };
+      tieBreaker: TieBreaker;
+      seedingPolicy?: 'average' | 'weighted' | 'highest' | 'captain';
+      waitlist?: boolean;
+      teamRegistrationMode?: 'on_entry' | 'pre_registered';
+      teamLeague?: TeamLeagueSettings;
+      teamMatchConfig?: { boards: TeamLeagueBoardConfig[] };
   };
-  // Expanded Metadata
-  description?: string;
-  venue?: string;
-  maxEntrants?: number;
   visibility: Visibility;
   registrationOpen: boolean;
+  description?: string;
+  venue?: string;
+  country?: string;
+  region?: string;
+  maxEntrants?: number;
   divisions?: CompetitionDivision[];
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface CompetitionEntry {
   id: string;
   competitionId: string;
-  entryType: 'team' | 'individual';
-  teamId?: string;
+  entryType: 'individual' | 'team';
   playerId?: string;
-  divisionId?: string;       
-  status: 'pending' | 'active' | 'withdrawn';
+  teamId?: string;
+  divisionId?: string;
+  status: 'active' | 'withdrawn' | 'waitlist';
   createdAt: number;
-  // NEW: To store partner details temporarily during wizard steps or for reference
-  partnerDetails?: any; 
+  partnerDetails?: any;
 }
 
-export type StageSettings = DivisionFormat;
-
-// Optional: if you want multi-stage leagues (e.g. round robin + playoffs)
-export interface CompetitionStage {
-  id: string;
-  competitionId: string;
-  name: string;
-  type: 'round_robin' | 'single_elim' | 'double_elim' | 'swiss';
-  order: number;
-  settings: StageSettings;
+export interface MatchScoreSubmission {
+  id?: string;
+  tournamentId?: string | null;
+  competitionId?: string | null;
+  matchId: string;
+  submittedBy: string;
+  teamAId: string;
+  teamBId: string;
+  submittedScore: {
+      scoreTeamAGames: number[];
+      scoreTeamBGames: number[];
+      winnerTeamId?: string | null;
+      boardIndex?: number | null;
+  };
+  status: 'pending_opponent' | 'confirmed' | 'rejected';
+  reasonRejected?: string;
+  createdAt: number;
+  respondedAt?: number;
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               MESSAGING                                    */
-/* -------------------------------------------------------------------------- */
+export interface TeamRoster {
+  id: string; 
+  teamId: string;
+  players: string[]; 
+  captainPlayerId?: string;
+  updatedAt: number;
+}
 
 export interface Notification {
   id: string;
@@ -442,9 +365,9 @@ export interface Notification {
 
 export interface AuditLog {
   id: string;
-  actorId: string;
   action: string;
+  actorId: string;
   entityId?: string;
-  details?: any;
   timestamp: number;
+  details?: any;
 }

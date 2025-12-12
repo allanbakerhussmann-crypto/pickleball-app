@@ -1,4 +1,4 @@
-import { db, sendNotification, getAuth } from './firebase';
+import { db, sendNotification, getAuth, callCloudFunction } from './firebase';
 import {
   collection,
   doc,
@@ -6,45 +6,7 @@ import {
   query,
   where,
   updateDoc
-} from '@firebase/firestore';
-
-const defaultConfig = {
-  projectId: "pickleball-app-dev"
-};
-
-const callCloudFunction = async (name: string, data: any): Promise<any> => {
-    const auth = getAuth();
-    const token = await auth.currentUser?.getIdToken();
-    if (!token) {
-        throw new Error("You must be logged in to perform this action.");
-    }
-
-    // Reuse config logic (simplified for minimal changes)
-    const stored = localStorage.getItem('pickleball_firebase_config');
-    const config = stored ? JSON.parse(stored) : defaultConfig;
-    const projectId = config.projectId || "pickleball-app-dev";
-    
-    // Default region for HTTP functions is typically us-central1 unless specified
-    const region = "us-central1"; 
-    const url = `https://${region}-${projectId}.cloudfunctions.net/${name}`;
-
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(data)
-    });
-
-    const json = await response.json();
-    
-    if (!response.ok) {
-        throw new Error(json.error || `Function ${name} failed`);
-    }
-    return json;
-};
-
+} from 'firebase/firestore';
 import type { Match, MatchScoreSubmission, Competition } from '../types';
 
 /**
@@ -63,7 +25,8 @@ export async function submitMatchScore(
   match: Match,
   submittedByUserId: string,
   score1: number,
-  score2: number
+  score2: number,
+  boardIndex?: number
 ) {
   if (Number.isNaN(score1) || Number.isNaN(score2)) {
     throw new Error('Please enter valid numeric scores.');
@@ -77,7 +40,8 @@ export async function submitMatchScore(
       await callCloudFunction('submitMatchScore', {
           matchId: match.id,
           score1,
-          score2
+          score2,
+          boardIndex // Optional for Team Leagues
       });
   } catch (error: any) {
       console.error("Score submission failed:", error);

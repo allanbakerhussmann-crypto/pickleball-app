@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { createCompetition, listCompetitions, logAudit } from '../services/firebase';
-import type { Competition, CompetitionType, Visibility, TieBreaker, CompetitionDivision, EventType, GenderCategory } from '../types';
+import type { Competition, CompetitionType, Visibility, TieBreaker, CompetitionDivision, EventType, GenderCategory, TeamLeagueSettings, TeamLeagueBoardConfig } from '../types';
 
 interface CreateCompetitionProps {
     onCancel: () => void;
@@ -10,6 +10,7 @@ interface CreateCompetitionProps {
     initialType?: CompetitionType;
 }
 
+// ... existing code ...
 const COUNTRIES = [
     { code: 'NZL', name: 'New Zealand' },
     { code: 'AUS', name: 'Australia' },
@@ -72,8 +73,21 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
     const [lossPoints, setLossPoints] = useState(0);
     const [bonusPoints, setBonusPoints] = useState(0);
     const [tieBreaker, setTieBreaker] = useState<TieBreaker>('point_diff');
+    const [seedingPolicy, setSeedingPolicy] = useState<'average' | 'weighted' | 'highest' | 'captain'>('average');
     const [teamRegistrationMode, setTeamRegistrationMode] = useState<'pre_registered'|'on_entry'>('on_entry');
     
+    // Team Match Config (Only for team_league)
+    const [teamBoards, setTeamBoards] = useState<TeamLeagueBoardConfig[]>([
+        { boardNumber: 1, boardType: 'men_doubles', weight: 1 },
+        { boardNumber: 2, boardType: 'women_doubles', weight: 1 },
+        { boardNumber: 3, boardType: 'mixed_doubles', weight: 1 }
+    ]);
+    const [rosterMin, setRosterMin] = useState(6);
+    const [rosterMax, setRosterMax] = useState(12);
+    const [lineupLock, setLineupLock] = useState(30);
+    const [pointsPerMatchWin, setPointsPerMatchWin] = useState(3);
+    const [pointsPerBoardWin, setPointsPerBoardWin] = useState(1);
+
     // Entrants & Divisions
     const [maxEntrants, setMaxEntrants] = useState<number | ''>('');
     const [waitlist, setWaitlist] = useState(false);
@@ -125,6 +139,19 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
         setDivisions(divisions.filter(d => d.id !== id));
     };
 
+    // Helper for team boards
+    const addBoard = () => {
+        setTeamBoards([...teamBoards, { boardNumber: teamBoards.length + 1, boardType: 'mixed_doubles', weight: 1 }]);
+    };
+    const removeBoard = (index: number) => {
+        setTeamBoards(teamBoards.filter((_, i) => i !== index));
+    };
+    const updateBoard = (index: number, field: keyof typeof teamBoards[0], value: any) => {
+        const updated = [...teamBoards];
+        updated[index] = { ...updated[index], [field]: value };
+        setTeamBoards(updated);
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -141,6 +168,11 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
             return;
         }
 
+        if (type === 'team_league' && teamBoards.length === 0) {
+            setError("Please configure at least one match board (line) for team leagues.");
+            return;
+        }
+
         setIsSubmitting(true);
         try {
             // Uniqueness Check
@@ -152,6 +184,16 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                 setIsSubmitting(false);
                 return;
             }
+
+            const teamLeagueSettings: TeamLeagueSettings | undefined = type === 'team_league' ? {
+                boards: teamBoards.map((b, i) => ({ ...b, boardNumber: i + 1 })),
+                rosterMin,
+                rosterMax,
+                lineupLockMinutesBeforeMatch: lineupLock,
+                pointsPerBoardWin,
+                pointsPerMatchWin,
+                tieBreakerOrder: ['matchWins', 'boardDiff', 'headToHead']
+            } : undefined;
 
             const comp: Competition = {
                 id: `comp_${Date.now()}`,
@@ -171,8 +213,10 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                         bonus: bonusPoints 
                     },
                     tieBreaker,
+                    seedingPolicy,
                     waitlist,
-                    teamRegistrationMode: type === 'team_league' ? teamRegistrationMode : undefined
+                    teamRegistrationMode: type === 'team_league' ? teamRegistrationMode : undefined,
+                    teamLeague: teamLeagueSettings
                 },
                 description,
                 venue,
@@ -333,59 +377,171 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                 <div className="space-y-4">
                     <h3 className="text-sm font-bold text-green-400 uppercase tracking-wide border-b border-gray-700 pb-2">Format & Rules</h3>
                     
-                    <div className="bg-gray-900 p-4 rounded border border-gray-700">
-                        <label className="block text-sm font-medium text-gray-300 mb-3">Points System</label>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">Win</label>
-                                <input 
-                                    type="number" 
-                                    className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                                    value={winPoints}
-                                    onChange={e => setWinPoints(Number(e.target.value))}
-                                />
+                    {/* Team League Specific Config */}
+                    {type === 'team_league' && (
+                        <div className="bg-gray-900 p-4 rounded border border-blue-900/50 mb-4 space-y-4">
+                            <h4 className="text-sm font-bold text-blue-300">Team Competition Settings</h4>
+                            
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Min Roster Size</label>
+                                    <input 
+                                        type="number" min="2"
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={rosterMin}
+                                        onChange={e => setRosterMin(parseInt(e.target.value))}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Max Roster Size</label>
+                                    <input 
+                                        type="number" min="2"
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={rosterMax}
+                                        onChange={e => setRosterMax(parseInt(e.target.value))}
+                                    />
+                                </div>
                             </div>
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">Draw</label>
-                                <input 
-                                    type="number" 
-                                    className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                                    value={drawPoints}
-                                    onChange={e => setDrawPoints(Number(e.target.value))}
-                                />
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Points per Match Win</label>
+                                    <input 
+                                        type="number"
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={pointsPerMatchWin}
+                                        onChange={e => setPointsPerMatchWin(parseInt(e.target.value))}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Lineup Lock (mins before)</label>
+                                    <input 
+                                        type="number" min="0"
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={lineupLock}
+                                        onChange={e => setLineupLock(parseInt(e.target.value))}
+                                    />
+                                </div>
                             </div>
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">Loss</label>
-                                <input 
-                                    type="number" 
-                                    className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                                    value={lossPoints}
-                                    onChange={e => setLossPoints(Number(e.target.value))}
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-gray-500 mb-1">Bonus</label>
-                                <input 
-                                    type="number" 
-                                    className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                                    value={bonusPoints}
-                                    onChange={e => setBonusPoints(Number(e.target.value))}
-                                />
+
+                            <div className="border-t border-gray-700 pt-4 mt-2">
+                                <label className="block text-sm font-bold text-gray-300 mb-3">Boards (Lines) Configuration</label>
+                                <div className="space-y-2">
+                                    {teamBoards.map((board, idx) => (
+                                        <div key={idx} className="flex gap-3 items-center bg-gray-800 p-2 rounded">
+                                            <span className="text-gray-500 text-sm font-mono w-6">#{idx + 1}</span>
+                                            <select 
+                                                className="bg-gray-700 text-white p-2 rounded border border-gray-600 text-sm flex-1"
+                                                value={board.boardType}
+                                                onChange={e => updateBoard(idx, 'boardType', e.target.value)}
+                                            >
+                                                <option value="men_doubles">Men's Doubles</option>
+                                                <option value="women_doubles">Women's Doubles</option>
+                                                <option value="mixed_doubles">Mixed Doubles</option>
+                                                <option value="open_doubles">Open Doubles</option>
+                                                <option value="singles">Singles</option>
+                                            </select>
+                                            <div className="flex items-center gap-1">
+                                                <span className="text-xs text-gray-400">Pts:</span>
+                                                <input 
+                                                    type="number" min="0" step="0.5"
+                                                    className="w-16 bg-gray-700 text-white p-2 rounded border border-gray-600 text-sm"
+                                                    value={board.weight}
+                                                    onChange={e => updateBoard(idx, 'weight', parseFloat(e.target.value))}
+                                                />
+                                            </div>
+                                            <button 
+                                                type="button" 
+                                                onClick={() => removeBoard(idx)}
+                                                className="text-red-400 hover:text-red-300 px-2"
+                                            >
+                                                &times;
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button 
+                                    type="button" 
+                                    onClick={addBoard}
+                                    className="mt-3 text-xs bg-blue-900 hover:bg-blue-800 text-blue-200 px-3 py-1.5 rounded"
+                                >
+                                    + Add Board
+                                </button>
                             </div>
                         </div>
-                    </div>
+                    )}
 
-                    <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-1">Tie Breaker</label>
-                        <select 
-                            className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
-                            value={tieBreaker}
-                            onChange={e => setTieBreaker(e.target.value as TieBreaker)}
-                        >
-                            <option value="point_diff">Point Difference</option>
-                            <option value="match_wins">Total Match Wins</option>
-                            <option value="head_to_head">Head to Head</option>
-                        </select>
+                    {type !== 'team_league' && (
+                        <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                            <label className="block text-sm font-medium text-gray-300 mb-3">Points System</label>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div>
+                                    <label className="block text-xs text-gray-500 mb-1">Win</label>
+                                    <input 
+                                        type="number" 
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={winPoints}
+                                        onChange={e => setWinPoints(Number(e.target.value))}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-500 mb-1">Draw</label>
+                                    <input 
+                                        type="number" 
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={drawPoints}
+                                        onChange={e => setDrawPoints(Number(e.target.value))}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-500 mb-1">Loss</label>
+                                    <input 
+                                        type="number" 
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={lossPoints}
+                                        onChange={e => setLossPoints(Number(e.target.value))}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-500 mb-1">Bonus</label>
+                                    <input 
+                                        type="number" 
+                                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                        value={bonusPoints}
+                                        onChange={e => setBonusPoints(Number(e.target.value))}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-1">Tie Breaker</label>
+                            <select 
+                                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                value={tieBreaker}
+                                onChange={e => setTieBreaker(e.target.value as TieBreaker)}
+                            >
+                                <option value="point_diff">Point Difference</option>
+                                <option value="match_wins">Total Match Wins</option>
+                                <option value="head_to_head">Head to Head</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-1">Seeding Policy</label>
+                            <select 
+                                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                value={seedingPolicy}
+                                onChange={e => setSeedingPolicy(e.target.value as any)}
+                            >
+                                <option value="average">Average Rating</option>
+                                <option value="weighted">Weighted (Top Heavy)</option>
+                                <option value="highest">Highest Player</option>
+                                <option value="captain">Captain's Rating</option>
+                            </select>
+                            <p className="text-xs text-gray-500 mt-1">Determines how team strength is calculated for seeding.</p>
+                        </div>
                     </div>
 
                     {type === 'team_league' && (

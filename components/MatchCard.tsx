@@ -1,4 +1,8 @@
+
 import React, { useState, useEffect } from 'react';
+import type { Board, Match } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { MatchLineupEditor } from './MatchLineupEditor';
 
 /**
  * Basic structures for displaying a match.
@@ -24,6 +28,8 @@ export interface MatchDisplay {
   // Optional flags added in TournamentManager
   isWaitingOnYou?: boolean;
   canCurrentUserConfirm?: boolean;
+  // Team League Boards
+  boards?: Board[];
 }
 
 interface MatchCardProps {
@@ -52,8 +58,17 @@ export const MatchCard: React.FC<MatchCardProps> = ({
   canCurrentUserConfirm,
   canCurrentUserEdit,
 }) => {
+  const { currentUser } = useAuth();
   const [score1, setScore1] = useState<number | ''>(match.score1 ?? '');
   const [score2, setScore2] = useState<number | ''>(match.score2 ?? '');
+  
+  // Board scores state
+  const [expanded, setExpanded] = useState(false);
+  const [boardScores, setBoardScores] = useState<Record<number, { s1: string, s2: string }>>({});
+
+  // Lineup Editor State
+  const [showLineupEditor, setShowLineupEditor] = useState(false);
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
 
   // If the match scores change from outside (e.g. other player / organiser),
   // keep local inputs in sync.
@@ -65,23 +80,35 @@ export const MatchCard: React.FC<MatchCardProps> = ({
   const isCompleted = match.status === 'completed';
   const isPendingConfirmation = match.status === 'pending_confirmation';
   const isDisputed = match.status === 'disputed';
+  const isTeamMatch = !!match.boards && match.boards.length > 0;
 
-  const handleSubmit = () => {
+  const handleSubmit = (boardIdx?: number) => {
     if (!isVerified) {
       console.warn('Only verified organisers/players can submit scores.');
       return;
     }
     if (!canCurrentUserEdit) {
-      // Extra defence in UI (server already checks this).
       console.warn('Only players in this match can enter scores.');
       return;
     }
 
-    const s1 = typeof score1 === 'string' ? parseInt(score1, 10) : score1;
-    const s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
+    let s1, s2;
+    // Handle Board Score
+    if (boardIdx !== undefined && isTeamMatch) {
+        const bScore = boardScores[boardIdx];
+        if (!bScore) return;
+        s1 = parseInt(bScore.s1, 10);
+        s2 = parseInt(bScore.s2, 10);
+        // We append the board index to the match ID for the parent to handle
+        onUpdateScore(`${match.id}:${boardIdx}`, s1, s2, 'submit');
+        return;
+    }
+
+    // Handle Normal Match Score
+    s1 = typeof score1 === 'string' ? parseInt(score1, 10) : score1;
+    s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
 
     if (Number.isNaN(s1) || Number.isNaN(s2)) {
-      // alert('Please enter scores for both sides.'); // Removed alert
       return;
     }
 
@@ -97,12 +124,13 @@ export const MatchCard: React.FC<MatchCardProps> = ({
 
   const handleDispute = () => {
     if (!canCurrentUserConfirm) return;
-    // Removed prompt to comply with sandbox restriction
     const reason = 'Disputed by user';
     const s1 = typeof score1 === 'string' ? parseInt(score1, 10) : score1;
     const s2 = typeof score2 === 'string' ? parseInt(score2, 10) : score2;
     onUpdateScore(match.id, s1 || 0, s2 || 0, 'dispute', reason);
   };
+
+  const canSetLineup = canCurrentUserEdit && isTeamMatch && !isCompleted; 
 
   const statusLabel =
     match.status === 'not_started'
@@ -129,11 +157,19 @@ export const MatchCard: React.FC<MatchCardProps> = ({
       : 'text-gray-400';
 
   const showEditableInputs =
-  !isCompleted && canCurrentUserEdit && isVerified && match.status === 'in_progress';
-
+  !isCompleted && canCurrentUserEdit && isVerified && match.status === 'in_progress' && !isTeamMatch;
 
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 flex flex-col gap-3 min-w-0">
+    <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 flex flex-col gap-3 min-w-0 relative">
+      {/* Lineup Editor Modal */}
+      {showLineupEditor && editingTeamId && (
+          <MatchLineupEditor 
+            match={match as any} 
+            teamId={editingTeamId} 
+            onClose={() => setShowLineupEditor(false)} 
+          />
+      )}
+
       {/* Header line: Match # / Round / Court / Status */}
       <div className="flex justify-between items-center text-xs text-gray-400">
         <div>
@@ -154,7 +190,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
         <div className={`font-semibold ${statusColor}`}>{statusLabel}</div>
       </div>
 
-      {/* Teams + scores */}
+      {/* Teams + scores (Aggregate or Single) */}
       <div className="flex justify-between items-center gap-4">
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-white truncate">
@@ -163,6 +199,14 @@ export const MatchCard: React.FC<MatchCardProps> = ({
           <div className="text-xs text-gray-500 truncate">
             {match.team1.players.map(p => p.name).join(' / ')}
           </div>
+          {canSetLineup && (
+              <button 
+                onClick={() => { setEditingTeamId(match.team1.id); setShowLineupEditor(true); }}
+                className="text-[10px] text-blue-400 hover:text-blue-300 underline mt-1"
+              >
+                  Set Lineup
+              </button>
+          )}
         </div>
 
         {/* Score inputs (or read-only display) */}
@@ -178,7 +222,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
                 className="w-12 bg-gray-800 text-white text-center text-sm rounded border border-gray-600 focus:outline-none focus:border-green-500"
               />
             ) : (
-              <div className="w-8 text-center text-white text-sm">
+              <div className="w-8 text-center text-white text-xl font-bold">
                 {match.score1 ?? '-'}
               </div>
             )}
@@ -197,7 +241,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
                 className="w-12 bg-gray-800 text-white text-center text-sm rounded border border-gray-600 focus:outline-none focus:border-green-500"
               />
             ) : (
-              <div className="w-8 text-center text-white text-sm">
+              <div className="w-8 text-center text-white text-xl font-bold">
                 {match.score2 ?? '-'}
               </div>
             )}
@@ -211,8 +255,81 @@ export const MatchCard: React.FC<MatchCardProps> = ({
           <div className="text-xs text-gray-500 truncate">
             {match.team2.players.map(p => p.name).join(' / ')}
           </div>
+          {canSetLineup && (
+              <button 
+                onClick={() => { setEditingTeamId(match.team2.id); setShowLineupEditor(true); }}
+                className="text-[10px] text-blue-400 hover:text-blue-300 underline mt-1"
+              >
+                  Set Lineup
+              </button>
+          )}
         </div>
       </div>
+
+      {/* Team Match Boards */}
+      {isTeamMatch && (
+          <div className="mt-2 border-t border-gray-800 pt-2">
+              <button 
+                onClick={() => setExpanded(!expanded)}
+                className="w-full flex items-center justify-between text-xs text-gray-400 hover:text-white bg-gray-800/50 p-1.5 rounded"
+              >
+                  <span className="font-bold">{match.boards?.length} Lines (Boards)</span>
+                  <svg className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+              </button>
+              
+              {expanded && (
+                  <div className="mt-2 space-y-2">
+                      {match.boards?.map((board, idx) => {
+                          const bComplete = board.status === 'completed';
+                          const canEditBoard = canCurrentUserEdit && !bComplete;
+                          const bScoreA = board.scoreTeamAGames?.[0];
+                          const bScoreB = board.scoreTeamBGames?.[0];
+                          
+                          // Display lineup names if available
+                          const playersA = board.teamAPlayers?.map(p => p.name).join('/') || 'TBD';
+                          const playersB = board.teamBPlayers?.map(p => p.name).join('/') || 'TBD';
+
+                          return (
+                              <div key={idx} className="bg-gray-800/50 p-2 rounded text-xs border border-gray-800">
+                                  <div className="flex justify-between items-center mb-1">
+                                      <span className="text-green-400 font-bold uppercase text-[10px]">{board.boardType.replace('_', ' ')}</span>
+                                      <div className="flex items-center gap-2">
+                                          {canEditBoard ? (
+                                              <>
+                                                  <input 
+                                                    className="w-8 bg-gray-700 text-center rounded border border-gray-600 text-white"
+                                                    placeholder="-"
+                                                    value={boardScores[idx]?.s1 || ''}
+                                                    onChange={e => setBoardScores({...boardScores, [idx]: { ...boardScores[idx], s1: e.target.value }})}
+                                                  />
+                                                  <span className="text-gray-500">-</span>
+                                                  <input 
+                                                    className="w-8 bg-gray-700 text-center rounded border border-gray-600 text-white"
+                                                    placeholder="-"
+                                                    value={boardScores[idx]?.s2 || ''}
+                                                    onChange={e => setBoardScores({...boardScores, [idx]: { ...boardScores[idx], s2: e.target.value }})}
+                                                  />
+                                                  <button onClick={() => handleSubmit(idx)} className="ml-1 text-green-400 hover:text-green-300">✓</button>
+                                              </>
+                                          ) : (
+                                              <span className="font-bold text-white">
+                                                  {bScoreA !== undefined ? bScoreA : '-'} : {bScoreB !== undefined ? bScoreB : '-'}
+                                              </span>
+                                          )}
+                                      </div>
+                                  </div>
+                                  <div className="flex justify-between text-gray-400 text-[10px]">
+                                      <span className="truncate max-w-[40%]">{playersA}</span>
+                                      <span className="text-gray-600">vs</span>
+                                      <span className="truncate max-w-[40%] text-right">{playersB}</span>
+                                  </div>
+                              </div>
+                          );
+                      })}
+                  </div>
+              )}
+          </div>
+      )}
 
       {/* Info + Actions */}
       <div className="flex justify-between items-center mt-1 text-xs">
@@ -235,8 +352,8 @@ export const MatchCard: React.FC<MatchCardProps> = ({
           {!isCompleted && !isPendingConfirmation && !isDisputed && !isWaitingOnYou && (
             <span className="text-gray-500">
               {showEditableInputs
-                ? 'Enter final score when match is complete.'
-                : 'Scores view only.'}
+                ? 'Enter final score.'
+                : isTeamMatch ? 'Set lineups & score boards.' : 'Scores view only.'}
             </span>
           )}
         </div>
@@ -245,7 +362,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
           {/* Submit scores */}
           {showEditableInputs && (
             <button
-              onClick={handleSubmit}
+              onClick={() => handleSubmit()}
               className="px-3 py-1 rounded text-xs font-semibold bg-green-600 hover:bg-green-500 text-white"
             >
               Submit Score
@@ -272,13 +389,6 @@ export const MatchCard: React.FC<MatchCardProps> = ({
           )}
         </div>
       </div>
-
-      {/* If user cannot edit and card is interactive, give a hint */}
-      {!canCurrentUserEdit && !isCompleted && (
-        <div className="mt-1 text-[11px] text-gray-500">
-          Only players in this match (or the organiser) can enter or confirm scores.
-        </div>
-      )}
     </div>
   );
 };
