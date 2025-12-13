@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from 'firebase/auth';
 import {
   getFirestore,
@@ -89,33 +89,42 @@ const firebaseConfig = (() => {
   return defaultConfig;
 })();
 
-/* ---------------------- Initialize App ---------------------- */
 
-let app;
+/* ---------------------- Initialize App (safe for HMR) ---------------------- */
+
+let app: FirebaseApp;
 try {
-  app = initializeApp(firebaseConfig);
+  // If an app already exists (HMR, multiple imports), reuse it
+  if (typeof getApps === 'function' && getApps().length > 0) {
+    app = getApp();
+  } else {
+    app = initializeApp(firebaseConfig);
+  }
 } catch (e: any) {
   console.error("Firebase initialization failed.", e);
   throw new Error("Firebase initialization failed: " + (e?.message || String(e)));
 }
 
-/* ---------------------- Exports (client) ---------------------- */
-
-const authInstance: Auth = getFirebaseAuth(app);
-export const db: Firestore = getFirestore(app);
-const storage = getStorage(app);
-
+// Lazy auth instance so we always register auth on the same app
+let authInstance: Auth | null = null;
 export const getAuth = (): Auth => {
-  if (!authInstance) throw new Error("Auth not initialized");
+  if (!authInstance) {
+    authInstance = getFirebaseAuth(app);
+    if (!authInstance) throw new Error("Auth not initialized");
+  }
   return authInstance;
 };
+
+// Firestore and storage bound to the same app
+export const db: Firestore = getFirestore(app);
+export const storage = getStorage(app);
 
 export function assertFirestore() {
   if (!db) throw new Error('Firestore not initialized - cannot call collection/doc APIs');
   return db;
 }
 
-/* ---------------------- Helpers (unchanged, but use safe db/auth) ---------------------- */
+/* ---------------------- Helpers ---------------------- */
 
 export const hasCustomConfig = () => !!localStorage.getItem(STORAGE_KEY);
 
