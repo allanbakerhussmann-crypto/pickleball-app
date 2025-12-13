@@ -1,58 +1,128 @@
-import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { getAuth as getFirebaseAuth, Auth } from 'firebase/auth';
-import { 
-    getFirestore, collection, doc, getDoc, setDoc, updateDoc, 
-    onSnapshot, query, where, getDocs, addDoc, deleteDoc, 
-    writeBatch, orderBy, limit, Firestore 
+import { initializeApp } from 'firebase/app';
+import { getAuth as getFirebaseAuth, type Auth } from 'firebase/auth';
+import {
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  onSnapshot,
+  updateDoc,
+  writeBatch,
+  limit,
+  runTransaction,
+  deleteDoc,
+  orderBy,
+  addDoc,
+  type Firestore
 } from 'firebase/firestore';
-import type { 
-    Tournament, Division, Team, Match, Court, UserProfile, 
-    PartnerInvite, Registration, Club, ClubJoinRequest, 
-    Notification, Competition, CompetitionEntry, StandingsEntry,
-    TeamRoster
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import type {
+  Tournament, UserProfile, Registration, Team, Division, Match, PartnerInvite, Club,
+  UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker,
+  GenderCategory, TeamPlayer, MatchTeam, Competition, CompetitionEntry, CompetitionType,
+  Notification, AuditLog, TeamRoster
 } from '../types';
 
-// Default config or load from local storage
-const DEFAULT_CONFIG = {
-    apiKey: process.env.API_KEY || "AIzaSy...", // Placeholder or env
-    authDomain: "pickleball-app.firebaseapp.com",
-    projectId: "pickleball-app",
-    storageBucket: "pickleball-app.appspot.com",
-    messagingSenderId: "123456789",
-    appId: "1:123456789:web:123456"
-};
+/* ---------------------- Config helpers with validation ---------------------- */
 
-const getStoredConfig = () => {
-    const stored = localStorage.getItem('pickleball_firebase_config');
-    return stored ? JSON.parse(stored) : DEFAULT_CONFIG;
-};
+const STORAGE_KEY = 'pickleball_firebase_config';
 
-let app: FirebaseApp;
-let auth: Auth;
-let db: Firestore;
+const requiredFields = ['apiKey', 'projectId', 'appId'];
 
-try {
-    const config = getStoredConfig();
-    if (!getApps().length) {
-        app = initializeApp(config);
-    } else {
-        app = getApp();
-    }
-    auth = getFirebaseAuth(app);
-    db = getFirestore(app);
-} catch (e) {
-    console.error("Firebase init failed", e);
+function isValidConfig(cfg: any) {
+  if (!cfg || typeof cfg !== 'object') return false;
+  return requiredFields.every(k => typeof cfg[k] === 'string' && cfg[k].length > 0);
 }
 
-export const getAuth = () => auth;
-export { db };
+const getStoredConfig = () => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (isValidConfig(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn("Failed to parse stored config", e);
+  }
+  return null;
+};
 
-export const hasCustomConfig = () => !!localStorage.getItem('pickleball_firebase_config');
+const getEnvConfig = () => {
+  if (process.env.FIREBASE_API_KEY) {
+    const cfg = {
+      apiKey: process.env.FIREBASE_API_KEY,
+      authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+      appId: process.env.FIREBASE_APP_ID,
+      measurementId: process.env.FIREBASE_MEASUREMENT_ID
+    };
+    if (isValidConfig(cfg)) return cfg;
+  }
+  return null;
+};
+
+const defaultConfig = {
+  apiKey: "AIzaSyBPeYXnPobCZ7bPH0g_2IYOP55-1PFTWTE",
+  authDomain: "pickleball-app-dev.firebaseapp.com",
+  projectId: "pickleball-app-dev",
+  storageBucket: "pickleball-app-dev.firebasestorage.app",
+  messagingSenderId: "906655677998",
+  appId: "1:906655677998:web:b7fe4bb2f479ba79c069bf",
+  measurementId: "G-WWLE6K6J7Z"
+};
+
+const firebaseConfig = (() => {
+  const stored = getStoredConfig();
+  if (stored) return stored;
+  const env = getEnvConfig();
+  if (env) return env;
+  // fallback to default AND ensure it's valid
+  if (!isValidConfig(defaultConfig)) {
+    throw new Error("Default firebase config is invalid or missing required fields.");
+  }
+  return defaultConfig;
+})();
+
+/* ---------------------- Initialize App ---------------------- */
+
+let app;
+try {
+  app = initializeApp(firebaseConfig);
+} catch (e: any) {
+  console.error("Firebase initialization failed.", e);
+  throw new Error("Firebase initialization failed: " + (e?.message || String(e)));
+}
+
+/* ---------------------- Exports (client) ---------------------- */
+
+const authInstance: Auth = getFirebaseAuth(app);
+export const db: Firestore = getFirestore(app);
+const storage = getStorage(app);
+
+export const getAuth = (): Auth => {
+  if (!authInstance) throw new Error("Auth not initialized");
+  return authInstance;
+};
+
+export function assertFirestore() {
+  if (!db) throw new Error('Firestore not initialized - cannot call collection/doc APIs');
+  return db;
+}
+
+/* ---------------------- Helpers (unchanged, but use safe db/auth) ---------------------- */
+
+export const hasCustomConfig = () => !!localStorage.getItem(STORAGE_KEY);
 
 export const saveFirebaseConfig = (configJson: string) => {
     try {
         JSON.parse(configJson); // Validate
-        localStorage.setItem('pickleball_firebase_config', configJson);
+        localStorage.setItem(STORAGE_KEY, configJson);
         window.location.reload(); // Reload to apply
         return { success: true };
     } catch (e: any) {
@@ -60,30 +130,36 @@ export const saveFirebaseConfig = (configJson: string) => {
     }
 };
 
-// ... Helper for Cloud Functions ...
 export const callCloudFunction = async (name: string, data: any): Promise<any> => {
-    const token = await auth.currentUser?.getIdToken();
-    if (!token) throw new Error("Not authenticated");
-    
-    const config = getStoredConfig();
-    const projectId = config.projectId || "pickleball-app";
-    const region = "us-central1"; 
-    const url = `https://${region}-${projectId}.cloudfunctions.net/${name}`;
+  const auth = getAuth();
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) {
+    throw new Error("You must be logged in to perform this action.");
+  }
 
+  const projectId = firebaseConfig.projectId || defaultConfig.projectId;
+  const region = "us-central1";
+  const url = `https://${region}-${projectId}.cloudfunctions.net/${name}`;
+
+  try {
     const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(data)
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(data)
     });
 
     const json = await response.json();
     if (!response.ok) {
-        throw new Error(json.error?.message || json.error || `Function ${name} failed`);
+      throw new Error(json.error?.message || json.error || `Function ${name} failed with status ${response.status}`);
     }
     return json.result || json;
+  } catch (e: any) {
+    console.error(`Error calling ${name}:`, e);
+    throw e;
+  }
 };
 
 // ... Users ...
@@ -320,7 +396,6 @@ export const saveRegistration = async (reg: Registration) => {
 
 export const finalizeRegistration = async (reg: Registration, tournament: Tournament, user: UserProfile) => {
     await saveRegistration({ ...reg, status: 'completed' });
-    // In a real app, this would trigger team creation logic for selected doubles events
 };
 
 export const ensureRegistrationForUser = async (tournamentId: string, userId: string, divisionId?: string) => {
@@ -581,3 +656,5 @@ export const logAudit = async (actorId: string, action: string, entityId: string
         actorId, action, entityId, details, timestamp: Date.now()
     });
 };
+
+export { initializeApp };
