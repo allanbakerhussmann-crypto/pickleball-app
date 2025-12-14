@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { MatchCard, MatchDisplay } from './MatchCard';
 import type { Court } from '../types';
@@ -152,42 +153,44 @@ export const Schedule: React.FC<ScheduleProps> = ({
               {matchesOnCourt.map(({ court, match }) => (
                 <div
                   key={court.id}
-                  className={`p-3 rounded border ${
+                  className={`p-3 rounded-lg border shadow-sm transition-all relative overflow-hidden ${
                     match
-                      ? 'bg-green-900/20 border-green-900'
+                      ? 'bg-gradient-to-br from-gray-900 to-gray-800 border-green-500/40'
                       : 'bg-gray-900 border-gray-800'
                   }`}
                 >
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="font-bold text-white">{court.name}</span>
+                  {match && <div className="absolute top-0 left-0 w-1 h-full bg-green-500"></div>}
+                  
+                  <div className="flex justify-between items-center mb-2 pl-2">
+                    <span className="font-bold text-white text-lg">{court.name}</span>
                     {match && (
-                      <span className="text-xs bg-green-900 text-green-300 px-1.5 rounded">
-                        Active
+                      <span className="text-[10px] bg-green-500 text-white px-2 py-0.5 rounded-full font-bold uppercase tracking-wide animate-pulse">
+                        Live
                       </span>
                     )}
                   </div>
                   {match ? (
-                    <div className="text-sm">
-                      <div className="flex justify-between font-medium text-gray-200">
-                        <span>{match.team1.name}</span>
-                        <span className="text-gray-500">vs</span>
-                        <span>{match.team2.name}</span>
+                    <div className="pl-2">
+                      <div className="flex justify-between items-center bg-gray-800/50 p-2 rounded border border-gray-700/50">
+                        <span className="font-bold text-white text-sm truncate w-1/3">{match.team1.name}</span>
+                        <span className="text-gray-500 text-xs px-2">vs</span>
+                        <span className="font-bold text-white text-sm truncate w-1/3 text-right">{match.team2.name}</span>
                       </div>
-                      <div className="text-xs text-gray-500 mt-1">
+                      <div className="text-xs text-gray-400 mt-2 text-center">
                         {match.status === 'in_progress'
-                          ? 'Playing'
+                          ? 'Playing Now'
                           : match.status === 'not_started' || match.status === 'scheduled'
                           ? 'Waiting to start'
                           : match.status === 'pending_confirmation'
-                          ? 'Awaiting score confirmation'
+                          ? <span className="text-yellow-400 font-bold">Verifying Score...</span>
                           : match.status === 'disputed'
-                          ? 'Score disputed'
+                          ? <span className="text-red-400 font-bold">Disputed</span>
                           : 'Finishing...'}
                       </div>
 
                     </div>
                   ) : (
-                    <div className="text-xs text-gray-500 italic">Open</div>
+                    <div className="text-xs text-gray-500 italic pl-2">Court is open</div>
                   )}
                 </div>
               ))}
@@ -199,28 +202,28 @@ export const Schedule: React.FC<ScheduleProps> = ({
                 Up Next
               </h3>
               {queue.length === 0 ? (
-                <div className="text-gray-500 text-sm italic">
+                <div className="text-gray-500 text-sm italic bg-gray-900/50 p-4 rounded border border-dashed border-gray-700 text-center">
                   Queue is empty
                 </div>
               ) : (
                 queue.slice(0, 5).map(m => (
                   <div
                     key={m.id}
-                    className="p-3 rounded bg-gray-900 border border-gray-700 flex justify-between items-center"
+                    className="p-3 rounded bg-gray-900 border border-gray-700 flex justify-between items-center relative overflow-hidden"
                   >
-                    <div>
-                      <div className="text-xs text-gray-400 mb-0.5">
-                        {m.team1.name} vs {m.team2.name}
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-gray-700"></div>
+                    <div className="pl-2">
+                      <div className="text-xs text-gray-400 mb-0.5 font-medium">
+                        {m.team1.name} <span className="text-gray-600">vs</span> {m.team2.name}
                       </div>
-                      <div className="text-[10px] text-gray-500 uppercase">
+                      <div className="text-[10px] text-gray-500 uppercase bg-gray-800 inline-block px-1.5 rounded">
                         {m.roundNumber ? `Round ${m.roundNumber}` : 'Pool'}
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-xs font-bold text-white">
+                      <div className="text-xs font-bold text-white bg-gray-800 px-2 py-1 rounded border border-gray-700">
                         ~{waitTimes[m.id]}m
                       </div>
-                      <div className="text-[10px] text-gray-500">Wait</div>
                     </div>
                   </div>
                 ))

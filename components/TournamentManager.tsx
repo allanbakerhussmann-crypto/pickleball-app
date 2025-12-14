@@ -223,12 +223,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           teamName: name || null,
         });
 
-        if (res?.existed) {
-          console.info('Team already existed:', res.teamId);
+        // Cast unknown response to expected shape
+        const data = res as { existed: boolean; teamId: string };
+
+        if (data?.existed) {
+          console.info('Team already existed:', data.teamId);
         } else {
-          console.info('Team created:', res.teamId);
+          console.info('Team created:', data.teamId);
         }
-        return res;
       } catch (err) {
         console.error('Failed to add team', err);
         throw err;

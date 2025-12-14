@@ -1,5 +1,7 @@
+
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header'; 
+import { BottomNav } from './components/BottomNav';
 import { Profile } from './components/Profile';
 import { TournamentManager } from './components/TournamentManager';
 import { TournamentDashboard } from './components/TournamentDashboard';
@@ -331,7 +333,7 @@ const App: React.FC = () => {
     // -- Main Authenticated Layout --
     return (
         <div className="min-h-screen bg-gray-900 flex flex-col font-sans text-gray-100 relative w-full overflow-x-hidden">
-            {/* Navigation Header */}
+            {/* Desktop Navigation Header */}
             <Header 
                 activeView={view}
                 onNavigate={handleNavigate}
@@ -341,6 +343,9 @@ const App: React.FC = () => {
                 userProfile={userProfile}
                 onAcceptInvite={handleAcceptInvite}
             />
+
+            {/* Mobile Bottom Navigation */}
+            <BottomNav activeView={view} onNavigate={handleNavigate} />
 
             {/* Partner Invite Popup */}
             {pendingInvites.length > 0 && invitePopupVisible && (
@@ -416,8 +421,8 @@ const App: React.FC = () => {
             {/* Verification Banner */}
             {currentUser && !currentUser.emailVerified && <VerificationBanner />}
 
-            {/* Main Content Area */}
-            <main className="flex-grow p-4 md:p-8 overflow-y-auto w-full">
+            {/* Main Content Area - Added pb-24 for bottom nav clearance on mobile */}
+            <main className="flex-grow p-4 md:p-8 pb-24 md:pb-8 overflow-y-auto w-full">
                 <div className="container mx-auto">
                     {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
 
@@ -508,20 +513,10 @@ const App: React.FC = () => {
                             onContinue={(selectedDivisionIds) => {
                             // 🔗 IMPORTANT:
                             // Here we hand off to your existing registration / waiver flow.
-                            // If you already have a function like `handleAcceptInvite(tournamentId, divisionId)`
-                            // which kicks off the wizard, you can either:
-                            //
-                            //  - For now: just use the first selected division (keeps behaviour identical
-                            //    to before but with a nicer selection screen):
-                            //
                             if (selectedDivisionIds.length > 0) {
                                 // Existing logic – you should already have something like this:
                                 handleAcceptInvite(eventSelectionTournamentId, selectedDivisionIds[0]);
                             }
-                            //
-                            //  - Later upgrade: extend your registration wizard to accept an array of
-                            //    division ids so the waiver/registration step covers ALL selected events
-                            //    in one go.
                             }}
                         />
                         ) : view === 'myResults' ? (
@@ -594,7 +589,7 @@ const App: React.FC = () => {
                 </div>
             </main>
             
-            <footer className="p-6 text-center border-t border-gray-800 text-gray-600 text-xs bg-gray-900">
+            <footer className="p-6 pb-28 md:pb-6 text-center border-t border-gray-800 text-gray-600 text-xs bg-gray-900 hidden md:block">
                 <div className="flex justify-center gap-4 mb-2">
                     <button onClick={() => setConfigModalOpen(true)} className="hover:text-gray-400">
                             {hasCustomConfig() ? 'Database Settings' : 'Connect Database'}

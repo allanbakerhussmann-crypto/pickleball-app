@@ -89,10 +89,10 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({ userProfile, onEdi
       }
   };
 
-  const StatItem = ({ label, value }: { label: string, value: React.ReactNode }) => (
-      <div className="flex flex-col items-end justify-center">
-          <span className="text-[9px] sm:text-[10px] text-gray-500 font-bold uppercase leading-none mb-1">{label}</span>
-          <span className="text-xs sm:text-sm font-bold text-white leading-none whitespace-nowrap">{value}</span>
+  const StatBox = ({ label, value, colorClass }: { label: string, value: React.ReactNode, colorClass: string }) => (
+      <div className={`flex flex-col items-center justify-center p-2 rounded-lg ${colorClass} bg-opacity-20 border border-white/10 shadow-sm`}>
+          <span className="text-[10px] text-gray-300 font-bold uppercase leading-none mb-1 opacity-80">{label}</span>
+          <span className="text-sm font-bold text-white leading-none whitespace-nowrap">{value}</span>
       </div>
   );
 
@@ -106,112 +106,122 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({ userProfile, onEdi
 
   return (
     <div className="max-w-5xl mx-auto mt-4 animate-fade-in flex flex-col h-full">
-        <h1 className="text-3xl font-bold text-white mb-6">My Dashboard</h1>
+        <div className="flex items-center justify-between mb-6 pl-2 border-l-4 border-green-500">
+            <h1 className="text-3xl font-bold text-white">My Dashboard</h1>
+        </div>
 
         {/* Profile Card */}
-        <div className="bg-gradient-to-r from-gray-800 via-gray-800 to-slate-900 rounded-xl p-4 sm:p-6 shadow-xl border border-gray-700 relative overflow-hidden mb-6">
+        <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 shadow-2xl border border-gray-700 relative overflow-hidden mb-6">
             
             {/* Edit Button */}
             <div className="absolute top-3 right-3 z-30">
                 <button 
                     onClick={onEditProfile}
-                    className="text-gray-400 hover:text-white p-1.5 rounded-md transition-colors hover:bg-gray-700 bg-black/20 backdrop-blur-sm"
+                    className="text-white/70 hover:text-white p-2 rounded-full transition-colors hover:bg-white/10 bg-black/20 backdrop-blur-md"
                     title="Edit Profile"
                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                         <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
                     </svg>
                 </button>
             </div>
 
-            {/* Main Layout Container */}
-            <div className="flex flex-row items-center justify-between gap-3 sm:gap-8 z-10 relative">
+            <div className="flex flex-col md:flex-row items-center gap-6 z-10 relative">
                 
-                {/* LEFT: Picture & Country */}
-                <div className="flex flex-col items-center gap-2 flex-shrink-0 w-20 sm:w-auto">
-                    <div className="relative group">
-                        <div className="w-16 h-16 sm:w-24 sm:h-24 rounded-full bg-gray-700/50 p-1 shadow-lg backdrop-blur-sm ring-2 ring-gray-700/50">
-                            <div className="w-full h-full rounded-full bg-gray-800 flex items-center justify-center overflow-hidden border border-gray-600">
-                                {profileImageSrc ? (
-                                    <img 
-                                        src={profileImageSrc} 
-                                        alt={userProfile.displayName} 
-                                        className="w-full h-full object-cover"
-                                    />
-                                ) : (
-                                    <span className="text-2xl sm:text-4xl font-bold text-gray-500 select-none">
-                                        {firstName[0]}{lastName[0] || ''}
-                                    </span>
-                                )}
-                            </div>
+                {/* Avatar */}
+                <div className="flex-shrink-0">
+                    <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full p-1 bg-gradient-to-tr from-green-400 to-blue-500 shadow-xl">
+                        <div className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center overflow-hidden border-2 border-gray-800">
+                            {profileImageSrc ? (
+                                <img 
+                                    src={profileImageSrc} 
+                                    alt={userProfile.displayName} 
+                                    className="w-full h-full object-cover"
+                                />
+                            ) : (
+                                <span className="text-3xl sm:text-5xl font-bold text-gray-600 select-none">
+                                    {firstName[0]}{lastName[0] || ''}
+                                </span>
+                            )}
                         </div>
-                    </div>
-                    <div className="flex items-center gap-1 bg-black/30 px-2 py-0.5 rounded-full border border-gray-600/30 backdrop-blur-sm">
-                         <span className="text-sm leading-none">{flag}</span>
-                         <span className="text-[10px] text-gray-300 font-bold uppercase tracking-wider truncate max-w-[60px] sm:max-w-none">{userProfile.country || 'N/A'}</span>
                     </div>
                 </div>
 
-                {/* MIDDLE: Name & Region */}
-                <div className="flex-1 flex flex-col items-center text-center min-w-0 px-1">
-                    <h3 className="text-[10px] sm:text-xs font-bold text-green-400 uppercase tracking-widest mb-0.5 truncate w-full">
-                        {firstName}
-                    </h3>
-                    <h1 className="text-2xl sm:text-5xl font-black text-white tracking-tight leading-none truncate w-full mb-1">
-                        {lastName}
-                    </h1>
+                {/* Info */}
+                <div className="flex-1 text-center md:text-left min-w-0">
+                    <div className="flex items-center justify-center md:justify-start gap-2 mb-1">
+                        <span className="text-2xl">{flag}</span>
+                        <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight">
+                            <span className="text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400">{firstName}</span>{' '}
+                            <span className="text-green-400">{lastName}</span>
+                        </h1>
+                    </div>
                     {userProfile.region && (
-                        <div className="inline-block px-2 py-0.5 bg-gray-700/50 rounded text-[10px] sm:text-xs text-gray-300 truncate max-w-full">
-                            {userProfile.region}
+                        <div className="inline-block px-3 py-1 bg-gray-700/50 rounded-full text-xs font-medium text-gray-300 border border-gray-600 mb-4">
+                            {userProfile.region}, {userProfile.country}
                         </div>
                     )}
+                    
+                    {/* Stats Grid - Colorful Boxes */}
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-w-lg mx-auto md:mx-0">
+                         <StatBox label="Gender" value={<span className="capitalize">{userProfile.gender?.charAt(0) || '-'}</span>} colorClass="bg-blue-600" />
+                         <StatBox label="Age" value={getAge(userProfile.birthDate)} colorClass="bg-purple-600" />
+                         <StatBox label="DUPR (D)" value={userProfile.duprDoublesRating?.toFixed(2) || 'NR'} colorClass="bg-pink-600" />
+                         <StatBox label="DUPR (S)" value={userProfile.duprSinglesRating?.toFixed(2) || 'NR'} colorClass="bg-orange-600" />
+                         <StatBox label="Hand" value={<span className="capitalize">{userProfile.playsHand?.charAt(0) || '-'}</span>} colorClass="bg-teal-600" />
+                    </div>
                 </div>
-
-                {/* RIGHT: Stats Grid */}
-                <div className="flex-shrink-0 grid grid-cols-2 gap-x-3 gap-y-2 sm:gap-x-6 sm:gap-y-4 text-right border-l border-gray-700 pl-2 sm:pl-6 py-1 min-w-[90px]">
-                     <StatItem label="Gender" value={<span className="capitalize">{userProfile.gender?.charAt(0) || '-'}</span>} />
-                     <StatItem label="Age" value={getAge(userProfile.birthDate)} />
-                     <StatItem label="DUPR (D)" value={userProfile.duprDoublesRating?.toFixed(3) || userProfile.duprRating || 'NR'} />
-                     <StatItem label="DUPR (S)" value={userProfile.duprSinglesRating?.toFixed(3) || 'NR'} />
-                     <StatItem label="Plays" value={<span className="capitalize">{userProfile.playsHand?.charAt(0) || '-'}</span>} />
-                </div>
-
             </div>
 
             {/* Background Decorations */}
-            <div className="absolute top-0 right-0 -mt-10 -mr-10 w-40 h-40 bg-green-900/10 rounded-full blur-3xl pointer-events-none"></div>
-            <div className="absolute bottom-0 left-0 -mb-10 -ml-10 w-40 h-40 bg-blue-900/10 rounded-full blur-3xl pointer-events-none"></div>
-            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-5 mix-blend-overlay pointer-events-none"></div>
+            <div className="absolute top-0 right-0 w-64 h-64 bg-green-500/10 rounded-full blur-[80px] pointer-events-none -translate-y-1/2 translate-x-1/2"></div>
+            <div className="absolute bottom-0 left-0 w-64 h-64 bg-blue-500/10 rounded-full blur-[80px] pointer-events-none translate-y-1/2 -translate-x-1/2"></div>
         </div>
 
-        {/* Additional Info (Tournaments, Matches, DUPR ID) */}
-        <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6">
-            <div className="bg-gray-800 p-3 sm:p-4 rounded-lg border border-gray-700 text-center relative overflow-hidden group">
-                 <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                 <p className="text-[9px] sm:text-[10px] text-gray-500 font-bold uppercase mb-1">Events</p>
-                 <p className="text-xl sm:text-2xl font-bold text-white">0</p>
+        {/* Big Colorful Metric Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+            {/* Events Card */}
+            <div className="bg-gradient-to-br from-indigo-900 to-blue-900 rounded-xl p-5 border border-indigo-700/50 relative overflow-hidden group shadow-lg">
+                 <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                    <svg className="w-16 h-16" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11z"/></svg>
+                 </div>
+                 <p className="text-indigo-200 text-xs font-bold uppercase tracking-wider mb-1">Total Events</p>
+                 <p className="text-3xl font-black text-white">0</p>
+                 <div className="mt-2 h-1 w-full bg-indigo-950 rounded-full overflow-hidden">
+                     <div className="h-full bg-indigo-400 w-0"></div>
+                 </div>
             </div>
-            <div className="bg-gray-800 p-3 sm:p-4 rounded-lg border border-gray-700 text-center relative overflow-hidden group">
-                 <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                 <p className="text-[9px] sm:text-[10px] text-gray-500 font-bold uppercase mb-1">Win Rate</p>
-                 <p className="text-xl sm:text-2xl font-bold text-white">--%</p>
+
+            {/* Win Rate Card */}
+            <div className="bg-gradient-to-br from-emerald-900 to-green-900 rounded-xl p-5 border border-emerald-700/50 relative overflow-hidden group shadow-lg">
+                 <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                    <svg className="w-16 h-16" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                 </div>
+                 <p className="text-emerald-200 text-xs font-bold uppercase tracking-wider mb-1">Win Rate</p>
+                 <p className="text-3xl font-black text-white">--%</p>
+                 <div className="mt-2 h-1 w-full bg-emerald-950 rounded-full overflow-hidden">
+                     <div className="h-full bg-emerald-400 w-0"></div>
+                 </div>
             </div>
-            <div className="bg-gray-800 p-3 sm:p-4 rounded-lg border border-gray-700 text-center relative overflow-hidden flex flex-col justify-between items-center group">
-                 <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-                 
-                 <div className="w-full">
-                    <p className="text-[9px] sm:text-[10px] text-gray-500 font-bold uppercase mb-1">DUPR ID</p>
+
+            {/* DUPR Card */}
+            <div className="bg-gradient-to-br from-fuchsia-900 to-purple-900 rounded-xl p-5 border border-fuchsia-700/50 relative overflow-hidden group shadow-lg flex flex-col justify-between">
+                 <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                    <svg className="w-16 h-16" fill="currentColor" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+                 </div>
+                 <div>
+                    <p className="text-fuchsia-200 text-xs font-bold uppercase tracking-wider mb-1">DUPR ID</p>
                     {userProfile.duprProfileUrl ? (
                         <a 
                             href={userProfile.duprProfileUrl} 
                             target="_blank" 
                             rel="noopener noreferrer" 
-                            className="text-sm sm:text-lg font-bold text-green-400 hover:underline truncate px-1 block"
+                            className="text-2xl font-bold text-white hover:text-fuchsia-300 underline decoration-fuchsia-500/50 underline-offset-4 truncate block"
                         >
                             {userProfile.duprId || 'Link'}
                         </a>
                     ) : (
-                        <p className="text-sm sm:text-lg font-bold text-white truncate px-1">{userProfile.duprId || '--'}</p>
+                        <p className="text-2xl font-bold text-white truncate">{userProfile.duprId || '--'}</p>
                     )}
                  </div>
                  
@@ -219,17 +229,17 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({ userProfile, onEdi
                      <button 
                         onClick={handleSyncDupr}
                         disabled={isSyncingDupr}
-                        className="mt-2 text-[10px] bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1 rounded border border-gray-600 flex items-center gap-1 transition-colors relative z-10"
+                        className="mt-3 self-start text-[10px] bg-black/30 hover:bg-black/50 text-white px-3 py-1.5 rounded-full border border-white/20 flex items-center gap-2 transition-all"
                      >
                         {isSyncingDupr ? (
                             <>
-                                <span className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
+                                <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
                                 Syncing...
                             </>
                         ) : (
                             <>
                                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                                Update Rating
+                                Refresh Ratings
                             </>
                         )}
                      </button>
@@ -237,14 +247,15 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({ userProfile, onEdi
             </div>
         </div>
 
-        {/* Quick Actions - Bottom Pinned, Single Line, Thin, Light Green */}
+        {/* Quick Actions */}
         <div className="mt-auto">
-             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+             <h3 className="text-sm font-bold text-gray-400 mb-3 uppercase tracking-wider">Quick Navigation</h3>
+             <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
                 {navItems.map((item) => (
                     <button
                         key={item.view}
                         onClick={() => onNavigate(item.view)}
-                        className="flex-1 min-w-[110px] bg-green-900/20 hover:bg-green-900/40 text-green-300 border border-green-500/30 hover:border-green-500/60 rounded-full py-1.5 px-4 text-xs font-medium transition-all whitespace-nowrap shadow-sm"
+                        className="flex-shrink-0 bg-gray-800 hover:bg-gray-750 text-gray-200 border border-gray-700 rounded-lg py-3 px-5 text-sm font-semibold transition-all shadow-md hover:shadow-lg hover:border-green-500/50 hover:text-green-400 flex flex-col items-center gap-1 min-w-[100px]"
                     >
                         {item.label}
                     </button>
