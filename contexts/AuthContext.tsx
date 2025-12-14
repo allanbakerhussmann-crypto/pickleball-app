@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { 
   type User, 
@@ -49,7 +50,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const auth = getAuth();
     if (!auth) {
-        console.error("Auth not initialized");
         setLoading(false);
         return;
     }
@@ -113,10 +113,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
   
   // Helper to improve email link clickability on mobile (especially iOS)
+  // FIXED: Removed URL to prevent "Domain not allowlisted" error during development.
   const getActionCodeSettings = () => undefined;
 
   const signup = useCallback(async (email: string, pass: string, role: UserRole, name: string) => {
       const auth = getAuth();
+      if (!auth) throw new Error("Auth not initialized");
       // 1. Create Auth User
       const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
       const user = userCredential.user;
@@ -158,16 +160,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   
   const login = useCallback(async (email: string, pass: string) => {
       const auth = getAuth();
+      if (!auth) throw new Error("Auth not initialized");
       const userCredential = await signInWithEmailAndPassword(auth, email, pass);
       return userCredential.user;
   }, []);
 
   const logout = useCallback(() => {
     const auth = getAuth();
+    if (!auth) return Promise.resolve();
     return signOut(auth);
   }, []);
     const resetPassword = useCallback(async (email: string) => {
     const auth = getAuth();
+    if (!auth) throw new Error("Auth not initialized");
     // Optionally use the same action code settings as verification;
     // this helps with handling on mobile.
     const actionCodeSettings = getActionCodeSettings();
@@ -177,7 +182,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const resendVerificationEmail = useCallback(async () => {
     const auth = getAuth();
-    if (auth.currentUser) {
+    if (auth && auth.currentUser) {
       await sendEmailVerification(auth.currentUser, getActionCodeSettings());
     } else {
       throw new Error("No user is currently signed in to resend verification email.");
@@ -186,7 +191,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const reloadUser = useCallback(async () => {
     const auth = getAuth();
-    const user = auth.currentUser;
+    const user = auth?.currentUser;
     if (user) {
       await user.reload();
       setCurrentUser(Object.assign({}, user));
@@ -195,7 +200,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateUserProfile = useCallback(async (displayName: string) => {
     const auth = getAuth();
-    const user = auth.currentUser;
+    const user = auth?.currentUser;
     if (user) {
       await updateProfile(user, { displayName });
       // Also update Firestore
@@ -210,7 +215,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateUserExtendedProfile = useCallback(async (data: Partial<UserProfile>) => {
       const auth = getAuth();
-      const user = auth.currentUser;
+      const user = auth?.currentUser;
       if (user) {
           await updateUserProfileDoc(user.uid, data);
           setUserProfile(prev => prev ? ({ ...prev, ...data }) : null);
@@ -221,7 +226,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateUserEmail = useCallback(async (newEmail: string) => {
     const auth = getAuth();
-    const user = auth.currentUser;
+    const user = auth?.currentUser;
     if (user) {
       await updateEmail(user, newEmail);
       // Also update Firestore

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { 
   Tournament, 
@@ -41,6 +42,7 @@ import { Schedule } from './Schedule';
 import { BracketViewer } from './BracketViewer';
 import { Standings } from './Standings';
 import { TournamentRegistrationWizard } from './registration/TournamentRegistrationWizard';
+import { TournamentDesk } from './TournamentDesk'; // Import new component
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -80,6 +82,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   // Wizard State
   const [showRegistrationWizard, setShowRegistrationWizard] = useState(false);
+  const [showDesk, setShowDesk] = useState(false); // New Desk State
+  
   const [wizardProps, setWizardProps] = useState<{
     mode: 'full' | 'waiver_only';
     initialDivisionId?: string;
@@ -1189,6 +1193,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         />
       )}
 
+      {showDesk && (
+          <TournamentDesk 
+            tournament={tournament} 
+            onClose={() => setShowDesk(false)} 
+          />
+      )}
+
       {/* Header */}
       <div className="mb-6 flex items-center gap-2 text-sm text-gray-500">
         <button
@@ -1215,6 +1226,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         </div>
         {isOrganizer && (
           <div className="absolute top-4 right-4 flex gap-2">
+            <button
+              onClick={() => setShowDesk(true)}
+              className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded shadow-lg font-bold border border-blue-400/50 flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+              Tournament Desk
+            </button>
             <button
               onClick={() =>
                 setViewMode(viewMode === 'public' ? 'admin' : 'public')

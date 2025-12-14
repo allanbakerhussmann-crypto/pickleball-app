@@ -1,12 +1,43 @@
-import { db, sendNotification, getAuth, callCloudFunction } from './firebase';
-import {
-  collection,
-  doc,
-  getDocs,
-  query,
-  where,
-  updateDoc
-} from 'firebase/firestore';
+import { db, sendNotification, getAuth, collection, query, where, getDocs } from './firebase';
+
+const defaultConfig = {
+  projectId: "placeholder-project"
+};
+
+const callCloudFunction = async (name: string, data: any): Promise<any> => {
+    const auth = getAuth();
+    if (!auth) throw new Error("Auth not initialized");
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) {
+        throw new Error("You must be logged in to perform this action.");
+    }
+
+    // Reuse config logic (simplified for minimal changes)
+    const stored = localStorage.getItem('pickleball_firebase_config');
+    const config = stored ? JSON.parse(stored) : defaultConfig;
+    const projectId = config.projectId || "placeholder-project";
+    
+    // Default region for HTTP functions is typically us-central1 unless specified
+    const region = "us-central1"; 
+    const url = `https://${region}-${projectId}.cloudfunctions.net/${name}`;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(data)
+    });
+
+    const json = await response.json();
+    
+    if (!response.ok) {
+        throw new Error(json.error || `Function ${name} failed`);
+    }
+    return json;
+};
+
 import type { Match, MatchScoreSubmission, Competition } from '../types';
 
 /**
@@ -72,6 +103,9 @@ export async function confirmMatchScore(
   confirmingUserId: string
 ) {
   // 1. Find the pending submission ID for this match
+  // Ensure db is defined (handled by services/firebase export or check here if needed, but db is imported)
+  if (!db) throw new Error("Database not initialized");
+  
   const submissionsRef = collection(db, 'matchScoreSubmissions');
   const q = query(submissionsRef, where('matchId', '==', match.id), where('status', '==', 'pending_opponent'));
   const snapshot = await getDocs(q);

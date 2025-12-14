@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { getTeamRoster, manageTeamRoster, searchUsers, getUsersByIds } from '../services/firebase';
+import { getTeamRoster, updateTeamRoster, searchUsers, getUsersByIds } from '../services/firebase';
 import type { Team, UserProfile, TeamRoster } from '../types';
 
 interface TeamRosterManagerProps {
@@ -13,40 +13,40 @@ export const TeamRosterManager: React.FC<TeamRosterManagerProps> = ({ team, isCa
     const [roster, setRoster] = useState<TeamRoster | null>(null);
     const [players, setPlayers] = useState<UserProfile[]>([]);
     const [loading, setLoading] = useState(true);
-    const [processing, setProcessing] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
     const [error, setError] = useState<string | null>(null);
 
-    const refreshRoster = async () => {
-        try {
-            let r = await getTeamRoster(team.id);
-            // If no dedicated roster, create default from team players
-            if (!r) {
-                r = {
-                    id: team.id,
-                    teamId: team.id,
-                    players: team.players || [],
-                    captainPlayerId: team.captainPlayerId,
-                    updatedAt: Date.now()
-                };
-            }
-            setRoster(r);
-            
-            if (r.players.length > 0) {
-                const profiles = await getUsersByIds(r.players);
-                setPlayers(profiles);
-            } else {
-                setPlayers([]);
-            }
-        } catch (e) {
-            console.error(e);
-            setError("Failed to load roster.");
-        }
-    };
-
     useEffect(() => {
-        refreshRoster().then(() => setLoading(false));
+        const load = async () => {
+            try {
+                let r = await getTeamRoster(team.id);
+                
+                // If no dedicated roster, create default from team players
+                if (!r) {
+                    r = {
+                        id: team.id,
+                        teamId: team.id,
+                        players: team.players || [],
+                        captainPlayerId: team.captainPlayerId,
+                        updatedAt: Date.now()
+                    };
+                }
+                
+                setRoster(r);
+                
+                if (r.players.length > 0) {
+                    const profiles = await getUsersByIds(r.players);
+                    setPlayers(profiles);
+                }
+            } catch (e) {
+                console.error(e);
+                setError("Failed to load roster.");
+            } finally {
+                setLoading(false);
+            }
+        };
+        load();
     }, [team.id]);
 
     const handleSearch = async (term: string) => {
@@ -60,48 +60,36 @@ export const TeamRosterManager: React.FC<TeamRosterManagerProps> = ({ team, isCa
     };
 
     const handleAddPlayer = async (user: UserProfile) => {
-        setProcessing(true);
-        setError(null);
-        try {
-            await manageTeamRoster({ 
-                teamId: team.id, 
-                action: 'add', 
-                playerId: user.id 
-            });
-            await refreshRoster();
-            setSearchResults([]);
-            setSearchTerm('');
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "Failed to add player. They may not meet eligibility rules.");
-        } finally {
-            setProcessing(false);
-        }
+        if (!roster) return;
+        
+        const updatedPlayers = [...roster.players, user.id];
+        const updatedRoster = { ...roster, players: updatedPlayers };
+        
+        setRoster(updatedRoster);
+        setPlayers([...players, user]);
+        setSearchResults([]);
+        setSearchTerm('');
+        
+        await updateTeamRoster(team.id, { players: updatedPlayers });
     };
 
     const handleRemovePlayer = async (userId: string) => {
+        if (!roster) return;
         if (userId === team.captainPlayerId) {
-            setError("Cannot remove the captain.");
+            alert("Cannot remove the captain.");
             return;
         }
-        setProcessing(true);
-        setError(null);
-        try {
-            await manageTeamRoster({ 
-                teamId: team.id, 
-                action: 'remove', 
-                playerId: userId 
-            });
-            await refreshRoster();
-        } catch (e: any) {
-            console.error(e);
-            setError(e.message || "Failed to remove player.");
-        } finally {
-            setProcessing(false);
-        }
+        
+        const updatedPlayers = roster.players.filter(id => id !== userId);
+        const updatedRoster = { ...roster, players: updatedPlayers };
+        
+        setRoster(updatedRoster);
+        setPlayers(players.filter(p => p.id !== userId));
+        
+        await updateTeamRoster(team.id, { players: updatedPlayers });
     };
 
-    if (loading) return <div className="p-4 text-center text-white">Loading Roster...</div>;
+    if (loading) return <div className="p-4 text-center">Loading Roster...</div>;
 
     return (
         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
@@ -130,8 +118,7 @@ export const TeamRosterManager: React.FC<TeamRosterManagerProps> = ({ team, isCa
                                 {isCaptain && p.id !== team.captainPlayerId && (
                                     <button 
                                         onClick={() => handleRemovePlayer(p.id)}
-                                        disabled={processing}
-                                        className="text-red-400 hover:text-red-300 text-xs disabled:opacity-50"
+                                        className="text-red-400 hover:text-red-300 text-xs"
                                     >
                                         Remove
                                     </button>
@@ -149,7 +136,6 @@ export const TeamRosterManager: React.FC<TeamRosterManagerProps> = ({ team, isCa
                             placeholder="Search by name..."
                             value={searchTerm}
                             onChange={e => handleSearch(e.target.value)}
-                            disabled={processing}
                         />
                         {searchResults.length > 0 && (
                             <div className="bg-gray-800 border border-gray-600 mt-1 rounded max-h-40 overflow-y-auto">
@@ -157,7 +143,6 @@ export const TeamRosterManager: React.FC<TeamRosterManagerProps> = ({ team, isCa
                                     <button 
                                         key={u.id}
                                         onClick={() => handleAddPlayer(u)}
-                                        disabled={processing}
                                         className="w-full text-left p-2 hover:bg-gray-700 text-sm text-white border-b border-gray-700 last:border-0"
                                     >
                                         + {u.displayName}

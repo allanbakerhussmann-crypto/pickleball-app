@@ -1,570 +1,618 @@
-import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app';
-import { getAuth as getFirebaseAuth, type Auth } from 'firebase/auth';
-import {
-  getFirestore,
-  collection,
-  doc,
-  setDoc,
-  getDoc,
-  getDocs,
-  query,
-  where,
-  onSnapshot,
-  updateDoc,
-  writeBatch,
-  limit,
-  runTransaction,
-  deleteDoc,
-  orderBy,
-  addDoc,
-  type Firestore
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
+import { 
+    getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, 
+    addDoc, deleteDoc, query, where, orderBy, limit, onSnapshot, 
+    arrayUnion, arrayRemove, writeBatch, increment, serverTimestamp,
+    type Firestore
 } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import type {
-  Tournament, UserProfile, Registration, Team, Division, Match, PartnerInvite, Club,
-  UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker,
-  GenderCategory, TeamPlayer, MatchTeam, Competition, CompetitionEntry, CompetitionType,
-  Notification, AuditLog, TeamRoster
-} from '../types';
 
-/* ---------------------- Config helpers with validation ---------------------- */
+// Re-export firestore functions for usage in other services/components
+export { 
+    collection, doc, getDoc, getDocs, setDoc, updateDoc, 
+    addDoc, deleteDoc, query, where, orderBy, limit, onSnapshot, 
+    arrayUnion, arrayRemove, writeBatch, increment, serverTimestamp
+};
+
+export type { Firestore };
+
+import { getAuth as getFirebaseAuth } from 'firebase/auth';
+import type { Auth } from 'firebase/auth';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import type { 
+    Tournament, Division, Team, Match, Court, UserProfile, 
+    Club, Registration, PartnerInvite, Notification, GameSession,
+    Competition, CompetitionEntry, StandingsEntry, TeamRoster,
+    ClubJoinRequest, AuditLog, UserRole
+} from '../types';
 
 const STORAGE_KEY = 'pickleball_firebase_config';
 
-const requiredFields = ['apiKey', 'projectId', 'appId'];
-
-function isValidConfig(cfg: any) {
-  if (!cfg || typeof cfg !== 'object') return false;
-  return requiredFields.every(k => typeof cfg[k] === 'string' && cfg[k].length > 0);
-}
-
-const getStoredConfig = () => {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (isValidConfig(parsed)) return parsed;
-    }
-  } catch (e) {
-    console.warn("Failed to parse stored config", e);
-  }
-  return null;
-};
-
-const getEnvConfig = () => {
-  if (process.env.FIREBASE_API_KEY) {
-    const cfg = {
-      apiKey: process.env.FIREBASE_API_KEY,
-      authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-      appId: process.env.FIREBASE_APP_ID,
-      measurementId: process.env.FIREBASE_MEASUREMENT_ID
-    };
-    if (isValidConfig(cfg)) return cfg;
-  }
-  return null;
-};
-
-const defaultConfig = {
-  apiKey: "AIzaSyBPeYXnPobCZ7bPH0g_2IYOP55-1PFTWTE",
-  authDomain: "pickleball-app-dev.firebaseapp.com",
-  projectId: "pickleball-app-dev",
-  storageBucket: "pickleball-app-dev.firebasestorage.app",
-  messagingSenderId: "906655677998",
-  appId: "1:906655677998:web:b7fe4bb2f479ba79c069bf",
-  measurementId: "G-WWLE6K6J7Z"
-};
-
-const firebaseConfig = (() => {
-  const stored = getStoredConfig();
-  if (stored) return stored;
-  const env = getEnvConfig();
-  if (env) return env;
-  // fallback to default AND ensure it's valid
-  if (!isValidConfig(defaultConfig)) {
-    throw new Error("Default firebase config is invalid or missing required fields.");
-  }
-  return defaultConfig;
-})();
-
-
-/* ---------------------- Initialize App (safe for HMR) ---------------------- */
-
-let app: FirebaseApp;
-try {
-  // If an app already exists (HMR, multiple imports), reuse it
-  if (typeof getApps === 'function' && getApps().length > 0) {
-    app = getApp();
-  } else {
-    app = initializeApp(firebaseConfig);
-  }
-} catch (e: any) {
-  console.error("Firebase initialization failed.", e);
-  throw new Error("Firebase initialization failed: " + (e?.message || String(e)));
-}
-
-// Lazy auth instance so we always register auth on the same app
-let authInstance: Auth | null = null;
-export const getAuth = (): Auth => {
-  if (!authInstance) {
-    authInstance = getFirebaseAuth(app);
-    if (!authInstance) throw new Error("Auth not initialized");
-  }
-  return authInstance;
-};
-
-// Firestore and storage bound to the same app
-export const db: Firestore = getFirestore(app);
-export const storage = getStorage(app);
-
-export function assertFirestore() {
-  if (!db) throw new Error('Firestore not initialized - cannot call collection/doc APIs');
-  return db;
-}
-
-/* ---------------------- Helpers ---------------------- */
+// --- CONFIGURATION & INIT ---
 
 export const hasCustomConfig = () => !!localStorage.getItem(STORAGE_KEY);
+export const isFirebaseConfigured = hasCustomConfig();
 
-export const saveFirebaseConfig = (configJson: string) => {
-    try {
-        JSON.parse(configJson); // Validate
-        localStorage.setItem(STORAGE_KEY, configJson);
-        window.location.reload(); // Reload to apply
-        return { success: true };
-    } catch (e: any) {
-        return { success: false, error: e.message };
-    }
-};
+let app: FirebaseApp;
+let db: Firestore | undefined;
+let auth: Auth | undefined;
+let functions: any;
 
-export const callCloudFunction = async (name: string, data: any): Promise<any> => {
-  const auth = getAuth();
-  const token = await auth.currentUser?.getIdToken();
-  if (!token) {
-    throw new Error("You must be logged in to perform this action.");
+const initFirebase = () => {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (!stored) {
+      // Console warn only once or suppress to avoid noise during render
+      return;
   }
-
-  const projectId = firebaseConfig.projectId || defaultConfig.projectId;
-  const region = "us-central1";
-  const url = `https://${region}-${projectId}.cloudfunctions.net/${name}`;
-
+  
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(data)
-    });
+      const config = JSON.parse(stored);
+      if (!getApps().length) {
+        app = initializeApp(config);
+      } else {
+        app = getApp();
+      }
 
-    const json = await response.json();
-    if (!response.ok) {
-      throw new Error(json.error?.message || json.error || `Function ${name} failed with status ${response.status}`);
-    }
-    return json.result || json;
-  } catch (e: any) {
-    console.error(`Error calling ${name}:`, e);
-    throw e;
+      db = getFirestore(app);
+      auth = getFirebaseAuth(app);
+      functions = getFunctions(app);
+  } catch (e) {
+      console.error("Failed to initialize Firebase", e);
   }
 };
 
-// ... Users ...
+if (hasCustomConfig()) {
+    initFirebase();
+}
+
+export const saveFirebaseConfig = (json: string) => {
+    try {
+        const parsed = JSON.parse(json);
+        if (!parsed.apiKey || !parsed.authDomain) return { success: false, error: 'Invalid config' };
+        localStorage.setItem(STORAGE_KEY, json);
+        window.location.reload();
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: 'Parse error' };
+    }
+};
+
+export const getAuth = () => {
+    if (!auth && hasCustomConfig()) initFirebase(); 
+    return auth;
+};
+
+// Export db for direct usage in other services if needed
+export { db };
+
+// Helper to remove undefined fields for Firestore compatibility
+const removeUndefined = (obj: any) => {
+    if (obj === null || typeof obj !== 'object') return obj;
+    const newObj: any = Array.isArray(obj) ? [] : {};
+    Object.keys(obj).forEach(key => {
+        if (obj[key] !== undefined) {
+            newObj[key] = removeUndefined(obj[key]);
+        }
+    });
+    return newObj;
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                USER PROFILES                               */
+/* -------------------------------------------------------------------------- */
+
 export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {
-    if (!userId) return null;
+    if (!db || !userId) return null;
     const snap = await getDoc(doc(db, 'users', userId));
     return snap.exists() ? snap.data() as UserProfile : null;
 };
 
 export const createUserProfile = async (userId: string, data: UserProfile) => {
-    await setDoc(doc(db, 'users', userId), { ...data, createdAt: Date.now(), updatedAt: Date.now() }, { merge: true });
+    if (!db) return;
+    await setDoc(doc(db, 'users', userId), removeUndefined(data), { merge: true });
 };
 
 export const updateUserProfileDoc = async (userId: string, data: Partial<UserProfile>) => {
-    await updateDoc(doc(db, 'users', userId), { ...data, updatedAt: Date.now() });
+    if (!db) return;
+    await setDoc(doc(db, 'users', userId), removeUndefined(data), { merge: true });
 };
 
 export const getAllUsers = async (limitCount = 100): Promise<UserProfile[]> => {
+    if (!db) return [];
     const q = query(collection(db, 'users'), limit(limitCount));
     const snap = await getDocs(q);
     return snap.docs.map(d => d.data() as UserProfile);
 };
 
 export const getUsersByIds = async (ids: string[]): Promise<UserProfile[]> => {
-    if (!ids || !ids.length) return [];
-    // Firestore 'in' limit is 10
-    const chunks = [];
-    for (let i = 0; i < ids.length; i += 10) {
-        chunks.push(ids.slice(i, i + 10));
-    }
-    const results = await Promise.all(chunks.map(chunk => 
-        getDocs(query(collection(db, 'users'), where('id', 'in', chunk)))
-    ));
-    return results.flatMap(r => r.docs.map(d => d.data() as UserProfile));
+    if (!db || !ids || ids.length === 0) return [];
+    // Firestore 'in' query is limited to 10. For larger lists, batch or simple loop.
+    // Simple loop for now to be safe against limits
+    const promises = ids.map(id => getDoc(doc(db!, 'users', id)));
+    const snapshots = await Promise.all(promises);
+    return snapshots.map(s => s.exists() ? s.data() as UserProfile : null).filter(u => u !== null) as UserProfile[];
 };
 
 export const searchUsers = async (term: string): Promise<UserProfile[]> => {
-    // Client-side filtering for demo
-    const all = await getAllUsers(200); 
+    if (!db) return [];
+    // Simple client-side filtering for small datasets or assume 'getAllUsers' style search
+    // In production, use Algolia or a dedicated search index.
+    const all = await getAllUsers(500); 
     const lower = term.toLowerCase();
     return all.filter(u => 
-        (u.displayName?.toLowerCase().includes(lower)) || 
-        (u.email?.toLowerCase().includes(lower))
+        (u.displayName?.toLowerCase().includes(lower) || u.email?.toLowerCase().includes(lower))
     );
 };
 
-// ... Admin Roles ...
-const updateRole = async (uid: string, role: string, action: 'add'|'remove') => {
-    const userRef = doc(db, 'users', uid);
-    const snap = await getDoc(userRef);
-    if (!snap.exists()) return;
-    const currentRoles = (snap.data() as UserProfile).roles || [];
-    let newRoles = [...currentRoles];
-    if (action === 'add' && !newRoles.includes(role as any)) newRoles.push(role as any);
-    if (action === 'remove') newRoles = newRoles.filter(r => r !== role);
-    await updateDoc(userRef, { roles: newRoles });
-};
+/* -------------------------------------------------------------------------- */
+/*                                TOURNAMENTS                                 */
+/* -------------------------------------------------------------------------- */
 
-export const promoteToAppAdmin = (uid: string) => updateRole(uid, 'admin', 'add');
-export const demoteFromAppAdmin = (uid: string, byUid: string) => updateRole(uid, 'admin', 'remove');
-export const promoteToOrganizer = (uid: string) => updateRole(uid, 'organizer', 'add');
-export const demoteFromOrganizer = (uid: string) => updateRole(uid, 'organizer', 'remove');
-export const promoteToPlayer = (uid: string) => updateRole(uid, 'player', 'add');
-export const demoteFromPlayer = (uid: string) => updateRole(uid, 'player', 'remove');
-
-// ... Tournaments ...
-export const subscribeToTournaments = (userId: string, callback: (t: Tournament[]) => void) => {
-    const q = query(collection(db, 'tournaments'));
+export const subscribeToTournaments = (userId: string | undefined, callback: (data: Tournament[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'tournaments'), orderBy('startDatetime', 'desc'));
     return onSnapshot(q, (snap) => {
-        const tours = snap.docs.map(d => d.data() as Tournament);
-        callback(tours);
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Tournament)));
     });
 };
 
-export const getAllTournaments = async (limitCount = 100): Promise<Tournament[]> => {
-    const q = query(collection(db, 'tournaments'), limit(limitCount));
+export const getAllTournaments = async (limitCount = 50): Promise<Tournament[]> => {
+    if (!db) return [];
+    const q = query(collection(db, 'tournaments'), orderBy('startDatetime', 'desc'), limit(limitCount));
     const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Tournament);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Tournament));
 };
 
 export const getTournament = async (id: string): Promise<Tournament | null> => {
-    if (!id) return null;
+    if (!db) return null;
     const snap = await getDoc(doc(db, 'tournaments', id));
-    return snap.exists() ? snap.data() as Tournament : null;
+    return snap.exists() ? { id: snap.id, ...snap.data() } as Tournament : null;
 };
 
-export const saveTournament = async (tournament: Tournament, divisions?: Division[]) => {
+export const saveTournament = async (tournament: Tournament, divisions: Division[] = []) => {
+    if (!db) return;
     const batch = writeBatch(db);
-    batch.set(doc(db, 'tournaments', tournament.id), { ...tournament, updatedAt: Date.now() }, { merge: true });
-    
-    if (divisions) {
-        divisions.forEach(div => {
-            batch.set(doc(db, 'divisions', div.id), { ...div, tournamentId: tournament.id, updatedAt: Date.now() }, { merge: true });
-        });
-    }
+    const tRef = doc(db, 'tournaments', tournament.id);
+    batch.set(tRef, removeUndefined(tournament), { merge: true });
+
+    divisions.forEach(div => {
+        const dRef = doc(db!, 'divisions', div.id);
+        const divData = { ...div, tournamentId: tournament.id };
+        batch.set(dRef, removeUndefined(divData), { merge: true });
+    });
+
     await batch.commit();
 };
 
-// ... Divisions ...
-export const subscribeToDivisions = (tournamentId: string, callback: (d: Division[]) => void) => {
+/* -------------------------------------------------------------------------- */
+/*                                DIVISIONS                                   */
+/* -------------------------------------------------------------------------- */
+
+export const subscribeToDivisions = (tournamentId: string, callback: (data: Division[]) => void) => {
+    if (!db) return () => {};
     const q = query(collection(db, 'divisions'), where('tournamentId', '==', tournamentId));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as Division)));
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Division)));
+    });
 };
 
-export const updateDivision = async (tournamentId: string, divisionId: string, data: Partial<Division>) => {
-    await updateDoc(doc(db, 'divisions', divisionId), { ...data, updatedAt: Date.now() });
+export const updateDivision = async (tournamentId: string, divisionId: string, updates: Partial<Division>) => {
+    if (!db) return;
+    await updateDoc(doc(db, 'divisions', divisionId), removeUndefined(updates));
 };
 
-// ... Teams ...
-export const subscribeToTeams = (tournamentId: string, callback: (t: Team[]) => void) => {
+/* -------------------------------------------------------------------------- */
+/*                                TEAMS                                       */
+/* -------------------------------------------------------------------------- */
+
+export const subscribeToTeams = (tournamentId: string, callback: (teams: Team[]) => void) => {
+    if (!db) return () => {};
     const q = query(collection(db, 'teams'), where('tournamentId', '==', tournamentId));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as Team)));
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Team)));
+    });
+};
+
+export const createTeamServer = async (data: { tournamentId: string, divisionId: string, playerIds: string[], teamName?: string | null }) => {
+    if (!functions) throw new Error("Firebase functions not initialized");
+    const fn = httpsCallable(functions, 'createTeam');
+    await fn(data);
 };
 
 export const deleteTeam = async (tournamentId: string, teamId: string) => {
+    if (!db) return;
     await deleteDoc(doc(db, 'teams', teamId));
 };
 
-export const createTeamServer = async (data: any) => {
-    return callCloudFunction('createTeam', data);
-};
-
-export const getUserTeamsForTournament = async (eventId: string, userId: string, type: 'tournament'|'competition'): Promise<Team[]> => {
-    const field = type === 'tournament' ? 'tournamentId' : 'competitionId';
-    const q = query(collection(db, 'teams'), where(field, '==', eventId));
+export const getUserTeamsForTournament = async (tournamentId: string, userId: string, context: 'tournament' | 'competition' = 'tournament'): Promise<Team[]> => {
+    if (!db) return [];
+    const field = context === 'competition' ? 'competitionId' : 'tournamentId';
+    const q = query(collection(db, 'teams'), where(field, '==', tournamentId), where('players', 'array-contains', userId));
     const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Team).filter(t => t.players.includes(userId));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
 };
 
-export const getOpenTeamsForDivision = async (eventId: string, divisionId: string, type: 'tournament'|'competition') => {
-    const field = type === 'tournament' ? 'tournamentId' : 'competitionId';
+export const getTeamsForDivision = async (eventId: string, divisionId: string, context: 'tournament' | 'competition'): Promise<Team[]> => {
+    if (!db) return [];
+    const field = context === 'competition' ? 'competitionId' : 'tournamentId';
+    const q = query(collection(db, 'teams'), where(field, '==', eventId), where('divisionId', '==', divisionId));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
+};
+
+export const getOpenTeamsForDivision = async (eventId: string, divisionId: string, context: 'tournament' | 'competition'): Promise<Team[]> => {
+    if (!db) return [];
+    const field = context === 'competition' ? 'competitionId' : 'tournamentId';
+    // looking for teams with pending_partner status
     const q = query(
         collection(db, 'teams'), 
-        where(field, '==', eventId),
+        where(field, '==', eventId), 
         where('divisionId', '==', divisionId),
         where('status', '==', 'pending_partner')
     );
     const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Team);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
 };
 
-export const getTeamsForDivision = async (eventId: string, divisionId: string, type: 'tournament'|'competition') => {
-    const field = type === 'tournament' ? 'tournamentId' : 'competitionId';
-    const q = query(
-        collection(db, 'teams'), 
-        where(field, '==', eventId),
-        where('divisionId', '==', divisionId)
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Team);
-};
+/* -------------------------------------------------------------------------- */
+/*                                MATCHES                                     */
+/* -------------------------------------------------------------------------- */
 
-// ... Matches ...
-export const subscribeToMatches = (tournamentId: string, callback: (m: Match[]) => void) => {
+export const subscribeToMatches = (tournamentId: string, callback: (matches: Match[]) => void) => {
+    if (!db) return () => {};
     const q = query(collection(db, 'matches'), where('tournamentId', '==', tournamentId));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as Match)));
-};
-
-export const updateMatchScore = async (tournamentId: string, matchId: string, updates: Partial<Match>) => {
-    await updateDoc(doc(db, 'matches', matchId), { ...updates, lastUpdatedAt: Date.now() });
-};
-
-// ... Courts ...
-export const subscribeToCourts = (tournamentId: string, callback: (c: Court[]) => void) => {
-    const q = query(collection(db, 'courts'), where('tournamentId', '==', tournamentId));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as Court)));
-};
-
-export const addCourt = async (tournamentId: string, name: string, order: number) => {
-    const newId = `court_${Date.now()}`;
-    await setDoc(doc(db, 'courts', newId), {
-        id: newId, tournamentId, name, order, active: true
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Match)));
     });
 };
 
-export const updateCourt = async (tournamentId: string, courtId: string, data: Partial<Court>) => {
-    await updateDoc(doc(db, 'courts', courtId), data);
+export const updateMatchScore = async (tournamentId: string, matchId: string, updates: Partial<Match>) => {
+    if (!db) return;
+    await updateDoc(doc(db, 'matches', matchId), removeUndefined(updates));
+};
+
+export const generatePoolsSchedule = async (tournamentId: string, division: Division, teams: Team[], playersCache: any) => {
+    console.log("Generating Pools Schedule (Stub)");
+};
+
+export const generateBracketSchedule = async (tournamentId: string, division: Division, teams: Team[], name: string, playersCache: any) => {
+    console.log("Generating Bracket Schedule (Stub)");
+};
+
+export const generateFinalsFromPools = async (tournamentId: string, division: Division, standings: StandingsEntry[], teams: Team[], playersCache: any) => {
+    console.log("Generating Finals (Stub)");
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                COURTS                                      */
+/* -------------------------------------------------------------------------- */
+
+export const subscribeToCourts = (tournamentId: string, callback: (courts: Court[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'courts'), where('tournamentId', '==', tournamentId), orderBy('order'));
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Court)));
+    });
+};
+
+export const addCourt = async (tournamentId: string, name: string, order: number) => {
+    if (!db) return;
+    const ref = doc(collection(db, 'courts'));
+    await setDoc(ref, { id: ref.id, tournamentId, name, order, active: true });
+};
+
+export const updateCourt = async (tournamentId: string, courtId: string, updates: Partial<Court>) => {
+    if (!db) return;
+    await updateDoc(doc(db, 'courts', courtId), updates);
 };
 
 export const deleteCourt = async (tournamentId: string, courtId: string) => {
+    if (!db) return;
     await deleteDoc(doc(db, 'courts', courtId));
 };
 
-// ... Invites ...
-export const subscribeToUserPartnerInvites = (userId: string, callback: (i: PartnerInvite[]) => void) => {
-    const q = query(collection(db, 'partnerInvites'), where('invitedUserId', '==', userId), where('status', '==', 'pending'));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as PartnerInvite)));
+/* -------------------------------------------------------------------------- */
+/*                                STANDINGS                                   */
+/* -------------------------------------------------------------------------- */
+
+export const saveStandings = async (tournamentId: string, divisionId: string, standings: StandingsEntry[]) => {
+    if (!db) return;
+    const batch = writeBatch(db);
+    standings.forEach(s => {
+        const ref = doc(db!, 'standings', `${tournamentId}_${divisionId}_${s.teamId}`);
+        batch.set(ref, { ...s, tournamentId, divisionId }, { merge: true });
+    });
+    await batch.commit();
 };
 
-export const respondToPartnerInvite = async (invite: PartnerInvite, status: 'accepted'|'declined') => {
-    await updateDoc(doc(db, 'partnerInvites', invite.id), { status, respondedAt: Date.now() });
+export const subscribeToStandings = (contextId: string, callback: (standings: StandingsEntry[]) => void) => {
+    if (!db) return () => {};
+    // Handles both tournamentId and competitionId queries if using same collection
+    const q = query(collection(db, 'standings'), where('competitionId', '==', contextId));
+    // Fallback for tournaments
+    const q2 = query(collection(db, 'standings'), where('tournamentId', '==', contextId));
     
-    if (status === 'accepted') {
-        const teamData = {
-            tournamentId: invite.tournamentId,
-            competitionId: invite.competitionId,
-            divisionId: invite.divisionId,
-            playerIds: [invite.inviterId, invite.invitedUserId],
-            teamName: null 
-        };
-        await callCloudFunction('createTeam', teamData);
-        return { tournamentId: invite.tournamentId, divisionId: invite.divisionId };
-    }
-    return null;
+    return onSnapshot(q, (snap) => {
+        if (!snap.empty) callback(snap.docs.map(d => d.data() as StandingsEntry));
+        else {
+             // Try tournament query
+             onSnapshot(q2, (snap2) => {
+                 callback(snap2.docs.map(d => d.data() as StandingsEntry));
+             });
+        }
+    });
 };
 
-export const getPendingInvitesForDivision = async (eventId: string, divisionId: string, type: 'tournament'|'competition') => {
-    const field = type === 'tournament' ? 'tournamentId' : 'competitionId';
-    const q = query(
-        collection(db, 'partnerInvites'),
-        where(field, '==', eventId),
-        where('divisionId', '==', divisionId),
-        where('status', '==', 'pending')
-    );
+/* -------------------------------------------------------------------------- */
+/*                                PARTNER INVITES                             */
+/* -------------------------------------------------------------------------- */
+
+export const subscribeToUserPartnerInvites = (userId: string, callback: (invites: PartnerInvite[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'partnerInvites'), where('invitedUserId', '==', userId), where('status', '==', 'pending'));
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as PartnerInvite)));
+    });
+};
+
+export const respondToPartnerInvite = async (invite: PartnerInvite, response: 'accepted' | 'declined') => {
+    if (!db) return invite;
+    await updateDoc(doc(db, 'partnerInvites', invite.id), { status: response, respondedAt: Date.now() });
+    return invite; // Return original invite for context
+};
+
+export const getPendingInvitesForDivision = async (eventId: string, divisionId: string, context: 'tournament' | 'competition'): Promise<PartnerInvite[]> => {
+    if (!db) return [];
+    const field = context === 'competition' ? 'competitionId' : 'tournamentId';
+    const q = query(collection(db, 'partnerInvites'), where(field, '==', eventId), where('divisionId', '==', divisionId), where('status', '==', 'pending'));
     const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as PartnerInvite);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as PartnerInvite));
 };
 
 export const searchEligiblePartners = async (term: string, gender: string, currentUser: UserProfile): Promise<UserProfile[]> => {
     const users = await searchUsers(term);
-    return users.filter(u => u.id !== currentUser.id); 
+    return users.filter(u => u.id !== currentUser.id);
 };
 
-// ... Registration ...
+/* -------------------------------------------------------------------------- */
+/*                                REGISTRATIONS                               */
+/* -------------------------------------------------------------------------- */
+
 export const getRegistration = async (tournamentId: string, userId: string): Promise<Registration | null> => {
-    const id = `${userId}_${tournamentId}`;
-    const snap = await getDoc(doc(db, 'registrations', id));
-    return snap.exists() ? snap.data() as Registration : null;
+    if (!db) return null;
+    const snap = await getDoc(doc(db, 'registrations', `${userId}_${tournamentId}`));
+    return snap.exists() ? { id: snap.id, ...snap.data() } as Registration : null;
 };
 
 export const saveRegistration = async (reg: Registration) => {
-    await setDoc(doc(db, 'registrations', reg.id), { ...reg, updatedAt: Date.now() }, { merge: true });
+    if (!db) return;
+    await setDoc(doc(db, 'registrations', reg.id), removeUndefined(reg), { merge: true });
 };
 
 export const finalizeRegistration = async (reg: Registration, tournament: Tournament, user: UserProfile) => {
-    await saveRegistration({ ...reg, status: 'completed' });
+    if (!db) return;
+    const batch = writeBatch(db);
+    const regRef = doc(db, 'registrations', reg.id);
+    batch.set(regRef, removeUndefined(reg), { merge: true });
+    
+    // Logic to create teams based on partner details would go here or in a cloud function
+    // For now we just save the registration
+    await batch.commit();
 };
 
-export const ensureRegistrationForUser = async (tournamentId: string, userId: string, divisionId?: string) => {
-    const reg = await getRegistration(tournamentId, userId);
-    if (!reg) {
-        await saveRegistration({
-            id: `${userId}_${tournamentId}`,
-            tournamentId,
-            playerId: userId,
-            status: 'completed', 
-            waiverAccepted: true,
-            selectedEventIds: divisionId ? [divisionId] : [],
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-        });
-    } else if (divisionId && !reg.selectedEventIds.includes(divisionId)) {
-        await saveRegistration({
-            ...reg,
-            selectedEventIds: [...reg.selectedEventIds, divisionId]
-        });
-    }
-};
-
-export const withdrawPlayerFromDivision = async (tournamentId: string, divisionId: string, userId: string) => {
-    const teams = await getUserTeamsForTournament(tournamentId, userId, 'tournament');
-    const team = teams.find(t => t.divisionId === divisionId);
-    if (team) {
-        await deleteTeam(tournamentId, team.id);
-    }
-    const reg = await getRegistration(tournamentId, userId);
-    if (reg) {
-        const newEvents = reg.selectedEventIds.filter(id => id !== divisionId);
-        await saveRegistration({ ...reg, selectedEventIds: newEvents });
-    }
-};
-
-// ... Clubs ...
-export const getAllClubs = async (): Promise<Club[]> => {
-    const q = query(collection(db, 'clubs'));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Club);
-};
-
-export const getUserClubs = async (userId: string): Promise<Club[]> => {
-    const q = query(collection(db, 'clubs'), where('admins', 'array-contains', userId));
-    const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Club);
-};
-
-export const createClub = async (clubData: Partial<Club>) => {
-    const clubId = `club_${Date.now()}`;
-    const newClub = { 
-        id: clubId, 
-        ...clubData, 
-        createdAt: Date.now(), 
-        updatedAt: Date.now() 
-    } as Club;
-    await setDoc(doc(db, 'clubs', clubId), newClub);
-    return newClub;
-};
-
-export const subscribeToClub = (clubId: string, callback: (c: Club) => void) => {
-    return onSnapshot(doc(db, 'clubs', clubId), (snap) => callback(snap.data() as Club));
-};
-
-export const subscribeToClubRequests = (clubId: string, callback: (r: ClubJoinRequest[]) => void) => {
-    const q = query(collection(db, 'clubJoinRequests'), where('clubId', '==', clubId), where('status', '==', 'pending'));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as ClubJoinRequest)));
-};
-
-export const subscribeToMyClubJoinRequest = (clubId: string, userId: string, callback: (hasPending: boolean) => void) => {
-    const q = query(collection(db, 'clubJoinRequests'), where('clubId', '==', clubId), where('userId', '==', userId), where('status', '==', 'pending'));
-    return onSnapshot(q, (snap) => callback(!snap.empty));
-};
-
-export const requestJoinClub = async (clubId: string, userId: string) => {
-    const id = `req_${clubId}_${userId}`;
-    await setDoc(doc(db, 'clubJoinRequests', id), {
-        id, clubId, userId, status: 'pending', createdAt: Date.now()
+export const subscribeToRegistrations = (tournamentId: string, callback: (regs: Registration[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'registrations'), where('tournamentId', '==', tournamentId));
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Registration)));
     });
 };
 
+export const ensureRegistrationForUser = async (tournamentId: string, userId: string, divisionId: string) => {
+    if (!db) return;
+    const regId = `${userId}_${tournamentId}`;
+    const regRef = doc(db, 'registrations', regId);
+    await setDoc(regRef, {
+        id: regId,
+        tournamentId,
+        playerId: userId,
+        status: 'in_progress',
+        selectedEventIds: arrayUnion(divisionId),
+        updatedAt: Date.now()
+    }, { merge: true });
+};
+
+export const withdrawPlayerFromDivision = async (tournamentId: string, divisionId: string, userId: string) => {
+    if (!db) return;
+    const regId = `${userId}_${tournamentId}`;
+    await updateDoc(doc(db, 'registrations', regId), {
+        selectedEventIds: arrayRemove(divisionId)
+    });
+};
+
+export const checkInPlayer = async (tournamentId: string, userId: string) => {
+    if (!db) return;
+    const regId = `${userId}_${tournamentId}`;
+    await updateDoc(doc(db, 'registrations', regId), {
+        checkedIn: true,
+        checkedInAt: Date.now()
+    });
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                CLUBS                                       */
+/* -------------------------------------------------------------------------- */
+
+export const getAllClubs = async (): Promise<Club[]> => {
+    if (!db) return [];
+    const snap = await getDocs(collection(db, 'clubs'));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Club));
+};
+
+export const getUserClubs = async (userId: string): Promise<Club[]> => {
+    if (!db) return [];
+    const q = query(collection(db, 'clubs'), where('admins', 'array-contains', userId));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Club));
+};
+
+export const createClub = async (clubData: Partial<Club>) => {
+    if (!db) return;
+    const ref = doc(collection(db, 'clubs'));
+    const club = { ...clubData, id: ref.id, createdAt: Date.now(), updatedAt: Date.now() };
+    await setDoc(ref, removeUndefined(club));
+};
+
+export const subscribeToClub = (clubId: string, callback: (club: Club) => void) => {
+    if (!db) return () => {};
+    return onSnapshot(doc(db, 'clubs', clubId), (snap) => {
+        if (snap.exists()) callback({ id: snap.id, ...snap.data() } as Club);
+    });
+};
+
+export const subscribeToClubRequests = (clubId: string, callback: (reqs: ClubJoinRequest[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'clubJoinRequests'), where('clubId', '==', clubId), where('status', '==', 'pending'));
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as ClubJoinRequest)));
+    });
+};
+
+export const subscribeToMyClubJoinRequest = (clubId: string, userId: string, callback: (exists: boolean) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'clubJoinRequests'), where('clubId', '==', clubId), where('userId', '==', userId), where('status', '==', 'pending'));
+    return onSnapshot(q, (snap) => {
+        callback(!snap.empty);
+    });
+};
+
+export const requestJoinClub = async (clubId: string, userId: string) => {
+    if (!db) return;
+    const ref = doc(collection(db, 'clubJoinRequests'));
+    await setDoc(ref, { id: ref.id, clubId, userId, status: 'pending', createdAt: Date.now() });
+};
+
 export const approveClubJoinRequest = async (clubId: string, requestId: string, userId: string) => {
+    if (!db) return;
     const batch = writeBatch(db);
     batch.update(doc(db, 'clubJoinRequests', requestId), { status: 'approved' });
-    const clubRef = doc(db, 'clubs', clubId);
-    const clubSnap = await getDoc(clubRef);
-    if (clubSnap.exists()) {
-        const members = (clubSnap.data() as Club).members || [];
-        if (!members.includes(userId)) {
-            batch.update(clubRef, { members: [...members, userId] });
-        }
-    }
+    batch.update(doc(db, 'clubs', clubId), { members: arrayUnion(userId) });
     await batch.commit();
 };
 
 export const declineClubJoinRequest = async (clubId: string, requestId: string) => {
+    if (!db) return;
     await updateDoc(doc(db, 'clubJoinRequests', requestId), { status: 'declined' });
 };
 
 export const bulkImportClubMembers = async (data: any) => {
-    return callCloudFunction('bulkImportClubMembers', data);
+    if (!functions) throw new Error("Functions not initialized");
+    const fn = httpsCallable(functions, 'bulkImportClubMembers');
+    const result = await fn(data);
+    return (result.data as any).results;
 };
 
-// ... Competitions ...
-export const createCompetition = async (comp: Competition) => {
-    await callCloudFunction('createCompetition', { competition: comp });
+/* -------------------------------------------------------------------------- */
+/*                                NOTIFICATIONS                               */
+/* -------------------------------------------------------------------------- */
+
+export const subscribeToNotifications = (userId: string, callback: (notes: Notification[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'notifications'), where('userId', '==', userId), orderBy('createdAt', 'desc'), limit(20));
+    return onSnapshot(q, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Notification)));
+    });
 };
 
-export const listCompetitions = async (filter?: { organiserId?: string }): Promise<Competition[]> => {
-    let q = query(collection(db, 'competitions'));
-    if (filter?.organiserId) {
-        q = query(q, where('organiserId', '==', filter.organiserId));
-    }
+export const sendNotification = async (userId: string, title: string, message: string, type: 'info' | 'action_required' = 'info') => {
+    if (!db) return;
+    const ref = doc(collection(db, 'notifications'));
+    await setDoc(ref, {
+        id: ref.id,
+        userId,
+        title,
+        message,
+        type,
+        read: false,
+        createdAt: Date.now()
+    });
+};
+
+export const markNotificationAsRead = async (userId: string, notificationId: string) => {
+    if (!db) return;
+    await updateDoc(doc(db, 'notifications', notificationId), { read: true });
+};
+
+export const logAudit = async (actorId: string, action: string, entityId: string, details: any) => {
+    if (!db) return;
+    await addDoc(collection(db, 'auditLogs'), {
+        actorId, action, entityId, details, timestamp: Date.now()
+    });
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                COMPETITIONS                                */
+/* -------------------------------------------------------------------------- */
+
+export const createCompetition = async (competition: Competition) => {
+    if (!functions) throw new Error("Functions not initialized");
+    const fn = httpsCallable(functions, 'createCompetition');
+    await fn({ competition });
+};
+
+export const listCompetitions = async (filters: any): Promise<Competition[]> => {
+    if (!db) return [];
+    const q = query(collection(db, 'competitions'), orderBy('createdAt', 'desc'));
     const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as Competition);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Competition));
 };
 
 export const getCompetition = async (id: string): Promise<Competition | null> => {
+    if (!db) return null;
     const snap = await getDoc(doc(db, 'competitions', id));
-    return snap.exists() ? snap.data() as Competition : null;
+    return snap.exists() ? { id: snap.id, ...snap.data() } as Competition : null;
 };
 
-export const updateCompetition = async (comp: Competition) => {
-    await updateDoc(doc(db, 'competitions', comp.id), { ...comp, updatedAt: Date.now() });
+export const updateCompetition = async (updates: Partial<Competition>) => {
+    if (!db || !updates.id) return;
+    await updateDoc(doc(db, 'competitions', updates.id), removeUndefined(updates));
 };
 
-export const subscribeToCompetitions = (callback: (c: Competition[]) => void) => {
-    const q = query(collection(db, 'competitions'));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as Competition)));
+export const subscribeToCompetitions = (callback: (comps: Competition[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'competitions'), orderBy('startDate', 'desc'));
+    return onSnapshot(q, (snap) => callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Competition))));
 };
 
-export const subscribeToCompetitionMatches = (compId: string, callback: (m: Match[]) => void) => {
-    const q = query(collection(db, 'matches'), where('competitionId', '==', compId));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as Match)));
+export const subscribeToCompetitionMatches = (competitionId: string, callback: (matches: Match[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'matches'), where('competitionId', '==', competitionId));
+    return onSnapshot(q, (snap) => callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Match))));
 };
 
-export const subscribeToCompetitionEntries = (compId: string, callback: (e: CompetitionEntry[]) => void) => {
-    const q = query(collection(db, 'competitionEntries'), where('competitionId', '==', compId));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as CompetitionEntry)));
+export const subscribeToCompetitionEntries = (competitionId: string, callback: (entries: CompetitionEntry[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'competitionEntries'), where('competitionId', '==', competitionId));
+    return onSnapshot(q, (snap) => callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as CompetitionEntry))));
 };
 
 export const createCompetitionEntry = async (entry: CompetitionEntry) => {
-    await setDoc(doc(db, 'competitionEntries', entry.id), entry);
+    if (!db) return;
+    await setDoc(doc(db, 'competitionEntries', entry.id), removeUndefined(entry));
 };
 
-export const getCompetitionEntry = async (compId: string, userId: string): Promise<CompetitionEntry | null> => {
-    const q = query(collection(db, 'competitionEntries'), where('competitionId', '==', compId), where('playerId', '==', userId));
+export const getCompetitionEntry = async (competitionId: string, playerId: string): Promise<CompetitionEntry | null> => {
+    if (!db) return null;
+    const q = query(collection(db, 'competitionEntries'), where('competitionId', '==', competitionId), where('playerId', '==', playerId));
     const snap = await getDocs(q);
-    return snap.empty ? null : snap.docs[0].data() as CompetitionEntry;
+    return !snap.empty ? { id: snap.docs[0].id, ...snap.docs[0].data() } as CompetitionEntry : null;
 };
 
-export const finalizeCompetitionRegistration = async (comp: Competition, user: UserProfile, divisionId: string, partnerDetails: any, teamId?: string) => {
-    const entryId = `entry_${comp.id}_${user.id}`;
+export const finalizeCompetitionRegistration = async (competition: Competition, user: UserProfile, divisionId: string, partnerDetails: any) => {
     const entry: CompetitionEntry = {
-        id: entryId,
-        competitionId: comp.id,
-        entryType: teamId ? 'team' : 'individual',
+        id: `entry_${user.id}_${competition.id}`,
+        competitionId: competition.id,
+        entryType: 'individual',
         playerId: user.id,
-        teamId: teamId,
         divisionId,
         status: 'active',
         createdAt: Date.now(),
@@ -573,97 +621,87 @@ export const finalizeCompetitionRegistration = async (comp: Competition, user: U
     await createCompetitionEntry(entry);
 };
 
-// ... Standings ...
-export const subscribeToStandings = (compId: string, callback: (s: StandingsEntry[]) => void) => {
-    const q = query(collection(db, 'standings'), where('competitionId', '==', compId));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => d.data() as StandingsEntry)));
-};
-
-export const saveStandings = async (tournamentId: string, divisionId: string, standings: StandingsEntry[]) => {
-    const batch = writeBatch(db);
-    standings.forEach(s => {
-        const ref = doc(db, 'standings', `${tournamentId}_${divisionId}_${s.teamId}`);
-        batch.set(ref, { ...s, tournamentId, divisionId }, { merge: true });
-    });
-    await batch.commit();
-};
-
-// ... Scheduling ...
-export const generatePoolsSchedule = async (tournamentId: string, division: Division, teams: Team[], playersCache: any) => {
-    const batch = writeBatch(db);
-    if (teams.length < 2) return;
-    for (let i=0; i<teams.length; i++) {
-        for (let j=i+1; j<teams.length; j++) {
-            const matchId = `match_${Date.now()}_${i}_${j}`;
-            const m: Match = {
-                id: matchId,
-                tournamentId,
-                divisionId: division.id,
-                teamAId: teams[i].id,
-                teamBId: teams[j].id,
-                status: 'scheduled',
-                scoreTeamAGames: [],
-                scoreTeamBGames: [],
-                roundNumber: 1
-            };
-            batch.set(doc(db, 'matches', matchId), m);
-        }
-    }
-    await batch.commit();
-};
-
-export const generateBracketSchedule = async (tournamentId: string, division: Division, teams: Team[], name: string, cache: any) => {
-    await generatePoolsSchedule(tournamentId, division, teams, cache);
-};
-
-export const generateFinalsFromPools = async (tournamentId: string, division: Division, standings: StandingsEntry[], teams: Team[], cache: any) => {
-    // Mock implementation
-    console.log("Generating finals...");
-};
-
 export const generateLeagueSchedule = async (competitionId: string) => {
-    return callCloudFunction('generateLeagueSchedule', { competitionId });
+    if (!functions) throw new Error("Functions not initialized");
+    const fn = httpsCallable(functions, 'generateLeagueSchedule');
+    await fn({ competitionId });
 };
 
-// ... Team Rosters ...
+/* -------------------------------------------------------------------------- */
+/*                                TEAM ROSTERS                                */
+/* -------------------------------------------------------------------------- */
+
 export const getTeamRoster = async (teamId: string): Promise<TeamRoster | null> => {
+    if (!db) return null;
     const snap = await getDoc(doc(db, 'teamRosters', teamId));
-    return snap.exists() ? snap.data() as TeamRoster : null;
+    return snap.exists() ? { id: snap.id, ...snap.data() } as TeamRoster : null;
 };
 
-export const manageTeamRoster = async (data: { teamId: string, action: 'add'|'remove', playerId: string }) => {
-    return callCloudFunction('manageTeamRoster', data);
+export const updateTeamRoster = async (teamId: string, updates: Partial<TeamRoster>) => {
+    if (!db) return;
+    await setDoc(doc(db, 'teamRosters', teamId), { ...updates, updatedAt: Date.now() }, { merge: true });
 };
 
 export const submitLineup = async (matchId: string, teamId: string, boards: any[]) => {
-    return callCloudFunction('submitLineup', { matchId, teamId, boards });
+    if (!functions) throw new Error("Functions not initialized");
+    const fn = httpsCallable(functions, 'submitLineup');
+    await fn({ matchId, teamId, boards });
 };
 
-export const syncPlayerRatings = async (playerIds: string[]) => {
-    return callCloudFunction('syncPlayerRatings', { playerIds });
+/* -------------------------------------------------------------------------- */
+/*                                GAME SESSIONS (SOCIAL)                      */
+/* -------------------------------------------------------------------------- */
+
+export const createGameSession = async (session: GameSession): Promise<void> => {
+    if (!db) return;
+    const ref = doc(collection(db, 'gameSessions'));
+    const newSession = { ...session, id: ref.id, createdAt: Date.now() };
+    await setDoc(ref, removeUndefined(newSession));
 };
 
-// ... Notifications ...
-export const sendNotification = async (userId: string, title: string, message: string, type: string) => {
-    await addDoc(collection(db, 'notifications'), {
-        userId, title, message, type, read: false, createdAt: Date.now()
+export const getGameSession = async (sessionId: string): Promise<GameSession | null> => {
+    if (!db) return null;
+    const snap = await getDoc(doc(db, 'gameSessions', sessionId));
+    return snap.exists() ? { id: snap.id, ...snap.data() } as GameSession : null;
+};
+
+export const joinGameSession = async (sessionId: string, userId: string): Promise<void> => {
+    if (!db) return;
+    await updateDoc(doc(db, 'gameSessions', sessionId), {
+        playerIds: arrayUnion(userId)
     });
 };
 
-export const subscribeToNotifications = (userId: string, callback: (n: Notification[]) => void) => {
-    const q = query(collection(db, 'notifications'), where('userId', '==', userId), orderBy('createdAt', 'desc'), limit(20));
-    return onSnapshot(q, (snap) => callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Notification))));
-};
-
-export const markNotificationAsRead = async (userId: string, notifId: string) => {
-    await updateDoc(doc(db, 'notifications', notifId), { read: true });
-};
-
-// ... Audit ...
-export const logAudit = async (actorId: string, action: string, entityId: string, details: any) => {
-    await addDoc(collection(db, 'auditLogs'), {
-        actorId, action, entityId, details, timestamp: Date.now()
+export const leaveGameSession = async (sessionId: string, userId: string): Promise<void> => {
+    if (!db) return;
+    await updateDoc(doc(db, 'gameSessions', sessionId), {
+        playerIds: arrayRemove(userId)
     });
 };
 
-export { initializeApp };
+export const subscribeToGameSessions = (callback: (sessions: GameSession[]) => void) => {
+    if (!db) return () => {};
+    const q = query(collection(db, 'gameSessions'), orderBy('startDatetime', 'desc'), limit(50));
+    return onSnapshot(q, (snap) => {
+        const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as GameSession));
+        callback(all);
+    });
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                ADMIN ACTIONS                               */
+/* -------------------------------------------------------------------------- */
+
+const updateUserRole = async (userId: string, action: 'add' | 'remove', role: UserRole) => {
+    if (!db) return;
+    const userRef = doc(db, 'users', userId);
+    if (action === 'add') await updateDoc(userRef, { roles: arrayUnion(role) });
+    else await updateDoc(userRef, { roles: arrayRemove(role) });
+};
+
+export const promoteToAppAdmin = (uid: string) => updateUserRole(uid, 'add', 'admin');
+export const demoteFromAppAdmin = (uid: string, byUid: string) => updateUserRole(uid, 'remove', 'admin');
+export const promoteToOrganizer = (uid: string) => updateUserRole(uid, 'add', 'organizer');
+export const demoteFromOrganizer = (uid: string) => updateUserRole(uid, 'remove', 'organizer');
+export const promoteToPlayer = (uid: string) => updateUserRole(uid, 'add', 'player');
+export const demoteFromPlayer = (uid: string) => updateUserRole(uid, 'remove', 'player');

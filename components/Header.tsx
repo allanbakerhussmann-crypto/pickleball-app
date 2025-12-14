@@ -55,6 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
   }, [invites]);
 
   const navLinks = [
+      { id: 'socialPlay', label: 'Social Play', visible: true },
       { id: 'tournaments', label: 'Tournaments', visible: true },
       { id: 'results', label: 'Results', visible: true },
       { id: 'leagues', label: 'Leagues', visible: FEATURE_FLAGS.ENABLE_LEAGUES },

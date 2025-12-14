@@ -12,8 +12,7 @@ import {
     searchUsers,
     logAudit,
     getCompetitionEntry,
-    getUserTeamsForTournament,
-    syncPlayerRatings
+    getUserTeamsForTournament
 } from '../services/firebase';
 import { 
     submitMatchScore, 
@@ -49,7 +48,6 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
     const [manualName, setManualName] = useState('');
     const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
     const [entryError, setEntryError] = useState<string | null>(null);
-    const [isSyncing, setIsSyncing] = useState(false);
 
     // Wizard State
     const [showWizard, setShowWizard] = useState(false);
@@ -183,29 +181,6 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
         } catch (e) {
             console.error(e);
             console.error("Failed to generate schedule.");
-        }
-    };
-
-    const handleSyncRatings = async () => {
-        if (!entries.length) return;
-        setIsSyncing(true);
-        try {
-            const playerIds = entries
-                .map(e => e.playerId)
-                .filter((id): id is string => !!id);
-            
-            if (playerIds.length > 0) {
-                await syncPlayerRatings(playerIds);
-                alert("Player ratings synced successfully.");
-                // Refresh local cache logic if needed, or rely on next fetch
-            } else {
-                alert("No individual players found to sync.");
-            }
-        } catch (e) {
-            console.error("Sync failed", e);
-            alert("Failed to sync ratings.");
-        } finally {
-            setIsSyncing(false);
         }
     };
 
@@ -376,30 +351,9 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                 <div className="bg-gray-800 rounded p-6 border border-gray-700">
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold text-white">League Entrants</h2>
-                        <div className="flex items-center gap-3">
-                            {isOrganizer && (
-                                <button 
-                                    onClick={handleSyncRatings}
-                                    disabled={isSyncing}
-                                    className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded border border-gray-600 flex items-center gap-2"
-                                >
-                                    {isSyncing ? (
-                                        <>
-                                            <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                                            Syncing...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                                            Sync DUPR
-                                        </>
-                                    )}
-                                </button>
-                            )}
-                            {competition.maxEntrants && (
-                                <span className="text-sm text-gray-400">Max: {competition.maxEntrants}</span>
-                            )}
-                        </div>
+                        {competition.maxEntrants && (
+                            <span className="text-sm text-gray-400">Max: {competition.maxEntrants}</span>
+                        )}
                     </div>
                     
                     {isOrganizer && competition.status === 'draft' && (
@@ -479,18 +433,10 @@ export const CompetitionManager: React.FC<CompetitionManagerProps> = ({ competit
                     <div className="space-y-2">
                         {entries.length === 0 ? <p className="text-gray-500 italic">No entrants yet.</p> : entries.map(e => {
                             const division = competition.divisions?.find(d => d.id === e.divisionId);
-                            const playerProfile = e.playerId ? playersCache[e.playerId] : null;
-                            const rating = playerProfile 
-                                ? (division?.type === 'singles' ? playerProfile.duprSinglesRating : playerProfile.duprDoublesRating) 
-                                : 0;
-
                             return (
                                 <div key={e.id} className="bg-gray-900 p-3 rounded flex justify-between items-center border border-gray-800">
                                     <div>
-                                        <div className="text-white font-medium">
-                                            {playerProfile?.displayName || e.playerId || e.teamId}
-                                            {rating ? <span className="ml-2 text-xs text-gray-500 font-mono">({rating.toFixed(2)})</span> : ''}
-                                        </div>
+                                        <div className="text-white font-medium">{playersCache[e.playerId || '']?.displayName || e.playerId || e.teamId}</div>
                                         {division && <div className="text-xs text-green-400">{division.name}</div>}
                                     </div>
                                     <span className="text-xs text-gray-500 capitalize bg-gray-800 px-2 py-1 rounded border border-gray-700">{e.entryType}</span>

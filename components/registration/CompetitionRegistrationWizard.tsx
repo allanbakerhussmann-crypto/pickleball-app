@@ -4,8 +4,7 @@ import type { Competition, UserProfile, CompetitionDivision, Team, CompetitionEn
 import {
     getUserTeamsForTournament,
     finalizeCompetitionRegistration,
-    getCompetitionEntry,
-    createTeamServer
+    getCompetitionEntry
 } from '../../services/firebase';
 import { DoublesPartnerStep } from './DoublesPartnerStep';
 
@@ -59,13 +58,11 @@ export const CompetitionRegistrationWizard: React.FC<WizardProps> = ({
     const [loading, setLoading] = useState(true);
     const [selectedDivisionIds, setSelectedDivisionIds] = useState<string[]>([]);
     const [partnerDetails, setPartnerDetails] = useState<any>({});
-    const [teamName, setTeamName] = useState('');
     const [existingTeamsByDivision, setExistingTeamsByDivision] = useState<Record<string, Team>>({});
     const [existingEntry, setExistingEntry] = useState<CompetitionEntry | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const divisions = competition.divisions || [];
-    const isTeamLeague = competition.type === 'team_league';
 
     useEffect(() => {
         const load = async () => {
@@ -96,18 +93,8 @@ export const CompetitionRegistrationWizard: React.FC<WizardProps> = ({
         const divId = selectedDivisionIds[0]; // Leagues usually single entry per user, simplified here
         const div = divisions.find(d => d.id === divId);
         
-        let createdTeamId = undefined;
-
-        // Team League Validation
-        if (isTeamLeague) {
-            if (!teamName.trim()) {
-                setError("Team Name is required.");
-                return;
-            }
-        }
-        
-        // Validation for doubles (Regular League)
-        if (!isTeamLeague && div?.type === 'doubles') {
+        // Validation for doubles
+        if (div?.type === 'doubles') {
             const details = partnerDetails[divId];
             const existingTeam = existingTeamsByDivision[divId];
             if (!existingTeam || existingTeam.players!.length < 2) {
@@ -128,25 +115,11 @@ export const CompetitionRegistrationWizard: React.FC<WizardProps> = ({
 
         setLoading(true);
         try {
-            // If Team League, create the team first
-            if (isTeamLeague) {
-                // Check if user already has a team for this division?
-                // For now, assume creating new.
-                const result = await createTeamServer({
-                    competitionId: competition.id,
-                    divisionId: divId,
-                    playerIds: [userProfile.id], // Initial roster is captain
-                    teamName: teamName
-                });
-                createdTeamId = result.team.id;
-            }
-
             await finalizeCompetitionRegistration(
                 competition,
                 userProfile,
                 divId,
-                partnerDetails,
-                createdTeamId
+                partnerDetails
             );
             onComplete();
         } catch (e: any) {
@@ -210,8 +183,7 @@ export const CompetitionRegistrationWizard: React.FC<WizardProps> = ({
                                 <button 
                                     onClick={() => {
                                         if (selectedDivisionIds.length === 0) return;
-                                        if (isTeamLeague) setStep(2); // Go to Team Name
-                                        else if (hasDoublesSelection) setStep(2); // Go to Doubles Partner
+                                        if (hasDoublesSelection) setStep(2);
                                         else setStep(3); // Skip to waiver/finalize
                                     }}
                                     disabled={selectedDivisionIds.length === 0}
@@ -223,37 +195,7 @@ export const CompetitionRegistrationWizard: React.FC<WizardProps> = ({
                         </div>
                     )}
 
-                    {step === 2 && isTeamLeague && (
-                        <div className="space-y-4">
-                            <h3 className="text-lg font-bold text-white">Team Details</h3>
-                            <p className="text-gray-400 text-sm">
-                                Create your team for this league. As the creator, you will be the captain and can manage the roster later.
-                            </p>
-                            <div>
-                                <label className="block text-sm font-bold text-gray-300 mb-1">Team Name</label>
-                                <input 
-                                    className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
-                                    placeholder="e.g. The Dink Floyds"
-                                    value={teamName}
-                                    onChange={e => setTeamName(e.target.value)}
-                                />
-                            </div>
-                            <div className="flex justify-between mt-6 pt-4 border-t border-gray-700">
-                                <button onClick={() => setStep(1)} className="bg-gray-700 text-white px-4 py-2 rounded">Back</button>
-                                <button 
-                                    onClick={() => {
-                                        if (!teamName.trim()) { setError("Team Name is required."); return; }
-                                        setStep(3);
-                                    }} 
-                                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded"
-                                >
-                                    Next
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
-                    {step === 2 && !isTeamLeague && hasDoublesSelection && (
+                    {step === 2 && (
                         <>
                             <DoublesPartnerStep
                                 eventId={competition.id}
@@ -280,7 +222,7 @@ export const CompetitionRegistrationWizard: React.FC<WizardProps> = ({
                             {error && <div className="text-red-400 font-bold bg-red-900/20 p-2 rounded">{error}</div>}
 
                             <div className="flex justify-between mt-6 pt-4 border-t border-gray-700">
-                                <button onClick={() => setStep(step - 1)} className="bg-gray-700 text-white px-4 py-2 rounded">Back</button>
+                                <button onClick={() => setStep(hasDoublesSelection ? 2 : 1)} className="bg-gray-700 text-white px-4 py-2 rounded">Back</button>
                                 <button 
                                     onClick={handleFinalize} 
                                     disabled={loading}

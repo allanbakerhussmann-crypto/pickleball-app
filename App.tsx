@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header'; 
+import { BottomNav } from './components/BottomNav';
 import { Profile } from './components/Profile';
 import { TournamentManager } from './components/TournamentManager';
 import { TournamentDashboard } from './components/TournamentDashboard';
@@ -17,6 +18,9 @@ import { CompetitionDashboard } from './components/CompetitionDashboard';
 import { CreateCompetition } from './components/CreateCompetition';
 import { CompetitionManager } from './components/CompetitionManager';
 import { DevTools } from './components/DevTools';
+import { SocialPlayDashboard } from './components/social/SocialPlayDashboard';
+import { CreateGameSession } from './components/social/CreateGameSession';
+import { GameSessionDetail } from './components/social/GameSessionDetail';
 import type { Tournament, PartnerInvite, UserProfile } from './types';
 import { useAuth } from './contexts/AuthContext';
 import { LoginModal } from './components/auth/LoginModal';
@@ -165,6 +169,7 @@ const App: React.FC = () => {
     const [activeTournamentId, setActiveTournamentId] = useState<string | null>(null);
     const [activeClubId, setActiveClubId] = useState<string | null>(null);
     const [activeCompetitionId, setActiveCompetitionId] = useState<string | null>(null);
+    const [activeGameSessionId, setActiveGameSessionId] = useState<string | null>(null); // New for game link
     
     // Wizard auto-open state
     const [wizardProps, setWizardProps] = useState<{ isOpen: boolean; mode?: 'full'|'waiver_only'; divisionId?: string } | null>(null);
@@ -181,6 +186,19 @@ const App: React.FC = () => {
     const [invitePopupVisible, setInvitePopupVisible] = useState(true);
     const [tournamentsById, setTournamentsById] = useState<Record<string, Tournament>>({});
     const [usersById, setUsersById] = useState<Record<string, UserProfile>>({});
+
+    // Check configuration on mount & Handle URL Params for Shared Links
+    useEffect(() => {
+        // Handle URL parameters for game invites
+        const params = new URLSearchParams(window.location.search);
+        const gameId = params.get('gameId');
+        if (gameId) {
+            setActiveGameSessionId(gameId);
+            setView('gameSessionDetail');
+            // Clean URL to prevent re-triggering on refresh
+            window.history.replaceState(null, '', window.location.pathname);
+        }
+    }, []);
 
     useEffect(() => {
         if (currentUser) {
@@ -239,7 +257,7 @@ const App: React.FC = () => {
         if (pendingInvites.length > 0) {
             loadInviters();
         }
-    }, [pendingInvites, usersById]); // Safe dependency due to functional update check inside logic
+    }, [pendingInvites, usersById]);
 
     // Check for verification redirect from email
     useEffect(() => {
@@ -293,6 +311,7 @@ const App: React.FC = () => {
         setActiveClubId(null);
         setActiveCompetitionId(null);
         setWizardProps(null);
+        setActiveGameSessionId(null);
     };
 
     const handleLogout = async () => {
@@ -312,15 +331,12 @@ const App: React.FC = () => {
             mode: 'waiver_only',
             divisionId
         });
-        // The TournamentManager will render because activeTournamentId is set
     };
 
     const handlePopupAccept = async (invite: PartnerInvite) => {
         try {
             const result = await respondToPartnerInvite(invite, 'accepted');
             if (result && currentUser) {
-                // Explicit cast to 'any' to ensure properties are accessible
-                // The result is actually { tournamentId, divisionId }
                 const r = result as any;
                 await ensureRegistrationForUser(r.tournamentId, currentUser.uid, r.divisionId);
                 handleAcceptInvite(r.tournamentId, r.divisionId);
@@ -332,9 +348,11 @@ const App: React.FC = () => {
 
     if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-gray-500">Loading PickleballDirector...</div>;
 
-    if (!currentUser) {
+    // Special Case: Allow viewing game invite details even if logged out (login prompted inside)
+    if (!currentUser && view !== 'gameSessionDetail') {
         return (
             <>
+                {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} onClose={() => setConfigModalOpen(false)} />}
                 <LoggedOutWelcome onLoginClick={() => setLoginModalOpen(true)} />
                 {isLoginModalOpen && <LoginModal onClose={() => setLoginModalOpen(false)} />}
             </>
@@ -343,7 +361,6 @@ const App: React.FC = () => {
 
     const activeTournament = tournaments.find(t => t.id === activeTournamentId);
 
-    // -- Main Authenticated Layout --
     return (
         <div className="min-h-screen bg-gray-900 flex flex-col font-sans text-gray-100 relative w-full overflow-x-hidden">
             {/* Navigation Header */}
@@ -357,9 +374,9 @@ const App: React.FC = () => {
                 onAcceptInvite={handleAcceptInvite}
             />
 
-            {/* Partner Invite Popup */}
+            {/* Partner Invite Popup - Adjusted Z-index to not overlap bottom nav */}
             {pendingInvites.length > 0 && invitePopupVisible && (
-                <div className="fixed inset-x-0 top-16 z-50 flex justify-center px-4 sm:px-0 pointer-events-none">
+                <div className="fixed inset-x-0 top-16 z-30 flex justify-center px-4 sm:px-0 pointer-events-none">
                     <div className="pointer-events-auto max-w-xl w-full bg-gray-900 border border-green-500/60 shadow-2xl rounded-xl p-4 sm:p-5 flex flex-col gap-3 animate-fade-in mt-2">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -418,12 +435,6 @@ const App: React.FC = () => {
                                 );
                             })}
                         </div>
-
-                        <div className="text-[11px] text-gray-500 flex justify-between items-center">
-                            <span>
-                                You can also manage these under <strong>My Invites</strong> in the menu.
-                            </span>
-                        </div>
                     </div>
                 </div>
             )}
@@ -431,20 +442,36 @@ const App: React.FC = () => {
             {/* Verification Banner */}
             {currentUser && !currentUser.emailVerified && <VerificationBanner />}
 
-            {/* Main Content Area */}
-            <main className="flex-grow p-4 md:p-8 overflow-y-auto w-full">
+            {/* Main Content Area - Added padding-bottom for mobile nav */}
+            <main className="flex-grow p-4 md:p-8 overflow-y-auto w-full pb-20 md:pb-8">
                 <div className="container mx-auto">
-                    {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
+                    {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} onClose={() => setConfigModalOpen(false)} />}
+                    {isLoginModalOpen && <LoginModal onClose={() => setLoginModalOpen(false)} />}
 
                     {/* Content Switcher */}
                     {activeTournament ? (
                             <TournamentManager 
                             tournament={activeTournament} 
                             onUpdateTournament={handleUpdateTournament}
-                            isVerified={!!currentUser.emailVerified} 
+                            isVerified={!!currentUser?.emailVerified} 
                             onBack={handleBackToDashboard}
                             initialWizardState={wizardProps}
                             clearWizardState={() => setWizardProps(null)}
+                        />
+                    ) : view === 'gameSessionDetail' && activeGameSessionId ? (
+                        <GameSessionDetail 
+                            sessionId={activeGameSessionId} 
+                            onBack={() => { setActiveGameSessionId(null); setView('dashboard'); }} 
+                        />
+                    ) : view === 'createGameSession' ? (
+                        <CreateGameSession 
+                            onCancel={() => setView('socialPlay')} 
+                            onCreated={() => setView('socialPlay')}
+                        />
+                    ) : view === 'socialPlay' ? (
+                        <SocialPlayDashboard 
+                            onCreateClick={() => setView('createGameSession')} 
+                            onSelectSession={(id) => { setActiveGameSessionId(id); setView('gameSessionDetail'); }} 
                         />
                     ) : view === 'createTournament' ? (
                         isOrganizer ? (
@@ -452,7 +479,7 @@ const App: React.FC = () => {
                                 onCreateTournament={handleCreateTournament} 
                                 onCancel={() => setView('tournaments')} 
                                 onCreateClub={() => setView('createClub')}
-                                userId={currentUser.uid}
+                                userId={currentUser?.uid || ''}
                             />
                         ) : (
                             <div className="text-center py-20">
@@ -471,12 +498,11 @@ const App: React.FC = () => {
                             onBack={() => { setActiveClubId(null); setView('clubs'); }} 
                         />
                     ) : view === 'dashboard' ? (
-                        // User Profile Dashboard
                         <UserDashboard 
                             userProfile={userProfile || {
-                                id: currentUser.uid, 
-                                email: currentUser.email || '', 
-                                displayName: currentUser.displayName || 'User',
+                                id: currentUser?.uid || '', 
+                                email: currentUser?.email || '', 
+                                displayName: currentUser?.displayName || 'User',
                                 roles: ['player']
                             }}
                             onEditProfile={() => setView('profile')}
@@ -526,7 +552,7 @@ const App: React.FC = () => {
                         />
                     ) : view === 'myResults' ? (
                         <PlaceholderView 
-                            title="My Results" 
+                            title="My Matches" 
                             icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
                             message="Your personal match history and statistics across all tournaments."
                             onBack={() => setView('dashboard')}
@@ -600,9 +626,9 @@ const App: React.FC = () => {
                         // Fallback
                         <UserDashboard 
                             userProfile={userProfile || {
-                                id: currentUser.uid, 
-                                email: currentUser.email || '', 
-                                displayName: currentUser.displayName || 'User',
+                                id: currentUser?.uid || '', 
+                                email: currentUser?.email || '', 
+                                displayName: currentUser?.displayName || 'User',
                                 roles: ['player']
                             }}
                             onEditProfile={() => setView('profile')}
@@ -612,7 +638,9 @@ const App: React.FC = () => {
                 </div>
             </main>
             
-            <footer className="p-6 text-center border-t border-gray-800 text-gray-600 text-xs bg-gray-900">
+            <BottomNav activeView={view} onNavigate={handleNavigate} />
+
+            <footer className="hidden md:block p-6 text-center border-t border-gray-800 text-gray-600 text-xs bg-gray-900">
                 <div className="flex justify-center gap-4 mb-2">
                     <button onClick={() => setConfigModalOpen(true)} className="hover:text-gray-400">
                             {hasCustomConfig() ? 'Database Settings' : 'Connect Database'}

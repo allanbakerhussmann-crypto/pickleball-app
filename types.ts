@@ -24,7 +24,6 @@ export interface UserProfile {
   ratingSingles?: number;
   ratingDoubles?: number;
   duprLastUpdatedManually?: number;
-  duprLastUpdatedAt?: number; // System sync timestamp
   playsHand?: 'right' | 'left' | '';
   height?: string;
   createdAt?: number;
@@ -44,6 +43,24 @@ export interface Club {
   members: string[];
   createdAt: number;
   updatedAt: number;
+}
+
+export interface GameSession {
+  id: string;
+  hostId: string;
+  hostName: string;
+  title: string;
+  location: string;
+  startDatetime: string; // ISO string
+  durationMinutes: number;
+  courtCount: number;
+  maxPlayers: number;
+  minRating?: number;
+  maxRating?: number;
+  description?: string;
+  playerIds: string[];
+  status: 'open' | 'full' | 'cancelled' | 'completed';
+  createdAt: number;
 }
 
 export interface ClubJoinRequest {
@@ -163,6 +180,8 @@ export interface Registration {
   status: 'in_progress' | 'completed' | 'cancelled';
   waiverAccepted: boolean;
   selectedEventIds: string[];
+  checkedIn?: boolean;
+  checkedInAt?: number;
   partnerDetails?: Record<string, {
       mode: 'invite' | 'open_team' | 'join_open';
       partnerUserId?: string;
@@ -294,7 +313,6 @@ export interface Competition {
   settings: {
       points: { win: number; draw: number; loss: number; bonus?: number };
       tieBreaker: TieBreaker;
-      seedingPolicy?: 'average' | 'weighted' | 'highest' | 'captain';
       waitlist?: boolean;
       teamRegistrationMode?: 'on_entry' | 'pre_registered';
       teamLeague?: TeamLeagueSettings;

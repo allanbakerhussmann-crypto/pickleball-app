@@ -17,7 +17,6 @@ export const MatchLineupEditor: React.FC<MatchLineupEditorProps> = ({ match, tea
     const [error, setError] = useState<string | null>(null);
 
     const boards = match.boards || [];
-    const isLocked = match.status === 'in_progress' || match.status === 'completed';
 
     useEffect(() => {
         const load = async () => {
@@ -58,7 +57,7 @@ export const MatchLineupEditor: React.FC<MatchLineupEditorProps> = ({ match, tea
             }
         };
         load();
-    }, [teamId, match.id]); 
+    }, [teamId, match.id]); // Added dependency match.id although unlikely to change
 
     const handleSelectPlayer = (boardIdx: number, slotIdx: number, playerId: string) => {
         setLineup(prev => {
@@ -66,16 +65,6 @@ export const MatchLineupEditor: React.FC<MatchLineupEditorProps> = ({ match, tea
             currentBoardPlayers[slotIdx] = playerId;
             return { ...prev, [boardIdx]: currentBoardPlayers };
         });
-    };
-
-    const getSelectedPlayers = (): Set<string> => {
-        const set = new Set<string>();
-        (Object.values(lineup) as string[][]).forEach(players => {
-            players.forEach(pid => {
-                if (pid) set.add(pid);
-            });
-        });
-        return set;
     };
 
     const handleSubmit = async () => {
@@ -105,8 +94,6 @@ export const MatchLineupEditor: React.FC<MatchLineupEditorProps> = ({ match, tea
 
     if (loading) return <div className="fixed inset-0 bg-black/80 flex items-center justify-center text-white">Loading Lineup...</div>;
 
-    const selectedSet = getSelectedPlayers();
-
     return (
         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
             <div className="bg-gray-800 w-full max-w-2xl p-6 rounded-lg border border-gray-700 max-h-[90vh] flex flex-col">
@@ -115,7 +102,6 @@ export const MatchLineupEditor: React.FC<MatchLineupEditorProps> = ({ match, tea
                     <button onClick={onClose} className="text-gray-400 hover:text-white">&times;</button>
                 </div>
 
-                {isLocked && <div className="bg-yellow-900/50 p-2 rounded text-yellow-200 text-xs mb-4">Match is in progress/completed. Lineup changes may not be allowed by the server.</div>}
                 {error && <div className="bg-red-900/50 p-2 rounded text-red-200 text-sm mb-4">{error}</div>}
 
                 <div className="flex-grow overflow-y-auto pr-2 space-y-4">
@@ -129,35 +115,21 @@ export const MatchLineupEditor: React.FC<MatchLineupEditorProps> = ({ match, tea
                                     <span className="font-bold text-green-400 uppercase text-sm">Board {idx + 1}: {board.boardType.replace('_', ' ')}</span>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    {Array.from({ length: slots }).map((_, slotIdx) => {
-                                        const currentValue = assigned[slotIdx] || '';
-                                        return (
-                                            <div key={slotIdx}>
-                                                <label className="block text-xs text-gray-500 mb-1">Player {slotIdx + 1}</label>
-                                                <select 
-                                                    className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 text-sm focus:border-green-500 outline-none"
-                                                    value={currentValue}
-                                                    onChange={e => handleSelectPlayer(idx, slotIdx, e.target.value)}
-                                                >
-                                                    <option value="">-- Select Player --</option>
-                                                    {rosterPlayers.map(p => {
-                                                        // Disable if selected elsewhere
-                                                        const isSelectedElsewhere = selectedSet.has(p.id) && p.id !== currentValue;
-                                                        return (
-                                                            <option 
-                                                                key={p.id} 
-                                                                value={p.id} 
-                                                                disabled={isSelectedElsewhere}
-                                                                className={isSelectedElsewhere ? "text-gray-600 italic" : ""}
-                                                            >
-                                                                {p.displayName} {isSelectedElsewhere ? '(Selected)' : ''}
-                                                            </option>
-                                                        );
-                                                    })}
-                                                </select>
-                                            </div>
-                                        );
-                                    })}
+                                    {Array.from({ length: slots }).map((_, slotIdx) => (
+                                        <div key={slotIdx}>
+                                            <label className="block text-xs text-gray-500 mb-1">Player {slotIdx + 1}</label>
+                                            <select 
+                                                className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 text-sm"
+                                                value={assigned[slotIdx] || ''}
+                                                onChange={e => handleSelectPlayer(idx, slotIdx, e.target.value)}
+                                            >
+                                                <option value="">-- Select Player --</option>
+                                                {rosterPlayers.map(p => (
+                                                    <option key={p.id} value={p.id}>{p.displayName}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         );

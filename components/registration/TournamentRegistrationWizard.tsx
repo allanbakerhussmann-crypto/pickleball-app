@@ -201,18 +201,13 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         setError(null);
         if (!regData) return;
 
-        // validation on click (same logic as validatePartnerChoices)
-        const missing = validatePartnerChoices();
-        if (missing.length > 0) {
-            setError(`You must select a valid partner option for: ${missing.join(', ')}`);
-            return;
-        }
-
         setLoading(true);
         try {
             const payload: Registration = {
                 ...(regData as Registration),
                 partnerDetails: isWaiverOnly ? (regData.partnerDetails || {}) : (partnerDetails || {}),
+                waiverAccepted: true,
+                status: 'completed'
             };
             await finalizeRegistration(payload, tournament, userProfile);
             setLoading(false);
@@ -224,15 +219,13 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         }
     };
 
-    if (loading && !regData) return <div className="p-10 text-white text-center">Loading...</div>;
+    if (loading && !regData) return <div className="fixed inset-0 bg-gray-900/90 flex items-center justify-center text-white z-50">Loading...</div>;
     if (!regData) return null;
 
     const isRegistrationComplete = regData.status === 'completed';
-    const primaryButtonLabel = loading ? 'Processing...' : isWaiverOnly ? 'Sign Waiver & Join' : isRegistrationComplete ? 'Update Registration' : 'Complete Registration';
-
-    // disable if missing partner choices or loading
-    const missingChoices = validatePartnerChoices();
-    const primaryDisabled = loading || (!isWaiverOnly && missingChoices.length > 0);
+    
+    // Simulate entry fee calculation
+    const entryFee = regData.selectedEventIds.length * 45; 
 
     return (
         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
@@ -262,20 +255,25 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                 </div>
             )}
 
-            <div className="bg-gray-800 w-full max-w-2xl p-6 rounded-lg border border-gray-700 relative flex flex-col max-h-[90vh]">
-                <h2 className="text-2xl text-white font-bold mb-4 flex-shrink-0">
-                    {isWaiverOnly ? 'Complete Registration' : isRegistrationComplete ? 'Manage Registration' : `Registration: ${tournament.name}`}
-                </h2>
+            <div className="bg-gray-800 w-full max-w-2xl p-6 rounded-lg border border-gray-700 relative flex flex-col max-h-[90vh] shadow-2xl">
+                {/* Steps Header */}
+                <div className="flex justify-between items-center mb-6 border-b border-gray-700 pb-4">
+                    <h2 className="text-2xl text-white font-bold">
+                        {isWaiverOnly ? 'Complete Registration' : 'Tournament Registration'}
+                    </h2>
+                    <div className="flex gap-2">
+                        {[1, 2, 3, 4].map(s => (
+                            <div key={s} className={`h-2 w-8 rounded-full ${step >= s ? 'bg-green-500' : 'bg-gray-700'}`} />
+                        ))}
+                    </div>
+                </div>
 
                 <div className="overflow-y-auto flex-grow pr-2">
                     <>
                         {step === 1 && (
                             <div className="space-y-4">
-                                <p className="text-gray-300">{isWaiverOnly ? 'You have been invited to join the following event:' : 'Select Division(s):'}</p>
-                                {isRegistrationComplete && !isWaiverOnly && (
-                                    <p className="text-xs text-gray-400">You are already registered. You can update your divisions and partner options below, then click <span className="font-semibold text-gray-200">Update Registration</span> to save your changes.</p>
-                                )}
-
+                                <p className="text-gray-300 text-sm">Select the divisions you wish to compete in:</p>
+                                
                                 <div className="grid gap-3">
                                     {divisions.map(div => {
                                         const { eligible, reason } = checkEligibility(div, userProfile);
@@ -289,12 +287,12 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                 onClick={() => {
                                                     if (isWaiverOnly) return;
                                                     if (!eligible) return;
-                                                    if (hasExistingTeam) return; // Prevent deselecting if they have a team, must use withdraw button
+                                                    if (hasExistingTeam) return; 
                                                     const current = regData.selectedEventIds;
                                                     const next = current.includes(div.id) ? current.filter(x => x !== div.id) : [...current, div.id];
                                                     handleSave({ selectedEventIds: next });
                                                 }}
-                                                className={`p-4 rounded border flex justify-between items-center transition-all ${!eligible ? 'bg-gray-800 border-gray-700 opacity-60 cursor-not-allowed' : isSelected ? 'bg-green-900/40 border-green-500 cursor-pointer shadow-[0_0_10px_rgba(34,197,94,0.1)]' : 'bg-gray-700 border-gray-600 hover:bg-gray-600 cursor-pointer'}`}
+                                                className={`p-4 rounded-xl border flex justify-between items-center transition-all ${!eligible ? 'bg-gray-900 border-gray-800 opacity-60 cursor-not-allowed' : isSelected ? 'bg-green-900/20 border-green-500 cursor-pointer' : 'bg-gray-700/50 border-gray-600 hover:bg-gray-700 cursor-pointer'}`}
                                             >
                                                 <div>
                                                     <div className={`font-bold ${isSelected ? 'text-green-400' : 'text-white'}`}>{div.name}</div>
@@ -303,7 +301,6 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                         <span>•</span>
                                                         <span className="capitalize">{div.gender}</span>
                                                         {div.minRating && <span>• {div.minRating}+ Rating</span>}
-                                                        {div.minAge && <span>• Age {div.minAge}+</span>}
                                                     </div>
                                                 </div>
 
@@ -311,7 +308,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                     <div className="text-xs font-bold text-red-400 border border-red-900 bg-red-900/20 px-2 py-1 rounded whitespace-nowrap">{reason}</div>
                                                 ) : hasExistingTeam ? (
                                                     <div className="text-xs font-bold text-gray-300 border border-gray-600 bg-gray-900 px-2 py-1 rounded whitespace-nowrap flex items-center gap-2">
-                                                        Currently Registered
+                                                        Registered
                                                         <button
                                                             type="button"
                                                             onMouseDown={(e) => e.stopPropagation()}
@@ -319,29 +316,33 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                                 e.stopPropagation();
                                                                 setWithdrawConfirmationId(div.id);
                                                             }}
-                                                            className="text-red-400 hover:text-red-300 hover:underline ml-1 cursor-pointer z-10 relative isolate"
+                                                            className="text-red-400 hover:text-red-300 hover:underline ml-1"
                                                         >
                                                             Withdraw
                                                         </button>
                                                     </div>
                                                 ) : isSelected ? (
-                                                    <div className="text-green-500 font-bold text-xl">✓</div>
-                                                ) : null}
+                                                    <div className="text-green-500 font-bold text-xl bg-green-900/30 rounded-full w-8 h-8 flex items-center justify-center border border-green-500">✓</div>
+                                                ) : <div className="w-8 h-8 rounded-full border border-gray-500" />}
                                             </div>
                                         );
                                     })}
                                 </div>
 
-                                <div className="flex justify-between items-center mt-6 border-t border-gray-700 pt-4">
+                                <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-700">
+                                    <button onClick={onClose} className="text-gray-400 hover:text-white px-4">Cancel</button>
                                     <button 
-                                        onClick={onClose} 
-                                        className="bg-gray-700 border border-gray-600 text-white px-4 py-2 rounded hover:bg-gray-600"
+                                        onClick={() => { 
+                                            if (isWaiverOnly || !regData.selectedEventIds.some(id => divisions.find(d => d.id === id && d.type === 'doubles'))) { 
+                                                setStep(3); // Skip partners if no doubles
+                                            } else { 
+                                                setStep(2); 
+                                            } 
+                                        }} 
+                                        className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold shadow-lg"
+                                        disabled={regData.selectedEventIds.length === 0}
                                     >
-                                        Back
-                                    </button>
-                                    <div className="text-xs text-gray-500 hidden sm:block"><p>* Eligibility is based on your Profile.</p></div>
-                                    <button onClick={() => { if (isWaiverOnly || !regData.selectedEventIds.some(id => divisions.find(d => d.id === id && d.type === 'doubles'))) { setStep(3); } else { setStep(2); } }} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-500">
-                                        Next
+                                        Next: Partners
                                     </button>
                                 </div>
                             </div>
@@ -349,6 +350,10 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
 
                         {step === 2 && (
                             <>
+                                <div className="mb-4">
+                                    <h3 className="text-lg font-bold text-white">Partner Selection</h3>
+                                    <p className="text-sm text-gray-400">Choose your partners for doubles events.</p>
+                                </div>
                                 <DoublesPartnerStep
                                     eventId={tournament.id}
                                     eventContext="tournament"
@@ -360,29 +365,99 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                     existingTeams={existingTeamsByDivision}
                                 />
 
-                                <div className="flex justify-between items-center mt-6 border-t border-gray-700 pt-4">
-                                    <button onClick={() => setStep(1)} className="bg-gray-700 border border-gray-600 text-white px-4 py-2 rounded">Back</button>
-                                    <button onClick={() => setStep(3)} className="bg-blue-600 text-white px-4 py-2 rounded">Review</button>
+                                <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-700">
+                                    <button onClick={() => setStep(1)} className="text-gray-400 hover:text-white px-4">Back</button>
+                                    <button 
+                                        onClick={() => {
+                                            const missing = validatePartnerChoices();
+                                            if (missing.length > 0) {
+                                                setError(`Missing partners for: ${missing.join(', ')}`);
+                                                return;
+                                            }
+                                            setError(null);
+                                            setStep(3);
+                                        }} 
+                                        className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold shadow-lg"
+                                    >
+                                        Next: Payment
+                                    </button>
                                 </div>
+                                {error && <div className="mt-4 text-red-400 text-center text-sm font-bold bg-red-900/20 p-2 rounded">{error}</div>}
                             </>
                         )}
 
                         {step === 3 && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-bold text-white">Entry Fee</h3>
+                                    <p className="text-sm text-gray-400">Review your summary and complete payment.</p>
+                                </div>
+
+                                <div className="bg-gray-900 rounded-xl p-6 border border-gray-700">
+                                    <div className="flex justify-between items-center mb-4 pb-4 border-b border-gray-800">
+                                        <span className="text-gray-400">Registration Fee</span>
+                                        <span className="text-white font-bold">${entryFee}.00</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-xl font-bold">
+                                        <span className="text-white">Total</span>
+                                        <span className="text-green-400">${entryFee}.00</span>
+                                    </div>
+                                </div>
+
+                                <div className="bg-gray-700/30 rounded-xl p-4 border border-gray-600 space-y-3">
+                                    <label className="block text-sm font-medium text-gray-300">Card Information (Simulated)</label>
+                                    <div className="flex gap-2">
+                                        <div className="flex-grow bg-gray-900 border border-gray-600 rounded p-2 flex items-center gap-2">
+                                            <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+                                            <input className="bg-transparent outline-none text-white w-full text-sm" placeholder="0000 0000 0000 0000" defaultValue="4242 4242 4242 4242" />
+                                        </div>
+                                        <input className="w-20 bg-gray-900 border border-gray-600 rounded p-2 text-white text-center text-sm" placeholder="MM/YY" defaultValue="12/25" />
+                                        <input className="w-16 bg-gray-900 border border-gray-600 rounded p-2 text-white text-center text-sm" placeholder="CVC" defaultValue="123" />
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-700">
+                                    <button onClick={() => setStep(2)} className="text-gray-400 hover:text-white px-4">Back</button>
+                                    <button 
+                                        onClick={() => setStep(4)} 
+                                        className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold shadow-lg flex items-center gap-2"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                                        Pay & Continue
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {step === 4 && (
                             <div className="space-y-4">
-                                <h3 className="text-white font-bold">Liability Waiver</h3>
-                                <p className="text-gray-300">By registering, I acknowledge the risks blah blah (waiver text omitted for brevity).</p>
+                                <h3 className="text-lg font-bold text-white">Liability Waiver</h3>
+                                <div className="bg-gray-900 p-4 rounded border border-gray-700 h-48 overflow-y-auto text-xs text-gray-400 leading-relaxed">
+                                    <p className="mb-2"><strong>PARTICIPANT RELEASE OF LIABILITY, WAIVER OF CLAIMS, ASSUMPTION OF RISKS AND INDEMNITY AGREEMENT</strong></p>
+                                    <p className="mb-2">In consideration of being allowed to participate in the pickleball tournament, I hereby acknowledge and agree to the following:</p>
+                                    <p className="mb-2">1. I certify that I am physically fit and have no medical condition that would prevent my full participation in this tournament.</p>
+                                    <p className="mb-2">2. I acknowledge that pickleball involves physical exertion and risk of injury, including but not limited to slips, falls, and contact with other players or equipment.</p>
+                                    <p>3. I hereby release, waive, discharge, and covenant not to sue the tournament organizers, venue owners, and sponsors from any and all liability, claims, demands, actions, or causes of action whatsoever arising out of or related to any loss, damage, or injury, including death, that may be sustained by me.</p>
+                                </div>
 
-                                {error && <div className="text-red-400 font-semibold">{error}</div>}
+                                <div className="flex items-start gap-3 p-4 bg-gray-700/20 rounded border border-gray-600">
+                                    <input type="checkbox" id="waiver" className="mt-1 w-5 h-5 text-green-600 rounded bg-gray-900 border-gray-600 focus:ring-green-500" />
+                                    <label htmlFor="waiver" className="text-sm text-gray-300">
+                                        I have read and understand the waiver and release of liability. I am aware that by signing this agreement I am waiving certain legal rights.
+                                    </label>
+                                </div>
 
-                                <div className="flex justify-between items-center mt-6 border-t border-gray-700 pt-4">
-                                    <button onClick={() => setStep(Math.max(1, step - 1))} className="bg-gray-700 border border-gray-600 text-white px-4 py-2 rounded">Back</button>
+                                {error && <div className="text-red-400 font-bold text-center">{error}</div>}
+
+                                <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-700">
+                                    <button onClick={() => setStep(3)} className="text-gray-400 hover:text-white px-4">Back</button>
 
                                     <button
                                         onClick={handleFinalize}
-                                        disabled={primaryDisabled}
-                                        className={`px-4 py-2 rounded font-bold ${primaryDisabled ? 'bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-green-600 text-white'}`}
+                                        disabled={loading}
+                                        className="bg-green-600 hover:bg-green-500 text-white px-8 py-3 rounded-lg font-bold shadow-lg transform transition hover:scale-105"
                                     >
-                                        {primaryButtonLabel}
+                                        {loading ? 'Finalizing...' : 'Complete Registration'}
                                     </button>
                                 </div>
                             </div>

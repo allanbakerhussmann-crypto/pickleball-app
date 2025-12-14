@@ -10,7 +10,6 @@ interface CreateCompetitionProps {
     initialType?: CompetitionType;
 }
 
-// ... existing code ...
 const COUNTRIES = [
     { code: 'NZL', name: 'New Zealand' },
     { code: 'AUS', name: 'Australia' },
@@ -73,7 +72,6 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
     const [lossPoints, setLossPoints] = useState(0);
     const [bonusPoints, setBonusPoints] = useState(0);
     const [tieBreaker, setTieBreaker] = useState<TieBreaker>('point_diff');
-    const [seedingPolicy, setSeedingPolicy] = useState<'average' | 'weighted' | 'highest' | 'captain'>('average');
     const [teamRegistrationMode, setTeamRegistrationMode] = useState<'pre_registered'|'on_entry'>('on_entry');
     
     // Team Match Config (Only for team_league)
@@ -213,7 +211,6 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                         bonus: bonusPoints 
                     },
                     tieBreaker,
-                    seedingPolicy,
                     waitlist,
                     teamRegistrationMode: type === 'team_league' ? teamRegistrationMode : undefined,
                     teamLeague: teamLeagueSettings
@@ -515,33 +512,17 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-300 mb-1">Tie Breaker</label>
-                            <select 
-                                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
-                                value={tieBreaker}
-                                onChange={e => setTieBreaker(e.target.value as TieBreaker)}
-                            >
-                                <option value="point_diff">Point Difference</option>
-                                <option value="match_wins">Total Match Wins</option>
-                                <option value="head_to_head">Head to Head</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-300 mb-1">Seeding Policy</label>
-                            <select 
-                                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
-                                value={seedingPolicy}
-                                onChange={e => setSeedingPolicy(e.target.value as any)}
-                            >
-                                <option value="average">Average Rating</option>
-                                <option value="weighted">Weighted (Top Heavy)</option>
-                                <option value="highest">Highest Player</option>
-                                <option value="captain">Captain's Rating</option>
-                            </select>
-                            <p className="text-xs text-gray-500 mt-1">Determines how team strength is calculated for seeding.</p>
-                        </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Tie Breaker</label>
+                        <select 
+                            className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                            value={tieBreaker}
+                            onChange={e => setTieBreaker(e.target.value as TieBreaker)}
+                        >
+                            <option value="point_diff">Point Difference</option>
+                            <option value="match_wins">Total Match Wins</option>
+                            <option value="head_to_head">Head to Head</option>
+                        </select>
                     </div>
 
                     {type === 'team_league' && (

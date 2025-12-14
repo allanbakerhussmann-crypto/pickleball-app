@@ -1,3 +1,4 @@
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -116,6 +117,15 @@ service cloud.firestore {
     match /auditLogs/{logId} {
        allow read: if isAdmin(request.auth.uid);
        allow write: if false; 
+    }
+
+    // --- Game Sessions (Social Play) ---
+    match /gameSessions/{sessionId} {
+      allow read: if true;
+      // Anyone signed in can create a social game
+      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
+      // Allow joining (arrayUnion) or host edits
+      allow update: if isSignedIn();
     }
     
     // --- Legacy / Other Collections ---

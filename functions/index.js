@@ -49,45 +49,6 @@ async function isParticipantOrOrganizer(uid, matchData) {
     }
 }
 
-// Helper to calculate team rating
-function calculateTeamRating(playerProfiles, type, policy = 'average', captainId = null) {
-    const ratings = playerProfiles.map(p => {
-        // Use doubles rating for doubles/teams, singles for singles events
-        const r = type === 'singles' 
-            ? (p.duprSinglesRating || p.ratingSingles || 0)
-            : (p.duprDoublesRating || p.ratingDoubles || 0);
-        return r || 0; // fallback to 0
-    }).sort((a, b) => b - a); // Descending
-
-    if (ratings.length === 0) return 0;
-
-    switch (policy) {
-        case 'highest':
-            return ratings[0];
-        case 'captain':
-            if (captainId) {
-                const captain = playerProfiles.find(p => p.id === captainId);
-                if (captain) {
-                    return type === 'singles' 
-                        ? (captain.duprSinglesRating || captain.ratingSingles || 0)
-                        : (captain.duprDoublesRating || captain.ratingDoubles || 0);
-                }
-            }
-            return ratings[0]; // Fallback
-        case 'weighted':
-            // Simple weighted: Top player 60%, 2nd 40% (if doubles pair)
-            // For teams: Top 2 weighted higher? Simplified:
-            if (ratings.length >= 2) {
-                return (ratings[0] * 0.6) + (ratings[1] * 0.4);
-            }
-            return ratings[0];
-        case 'average':
-        default:
-            const sum = ratings.reduce((a, b) => a + b, 0);
-            return sum / ratings.length;
-    }
-}
-
 // --- Auth Helper ---
 
 async function validateAuth(req) {
@@ -274,7 +235,7 @@ exports.generateLeagueSchedule = createHandler(async (data, uid) => {
   }
 
   const isTeamLeague = comp.type === 'team_league';
-  const seedingPolicy = comp.settings?.seedingPolicy || 'average';
+  // Use new TeamLeagueSettings if available, fallback to legacy teamMatchConfig
   const teamLeagueSettings = comp.settings && comp.settings.teamLeague;
   const legacyConfig = comp.settings && comp.settings.teamMatchConfig;
   const teamBoardsConfig = teamLeagueSettings ? teamLeagueSettings.boards : (legacyConfig ? legacyConfig.boards : []);
@@ -299,75 +260,15 @@ exports.generateLeagueSchedule = createHandler(async (data, uid) => {
       entriesByDivision['default'] = entries;
   }
 
-  // Pre-fetch all teams and players to calculate ratings
-  const allTeamIds = new Set();
-  const allPlayerIds = new Set();
-  entries.forEach(e => {
-      if (e.teamId) allTeamIds.add(e.teamId);
-      if (e.playerId) allPlayerIds.add(e.playerId);
-  });
-
-  // Fetch Team Docs
-  const teamDocs = {};
-  if (allTeamIds.size > 0) {
-      // Chunking for 'in' query if needed (omitted for brevity, assume < 30 per division for MVP)
-      const tSnap = await db.collection('teams').where(admin.firestore.FieldPath.documentId(), 'in', Array.from(allTeamIds)).get();
-      tSnap.forEach(d => {
-          teamDocs[d.id] = d.data();
-          if (d.data().players) {
-              d.data().players.forEach(p => allPlayerIds.add(p));
-          }
-      });
-  }
-
-  // Fetch User Docs (Profiles)
-  const userDocs = {};
-  if (allPlayerIds.size > 0) {
-      const pIds = Array.from(allPlayerIds);
-      // Batch fetch (chunks of 10)
-      for (let i = 0; i < pIds.length; i += 10) {
-          const chunk = pIds.slice(i, i + 10);
-          const uSnap = await db.collection('users').where(admin.firestore.FieldPath.documentId(), 'in', chunk).get();
-          uSnap.forEach(d => userDocs[d.id] = d.data());
-      }
-  }
-
   const batch = db.batch();
   let matchesCount = 0;
 
-  // 2. Generate Logic per Division
+  // 2. Generate Logic
   for (const [divId, divEntries] of Object.entries(entriesByDivision)) {
       if (divEntries.length < 2) continue;
 
-      const division = comp.divisions?.find(d => d.id === divId);
-      const divType = division ? division.type : 'doubles';
-
-      // SEEDING: Calculate Ratings & Sort
-      const rankedEntries = divEntries.map(e => {
-          let rating = 0;
-          let players = [];
-          let captainId = null;
-
-          if (e.entryType === 'individual') {
-              const u = userDocs[e.playerId];
-              if (u) players.push(u);
-          } else if (e.entryType === 'team' && e.teamId) {
-              const t = teamDocs[e.teamId];
-              if (t && t.players) {
-                  players = t.players.map(pid => userDocs[pid]).filter(Boolean);
-                  captainId = t.captainPlayerId;
-              }
-          }
-          
-          rating = calculateTeamRating(players, divType, seedingPolicy, captainId);
-          return { ...e, rating };
-      });
-
-      // Sort Descending by Rating
-      rankedEntries.sort((a, b) => b.rating - a.rating);
-
       // Initialize Standings
-      rankedEntries.forEach(e => {
+      divEntries.forEach(e => {
           const teamId = e.teamId || e.playerId || 'unknown';
           const standingId = divId === 'default' 
             ? `${competitionId}_${teamId}` 
@@ -378,8 +279,7 @@ exports.generateLeagueSchedule = createHandler(async (data, uid) => {
               competitionId,
               divisionId: divId === 'default' ? null : divId,
               teamId,
-              teamName: teamId, // UI resolves name
-              rating: e.rating, // Store seeding rating
+              teamName: teamId,
               played: 0, wins: 0, losses: 0, draws: 0, 
               pointsFor: 0, pointsAgainst: 0, pointDifference: 0, 
               points: 0,
@@ -389,7 +289,7 @@ exports.generateLeagueSchedule = createHandler(async (data, uid) => {
       });
 
       // Round Robin Algorithm
-      const participants = rankedEntries.map(e => e.teamId || e.playerId || 'unknown');
+      const participants = divEntries.map(e => e.teamId || e.playerId || 'unknown');
       if (participants.length % 2 !== 0) participants.push('BYE');
 
       const numRounds = participants.length - 1;
@@ -463,158 +363,6 @@ exports.generateLeagueSchedule = createHandler(async (data, uid) => {
   await batch.commit();
   
   return { success: true, matchesGenerated: matchesCount };
-});
-
-exports.syncPlayerRatings = createHandler(async (data, uid) => {
-    if (!(await isOrganizerOrAdmin(uid))) {
-        const e = new Error('Permission denied'); e.httpStatus = 403; throw e;
-    }
-
-    const { playerIds } = data;
-    if (!Array.isArray(playerIds) || playerIds.length === 0) {
-        const e = new Error('No players specified'); e.httpStatus = 400; throw e;
-    }
-
-    const batch = db.batch();
-    const timestamp = Date.now();
-    let updatedCount = 0;
-
-    // In a real app, you would batch call the DUPR API.
-    // Here we assume a mock function or external service call logic.
-    // For this demonstration, we simulate fetching ratings.
-    
-    for (const pid of playerIds) {
-        const userRef = db.collection('users').doc(pid);
-        const userSnap = await userRef.get();
-        if (!userSnap.exists) continue;
-        const user = userSnap.data();
-
-        // Simulate DUPR Fetch based on ID
-        if (user.duprId) {
-            // Mock random shift for demo
-            const newSingles = (user.duprSinglesRating || 3.0) + (Math.random() * 0.1 - 0.05);
-            const newDoubles = (user.duprDoublesRating || 3.0) + (Math.random() * 0.1 - 0.05);
-            
-            batch.update(userRef, {
-                duprSinglesRating: parseFloat(newSingles.toFixed(3)),
-                duprDoublesRating: parseFloat(newDoubles.toFixed(3)),
-                duprLastUpdatedAt: timestamp
-            });
-            updatedCount++;
-        }
-    }
-
-    await batch.commit();
-    return { success: true, updatedCount };
-});
-
-// ... existing functions ...
-
-exports.manageTeamRoster = createHandler(async (data, uid) => {
-    const { teamId, action, playerId } = data;
-    
-    if (!teamId || !action || !playerId) {
-        const e = new Error("Missing parameters"); e.httpStatus = 400; throw e;
-    }
-
-    const teamRef = db.collection('teams').doc(teamId);
-    const teamSnap = await teamRef.get();
-    if (!teamSnap.exists) {
-        const e = new Error("Team not found"); e.httpStatus = 404; throw e;
-    }
-    const team = teamSnap.data();
-
-    // Check Permissions (Captain or Admin)
-    const isAdmin = await isOrganizerOrAdmin(uid);
-    const isCaptain = team.captainPlayerId === uid;
-    
-    // Allow self-removal for any member? Maybe not if roster is locked. Assuming strict captain control for now.
-    if (!isAdmin && !isCaptain) {
-        const e = new Error("Only team captain or admin can manage roster"); e.httpStatus = 403; throw e;
-    }
-
-    // Get Competition settings to check eligibility
-    const compId = team.competitionId || team.tournamentId; // Legacy fallback
-    if (!compId) {
-        const e = new Error("Team not linked to valid competition"); e.httpStatus = 500; throw e;
-    }
-    const compRef = db.collection('competitions').doc(compId);
-    const compSnap = await compRef.get();
-    // Fallback to legacy tournaments if not found
-    let comp = compSnap.exists ? compSnap.data() : (await db.collection('tournaments').doc(compId).get()).data();
-    
-    if (!comp) {
-        const e = new Error("Event not found"); e.httpStatus = 404; throw e;
-    }
-
-    // Fetch Division rules
-    let division = comp.divisions?.find(d => d.id === team.divisionId);
-    // If not in comp object, check legacy divisions collection
-    if (!division) {
-        const divSnap = await db.collection('divisions').doc(team.divisionId).get();
-        if (divSnap.exists) division = divSnap.data();
-    }
-
-    if (!division) {
-        const e = new Error("Division not found"); e.httpStatus = 404; throw e;
-    }
-
-    // Roster Collection
-    const rosterRef = db.collection('teamRosters').doc(teamId);
-    let rosterSnap = await rosterRef.get();
-    let roster = rosterSnap.exists ? rosterSnap.data() : { 
-        id: teamId, 
-        teamId, 
-        players: team.players || [], 
-        captainPlayerId: team.captainPlayerId 
-    };
-
-    if (action === 'add') {
-        // Eligibility Check
-        const playerSnap = await db.collection('users').doc(playerId).get();
-        if (!playerSnap.exists) {
-            const e = new Error("Player not found"); e.httpStatus = 404; throw e;
-        }
-        const player = playerSnap.data();
-        
-        const { eligible, reason } = checkEligibility(player, division);
-        if (!eligible && !isAdmin) {
-            const e = new Error(`Player ineligible: ${reason}`); e.httpStatus = 400; throw e;
-        }
-
-        if (roster.players.includes(playerId)) {
-            return { success: true, message: "Player already in roster" };
-        }
-
-        // Check Max Roster Size
-        const maxRoster = comp.settings?.teamLeague?.rosterMax || 99;
-        if (roster.players.length >= maxRoster && !isAdmin) {
-            const e = new Error(`Roster full (Max ${maxRoster})`); e.httpStatus = 400; throw e;
-        }
-
-        roster.players.push(playerId);
-    } else if (action === 'remove') {
-        if (playerId === roster.captainPlayerId) {
-            const e = new Error("Cannot remove captain"); e.httpStatus = 400; throw e;
-        }
-        roster.players = roster.players.filter(p => p !== playerId);
-    }
-
-    // Save
-    await rosterRef.set(roster, { merge: true });
-    
-    // Sync Legacy Team.players
-    await teamRef.update({ players: roster.players, updatedAt: Date.now() });
-
-    await db.collection('auditLogs').add({
-      action: 'roster_update',
-      actorId: uid,
-      entityId: teamId,
-      timestamp: Date.now(),
-      details: { action, playerId }
-    });
-
-    return { success: true, roster };
 });
 
 exports.submitMatchScore = createHandler(async (data, uid) => {
@@ -692,28 +440,12 @@ exports.submitLineup = createHandler(async (data, uid) => {
     }
     const match = matchSnap.data();
 
-    // Validate Lock Time
-    // Assume match has a startTime or scheduledTime if strict locking is enabled.
-    // If schedule is generated, it might just be 'scheduled' without specific time in this MVP.
-    // We check competition settings.
-    const compRef = db.collection('competitions').doc(match.competitionId);
-    const compSnap = await compRef.get();
-    if (compSnap.exists) {
-        const comp = compSnap.data();
-        const settings = comp.settings?.teamLeague;
-        if (settings && settings.lineupLockMinutesBeforeMatch && match.startTime) {
-            const lockTime = match.startTime - (settings.lineupLockMinutesBeforeMatch * 60 * 1000);
-            if (Date.now() > lockTime) {
-                const e = new Error("Lineup submission is locked for this match"); e.httpStatus = 400; throw e;
-            }
-        }
-    }
-
     if (match.teamAId !== teamId && match.teamBId !== teamId) {
         const e = new Error('Team not part of this match');
         e.httpStatus = 400; throw e;
     }
 
+    // Check if user is captain or roster member or admin
     // Get Roster to validate players
     const rosterRef = db.collection('teamRosters').doc(teamId);
     const rosterSnap = await rosterRef.get();
@@ -722,12 +454,14 @@ exports.submitLineup = createHandler(async (data, uid) => {
     if (rosterSnap.exists) {
         rosterPlayers = rosterSnap.data().players || [];
     } else {
+        // Fallback to Team doc if no roster (legacy)
         const teamSnap = await db.collection('teams').doc(teamId).get();
         if (teamSnap.exists) {
             rosterPlayers = teamSnap.data().players || [];
         }
     }
 
+    // Auth check: User must be in roster or admin
     const isAdmin = await isOrganizerOrAdmin(uid);
     if (!isAdmin && !rosterPlayers.includes(uid)) {
         const e = new Error('Not authorized to submit lineup for this team');
@@ -743,47 +477,6 @@ exports.submitLineup = createHandler(async (data, uid) => {
         }
     }
 
-    // Check for Duplicates in Lineup (Single match rule: player plays once)
-    const uniquePlayers = new Set(allPlayerIds);
-    if (uniquePlayers.size !== allPlayerIds.length) {
-        const e = new Error("Duplicate players found in lineup. A player can only play one board per match.");
-        e.httpStatus = 400; throw e;
-    }
-
-    // Validate Gender Rules per Board Type
-    // Requires fetching player profiles
-    const playerProfilesSnap = await db.collection('users').where(admin.firestore.FieldPath.documentId(), 'in', allPlayerIds).get();
-    const playerMap = {};
-    playerProfilesSnap.forEach(doc => { playerMap[doc.id] = doc.data(); });
-
-    // We need board configs to know types. stored in match.boards already or comp settings.
-    // Match boards are authoritative once generated.
-    const matchBoards = match.boards || [];
-    
-    for (const assignment of boards) {
-        const boardIdx = assignment.boardNumber - 1;
-        const configBoard = matchBoards[boardIdx];
-        if (!configBoard) continue;
-
-        const assignedPlayers = assignment.playerIds.map(pid => playerMap[pid]);
-        
-        if (configBoard.boardType === 'men_doubles') {
-            if (assignedPlayers.some(p => p.gender !== 'male')) {
-                const e = new Error(`Board ${assignment.boardNumber} requires Male players.`); e.httpStatus = 400; throw e;
-            }
-        } else if (configBoard.boardType === 'women_doubles') {
-            if (assignedPlayers.some(p => p.gender !== 'female')) {
-                const e = new Error(`Board ${assignment.boardNumber} requires Female players.`); e.httpStatus = 400; throw e;
-            }
-        } else if (configBoard.boardType === 'mixed_doubles') {
-            const men = assignedPlayers.filter(p => p.gender === 'male').length;
-            const women = assignedPlayers.filter(p => p.gender === 'female').length;
-            if (men === 0 || women === 0) {
-                const e = new Error(`Board ${assignment.boardNumber} requires Mixed gender.`); e.httpStatus = 400; throw e;
-            }
-        }
-    }
-
     // Save Lineup
     const lineupId = `${matchId}_${teamId}`;
     const lineupRef = db.collection('lineups').doc(lineupId);
@@ -795,13 +488,14 @@ exports.submitLineup = createHandler(async (data, uid) => {
         submittedBy: uid,
         boards,
         submittedAt: Date.now(),
-        locked: true 
+        locked: true // Lock immediately upon submission for simplicity in this version
     });
 
     // Update Match doc with snapshot for UI display
-    // We reuse playerMap names
-    const snapshotPlayerMap = {};
-    playerProfilesSnap.forEach(doc => { snapshotPlayerMap[doc.id] = doc.data().displayName || 'Unknown'; });
+    // We need to resolve player names for the snapshot
+    const playerProfilesSnap = await db.collection('users').where(admin.firestore.FieldPath.documentId(), 'in', allPlayerIds).get();
+    const playerMap = {};
+    playerProfilesSnap.forEach(doc => { playerMap[doc.id] = doc.data().displayName || 'Unknown'; });
 
     const isTeamA = match.teamAId === teamId;
     const updatedBoards = [...(match.boards || [])];
@@ -809,7 +503,7 @@ exports.submitLineup = createHandler(async (data, uid) => {
     boards.forEach(assignment => {
         const idx = assignment.boardNumber - 1;
         if (updatedBoards[idx]) {
-            const snapshot = assignment.playerIds.map(pid => ({ id: pid, name: snapshotPlayerMap[pid] || 'Unknown' }));
+            const snapshot = assignment.playerIds.map(pid => ({ id: pid, name: playerMap[pid] || 'Unknown' }));
             if (isTeamA) {
                 updatedBoards[idx].teamAPlayers = snapshot;
             } else {
@@ -900,7 +594,7 @@ exports.confirmMatchScore = createHandler(async (data, uid) => {
           updatedBoards[idx].winnerTeamId = winnerId;
       }
       
-      // Aggregate Scores
+      // Calculate Aggregate (Weighted Score)
       let matchScoreA = 0;
       let matchScoreB = 0;
       let boardsWonA = 0;
@@ -1031,12 +725,6 @@ exports.confirmMatchScore = createHandler(async (data, uid) => {
 
 async function updateStandings(batch, competitionId, divisionId, teamAId, teamBId, scoreA, scoreB, comp, overrides = null) {
     const pointsSettings = comp.settings && comp.settings.points ? comp.settings.points : { win: 3, loss: 0, draw: 1 };
-    
-    // Override for team leagues if specific points settings exist
-    let winPts = pointsSettings.win;
-    if (comp.type === 'team_league' && comp.settings?.teamLeague?.pointsPerMatchWin) {
-        winPts = comp.settings.teamLeague.pointsPerMatchWin;
-    }
 
     const getStandingRef = (teamId) => {
         const id = divisionId 
@@ -1096,13 +784,13 @@ async function updateStandings(batch, competitionId, divisionId, teamAId, teamBI
         // Standard Scoring Logic
         if (scoreA > scoreB) {
             updateA.wins = inc(1);
-            updateA.points = inc(winPts);
+            updateA.points = inc(pointsSettings.win);
             
             updateB.losses = inc(1);
             updateB.points = inc(pointsSettings.loss);
         } else if (scoreB > scoreA) {
             updateB.wins = inc(1);
-            updateB.points = inc(winPts);
+            updateB.points = inc(pointsSettings.win);
             
             updateA.losses = inc(1);
             updateA.points = inc(pointsSettings.loss);

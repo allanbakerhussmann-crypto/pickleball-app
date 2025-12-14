@@ -6,28 +6,33 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PickleballDirector</title>
-
-    <!-- dev: tailwind CDN is OK, production should install PostCSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-
-    <!-- REMOVE THE IMPORTMAP HERE -->
-    <link rel="stylesheet" href="/index.css">
   <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react-dom": "https://esm.sh/react-dom@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
-    "crypto": "https://esm.sh/crypto@^1.0.1",
-    "firebase/": "https://esm.sh/firebase@^12.6.0/",
-    "firebase-functions": "https://esm.sh/firebase-functions@^7.0.1",
-    "firebase-admin": "https://esm.sh/firebase-admin@^13.6.0"
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "firebase/app": "https://esm.sh/firebase@10.12.2/app",
+    "firebase/auth": "https://esm.sh/firebase@10.12.2/auth",
+    "firebase/firestore": "https://esm.sh/firebase@10.12.2/firestore",
+    "firebase/functions": "https://esm.sh/firebase@10.12.2/functions",
+    "firebase/storage": "https://esm.sh/firebase@10.12.2/storage",
+    "@firebase/app": "https://aistudiocdn.com/@firebase/app@^0.14.6",
+    "@firebase/auth": "https://aistudiocdn.com/@firebase/auth@^1.11.1",
+    "@firebase/firestore": "https://aistudiocdn.com/@firebase/firestore@^4.6.1",
+    "@firebase/storage": "https://aistudiocdn.com/@firebase/storage@^0.14.0",
+    "@firebase/functions": "https://aistudiocdn.com/@firebase/functions@^0.11.8",
+    "firebase-functions": "https://aistudiocdn.com/firebase-functions@^7.0.0",
+    "firebase-admin": "https://aistudiocdn.com/firebase-admin@^13.6.0",
+    "crypto": "https://aistudiocdn.com/crypto@^1.0.1",
+    "firebase/": "https://esm.sh/firebase@10.12.2/"
   }
 }
 </script>
+<link rel="stylesheet" href="/index.css">
 </head>
   <body class="bg-gray-900 text-white">
     <div id="root"></div>
