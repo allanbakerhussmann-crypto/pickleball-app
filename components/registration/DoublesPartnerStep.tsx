@@ -1,13 +1,10 @@
-
 import React, { useEffect, useState } from 'react';
 import type {
   Tournament,
-  Competition,
   Division,
   Team,
-  Registration,
+  TournamentRegistration,
   UserProfile,
-  CompetitionDivision,
 } from '../../types';
 import {
   getOpenTeamsForDivision,
@@ -18,16 +15,15 @@ import {
 } from '../../services/firebase';
 
 interface DoublesPartnerStepProps {
-  eventId: string; // was tournamentId
-  eventContext: 'tournament' | 'competition'; // new
-  divisions: (Division | CompetitionDivision)[]; // support both types
+  tournament: Tournament;
+  divisions: Division[];
   selectedDivisionIds: string[];
   userProfile: UserProfile;
-  partnerDetails: Registration['partnerDetails'];
+  partnerDetails: TournamentRegistration['partnerDetails'];
   setPartnerDetails: (
     updater:
-      | Registration['partnerDetails']
-      | ((prev: Registration['partnerDetails']) => Registration['partnerDetails'])
+      | TournamentRegistration['partnerDetails']
+      | ((prev: TournamentRegistration['partnerDetails']) => TournamentRegistration['partnerDetails'])
   ) => void;
   existingTeams: Record<string, Team>;
 }
@@ -48,7 +44,7 @@ const getAge = (birthDate?: string | null): number | null => {
   return age;
 };
 
-const checkPartnerEligibility = (division: Division | CompetitionDivision, player: UserProfile): { eligible: boolean; reason?: string } => {
+const checkPartnerEligibility = (division: Division, player: UserProfile): { eligible: boolean; reason?: string } => {
   const rating =
     player.duprDoublesRating ??
     player.ratingDoubles ??
@@ -67,7 +63,7 @@ const checkPartnerEligibility = (division: Division | CompetitionDivision, playe
 };
 
 const checkGenderCompatibility = (
-  division: Division | CompetitionDivision,
+  division: Division,
   p1: UserProfile,
   p2: UserProfile
 ): { allowed: boolean; reason?: string } => {
@@ -92,8 +88,7 @@ const checkGenderCompatibility = (
 };
 
 export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
-  eventId,
-  eventContext,
+  tournament,
   divisions,
   selectedDivisionIds,
   userProfile,
@@ -112,7 +107,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
       const statusMap = new Map<string, string>();
 
       for (const divId of selectedDivisionIds) {
-        const teams = await getTeamsForDivision(eventId, divId, eventContext);
+        const teams = await getTeamsForDivision(tournament.id, divId);
         teams.forEach(t => {
           const isWithdrawn = t.status === 'withdrawn' || t.status === 'cancelled';
           const isSoloPending = t.status === 'pending_partner' && Array.isArray(t.players) && t.players.length === 1;
@@ -122,7 +117,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
           }
         });
 
-        const invites = await getPendingInvitesForDivision(eventId, divId, eventContext);
+        const invites = await getPendingInvitesForDivision(tournament.id, divId);
         invites.forEach(inv => {
           if (!statusMap.has(inv.invitedUserId)) statusMap.set(inv.invitedUserId, 'Has Pending Invite');
         });
@@ -131,7 +126,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
       setUnavailableUsers(statusMap);
     };
     if (selectedDivisionIds.length > 0) loadUnavailable();
-  }, [selectedDivisionIds, eventId, eventContext]);
+  }, [selectedDivisionIds, tournament.id]);
 
   useEffect(() => {
     const load = async () => {
@@ -144,15 +139,15 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
           if (!div || div.type !== 'doubles') continue;
 
           // If user is already in a full team, we don't need to load open teams for them
-          const existingTeam = existingTeams[div.id];
-          if (existingTeam && existingTeam.players && existingTeam.players.length >= 2) continue;
+          const existingTeam = existingTeams[divId];
+          if (existingTeam && existingTeam.players.length >= 2) continue;
 
-          const teams = await getOpenTeamsForDivision(eventId, divId, eventContext);
+          const teams = await getOpenTeamsForDivision(tournament.id, divId);
 
           const ownerIds = Array.from(new Set(teams.map(t => t.players?.[0]).filter(id => !!id)));
           let ownersById: Record<string, UserProfile> = {};
           if (ownerIds.length > 0) {
-            const owners = await getUsersByIds(ownerIds as string[]);
+            const owners = await getUsersByIds(ownerIds);
             ownersById = owners.reduce<Record<string, UserProfile>>((acc, u) => { acc[u.id] = u; return acc; }, {});
           }
 
@@ -171,8 +166,8 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
           }
 
           enriched.sort((a, b) => {
-            const nameA = (a.owner?.displayName || a.owner?.email || '').toLowerCase();
-            const nameB = (b.owner?.displayName || b.owner?.email || '').toLowerCase();
+            const nameA = (a.owner.displayName || a.owner.email || '').toLowerCase();
+            const nameB = (b.owner.displayName || b.owner.email || '').toLowerCase();
             if (nameA < nameB) return -1;
             if (nameA > nameB) return 1;
             return 0;
@@ -188,7 +183,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     };
 
     if (selectedDivisionIds.length > 0) load();
-  }, [selectedDivisionIds.join(','), divisions.length, eventId, userProfile.id, existingTeams, eventContext]);
+  }, [selectedDivisionIds.join(','), divisions.length, tournament.id, userProfile.id, existingTeams]);
 
   const handleModeChange = (divId: string, mode: 'invite' | 'open_team' | 'join_open') => {
     setPartnerDetails(prev => {
@@ -256,10 +251,10 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     <div className="space-y-6">
       {selectedDivisionIds
         .map(id => divisions.find(d => d.id === id))
-        .filter((d): d is Division | CompetitionDivision => !!d && d.type === 'doubles')
+        .filter((d): d is Division => !!d && d.type === 'doubles')
         .map(div => {
           const existingTeam = existingTeams[div.id];
-          const isFullTeam = existingTeam && existingTeam.players && existingTeam.players.length >= 2;
+          const isFullTeam = existingTeam && existingTeam.players.length >= 2;
 
           if (isFullTeam) {
             return (
@@ -268,7 +263,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                      <div className="text-sm text-green-400 p-3 bg-green-900/20 border border-green-800 rounded">
                          You are currently registered with a partner.
                          <br/>
-                         <span className="text-xs text-gray-400">To change partners, please withdraw from this division and rejoin.</span>
+                         <span className="text-xs text-gray-400">To change partners, please go back and withdraw from this division.</span>
                      </div>
                 </div>
             );
@@ -282,50 +277,20 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
             <div key={div.id} className="bg-gray-800 p-4 rounded border border-gray-700 space-y-3">
               <h3 className="text-white font-bold text-sm">{div.name} – Doubles Partner</h3>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                {/* Invite Option */}
-                <label 
-                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                    mode === 'invite' 
-                      ? 'bg-green-600/20 border-green-500 text-white' 
-                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-800'
-                  }`}
-                >
-                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${mode === 'invite' ? 'border-green-400' : 'border-gray-500'}`}>
-                      {mode === 'invite' && <div className="w-2 h-2 rounded-full bg-green-400" />}
-                  </div>
-                  <input type="radio" className="hidden" checked={mode === 'invite'} onChange={() => handleModeChange(div.id, 'invite')} />
-                  <span className="font-semibold text-sm">Invite a specific partner</span>
+              <div className="flex flex-col md:flex-row gap-3 text-sm">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={mode === 'invite'} onChange={() => handleModeChange(div.id, 'invite')} />
+                  <span>Invite a specific partner</span>
                 </label>
 
-                {/* Open Team Option */}
-                <label 
-                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                    mode === 'open_team' 
-                      ? 'bg-green-600/20 border-green-500 text-white' 
-                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-800'
-                  }`}
-                >
-                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${mode === 'open_team' ? 'border-green-400' : 'border-gray-500'}`}>
-                      {mode === 'open_team' && <div className="w-2 h-2 rounded-full bg-green-400" />}
-                  </div>
-                  <input type="radio" className="hidden" checked={mode === 'open_team'} onChange={() => handleModeChange(div.id, 'open_team')} />
-                  <span className="font-semibold text-sm">I don&apos;t have a partner yet</span>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={mode === 'open_team'} onChange={() => handleModeChange(div.id, 'open_team')} />
+                  <span>I don&apos;t have a partner yet</span>
                 </label>
 
-                {/* Join Open Option */}
-                <label 
-                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                    mode === 'join_open' 
-                      ? 'bg-green-600/20 border-green-500 text-white' 
-                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-800'
-                  }`}
-                >
-                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${mode === 'join_open' ? 'border-green-400' : 'border-gray-500'}`}>
-                      {mode === 'join_open' && <div className="w-2 h-2 rounded-full bg-green-400" />}
-                  </div>
-                  <input type="radio" className="hidden" checked={mode === 'join_open'} onChange={() => handleModeChange(div.id, 'join_open')} />
-                  <span className="font-semibold text-sm">Join a player looking</span>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={mode === 'join_open'} onChange={() => handleModeChange(div.id, 'join_open')} />
+                  <span>Join a player looking for a partner</span>
                 </label>
               </div>
 
@@ -385,34 +350,12 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
               {mode === 'join_open' && (
                 <div className="space-y-2">
                   <p className="text-xs text-gray-400">Available open teams:</p>
-                  {openTeams.length === 0 ? <div className="text-gray-500">No open teams</div> : openTeams.map(ot => {
-                    const isSelected = partnerInfo?.openTeamId === ot.team.id;
-                    return (
-                      <div 
-                        key={ot.team.id} 
-                        className={`p-3 border rounded-lg cursor-pointer transition-all flex justify-between items-center ${
-                          isSelected 
-                            ? 'bg-green-900/30 border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.1)]' 
-                            : 'bg-gray-900 border-gray-700 hover:bg-gray-800'
-                        }`}
-                        onClick={() => handleSelectOpenTeam(div.id, ot.team)}
-                      >
-                        <div>
-                          <div className={`font-semibold ${isSelected ? 'text-white' : 'text-gray-200'}`}>
-                            {ot.owner?.displayName || ot.owner?.email}
-                          </div>
-                          <div className="text-xs text-gray-400">{ot.team.teamName}</div>
-                        </div>
-                        {isSelected && (
-                          <div className="text-green-500">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {openTeams.length === 0 ? <div className="text-gray-500">No open teams</div> : openTeams.map(ot => (
+                    <div key={ot.team.id} className="p-2 border border-gray-700 rounded cursor-pointer" onClick={() => handleSelectOpenTeam(div.id, ot.team)}>
+                      <div className="font-semibold text-white">{ot.owner.displayName || ot.owner.email}</div>
+                      <div className="text-xs text-gray-400">{ot.team.teamName}</div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

@@ -1,4 +1,3 @@
-
 import React, { useMemo } from 'react';
 import { MatchCard, MatchDisplay } from './MatchCard';
 import type { Court } from '../types';
@@ -27,7 +26,7 @@ export const Schedule: React.FC<ScheduleProps> = ({
   onUpdateScore,
   isVerified,
 }) => {
-  const { currentUser, isOrganizer } = useAuth();
+  const { currentUser } = useAuth();
 
   // Active Matches on Courts
   const matchesOnCourt = useMemo(() => {
@@ -248,9 +247,6 @@ export const Schedule: React.FC<ScheduleProps> = ({
                   match.team1.players.some(p => p.name === currentUser.displayName) ||
                   match.team2.players.some(p => p.name === currentUser.displayName)
                 );
-              
-              // Allow editing if user is a participant OR an organizer
-              const canEdit = isOrganizer || isPlayerInThisMatch;
 
               return (
                 <MatchCard
@@ -261,7 +257,7 @@ export const Schedule: React.FC<ScheduleProps> = ({
                   isVerified={isVerified}
                   isWaitingOnYou={(match as any).isWaitingOnYou}
                   canCurrentUserConfirm={(match as any).canCurrentUserConfirm}
-                  canCurrentUserEdit={canEdit}
+                  canCurrentUserEdit={isPlayerInThisMatch}
                 />
               );
             })}

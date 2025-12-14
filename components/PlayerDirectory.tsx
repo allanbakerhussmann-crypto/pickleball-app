@@ -1,6 +1,7 @@
+
 import React, { useEffect, useState } from 'react';
-import { getAllUsers, getAllTournaments } from '../services/firebase';
-import type { UserProfile, Tournament, Registration } from '../types';
+import { getAllUsers, getAllTournaments, getAllRegistrations } from '../services/firebase';
+import type { UserProfile, Tournament, TournamentRegistration } from '../types';
 
 interface PlayerDirectoryProps {
     onBack: () => void;

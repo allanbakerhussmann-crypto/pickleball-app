@@ -1,6 +1,5 @@
-
 import React, { useState } from 'react';
-import { FirebaseError } from 'firebase/app';
+import { FirebaseError } from '@firebase/app';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
 
@@ -21,7 +20,7 @@ const getFriendlyErrorMessage = (error: FirebaseError): string => {
     case 'auth/weak-password':
       return 'Password should be at least 6 characters long.';
     default:
-      return error.message || 'An unexpected error occurred. Please try again.';
+      return 'An unexpected error occurred. Please try again.';
   }
 };
 
@@ -65,20 +64,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
       }
       onClose();
     } catch (err: any) {
-      console.error("Auth error:", err);
-      // Try to extract a useful message if it's not a standard FirebaseError
-      let msg = 'An unexpected error occurred.';
       if (err instanceof FirebaseError) {
-        msg = getFriendlyErrorMessage(err);
-      } else if (err instanceof Error) {
-        // Specifically catch auth initialization errors
-        if (err.message.includes('Auth not initialized')) {
-            msg = 'System not configured. Please click "Connect Database" at the bottom of the page.';
-        } else {
-            msg = err.message;
-        }
+        setError(getFriendlyErrorMessage(err));
+      } else {
+        setError('An unexpected error occurred.');
+        console.error(err);
       }
-      setError(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -216,7 +207,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
           )}
 
           {error && (
-            <p className="text-red-400 text-sm text-center bg-red-900/20 p-2 rounded">{error}</p>
+            <p className="text-red-400 text-sm text-center">{error}</p>
           )}
           {message && (
             <div className="text-green-400 text-sm text-center mt-1 leading-snug">

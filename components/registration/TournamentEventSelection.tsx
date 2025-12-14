@@ -66,19 +66,18 @@ export const TournamentEventSelection: React.FC<TournamentEventSelectionProps> =
     setSelectedDivisionIds((prev) =>
       prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]
     );
-    setError(null);
   };
 
   const handleContinue = () => {
     if (!selectedDivisionIds.length) {
-      setError('Please select at least one event to continue.');
+      alert('Please select at least one event to continue.');
       return;
     }
     onContinue(selectedDivisionIds);
   };
 
   if (loading) return <div className="p-4 text-gray-400">Loading tournament events...</div>;
-  if (!tournament) return <div className="p-4 text-red-400">Tournament not found.</div>;
+  if (error || !tournament) return <div className="p-4 text-red-400">{error || 'Tournament not found.'}</div>;
 
   return (
     <div className="max-w-3xl mx-auto px-4 pb-24 pt-4 animate-fade-in">
@@ -88,12 +87,6 @@ export const TournamentEventSelection: React.FC<TournamentEventSelectionProps> =
           You can join multiple events for this tournament. Partner invite events are pre-selected.
         </p>
       </div>
-
-      {error && (
-        <div className="mb-4 p-3 bg-red-900/30 text-red-300 rounded border border-red-800 text-sm">
-          {error}
-        </div>
-      )}
 
       <div className="space-y-3">
         {divisionOptions.map((division) => (

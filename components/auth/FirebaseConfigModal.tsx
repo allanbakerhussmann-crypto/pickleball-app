@@ -3,10 +3,9 @@ import React, { useState } from 'react';
 
 interface FirebaseConfigModalProps {
     onSave: (configJson: string) => { success: boolean, error?: string };
-    onClose: () => void;
 }
 
-export const FirebaseConfigModal: React.FC<FirebaseConfigModalProps> = ({ onSave, onClose }) => {
+export const FirebaseConfigModal: React.FC<FirebaseConfigModalProps> = ({ onSave }) => {
     const [config, setConfig] = useState('');
     const [error, setError] = useState('');
 
@@ -78,18 +77,8 @@ export const FirebaseConfigModal: React.FC<FirebaseConfigModalProps> = ({ onSave
     };
 
     return (
-        <div 
-            className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={(e) => { if(e.target === e.currentTarget) onClose(); }}
-        >
-            <div className="bg-gray-800 rounded-lg shadow-2xl p-8 w-full max-w-2xl border border-gray-700 relative">
-                <button 
-                    onClick={onClose}
-                    className="absolute top-4 right-4 text-gray-400 hover:text-white"
-                >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
-
+        <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-gray-800 rounded-lg shadow-2xl p-8 w-full max-w-2xl border border-gray-700">
                 <h2 className="text-2xl font-bold text-center mb-2 text-green-400">Connect Database</h2>
                 <p className="text-gray-400 text-center mb-6 text-sm">
                     Paste your <strong>Firebase Config</strong> object below.
@@ -127,7 +116,7 @@ export const FirebaseConfigModal: React.FC<FirebaseConfigModalProps> = ({ onSave
 
                 <div className="mt-6 flex gap-3">
                      <button
-                        onClick={onClose}
+                        onClick={() => window.location.reload()} // Simple way to cancel/close is reload or add a cancel prop
                         className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-4 rounded-md transition-colors"
                     >
                         Cancel

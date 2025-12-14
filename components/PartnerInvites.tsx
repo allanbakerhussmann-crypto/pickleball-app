@@ -108,7 +108,11 @@ export const PartnerInvites: React.FC<PartnerInvitesProps> = ({
       }
     } catch (error) {
       console.error('Failed to respond to invite', error);
-      // Removed alert due to sandbox restrictions
+      alert(
+        error instanceof Error
+          ? error.message
+          : 'Failed to process your response. Please try again.',
+      );
     } finally {
       setBusyInviteId(null);
     }

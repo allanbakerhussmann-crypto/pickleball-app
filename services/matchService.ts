@@ -1,143 +1,174 @@
-import { db, sendNotification, getAuth, collection, query, where, getDocs } from './firebase';
-
-const defaultConfig = {
-  projectId: "placeholder-project"
-};
-
-const callCloudFunction = async (name: string, data: any): Promise<any> => {
-    const auth = getAuth();
-    if (!auth) throw new Error("Auth not initialized");
-    const token = await auth.currentUser?.getIdToken();
-    if (!token) {
-        throw new Error("You must be logged in to perform this action.");
-    }
-
-    // Reuse config logic (simplified for minimal changes)
-    const stored = localStorage.getItem('pickleball_firebase_config');
-    const config = stored ? JSON.parse(stored) : defaultConfig;
-    const projectId = config.projectId || "placeholder-project";
-    
-    // Default region for HTTP functions is typically us-central1 unless specified
-    const region = "us-central1"; 
-    const url = `https://${region}-${projectId}.cloudfunctions.net/${name}`;
-
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(data)
-    });
-
-    const json = await response.json();
-    
-    if (!response.ok) {
-        throw new Error(json.error || `Function ${name} failed`);
-    }
-    return json;
-};
-
-import type { Match, MatchScoreSubmission, Competition } from '../types';
+import { db } from './firebase';
+import {
+  collection,
+  doc,
+  addDoc,
+  updateDoc,
+  getDocs,
+  query,
+  where,
+} from '@firebase/firestore';
+import type { Match, MatchScoreSubmission } from '../types';
 
 /**
- * SERVICE: Match Management
- * 
- * Handles the secure submission and verification of match scores.
- * All critical state changes are delegated to Firebase Cloud Functions to ensure
- * data integrity and enforce rules (e.g. only participants can submit, atomic standings updates).
- */
-
-/**
- * Submits a score for a match via Cloud Function.
+ * Player submits a score for a match.
+ * - Creates a MatchScoreSubmission document
+ * - Writes the proposed score to the Match
+ * - Sets the match status to 'pending_confirmation'
  */
 export async function submitMatchScore(
-  contextId: string, 
+  tournamentId: string,
   match: Match,
   submittedByUserId: string,
   score1: number,
-  score2: number,
-  boardIndex?: number
+  score2: number
 ) {
   if (Number.isNaN(score1) || Number.isNaN(score2)) {
-    throw new Error('Please enter valid numeric scores.');
+    throw new Error('Please enter both scores.');
   }
-  
-  if (score1 < 0 || score2 < 0) {
-      throw new Error('Scores cannot be negative.');
-  }
-
-  try {
-      await callCloudFunction('submitMatchScore', {
-          matchId: match.id,
-          score1,
-          score2,
-          boardIndex // Optional for Team Leagues
-      });
-  } catch (error: any) {
-      console.error("Score submission failed:", error);
-      throw new Error(error.message || "Failed to submit score. Please try again.");
+  if (score1 === score2) {
+    throw new Error('Scores cannot be tied. Please enter a winner.');
   }
 
-  // OPTIONAL: Client-side notification trigger (Best Effort)
-  const teamAId = match.teamAId!;
-  const teamBId = match.teamBId!;
-  const opponentTeamId = (teamAId === submittedByUserId || (typeof teamAId === 'string' && teamAId.includes(submittedByUserId))) ? teamBId : teamAId;
-  
-  if (opponentTeamId && opponentTeamId !== 'BYE') {
-      sendNotification(
-          opponentTeamId,
-          "Score Verification Required",
-          `A score has been submitted for your match. Please confirm or dispute it.`,
-          "action_required"
-      ).catch(err => console.warn("Failed to send client-side notification", err)); 
+  const winnerTeamId =
+    score1 > score2 ? match.teamAId :
+    score2 > score1 ? match.teamBId :
+    null;
+
+  if (!winnerTeamId) {
+    throw new Error('Unable to determine winner from scores.');
   }
+
+  const submission: Omit<MatchScoreSubmission, 'id'> = {
+    tournamentId,
+    matchId: match.id,
+    submittedBy: submittedByUserId,
+    teamAId: match.teamAId,
+    teamBId: match.teamBId,
+    submittedScore: {
+      // For now, a single game match [score1], [score2]
+      scoreTeamAGames: [score1],
+      scoreTeamBGames: [score2],
+      winnerTeamId,
+    },
+    status: 'pending_opponent',
+    opponentUserId: null, // we will wire this later
+    respondedAt: null,
+    reasonRejected: null,
+    createdAt: Date.now(),
+  };
+
+  // Save the submission
+  const submissionsRef = collection(
+    db,
+    'tournaments',
+    tournamentId,
+    'scoreSubmissions'
+  );
+  await addDoc(submissionsRef, submission);
+
+  // Update the match with the proposed score + pending status
+  const matchRef = doc(db, 'tournaments', tournamentId, 'matches', match.id);
+  await updateDoc(matchRef, {
+    status: 'pending_confirmation',
+    scoreTeamAGames: [score1],
+    scoreTeamBGames: [score2],
+    winnerTeamId,
+    lastUpdatedBy: submittedByUserId,
+    lastUpdatedAt: Date.now(),
+  });
 }
 
 /**
- * Confirms a pending score submission.
+ * Opponent (or organiser) confirms the pending score.
+ * - Marks submission as confirmed
+ * - Marks the match as 'completed'
  */
 export async function confirmMatchScore(
-  contextId: string,
+  tournamentId: string,
   match: Match,
   confirmingUserId: string
 ) {
-  // 1. Find the pending submission ID for this match
-  // Ensure db is defined (handled by services/firebase export or check here if needed, but db is imported)
-  if (!db) throw new Error("Database not initialized");
-  
-  const submissionsRef = collection(db, 'matchScoreSubmissions');
-  const q = query(submissionsRef, where('matchId', '==', match.id), where('status', '==', 'pending_opponent'));
+  const submissionsRef = collection(
+    db,
+    'tournaments',
+    tournamentId,
+    'scoreSubmissions'
+  );
+
+  // Find the latest pending submission for this match
+  const q = query(
+    submissionsRef,
+    where('matchId', '==', match.id),
+    where('status', '==', 'pending_opponent')
+  );
   const snapshot = await getDocs(q);
 
   if (snapshot.empty) {
-      throw new Error('No pending score submission found to confirm.');
+    throw new Error('No pending score submission found for this match.');
   }
-  
-  const submissionId = snapshot.docs[0].id;
 
-  // 2. Call Cloud Function
-  try {
-      await callCloudFunction('confirmMatchScore', { matchId: match.id, submissionId });
-  } catch (error: any) {
-      console.error("Score confirmation failed:", error);
-      throw new Error(error.message || "Failed to confirm score.");
-  }
+  const docSnap = snapshot.docs[0];
+  const data = docSnap.data() as MatchScoreSubmission;
+
+  // Confirm the submission
+  await updateDoc(docSnap.ref, {
+    status: 'confirmed',
+    respondedAt: Date.now(),
+  });
+
+  // Mark the match as completed (scores were already written on submit)
+  const matchRef = doc(db, 'tournaments', tournamentId, 'matches', match.id);
+  await updateDoc(matchRef, {
+    status: 'completed',
+    endTime: Date.now(),
+    lastUpdatedBy: confirmingUserId,
+    lastUpdatedAt: Date.now(),
+    court: null, // free court
+  });
 }
 
 /**
- * Disputes a score, flagging it for organizer review.
+ * Opponent disputes the submitted score.
+ * - Marks submission as rejected
+ * - Flags the match as 'disputed'
  */
 export async function disputeMatchScore(
-  contextId: string,
+  tournamentId: string,
   match: Match,
   disputingUserId: string,
   reason?: string
 ) {
-  try {
-      await callCloudFunction('disputeMatchScore', { matchId: match.id, reason });
-  } catch (error: any) {
-      console.error("Dispute action failed:", error);
-      throw new Error(error.message || "Failed to lodge dispute.");
+  const submissionsRef = collection(
+    db,
+    'tournaments',
+    tournamentId,
+    'scoreSubmissions'
+  );
+
+  const q = query(
+    submissionsRef,
+    where('matchId', '==', match.id),
+    where('status', '==', 'pending_opponent')
+  );
+  const snapshot = await getDocs(q);
+
+  if (snapshot.empty) {
+    throw new Error('No pending score submission found to dispute.');
   }
+
+  const docSnap = snapshot.docs[0];
+
+  await updateDoc(docSnap.ref, {
+    status: 'rejected',
+    respondedAt: Date.now(),
+    reasonRejected: reason ?? null,
+  });
+
+  const matchRef = doc(db, 'tournaments', tournamentId, 'matches', match.id);
+  await updateDoc(matchRef, {
+    status: 'disputed',
+    lastUpdatedBy: disputingUserId,
+    lastUpdatedAt: Date.now(),
+  });
 }
