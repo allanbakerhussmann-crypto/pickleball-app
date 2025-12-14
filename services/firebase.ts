@@ -1,5 +1,6 @@
+
 // ... (imports)
-import { initializeApp } from '@firebase/app';
+import { initializeApp, getApps } from '@firebase/app';
 import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
 import { 
   getFirestore, 
@@ -17,14 +18,15 @@ import {
   collectionGroup,
   runTransaction,
   deleteDoc,
-  orderBy, // Added
+  orderBy, 
+  arrayUnion,
+  arrayRemove,
   type Firestore
 } from '@firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from '@firebase/storage';
 import { getFunctions, httpsCallable } from '@firebase/functions';
-import type { Tournament, UserProfile, TournamentRegistration, Team, Division, Match, PartnerInvite, Club, UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, GenderCategory } from '../types';
+import type { Tournament, UserProfile, TournamentRegistration, Team, Division, Match, PartnerInvite, Club, UserRole, ClubJoinRequest, Court, StandingsEntry, SeedingMethod, TieBreaker, GenderCategory, SocialEvent, Meetup, MeetupRSVP } from '../types';
 
-// ... (config and init code remains same) ...
 const STORAGE_KEY = 'pickleball_firebase_config';
 
 const getStoredConfig = () => {
@@ -38,7 +40,42 @@ const getStoredConfig = () => {
 };
 
 const getEnvConfig = () => {
-    if (process.env.FIREBASE_API_KEY) {
+    // 1. Try Vite standard environment variables
+    const meta = import.meta as any;
+    if (
+    meta.env &&
+    meta.env.VITE_FIREBASE_API_KEY &&
+    meta.env.VITE_FIREBASE_PROJECT_ID &&
+    meta.env.VITE_FIREBASE_AUTH_DOMAIN
+) {
+
+        // Validation: Ignore placeholders
+        if (meta.env.VITE_FIREBASE_API_KEY.includes('...') || meta.env.VITE_FIREBASE_API_KEY.startsWith('YOUR_')) {
+            return null;
+        }
+        return {
+            apiKey: meta.env.VITE_FIREBASE_API_KEY,
+            authDomain: meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+            projectId: meta.env.VITE_FIREBASE_PROJECT_ID,
+            storageBucket: meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+            messagingSenderId: meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+            appId: meta.env.VITE_FIREBASE_APP_ID,
+            measurementId: meta.env.VITE_FIREBASE_MEASUREMENT_ID
+        };
+    }
+    // 2. Try process.env fallback (if defined by bundler)
+    if (
+        typeof process !== 'undefined' &&
+        process.env &&
+        process.env.FIREBASE_API_KEY &&
+        process.env.FIREBASE_PROJECT_ID &&
+        process.env.FIREBASE_AUTH_DOMAIN
+    ) {
+
+        // Validation: Ignore placeholders
+        if (process.env.FIREBASE_API_KEY.includes('...') || process.env.FIREBASE_API_KEY.startsWith('YOUR_')) {
+            return null;
+        }
         return {
             apiKey: process.env.FIREBASE_API_KEY,
             authDomain: process.env.FIREBASE_AUTH_DOMAIN,
@@ -52,25 +89,50 @@ const getEnvConfig = () => {
     return null;
 };
 
-const defaultConfig = {
-  apiKey: "AIzaSyBPeYXnPobCZ7bPH0g_2IYOP55-1PFTWTE",
-  authDomain: "pickleball-app-dev.firebaseapp.com",
-  projectId: "pickleball-app-dev",
-  storageBucket: "pickleball-app-dev.firebasestorage.app",
-  messagingSenderId: "906655677998",
-  appId: "1:906655677998:web:b7fe4bb2f479ba79c069bf",
-  measurementId: "G-WWLE6K6J7Z"
-};
+// Prioritize: LocalStorage > Environment Vars
+const firebaseConfig = getStoredConfig() || getEnvConfig();
 
-const firebaseConfig = getStoredConfig() || getEnvConfig() || defaultConfig;
+console.log('🔥 Firebase ENV CHECK', {
+  hasStoredConfig: !!getStoredConfig(),
+  hasEnvConfig: !!getEnvConfig(),
+  firebaseConfig,
+});
 
+
+const isValidConfig = (cfg: any) =>
+  !!cfg &&
+  typeof cfg === "object" &&
+  !!cfg.apiKey &&
+  !!cfg.projectId &&
+  !!cfg.authDomain;
+
+const buildDummyConfig = () => ({
+  apiKey: "dummy-key",
+  authDomain: "dummy-domain.firebaseapp.com",
+  projectId: "dummy-project-id",
+});
+
+// ✅ HMR / refresh-safe Firebase initialization
 let app;
-try {
-    app = initializeApp(firebaseConfig);
-} catch (e) {
-    console.error("Firebase initialization failed.", e);
-    app = initializeApp(defaultConfig);
+
+// If any Firebase app already exists (default or named), reuse the first one.
+// This prevents "Firebase App named '[DEFAULT]' already exists" errors in Vite/AI Studio.
+const existingApps = getApps();
+if (existingApps.length > 0) {
+  app = existingApps[0];
+} else {
+  const cfgToUse = isValidConfig(firebaseConfig) ? firebaseConfig : buildDummyConfig();
+
+  if (!isValidConfig(firebaseConfig)) {
+    console.warn(
+      "No valid Firebase configuration found. Using dummy config so UI can render the ConfigModal."
+    );
+  }
+
+  // Initialize DEFAULT app (no name). This is the safest long-term.
+  app = initializeApp(cfgToUse);
 }
+
 
 const authInstance: Auth = getFirebaseAuth(app);
 export const db: Firestore = getFirestore(app);
@@ -79,7 +141,93 @@ const functions = getFunctions(app);
 
 export const getAuth = (): Auth => authInstance;
 
-// ... (createTeamServer and ensureTeamExists remain same) ...
+// --- Social Play / Meetups (New) ---
+
+export const createMeetup = async (meetupData: Omit<Meetup, "id"|"createdAt"|"updatedAt">): Promise<string> => {
+    const meetupsRef = collection(db, 'meetups');
+    const newDocRef = doc(meetupsRef); // Auto-generate ID
+    const now = Date.now();
+    const meetup: Meetup = {
+        ...meetupData,
+        id: newDocRef.id,
+        createdAt: now,
+        updatedAt: now
+    };
+    await setDoc(newDocRef, meetup);
+    return newDocRef.id;
+};
+
+export const getMeetups = async (): Promise<Meetup[]> => {
+    const q = query(collection(db, 'meetups'), orderBy('when', 'asc'));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data() as Meetup);
+};
+
+export const getMeetupById = async (meetupId: string): Promise<Meetup | null> => {
+    const snap = await getDoc(doc(db, 'meetups', meetupId));
+    return snap.exists() ? (snap.data() as Meetup) : null;
+};
+
+export const setMeetupRSVP = async (meetupId: string, userId: string, status: "going"|"maybe"): Promise<void> => {
+    const rsvpRef = doc(db, 'meetups', meetupId, 'rsvps', userId);
+    await setDoc(rsvpRef, {
+        userId,
+        status,
+        createdAt: Date.now()
+    });
+};
+
+export const getMeetupRSVPs = async (meetupId: string): Promise<MeetupRSVP[]> => {
+    const rsvpsRef = collection(db, 'meetups', meetupId, 'rsvps');
+    const snap = await getDocs(rsvpsRef);
+    const rsvps = snap.docs.map(d => d.data() as MeetupRSVP);
+    
+    if (rsvps.length > 0) {
+        const userIds = rsvps.map(r => r.userId);
+        const users = await getUsersByIds(userIds); 
+        const userMap = new Map(users.map(u => [u.id, u]));
+        return rsvps.map(r => ({
+            ...r,
+            userProfile: userMap.get(r.userId)
+        }));
+    }
+    return rsvps;
+};
+
+// --- Legacy Social Play (keeping for backward compatibility or removal later) ---
+export const createSocialEvent = async (event: Omit<SocialEvent, 'id'>) => {
+    const ref = doc(collection(db, 'social_events'));
+    await setDoc(ref, { ...event, id: ref.id });
+};
+
+export const subscribeToSocialEvents = (callback: (events: SocialEvent[]) => void) => {
+    // Order by date ascending (upcoming first)
+    const q = query(collection(db, 'social_events'), orderBy('date', 'asc'), orderBy('startTime', 'asc'));
+    return onSnapshot(q, (snap) => {
+        const events = snap.docs.map(d => d.data() as SocialEvent);
+        callback(events);
+    });
+};
+
+export const joinSocialEvent = async (eventId: string, userId: string) => {
+    const ref = doc(db, 'social_events', eventId);
+    await updateDoc(ref, {
+        attendees: arrayUnion(userId)
+    });
+};
+
+export const leaveSocialEvent = async (eventId: string, userId: string) => {
+    const ref = doc(db, 'social_events', eventId);
+    await updateDoc(ref, {
+        attendees: arrayRemove(userId)
+    });
+};
+
+export const deleteSocialEvent = async (eventId: string) => {
+    await deleteDoc(doc(db, 'social_events', eventId));
+};
+
+// ... (Rest of the file remains strictly unchanged from previous save except new imports at top)
 /**
  * Client wrapper to call the createTeam Cloud Function.
  * Returns { existed: boolean, teamId, team } on success.
@@ -206,7 +354,7 @@ export const ensureTeamExists = async (
 export const saveFirebaseConfig = (configJson: string) => {
     try {
         const parsed = JSON.parse(configJson);
-        if (!parsed.apiKey || !parsed.authDomain) return { success: false, error: 'Invalid config' };
+        if (!parsed.apiKey || !parsed.authDomain || !parsed.projectId) return { success: false, error: 'Invalid config. Missing apiKey, authDomain, or projectId.' };
         localStorage.setItem(STORAGE_KEY, configJson);
         window.location.reload();
         return { success: true };
@@ -215,6 +363,12 @@ export const saveFirebaseConfig = (configJson: string) => {
     }
 };
 export const hasCustomConfig = () => !!getStoredConfig() || !!getEnvConfig();
+
+export const isFirebaseConfigured = () => {
+  const cfg = getStoredConfig() || getEnvConfig();
+  return !!cfg?.apiKey && !!cfg?.authDomain && !!cfg?.projectId;
+};
+
 
 // --- Helper: Get User Teams (Moved up for use in finalizeRegistration) ---
 export const getUserTeamsForTournament = async (
@@ -1081,7 +1235,7 @@ export const finalizeRegistration = async (
   const regRef = doc(db, 'tournament_registrations', payload.id);
   const now = Date.now();
 
-  // Persist the incoming registration early (merge so partial updates don't clobber)
+  // Persist the registration early (merge so partial updates don't clobber)
   await setDoc(regRef, { ...payload, updatedAt: now }, { merge: true });
 
   const teamsCreated: Record<string, any> = {};

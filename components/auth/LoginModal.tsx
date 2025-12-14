@@ -1,14 +1,29 @@
+
 import React, { useState } from 'react';
-import { FirebaseError } from '@firebase/app';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
+import { isFirebaseConfigured } from '../../services/firebase';
 
 interface LoginModalProps {
   onClose: () => void;
+  onOpenConfig?: () => void;
 }
 
-const getFriendlyErrorMessage = (error: FirebaseError): string => {
-  switch (error.code) {
+const getFriendlyErrorMessage = (error: any): string => {
+  const code = error?.code || '';
+  const message = error?.message || '';
+
+  // Detect API Key errors (often due to missing configuration)
+  if (
+      code.includes('api-key') || 
+      code === 'auth/invalid-api-key' ||
+      message.toLowerCase().includes('api-key') ||
+      message.toLowerCase().includes('api key')
+  ) {
+      return 'CONFIGURATION_ERROR';
+  }
+
+  switch (code) {
     case 'auth/invalid-email':
       return 'Please enter a valid email address.';
     case 'auth/user-not-found':
@@ -19,12 +34,14 @@ const getFriendlyErrorMessage = (error: FirebaseError): string => {
       return 'An account with this email already exists.';
     case 'auth/weak-password':
       return 'Password should be at least 6 characters long.';
+    case 'auth/network-request-failed':
+        return 'Network error. Please check your connection.';
     default:
-      return 'An unexpected error occurred. Please try again.';
+      return error?.message || 'An unexpected error occurred. Please try again.';
   }
 };
 
-export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
+export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig }) => {
   const [isLoginView, setIsLoginView] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,6 +50,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
   const [roleChoice, setRoleChoice] = useState<UserRole>('player');
   
   const [error, setError] = useState<string | null>(null);
+  const [isConfigError, setIsConfigError] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
@@ -41,6 +59,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setIsConfigError(false);
     setMessage(null);
 
     // Extra validation for sign-up view
@@ -56,7 +75,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
     }
 
     setIsSubmitting(true);
+
+    if (!isFirebaseConfigured()) {
+      setError("Firebase is not configured. Please click Configure Database first.");
+      setIsConfigError(true);
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
+
       if (isLoginView) {
         await login(email, password);
       } else {
@@ -64,11 +92,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
       }
       onClose();
     } catch (err: any) {
-      if (err instanceof FirebaseError) {
-        setError(getFriendlyErrorMessage(err));
+      console.error("Login Error:", err);
+      const friendlyMsg = getFriendlyErrorMessage(err);
+      
+      if (friendlyMsg === 'CONFIGURATION_ERROR') {
+          setError('Firebase is not configured or the API key is invalid.');
+          setIsConfigError(true);
       } else {
-        setError('An unexpected error occurred.');
-        console.error(err);
+          setError(friendlyMsg);
       }
     } finally {
       setIsSubmitting(false);
@@ -77,22 +108,31 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
 
   const handleForgotPassword = async () => {
     setError(null);
+    setIsConfigError(false);
     setMessage(null);
 
     if (!email) {
       setError('Please enter your email address first.');
       return;
     }
+    if (!isFirebaseConfigured()) {
+      setError("Firebase is not configured. Please click Configure Database first.");
+      setIsConfigError(true);
+      return;
+    }
+
 
     try {
       await resetPassword(email);
       setMessage('Password reset email sent. Please check your inbox — and don’t forget to check your spam folder.');
     } catch (err: any) {
-      if (err instanceof FirebaseError) {
-        setError(getFriendlyErrorMessage(err));
+      console.error("Reset Password Error:", err);
+      const friendlyMsg = getFriendlyErrorMessage(err);
+      if (friendlyMsg === 'CONFIGURATION_ERROR') {
+          setError('Firebase is not configured or the API key is invalid.');
+          setIsConfigError(true);
       } else {
-        setError('Unable to send password reset email. Please try again.');
-        console.error(err);
+          setError('Unable to send password reset email. Please try again.');
       }
     }
   };
@@ -207,7 +247,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
           )}
 
           {error && (
-            <p className="text-red-400 text-sm text-center">{error}</p>
+            <div className="bg-red-900/20 p-3 rounded text-center">
+                <p className="text-red-400 text-sm font-bold mb-2">{error}</p>
+                {isConfigError && onOpenConfig && (
+                    <button
+                        type="button"
+                        onClick={onOpenConfig}
+                        className="text-xs bg-red-700 hover:bg-red-600 text-white px-3 py-1 rounded transition-colors"
+                    >
+                        Configure Database
+                    </button>
+                )}
+            </div>
           )}
           {message && (
             <div className="text-green-400 text-sm text-center mt-1 leading-snug">
@@ -230,6 +281,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose }) => {
             onClick={() => { 
               setIsLoginView(!isLoginView); 
               setError(null); 
+              setIsConfigError(false);
               setMessage(null);
             }}
             className="font-semibold text-green-400 hover:text-green-300 ml-2"

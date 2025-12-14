@@ -55,9 +55,9 @@ export const Header: React.FC<HeaderProps> = ({
 
   const navLinks = [
       { id: 'tournaments', label: 'Tournaments' },
+      { id: 'meetups', label: 'Meetups' },
       { id: 'results', label: 'Results' },
       { id: 'leagues', label: 'Leagues' },
-      { id: 'teamLeagues', label: 'Team Leagues' },
       { id: 'clubs', label: 'Clubs' },
       { id: 'players', label: 'Players' },
   ];

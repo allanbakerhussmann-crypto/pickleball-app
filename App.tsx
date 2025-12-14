@@ -14,6 +14,9 @@ import { PlayerDirectory } from './components/PlayerDirectory';
 import { PartnerInvites } from './components/PartnerInvites';
 import { TournamentEventSelection } from './components/registration/TournamentEventSelection';
 import { AdminUsersPage } from './components/AdminUsersPage';
+import { MeetupsList } from './components/meetups/MeetupsList';
+import { CreateMeetup } from './components/meetups/CreateMeetup';
+import { MeetupDetail } from './components/meetups/MeetupDetail';
 import type { Tournament, PartnerInvite, UserProfile } from './types';
 import { useAuth } from './contexts/AuthContext';
 import { LoginModal } from './components/auth/LoginModal';
@@ -159,6 +162,7 @@ const App: React.FC = () => {
     const [view, setView] = useState<string>('dashboard');
     const [activeTournamentId, setActiveTournamentId] = useState<string | null>(null);
     const [activeClubId, setActiveClubId] = useState<string | null>(null);
+    const [activeMeetupId, setActiveMeetupId] = useState<string | null>(null);
     
     // Wizard auto-open state
     const [wizardProps, setWizardProps] = useState<{ isOpen: boolean; mode?: 'full'|'waiver_only'; divisionId?: string } | null>(null);
@@ -282,6 +286,7 @@ const App: React.FC = () => {
         setView(newView);
         setActiveTournamentId(null);
         setActiveClubId(null);
+        setActiveMeetupId(null);
         setWizardProps(null);
     };
 
@@ -320,13 +325,25 @@ const App: React.FC = () => {
     if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-gray-500">Loading PickleballDirector...</div>;
 
     if (!currentUser) {
-        return (
-            <>
-                <LoggedOutWelcome onLoginClick={() => setLoginModalOpen(true)} />
-                {isLoginModalOpen && <LoginModal onClose={() => setLoginModalOpen(false)} />}
-            </>
-        );
-    }
+    return (
+        <>
+            <LoggedOutWelcome onLoginClick={() => setLoginModalOpen(true)} />
+
+            {isLoginModalOpen && (
+                <LoginModal 
+                    onClose={() => setLoginModalOpen(false)} 
+                    onOpenConfig={() => {
+                        setLoginModalOpen(false);
+                        setConfigModalOpen(true);
+                    }}
+                />
+            )}
+
+            {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
+        </>
+    );
+}
+
 
     const activeTournament = tournaments.find(t => t.id === activeTournamentId);
 
@@ -476,6 +493,21 @@ const App: React.FC = () => {
                         <Profile onBack={() => setView('dashboard')} />
                     ) : view === 'adminUsers' && isAppAdmin ? (
                         <AdminUsersPage onBack={() => setView('dashboard')} />
+                    ) : view === 'meetups' ? (
+                        <MeetupsList 
+                            onCreateClick={() => setView('create_meetup')}
+                            onSelectMeetup={(id) => { setActiveMeetupId(id); setView('meetup_detail'); }}
+                        />
+                    ) : view === 'create_meetup' ? (
+                        <CreateMeetup 
+                            onBack={() => setView('meetups')}
+                            onCreated={() => setView('meetups')}
+                        />
+                    ) : view === 'meetup_detail' && activeMeetupId ? (
+                        <MeetupDetail 
+                            meetupId={activeMeetupId}
+                            onBack={() => { setActiveMeetupId(null); setView('meetups'); }}
+                        />
                     ) : view === 'tournaments' ? (
                         <TournamentDashboard 
                             tournaments={tournaments}
@@ -523,7 +555,7 @@ const App: React.FC = () => {
 
                         <PlaceholderView 
                             title="My Results" 
-                            icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
+                            icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
                             message="Your personal match history and statistics across all tournaments."
                             onBack={() => setView('dashboard')}
                         />

@@ -1,6 +1,4 @@
 
-
-
 export type TournamentFormat =
   | 'single_elim'
   | 'double_elim'
@@ -88,6 +86,41 @@ export interface ClubJoinRequest {
   status: 'pending' | 'approved' | 'declined';
   createdAt: number;
   updatedAt: number;
+}
+
+export interface SocialEvent {
+  id: string;
+  hostUserId: string;
+  hostName: string;
+  title: string;
+  description: string;
+  date: string; // YYYY-MM-DD
+  startTime: string; // HH:MM
+  location: string;
+  maxPlayers: number;
+  attendees: string[]; // List of userIds
+  createdAt: number;
+}
+
+export interface Meetup {
+  id: string;
+  title: string;
+  description: string;
+  when: number; // epoch ms
+  visibility: 'public' | 'linkOnly';
+  maxPlayers: number;
+  locationName: string;
+  location?: { lat: number; lng: number };
+  createdByUserId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MeetupRSVP {
+  userId: string;
+  status: 'going' | 'maybe';
+  createdAt: number;
+  userProfile?: UserProfile;
 }
 
 export interface TournamentRegistration {
