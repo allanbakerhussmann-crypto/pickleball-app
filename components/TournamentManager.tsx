@@ -11,13 +11,8 @@ import type {
 } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { 
-  getRegistration,
-  subscribeToDivisions,
-  subscribeToTeams,
-  subscribeToMatches,
   subscribeToCourts,
   createTeamServer,
-  getUsersByIds,
   deleteTeam,
   updateDivision,
   saveTournament,
@@ -41,6 +36,7 @@ import { BracketViewer } from './BracketViewer';
 import { Standings } from './Standings';
 import { TournamentRegistrationWizard } from './registration/TournamentRegistrationWizard';
 import { useTournamentPhase } from './tournament/hooks/useTournamentPhase';
+import { useTournamentData } from './tournament/hooks/useTournamentData';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -66,6 +62,33 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   clearWizardState,
 }) => {
   const { currentUser, userProfile, isOrganizer } = useAuth();
+  // Tournament Data (using new hook)
+  const {
+    divisions,
+    teams,
+    matches,
+    courts,
+    playersCache,
+    activeDivisionId,
+    setActiveDivisionId,
+    activeDivision,
+    divisionTeams,
+    divisionMatches,
+    attentionMatches,
+    hasCompletedRegistration,
+    getTeamDisplayName,
+    getTeamPlayers,
+  } = useTournamentData({
+    tournamentId: tournament.id,
+    currentUserId: currentUser?.uid,
+  });
+    const {
+    tournamentPhase,
+    tournamentPhaseLabel,
+    tournamentPhaseClass,
+    handleStartTournament,
+  } = useTournamentPhase({ matches });
+
 
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
@@ -97,62 +120,15 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   };
 
   // Track if the current user has already completed a registration
-  const [hasCompletedRegistration, setHasCompletedRegistration] =
-    useState(false);
+ 
+    // Tournament Phase (using new hook)
 
-  useEffect(() => {
-    const loadRegistration = async () => {
-      if (!currentUser) {
-        setHasCompletedRegistration(false);
-        return;
-      }
-
-      try {
-        const reg = await getRegistration(tournament.id, currentUser.uid);
-        setHasCompletedRegistration(!!reg && reg.status === 'completed');
-      } catch (err) {
-        console.error('Failed to load registration status', err);
-        setHasCompletedRegistration(false);
-      }
-    };
-
-    loadRegistration();
-  }, [tournament.id, currentUser]);
-
-  // Subcollection Data
-  const [divisions, setDivisions] = useState<Division[]>([]);
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [matches, setMatches] = useState<Match[]>([]);
-  const [courts, setCourts] = useState<Court[]>([]);
-  // Tournament Phase (using new hook)
-  const {
-    tournamentPhase,
-    tournamentPhaseLabel,
-    tournamentPhaseClass,
-    handleStartTournament,
-  } = useTournamentPhase({ matches });
   const [autoAllocateCourts, setAutoAllocateCourts] = useState(false);
-  const [playersCache, setPlayersCache] = useState<Record<string, UserProfile>>(
-    {}
-  );
-
   /* -------- Active Division / Tabs -------- */
 
-  const [activeDivisionId, setActiveDivisionId] = useState<string>('');
   const [activeTab, setActiveTab] = useState<
     'details' | 'players' | 'bracket' | 'standings'
   >('details');
-
-  const activeDivision = useMemo(
-    () => divisions.find(d => d.id === activeDivisionId) || divisions[0],
-    [divisions, activeDivisionId]
-  );
-
-  useEffect(() => {
-    if (!activeDivisionId && divisions.length > 0) {
-      setActiveDivisionId(divisions[0].id);
-    }
-  }, [divisions, activeDivisionId]);
 
   // Editable division settings (ratings, age, seeding)
   const [divisionSettings, setDivisionSettings] = useState<{
@@ -168,49 +144,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     maxAge: '',
     seedingMethod: 'rating',
   });
-
-  /* -------- Subscriptions (only depend on tournament.id) -------- */
-  useEffect(() => {
-    const unsubDivs = subscribeToDivisions(tournament.id, setDivisions);
-    const unsubTeams = subscribeToTeams(tournament.id, setTeams);
-    const unsubMatches = subscribeToMatches(tournament.id, setMatches);
-    const unsubCourts = subscribeToCourts(tournament.id, setCourts);
-
-    return () => {
-      unsubDivs();
-      unsubTeams();
-      unsubMatches();
-      unsubCourts();
-    };
-  }, [tournament.id]);
-
-  /* -------- Fetch missing player profiles when teams change -------- */
-  useEffect(() => {
-    const allPlayerIds = Array.from(new Set(teams.flatMap(t => t.players || [])));
-    const missing = allPlayerIds.filter(
-      id => !playersCache[id] && !id.startsWith('invite_') && !id.startsWith('tbd')
-    );
-    if (missing.length === 0) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const profiles = await getUsersByIds(missing);
-        if (cancelled) return;
-        setPlayersCache(prev => {
-          const next = { ...prev };
-          profiles.forEach(p => (next[p.id] = p));
-          return next;
-        });
-      } catch (err) {
-        console.error('Failed to fetch missing player profiles', err);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [teams]);
 
   /* -------- Handler to add a team via the server createTeam function -------- */
   const handleAddTeam = useCallback(
@@ -265,30 +198,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     });
   }, [activeDivision]);
 
-  /* -------- Data Filtering -------- */
-
-  const divisionTeams = useMemo(
-    () =>
-      teams.filter(
-        t => t.divisionId === activeDivision?.id && t.status !== 'withdrawn'
-      ),
-    [teams, activeDivision]
-  );
-
-  const divisionMatches = useMemo(
-    () => matches.filter(m => m.divisionId === activeDivision?.id),
-    [matches, activeDivision]
-  );
-
-  // Matches in this division that need organiser attention
-  const attentionMatches = useMemo(
-    () =>
-      divisionMatches.filter(
-        m => m.status === 'pending_confirmation' || m.status === 'disputed'
-      ),
-    [divisionMatches]
-  );
-
   /* -------- Court Allocation Data -------- */
   const { rawQueue, waitTimes } = useMemo(() => {
     const busy = new Set<string>();
@@ -328,30 +237,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   }, [matches, courts]);
 
   /* -------- Helpers -------- */
-
-  const getTeamDisplayName = useCallback(
-    (teamId: string) => {
-      const team = teams.find(t => t.id === teamId);
-      if (!team) return 'TBD';
-      if (team.teamName) return team.teamName;
-      const names = team.players
-        .map(pid => playersCache[pid]?.displayName || 'Unknown')
-        .join(' / ');
-      return names;
-    },
-    [teams, playersCache]
-  );
-
-  const getTeamPlayers = useCallback(
-    (teamId: string) => {
-      const team = teams.find(t => t.id === teamId);
-      if (!team) return [];
-      return team.players
-        .map(pid => playersCache[pid])
-        .filter(Boolean) as UserProfile[];
-    },
-    [teams, playersCache]
-  );
 
   /* -------- Live Courts View Models -------- */
 
