@@ -11,23 +11,13 @@ import type {
 } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { 
-  createTeamServer,
-  deleteTeam,
   updateDivision,
   saveTournament,
   addCourt,
   updateCourt,
   deleteCourt,
-  updateMatchScore,
-  generatePoolsSchedule,
-  generateBracketSchedule,
-  generateFinalsFromPools
+  updateMatchScore,  
 } from '../services/firebase';
-import { 
-  submitMatchScore, 
-  confirmMatchScore, 
-  disputeMatchScore 
-} from '../services/matchService';
 import { TeamSetup } from './TeamSetup';
 import { CourtAllocation } from './CourtAllocation';
 import { Schedule } from './Schedule';
@@ -37,6 +27,7 @@ import { TournamentRegistrationWizard } from './registration/TournamentRegistrat
 import { useTournamentPhase } from './tournament/hooks/useTournamentPhase';
 import { useTournamentData } from './tournament/hooks/useTournamentData';
 import { useCourtManagement } from './tournament/hooks/useCourtManagement';
+import { useMatchActions } from './tournament/hooks/useMatchActions';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -107,6 +98,21 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     courts,
     divisions,
   });
+  // Match Actions (using new hook)
+  const {
+    handleAddTeam,
+    handleRemoveTeam,
+    handleGenerateSchedule,
+    handleGenerateFinals,
+    handleUpdateScore,
+  } = useMatchActions({
+    tournamentId: tournament.id,
+    activeDivision,
+    divisionTeams,
+    playersCache,
+    currentUserId: currentUser?.uid,
+    isOrganizer,
+  });
 
 
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
@@ -163,36 +169,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     maxAge: '',
     seedingMethod: 'rating',
   });
-
-  /* -------- Handler to add a team via the server createTeam function -------- */
-  const handleAddTeam = useCallback(
-    async ({ name, playerIds }: { name: string; playerIds: string[] }) => {
-      if (!activeDivision) {
-        throw new Error('No active division selected');
-      }
-      try {
-        const res = await createTeamServer({
-          tournamentId: tournament.id,
-          divisionId: activeDivision.id,
-          playerIds,
-          teamName: name || null,
-        });
-
-        // Cast unknown response to expected shape
-        const data = res as { existed: boolean; teamId: string };
-
-        if (data?.existed) {
-          console.info('Team already existed:', data.teamId);
-        } else {
-          console.info('Team created:', data.teamId);
-        }
-      } catch (err) {
-        console.error('Failed to add team', err);
-        throw err;
-      }
-    },
-    [tournament.id, activeDivision]
-  );
 
   /* -------- Tournament phase derived from matches -------- */
 
@@ -405,52 +381,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   /* -------- Actions -------- */
 
-  const handleRemoveTeam = async (id: string) => {
-    await deleteTeam(tournament.id, id);
-  };
-
-  const handleGenerateSchedule = async () => {
-    if (!activeDivision) return;
-    if (divisionTeams.length < 2) return alert('Need at least 2 teams.');
-
-    try {
-      if (activeDivision.format.stageMode === 'single_stage') {
-        if (activeDivision.format.mainFormat === 'round_robin') {
-          // Single Pool RR
-          await generatePoolsSchedule(
-            tournament.id,
-            {
-              ...activeDivision,
-              format: { ...activeDivision.format, numberOfPools: 1 },
-            },
-            divisionTeams,
-            playersCache
-          );
-        } else {
-          // Bracket (Single Elim, etc)
-          await generateBracketSchedule(
-            tournament.id,
-            activeDivision,
-            divisionTeams,
-            'Main Bracket',
-            playersCache
-          );
-        }
-      } else {
-        // Two Stage - Generate Pools
-        await generatePoolsSchedule(
-          tournament.id,
-          activeDivision,
-          divisionTeams,
-          playersCache
-        );
-      }
-      alert('Schedule Generated!');
-    } catch (e: any) {
-      alert('Error: ' + e.message);
-    }
-  };
-
   // Standings & H2H
   const { standings, h2hMatrix } = useMemo(() => {
     const stats: Record<string, StandingsEntry> = {};
@@ -509,91 +439,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     );
     return { standings: Object.values(stats), h2hMatrix: h2h };
   }, [divisionTeams, divisionMatches, getTeamDisplayName]);
-
-  const handleGenerateFinals = async () => {
-    if (!activeDivision || activeDivision.format.stageMode !== 'two_stage')
-      return;
-    try {
-      await generateFinalsFromPools(
-        tournament.id,
-        activeDivision,
-        standings,
-        divisionTeams,
-        playersCache
-      );
-      alert('Finals Bracket Generated!');
-    } catch (e: any) {
-      alert('Error: ' + e.message);
-    }
-  };
-
-  const handleUpdateScore = async (
-    matchId: string,
-    score1: number,
-    score2: number,
-    action: 'submit' | 'confirm' | 'dispute',
-    reason?: string
-  ) => {
-    const match = matches.find(m => m.id === matchId);
-    if (!match) return;
-
-    if (!currentUser) {
-      alert('You must be logged in to report scores.');
-      return;
-    }
-
-    // Only players in the match or organisers can enter scores
-    const teamA = teams.find(t => t.id === match.teamAId);
-    const teamB = teams.find(t => t.id === match.teamBId);
-
-    const isOnTeamA = teamA?.players?.includes(currentUser.uid);
-    const isOnTeamB = teamB?.players?.includes(currentUser.uid);
-
-    const isPlayerInMatch = isOnTeamA || isOnTeamB;
-
-    if (!isPlayerInMatch && !isOrganizer) {
-      alert('Only players in this match (or organisers) can enter scores.');
-      return;
-    }
-
-    const division = divisions.find(d => d.id === match.divisionId);
-    if (!division) {
-      alert('Could not find division for this match.');
-      return;
-    }
-
-    try {
-      if (action === 'submit') {
-        const error = validateScoreForDivision(score1, score2, division);
-        if (error) {
-          alert(error);
-          return;
-        }
-
-        await submitMatchScore(
-          tournament.id,
-          match,
-          currentUser.uid,
-          score1,
-          score2
-        );
-      } else if (action === 'confirm') {
-        await confirmMatchScore(tournament.id, match, currentUser.uid);
-      } else if (action === 'dispute') {
-        await disputeMatchScore(
-          tournament.id,
-          match,
-          currentUser.uid,
-          reason
-        );
-      }
-    } catch (err) {
-      console.error('Failed to update score', err);
-      alert(
-        'There was a problem saving the score. Please try again or ask the organiser to help.'
-      );
-    }
-  };
 
   const handleUpdateDivisionSettings = async (updates: Partial<Division>) => {
     if (!activeDivision) return;
@@ -879,7 +724,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 <div className="flex gap-4">
                   {activeDivision.format.stageMode === 'two_stage' && (
                     <button
-                      onClick={handleGenerateFinals}
+                      onClick={() => handleGenerateFinals(standings)}
                       disabled={divisionMatches.length === 0}
                       className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded font-bold disabled:bg-gray-700"
                     >

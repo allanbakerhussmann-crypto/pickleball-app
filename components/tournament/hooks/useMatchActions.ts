@@ -5,20 +5,19 @@
  */
 
 import { useCallback } from 'react';
-import type { Division, Team, Match, UserProfile } from '../../types';
+import type { Division, Team, UserProfile } from '../../../types';
 import {
   createTeamServer,
   deleteTeam,
-  updateMatchScore,
   generatePoolsSchedule,
   generateBracketSchedule,
   generateFinalsFromPools,
-} from '../../services/firebase';
+} from '../../../services/firebase';
 import {
   submitMatchScore,
   confirmMatchScore,
   disputeMatchScore,
-} from '../../services/matchService';
+} from '../../../services/matchService';
 
 interface UseMatchActionsProps {
   tournamentId: string;
@@ -155,9 +154,9 @@ export const useMatchActions = ({
       await generateFinalsFromPools(
         tournamentId,
         activeDivision,
+        standings,
         divisionTeams,
-        playersCache,
-        standings
+        playersCache
       );
       
       alert('Finals bracket generated!');
