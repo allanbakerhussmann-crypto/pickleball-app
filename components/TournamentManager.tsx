@@ -11,7 +11,6 @@ import type {
 } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { 
-  subscribeToCourts,
   createTeamServer,
   deleteTeam,
   updateDivision,
@@ -37,6 +36,7 @@ import { Standings } from './Standings';
 import { TournamentRegistrationWizard } from './registration/TournamentRegistrationWizard';
 import { useTournamentPhase } from './tournament/hooks/useTournamentPhase';
 import { useTournamentData } from './tournament/hooks/useTournamentData';
+import { useCourtManagement } from './tournament/hooks/useCourtManagement';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -88,6 +88,25 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     tournamentPhaseClass,
     handleStartTournament,
   } = useTournamentPhase({ matches });
+  // Court Management (using new hook)
+  const {
+    courtViewModels,
+    courtMatchModels,
+    queue: rawQueue,
+    waitTimes,
+    getBusyTeamIds,
+    findActiveConflictMatch,
+    assignMatchToCourt,
+    startMatchOnCourt,
+    finishMatchOnCourt,
+    handleAssignCourt,
+    autoAssignFreeCourts,
+  } = useCourtManagement({
+    tournamentId: tournament.id,
+    matches,
+    courts,
+    divisions,
+  });
 
 
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
@@ -197,105 +216,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         'rating') as SeedingMethod,
     });
   }, [activeDivision]);
-
-  /* -------- Court Allocation Data -------- */
-  const { rawQueue, waitTimes } = useMemo(() => {
-    const busy = new Set<string>();
-    matches.forEach(m => {
-      if (!m.court) return;
-      if (m.status === 'completed') return;
-      busy.add(m.teamAId);
-      busy.add(m.teamBId);
-    });
-
-    const candidates = matches
-      .filter(m => {
-        const status = m.status ?? 'scheduled';
-        const isWaiting =
-          status === 'scheduled' || status === 'not_started';
-        return isWaiting && !m.court;
-      })
-      .slice()
-      .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1));
-
-    const queue: Match[] = [];
-    const wt: Record<string, number> = {};
-
-    candidates.forEach(m => {
-      const isBusy = busy.has(m.teamAId) || busy.has(m.teamBId);
-      if (!isBusy) {
-        queue.push(m);
-        wt[m.id] = 0;
-        busy.add(m.teamAId);
-        busy.add(m.teamBId);
-      } else {
-        wt[m.id] = 0;
-      }
-    });
-
-    return { rawQueue: queue, waitTimes: wt };
-  }, [matches, courts]);
-
-  /* -------- Helpers -------- */
-
-  /* -------- Live Courts View Models -------- */
-
-  const courtViewModels = useMemo(() => {
-    return courts.map(court => {
-      const currentMatch = matches.find(
-        m => m.court === court.name && m.status !== 'completed'
-      );
-
-      let status: 'AVAILABLE' | 'ASSIGNED' | 'IN_USE' | 'OUT_OF_SERVICE';
-
-      if (court.active === false) {
-        status = 'OUT_OF_SERVICE';
-      } else if (!currentMatch) {
-        status = 'AVAILABLE';
-      } else if (currentMatch.status === 'in_progress') {
-        status = 'IN_USE';
-      } else {
-        status = 'ASSIGNED';
-      }
-
-      return {
-        id: court.id,
-        name: court.name,
-        status,
-        currentMatchId: currentMatch ? currentMatch.id : undefined,
-      };
-    });
-  }, [courts, matches]);
-
-  const courtMatchModels = useMemo(() => {
-    return matches.map(m => {
-      const division = divisions.find(d => d.id === m.divisionId);
-      const court = courts.find(c => c.name === m.court);
-
-      let status: 'WAITING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED';
-
-      if (m.status === 'completed') {
-        status = 'COMPLETED';
-      } else if (m.status === 'in_progress') {
-        status = 'IN_PROGRESS';
-      } else if (m.court) {
-        status = 'ASSIGNED';
-      } else {
-        status = 'WAITING';
-      }
-
-      return {
-        id: m.id,
-        division: division?.name || 'Unknown',
-        roundLabel: m.stage || `Round ${m.roundNumber || 1}`,
-        matchLabel: `Match ${m.matchNumber ?? ''}`,
-        teamAName: getTeamDisplayName(m.teamAId),
-        teamBName: getTeamDisplayName(m.teamBId),
-        status,
-        courtId: court?.id,
-      };
-    });
-  }, [matches, divisions, courts, getTeamDisplayName]);
 
   /* -------- Per-match flags for confirmation UX -------- */
 
@@ -720,24 +640,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     alert('Division settings updated');
   };
 
-  /* -------- Conflict helper (same team on multiple courts) -------- */
-
-  const findActiveConflictMatch = (match: Match) => {
-    return matches.find(m => {
-      if (m.id === match.id) return false;
-      if (!m.court) return false;
-      if (m.status === 'completed') return false;
-
-      // Same team appearing in another live/pending match
-      return (
-        m.teamAId === match.teamAId ||
-        m.teamAId === match.teamBId ||
-        m.teamBId === match.teamAId ||
-        m.teamBId === match.teamBId
-      );
-    });
-  };
-
   /* -------- Court Management -------- */
 
   const [newCourtName, setNewCourtName] = useState('');
@@ -747,247 +649,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     await addCourt(tournament.id, newCourtName, courts.length + 1);
     setNewCourtName('');
   };
-
-  /**
-   * Simple "Assign" used from the Courts tab queue
-   * - Immediately starts the match (in_progress) on a free active court
-   */
-  const handleAssignCourt = async (matchId: string) => {
-    const match = matches.find(m => m.id === matchId);
-    if (!match) return;
-
-    // Check for conflict
-    const conflict = findActiveConflictMatch(match);
-    if (conflict) {
-      alert(
-        `Cannot assign this match: one of the teams is already playing or waiting on court ${conflict.court}. Finish that match first.`
-      );
-      return;
-    }
-
-    const freeCourt = courts.find(
-      c =>
-        c.active &&
-        !matches.some(m => m.status !== 'completed' && m.court === c.name)
-    );
-    if (!freeCourt) {
-      alert('No active courts available.');
-      return;
-    }
-
-    await updateMatchScore(tournament.id, matchId, {
-      status: 'in_progress',
-      court: freeCourt.name,
-      startTime: Date.now(),
-    });
-  };
-
-  // Assigns a match to a specific court, but does NOT start it yet.
-  const assignMatchToCourt = async (matchId: string, courtName: string) => {
-    const match = matches.find(m => m.id === matchId);
-    if (!match) return;
-
-    const conflict = findActiveConflictMatch(match);
-    if (conflict) {
-      alert(
-        `Cannot assign this match: one of the teams is already playing or waiting on court ${conflict.court}. Finish that match first.`
-      );
-      return;
-    }
-
-    await updateMatchScore(tournament.id, matchId, {
-      court: courtName,
-      status: 'scheduled',
-    });
-  };
-
-  // Starts the match that is currently on the given court
-  const startMatchOnCourt = async (courtId: string) => {
-    const court = courts.find(c => c.id === courtId);
-    if (!court) return;
-
-    const match = matches.find(
-      m => m.court === court.name && m.status !== 'completed'
-    );
-    if (!match) return;
-
-    await updateMatchScore(tournament.id, match.id, {
-      status: 'in_progress',
-      startTime: Date.now(),
-    });
-  };
-
-  // When finishing a match on a court:
-  const finishMatchOnCourt = async (
-    courtId: string,
-    scoreTeamA?: number,
-    scoreTeamB?: number
-  ) => {
-    const court = courts.find(c => c.id === courtId);
-    if (!court) return;
-
-    const currentMatch = matches.find(
-      m => m.court === court.name && m.status !== 'completed'
-    );
-    if (!currentMatch) {
-      alert('No active match found on this court.');
-      return;
-    }
-
-    const division =
-      divisions.find(d => d.id === currentMatch.divisionId) || null;
-
-    const existingHasScores =
-      Array.isArray(currentMatch.scoreTeamAGames) &&
-      currentMatch.scoreTeamAGames.length > 0 &&
-      Array.isArray(currentMatch.scoreTeamBGames) &&
-      currentMatch.scoreTeamBGames.length > 0;
-
-    const inlineHasScores =
-      typeof scoreTeamA === 'number' &&
-      !Number.isNaN(scoreTeamA) &&
-      typeof scoreTeamB === 'number' &&
-      !Number.isNaN(scoreTeamB);
-
-    if (!existingHasScores && !inlineHasScores) {
-      alert('Please enter scores for both teams before finishing this match.');
-      return;
-    }
-
-    if (!existingHasScores && inlineHasScores && division) {
-      const validationError = validateScoreForDivision(
-        scoreTeamA as number,
-        scoreTeamB as number,
-        division
-      );
-      if (validationError) {
-        alert(validationError);
-        return;
-      }
-    }
-
-    const updates: Partial<Match> = {
-      status: 'completed',
-      endTime: Date.now(),
-      court: '',
-    };
-
-    if (!existingHasScores && inlineHasScores) {
-      const sA = scoreTeamA as number;
-      const sB = scoreTeamB as number;
-
-      updates.scoreTeamAGames = [sA];
-      updates.scoreTeamBGames = [sB];
-      updates.winnerTeamId =
-        sA > sB ? currentMatch.teamAId : currentMatch.teamBId;
-    }
-
-    await updateMatchScore(tournament.id, currentMatch.id, updates);
-
-    // Find next waiting match (prefer same division, earliest round)
-    const nextSameDivision = matches
-      .filter(
-        m =>
-          (m.status === 'not_started' ||
-            m.status === 'scheduled' ||
-            !m.status) &&
-          !m.court &&
-          m.divisionId === currentMatch.divisionId
-      )
-      .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1))[0];
-
-    const nextAnyDivision =
-      nextSameDivision ||
-      matches
-        .filter(
-          m =>
-            (m.status === 'not_started' ||
-              m.status === 'scheduled' ||
-              !m.status) &&
-            !m.court
-        )
-        .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1))[0];
-
-    if (nextAnyDivision) {
-      await assignMatchToCourt(nextAnyDivision.id, court.name);
-    }
-  };
-
-  // Helper: list of team IDs that are currently busy on a court
-  const getBusyTeamIds = () => {
-    const busy = new Set<string>();
-    matches.forEach(m => {
-      if (!m.court) return;
-      if (m.status === 'completed') return;
-      busy.add(m.teamAId);
-      busy.add(m.teamBId);
-    });
-    return busy;
-  };
-
-  // Auto-fill all free courts with the best next matches (no conflicts)
-  const autoAssignFreeCourts = async (options?: { silent?: boolean }) => {
-    const silent = options?.silent ?? false;
-
-    const freeCourts = courts.filter(
-      c =>
-        c.active !== false &&
-        !matches.some(m => m.court === c.name && m.status !== 'completed')
-    );
-
-    if (freeCourts.length === 0) {
-      if (!silent) {
-        alert('No free courts available to auto-assign.');
-      }
-      return;
-    }
-
-    if (rawQueue.length === 0) {
-      if (!silent) {
-        alert('No waiting matches available for auto-assignment.');
-      }
-      return;
-    }
-
-    const busy = getBusyTeamIds();
-    const updates: Promise<any>[] = [];
-    let queueIndex = 0;
-
-    for (const court of freeCourts) {
-      let matchToAssign: Match | undefined;
-
-      while (queueIndex < rawQueue.length && !matchToAssign) {
-        const candidate = rawQueue[queueIndex++];
-
-        if (!busy.has(candidate.teamAId) && !busy.has(candidate.teamBId)) {
-          matchToAssign = candidate;
-          busy.add(candidate.teamAId);
-          busy.add(candidate.teamBId);
-        }
-      }
-
-      if (!matchToAssign) break;
-
-      updates.push(
-        updateMatchScore(tournament.id, matchToAssign.id, {
-          court: court.name,
-          status: 'scheduled',
-        })
-      );
-    }
-
-    if (updates.length === 0) {
-      if (!silent) {
-        alert(
-          'All waiting matches either conflict with players already on court or have already been assigned.'
-        );
-      }
-      return;
-    }
-
-    await Promise.all(updates);
-  };
-
   
   /* -------- Player Start Match (from sidebar) -------- */
 
