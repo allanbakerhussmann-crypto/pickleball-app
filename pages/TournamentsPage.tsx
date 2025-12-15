@@ -16,15 +16,18 @@ import type { Tournament } from '../types';
 
 const TournamentsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { isOrganizer } = useAuth();
+  const { currentUser, isOrganizer } = useAuth();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
 
   useEffect(() => {
-    const unsubscribe = subscribeToTournaments((data) => {
+    // subscribeToTournaments requires userId as first param
+    // Pass empty string for logged-out users (still shows public tournaments)
+    const userId = currentUser?.uid || '';
+    const unsubscribe = subscribeToTournaments(userId, (data) => {
       setTournaments(data);
     });
     return () => unsubscribe();
-  }, []);
+  }, [currentUser?.uid]);
 
   return (
     <TournamentDashboard

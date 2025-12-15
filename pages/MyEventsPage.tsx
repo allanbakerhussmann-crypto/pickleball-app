@@ -14,15 +14,17 @@ import type { Tournament } from '../types';
 
 const MyEventsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { isOrganizer } = useAuth();
+  const { currentUser, isOrganizer } = useAuth();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
 
   useEffect(() => {
-    const unsubscribe = subscribeToTournaments((data) => {
+    // subscribeToTournaments requires userId as first param
+    const userId = currentUser?.uid || '';
+    const unsubscribe = subscribeToTournaments(userId, (data) => {
       setTournaments(data);
     });
     return () => unsubscribe();
-  }, []);
+  }, [currentUser?.uid]);
 
   return (
     <TournamentDashboard
