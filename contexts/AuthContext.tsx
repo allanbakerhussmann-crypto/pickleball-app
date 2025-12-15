@@ -3,6 +3,9 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { 
   type User, 
   onAuthStateChanged,
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
   createUserWithEmailAndPassword,
   sendEmailVerification,
   signInWithEmailAndPassword,
@@ -11,6 +14,7 @@ import {
   updateEmail,
   sendPasswordResetEmail
 } from '@firebase/auth';
+
 import { getAuth, createUserProfile, getUserProfile, updateUserProfileDoc } from '../services/firebase';
 import type { UserProfile, UserRole } from '../types';
 
@@ -47,79 +51,99 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const auth = getAuth();
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+useEffect(() => {
+  const auth = getAuth();
+
+  let unsubscribe: (() => void) | undefined;
+
+  (async () => {
+    try {
+      // ✅ Persist login across reloads
+      await setPersistence(auth, browserLocalPersistence);
+    } catch (e) {
+      // Some preview/iframe environments block localStorage; fall back to session
+      console.warn('Local persistence failed, falling back to session persistence:', e);
+      await setPersistence(auth, browserSessionPersistence);
+    }
+
+    unsubscribe = onAuthStateChanged(auth, async (user) => {
       try {
         setCurrentUser(user);
-        
+
         if (user) {
           // Fetch extended profile from Firestore
           let profile = await getUserProfile(user.uid);
-          
+
           // Auto-promote specific admin email
           const ADMIN_EMAIL = 'allanrbaker13@gmail.com';
           if (user.email === ADMIN_EMAIL) {
-              const currentRoles = profile?.roles || ['player'];
-              const hasAdminRole = currentRoles.includes('admin');
-              
-              if (!hasAdminRole) {
-                  // Grant all roles
-                  const newRoles: UserRole[] = Array.from(new Set([...currentRoles, 'player', 'organizer', 'admin'])) as UserRole[];
-                  
-                  const updatedProfileData = {
-                      id: user.uid,
-                      email: user.email || '',
-                      displayName: profile?.displayName || user.displayName || 'Admin',
-                      roles: newRoles,
-                      isRootAdmin: true // Ensure flag is set for hardcoded email
-                  };
-                  
-                  // Update DB
-                  await createUserProfile(user.uid, updatedProfileData);
-                  
-                  // Update local variable so state is correct immediately
-                  if (profile) {
-                      profile.roles = newRoles;
-                      profile.isRootAdmin = true;
-                  } else {
-                      profile = updatedProfileData as UserProfile;
-                  }
+            const currentRoles = profile?.roles || ['player'];
+            const hasAdminRole = currentRoles.includes('admin');
+
+            if (!hasAdminRole) {
+              // Grant all roles
+              const newRoles: UserRole[] = Array.from(
+                new Set([...currentRoles, 'player', 'organizer', 'admin'])
+              ) as UserRole[];
+
+              const updatedProfileData = {
+                id: user.uid,
+                email: user.email || '',
+                displayName: profile?.displayName || user.displayName || 'Admin',
+                roles: newRoles,
+                isRootAdmin: true
+              };
+
+              // Update DB
+              await createUserProfile(user.uid, updatedProfileData);
+
+              // Update local variable so state is correct immediately
+              if (profile) {
+                profile.roles = newRoles;
+                profile.isRootAdmin = true;
+              } else {
+                profile = updatedProfileData as UserProfile;
               }
+            }
           }
 
           if (profile) {
-              setUserProfile(profile);
+            setUserProfile(profile);
           } else {
-              // Legacy user or error: fallback
-               setUserProfile({
-                  id: user.uid,
-                  displayName: user.displayName || 'User',
-                  email: user.email || '',
-                  roles: user.email === ADMIN_EMAIL ? ['player', 'organizer', 'admin'] : ['player'],
-                  isRootAdmin: user.email === ADMIN_EMAIL
-               });
+            // Legacy user or error: fallback
+            setUserProfile({
+              id: user.uid,
+              displayName: user.displayName || 'User',
+              email: user.email || '',
+              roles: user.email === ADMIN_EMAIL ? ['player', 'organizer', 'admin'] : ['player'],
+              isRootAdmin: user.email === ADMIN_EMAIL
+            });
           }
         } else {
           setUserProfile(null);
         }
       } catch (err) {
-        console.error("Auth State Change Error:", err);
+        console.error('Auth State Change Error:', err);
         // Fallback for UI if profile fetch fails
         if (user) {
-             setUserProfile({
-                id: user.uid,
-                displayName: user.displayName || 'User',
-                email: user.email || '',
-                roles: ['player']
-             });
+          setUserProfile({
+            id: user.uid,
+            displayName: user.displayName || 'User',
+            email: user.email || '',
+            roles: ['player']
+          });
         }
       } finally {
         setLoading(false);
       }
     });
-    return unsubscribe;
-  }, []);
+  })();
+
+  return () => {
+    if (unsubscribe) unsubscribe();
+  };
+}, []);
+
   
   // Helper to improve email link clickability on mobile (especially iOS)
   const getActionCodeSettings = () => undefined;

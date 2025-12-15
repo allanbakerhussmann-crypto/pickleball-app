@@ -2,13 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- Critical: forces all relative URLs to resolve within this preview origin, not ai.studio -->
     <base href="./" />
 
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>PickleballDirector</title>
 
-    <!-- Favicon (keep relative so preview environments don't break) -->
+    <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="vite.svg" />
 
     <!-- Fonts -->
@@ -47,7 +46,10 @@
     <!-- PapaParse -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
-    <!-- Importmap for AI Studio / ESM runtime -->
+    <!-- 
+      CORRECTED: Using AI Studio's built-in CDN (aistudiocdn.com)
+      This is the ONLY CDN that reliably works in AI Studio without CORS issues
+    -->
     <script type="importmap">
 {
   "imports": {
@@ -55,14 +57,15 @@
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
     "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.1",
     "@firebase/app": "https://aistudiocdn.com/@firebase/app@^0.14.6",
     "@firebase/auth": "https://aistudiocdn.com/@firebase/auth@^1.11.1",
     "@firebase/firestore": "https://aistudiocdn.com/@firebase/firestore@^4.6.1",
     "@firebase/storage": "https://aistudiocdn.com/@firebase/storage@^0.14.0",
     "@firebase/functions": "https://aistudiocdn.com/@firebase/functions@^0.11.8",
-    "firebase-functions": "https://esm.sh/firebase-functions@^7.0.1",
-    "firebase-admin": "https://esm.sh/firebase-admin@^13.6.0"
+    "firebase-functions": "https://aistudiocdn.com/firebase-functions@^7.0.1",
+    "firebase-admin": "https://aistudiocdn.com/firebase-admin@^13.6.0"
   }
 }
 </script>
@@ -72,7 +75,7 @@
   <body class="bg-gray-900 text-white">
     <div id="root"></div>
 
-    <!-- Critical: entry script must be relative + base href must be set -->
+    <!-- Entry script -->
     <script type="module" src="index.tsx"></script>
   <script type="module" src="/index.tsx"></script>
 </body>

@@ -36,16 +36,19 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                 return;
             }
 
-            const meetupData: Omit<Meetup, "id"|"createdAt"|"updatedAt"> = {
+            const meetupData: any = {
                 title,
                 description,
                 when,
                 visibility,
                 maxPlayers: maxPlayers ? parseInt(maxPlayers, 10) : 0,
                 locationName,
-                location: (lat && lng) ? { lat: parseFloat(lat), lng: parseFloat(lng) } : undefined,
                 createdByUserId: currentUser.uid,
             };
+
+            if (lat && lng) {
+                meetupData.location = { lat: parseFloat(lat), lng: parseFloat(lng) };
+            }
 
             await createMeetup(meetupData);
             onCreated();

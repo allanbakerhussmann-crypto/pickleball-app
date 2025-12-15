@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header'; 
 import { BottomNav } from './components/BottomNav';
@@ -26,6 +25,7 @@ import {
     saveTournament, 
     saveFirebaseConfig, 
     hasCustomConfig,
+    isFirebaseConfigured,
     subscribeToUserPartnerInvites,
     respondToPartnerInvite,
     getAllTournaments,
@@ -154,6 +154,20 @@ const LoggedOutWelcome: React.FC<{ onLoginClick: () => void }> = ({ onLoginClick
 };
 
 const App: React.FC = () => {
+    // ==========================================
+    // FIREBASE CONFIG CHECK (Added for AI Studio)
+    // ==========================================
+    const [firebaseReady, setFirebaseReady] = useState(false);
+    const [checkingConfig, setCheckingConfig] = useState(true);
+    
+    useEffect(() => {
+        console.log('🔍 App: Checking Firebase configuration...');
+        const configured = isFirebaseConfigured();
+        console.log('🔍 App: Firebase configured?', configured);
+        setFirebaseReady(configured);
+        setCheckingConfig(false);
+    }, []);
+
     const { currentUser, userProfile, loading, isOrganizer, isAppAdmin, logout, reloadUser } = useAuth();
     const [isLoginModalOpen, setLoginModalOpen] = useState(false);
     const [isConfigModalOpen, setConfigModalOpen] = useState(false);
@@ -180,8 +194,16 @@ const App: React.FC = () => {
     const [tournamentsById, setTournamentsById] = useState<Record<string, Tournament>>({});
     const [usersById, setUsersById] = useState<Record<string, UserProfile>>({});
 
+    // Show config modal if not configured
     useEffect(() => {
-        if (currentUser) {
+        if (!checkingConfig && !firebaseReady) {
+            console.log('⚠️ Firebase not configured, showing config modal');
+            setConfigModalOpen(true);
+        }
+    }, [checkingConfig, firebaseReady]);
+
+    useEffect(() => {
+        if (currentUser && firebaseReady) {
             const unsubscribe = subscribeToTournaments(currentUser.uid, (data) => {
                 setTournaments(data);
             });
@@ -189,11 +211,11 @@ const App: React.FC = () => {
         } else {
             setTournaments([]);
         }
-    }, [currentUser]);
+    }, [currentUser, firebaseReady]);
 
     // Subscribe to Invites
     useEffect(() => {
-        if (!currentUser) {
+        if (!currentUser || !firebaseReady) {
             setPendingInvites([]);
             return;
         }
@@ -202,10 +224,11 @@ const App: React.FC = () => {
             if (invites && invites.length > 0) setInvitePopupVisible(true);
         });
         return () => unsub();
-    }, [currentUser?.uid]);
+    }, [currentUser?.uid, firebaseReady]);
 
     // Load Tournament Metadata for Popup
     useEffect(() => {
+        if (!firebaseReady) return;
         const load = async () => {
             const all = await getAllTournaments(200);
             const map: Record<string, Tournament> = {};
@@ -213,10 +236,11 @@ const App: React.FC = () => {
             setTournamentsById(map);
         };
         load();
-    }, []);
+    }, [firebaseReady]);
 
     // Load Inviter Metadata for Popup
     useEffect(() => {
+        if (!firebaseReady) return;
         const loadInviters = async () => {
             const missingIds = Array.from(
                 new Set(
@@ -237,16 +261,14 @@ const App: React.FC = () => {
         if (pendingInvites.length > 0) {
             loadInviters();
         }
-    }, [pendingInvites, usersById]); // Safe dependency due to functional update check inside logic
+    }, [pendingInvites, usersById, firebaseReady]);
 
     // Check for verification redirect from email
     useEffect(() => {
         if (currentUser && !currentUser.emailVerified) {
             const params = new URLSearchParams(window.location.search);
             if (params.get('verified') === 'true') {
-                // Clean URL
                 window.history.replaceState(null, '', window.location.pathname);
-                // Reload user to update emailVerified status
                 reloadUser().catch(console.error);
             }
         }
@@ -279,7 +301,6 @@ const App: React.FC = () => {
     };
 
     const handleNavigate = (newView: string) => {
-        // Security check for organizer-only views
         if (newView === 'createTournament' && !isOrganizer) return;
         if (newView === 'adminUsers' && !isAppAdmin) return;
         
@@ -296,10 +317,14 @@ const App: React.FC = () => {
     };
 
     const handleSaveConfig = (configJson: string) => {
-        return saveFirebaseConfig(configJson);
+        const result = saveFirebaseConfig(configJson);
+        if (result.success) {
+            setFirebaseReady(true);
+            setConfigModalOpen(false);
+        }
+        return result;
     };
     
-    // Callback when user accepts an invite
     const handleAcceptInvite = (tournamentId: string, divisionId: string) => {
         setActiveTournamentId(tournamentId);
         setWizardProps({
@@ -307,7 +332,6 @@ const App: React.FC = () => {
             mode: 'waiver_only',
             divisionId
         });
-        // The TournamentManager will render because activeTournamentId is set
     };
 
     const handlePopupAccept = async (invite: PartnerInvite) => {
@@ -322,35 +346,84 @@ const App: React.FC = () => {
         }
     };
 
-    if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-gray-500">Loading PickleballDirector...</div>;
+    // ==========================================
+    // LOADING STATES
+    // ==========================================
+    
+    // Show loading while checking config
+    if (checkingConfig) {
+        return (
+            <div className="min-h-screen bg-gray-900 flex items-center justify-center text-gray-500">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
+                    <p>Initializing PickleballDirector...</p>
+                </div>
+            </div>
+        );
+    }
+
+    // Show config modal if Firebase not ready
+    if (!firebaseReady) {
+        return (
+            <>
+                <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+                    <div className="text-center max-w-md p-8">
+                        <PickleballDirectorLogo className="h-20 w-auto mx-auto mb-6" />
+                        <h2 className="text-2xl font-bold text-white mb-4">Database Connection Required</h2>
+                        <p className="text-gray-400 mb-6">
+                            Please connect your Firebase database to continue.
+                        </p>
+                        <button
+                            onClick={() => setConfigModalOpen(true)}
+                            className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-8 rounded-lg transition-all"
+                        >
+                            Connect Database
+                        </button>
+                    </div>
+                </div>
+                {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
+            </>
+        );
+    }
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-gray-900 flex items-center justify-center text-gray-500">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
+                    <p>Loading PickleballDirector...</p>
+                </div>
+            </div>
+        );
+    }
 
     if (!currentUser) {
-    return (
-        <>
-            <LoggedOutWelcome onLoginClick={() => setLoginModalOpen(true)} />
+        return (
+            <>
+                <LoggedOutWelcome onLoginClick={() => setLoginModalOpen(true)} />
 
-            {isLoginModalOpen && (
-                <LoginModal 
-                    onClose={() => setLoginModalOpen(false)} 
-                    onOpenConfig={() => {
-                        setLoginModalOpen(false);
-                        setConfigModalOpen(true);
-                    }}
-                />
-            )}
+                {isLoginModalOpen && (
+                    <LoginModal 
+                        onClose={() => setLoginModalOpen(false)} 
+                        onOpenConfig={() => {
+                            setLoginModalOpen(false);
+                            setConfigModalOpen(true);
+                        }}
+                    />
+                )}
 
-            {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
-        </>
-    );
-}
-
+                {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
+            </>
+        );
+    }
 
     const activeTournament = tournaments.find(t => t.id === activeTournamentId);
 
-    // -- Main Authenticated Layout --
+    // ==========================================
+    // MAIN AUTHENTICATED LAYOUT
+    // ==========================================
     return (
         <div className="min-h-screen bg-gray-900 flex flex-col font-sans text-gray-100 relative w-full overflow-x-hidden">
-            {/* Desktop Navigation Header */}
             <Header 
                 activeView={view}
                 onNavigate={handleNavigate}
@@ -361,7 +434,6 @@ const App: React.FC = () => {
                 onAcceptInvite={handleAcceptInvite}
             />
 
-            {/* Mobile Bottom Navigation */}
             <BottomNav activeView={view} onNavigate={handleNavigate} />
 
             {/* Partner Invite Popup */}
@@ -435,17 +507,17 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            {/* Verification Banner */}
             {currentUser && !currentUser.emailVerified && <VerificationBanner />}
 
-            {/* Main Content Area - Added pb-24 for bottom nav clearance on mobile */}
             <main className="flex-grow p-4 md:p-8 pb-24 md:pb-8 overflow-y-auto w-full">
                 <div className="container mx-auto">
                     {isConfigModalOpen && <FirebaseConfigModal onSave={handleSaveConfig} />}
 
-                    {/* Content Switcher */}
+                    {/* ==========================================
+                        CONTENT SWITCHER - ALL VIEWS
+                        ========================================== */}
                     {activeTournament ? (
-                            <TournamentManager 
+                        <TournamentManager 
                             tournament={activeTournament} 
                             onUpdateTournament={handleUpdateTournament}
                             isVerified={!!currentUser.emailVerified} 
@@ -478,7 +550,6 @@ const App: React.FC = () => {
                             onBack={() => { setActiveClubId(null); setView('clubs'); }} 
                         />
                     ) : view === 'dashboard' ? (
-                        // User Profile Dashboard
                         <UserDashboard 
                             userProfile={userProfile || {
                                 id: currentUser.uid, 
@@ -527,32 +598,26 @@ const App: React.FC = () => {
                     ) : view === 'invites' ? (
                         <PartnerInvites
                             onAcceptInvites={(tournamentId, divisionIds) => {
-                            // Move to the "choose events for this tournament" screen
-                            setEventSelectionTournamentId(tournamentId);
-                            setEventSelectionPreselectedDivisionIds(divisionIds);
-                            setView('tournamentEvents');
+                                setEventSelectionTournamentId(tournamentId);
+                                setEventSelectionPreselectedDivisionIds(divisionIds);
+                                setView('tournamentEvents');
                             }}
                             onCompleteWithoutSelection={() => setView('dashboard')}
                         />
-                        ) : view === 'tournamentEvents' && eventSelectionTournamentId ? (
+                    ) : view === 'tournamentEvents' && eventSelectionTournamentId ? (
                         <TournamentEventSelection
                             tournamentId={eventSelectionTournamentId}
                             preselectedDivisionIds={eventSelectionPreselectedDivisionIds}
                             onBack={() => {
-                            // Go back to the invite summary screen
-                            setView('invites');
+                                setView('invites');
                             }}
                             onContinue={(selectedDivisionIds) => {
-                            // 🔗 IMPORTANT:
-                            // Here we hand off to your existing registration / waiver flow.
-                            if (selectedDivisionIds.length > 0) {
-                                // Existing logic – you should already have something like this:
-                                handleAcceptInvite(eventSelectionTournamentId, selectedDivisionIds[0]);
-                            }
+                                if (selectedDivisionIds.length > 0) {
+                                    handleAcceptInvite(eventSelectionTournamentId, selectedDivisionIds[0]);
+                                }
                             }}
                         />
-                        ) : view === 'myResults' ? (
-
+                    ) : view === 'myResults' ? (
                         <PlaceholderView 
                             title="My Results" 
                             icon={<svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
@@ -600,7 +665,7 @@ const App: React.FC = () => {
                             onBack={() => setView('dashboard')}
                         />
                     ) : view === 'myClub' ? (
-                         <ClubsList 
+                        <ClubsList 
                             onCreateClub={() => setView('createClub')}
                             onViewClub={(id) => { setActiveClubId(id); setView('clubDetail'); }}
                             onBack={() => setView('dashboard')}
@@ -624,7 +689,7 @@ const App: React.FC = () => {
             <footer className="p-6 pb-28 md:pb-6 text-center border-t border-gray-800 text-gray-600 text-xs bg-gray-900 hidden md:block">
                 <div className="flex justify-center gap-4 mb-2">
                     <button onClick={() => setConfigModalOpen(true)} className="hover:text-gray-400">
-                            {hasCustomConfig() ? 'Database Settings' : 'Connect Database'}
+                        {hasCustomConfig() ? 'Database Settings' : 'Connect Database'}
                     </button>
                     <span>&middot;</span>
                     <a href="#" className="hover:text-gray-400">Support</a>
