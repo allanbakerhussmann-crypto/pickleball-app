@@ -40,7 +40,7 @@ import { Schedule } from './Schedule';
 import { BracketViewer } from './BracketViewer';
 import { Standings } from './Standings';
 import { TournamentRegistrationWizard } from './registration/TournamentRegistrationWizard';
-import { useTournamentPhase } from './tournament/hooks';
+import { useTournamentPhase } from './tournament/hooks/useTournamentPhase';
 
 interface TournamentManagerProps {
   tournament: Tournament;
