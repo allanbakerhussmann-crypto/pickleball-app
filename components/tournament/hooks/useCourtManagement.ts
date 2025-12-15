@@ -5,8 +5,8 @@
  */
 
 import { useMemo, useCallback } from 'react';
-import type { Match, Court, Division } from '../../types';
-import { updateMatchScore } from '../../services/firebase';
+import type { Match, Court, Division } from '../../../types';
+import { updateMatchScore } from '../../../services/firebase';
 
 interface UseCourtManagementProps {
   tournamentId: string;
@@ -255,8 +255,6 @@ export const useCourtManagement = ({
       return;
     }
 
-    const division = divisions.find(d => d.id === currentMatch.divisionId) || null;
-
     const existingHasScores =
       Array.isArray(currentMatch.scoreTeamAGames) &&
       currentMatch.scoreTeamAGames.length > 0 &&
@@ -302,7 +300,7 @@ export const useCourtManagement = ({
     if (nextMatch) {
       await assignMatchToCourt(nextMatch.id, court.name);
     }
-  }, [tournamentId, courts, matches, divisions, assignMatchToCourt]);
+  }, [tournamentId, courts, matches, assignMatchToCourt]);
 
   const handleAssignCourt = useCallback(async (matchId: string) => {
     const match = matches.find(m => m.id === matchId);

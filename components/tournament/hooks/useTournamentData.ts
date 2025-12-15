@@ -5,8 +5,8 @@
  * Centralizes divisions, teams, matches, courts, and player cache management.
  */
 
-import { useState, useEffect, useMemo } from 'react';
-import type { Division, Team, Match, Court, UserProfile } from '../../types';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import type { Division, Team, Match, Court, UserProfile } from '../../../types';
 import {
   subscribeToDivisions,
   subscribeToTeams,
@@ -14,7 +14,7 @@ import {
   subscribeToCourts,
   getUsersByIds,
   getRegistration,
-} from '../../services/firebase';
+} from '../../../services/firebase';
 
 interface UseTournamentDataProps {
   tournamentId: string;
@@ -123,7 +123,7 @@ export const useTournamentData = ({
     return () => {
       cancelled = true;
     };
-  }, [teams]);
+  }, [teams, playersCache]);
 
   // ============================================
   // Check registration status
@@ -180,7 +180,7 @@ export const useTournamentData = ({
   // Helper functions
   // ============================================
 
-  const getTeamDisplayName = (teamId: string): string => {
+  const getTeamDisplayName = useCallback((teamId: string): string => {
     const team = teams.find(t => t.id === teamId);
     if (!team) return 'TBD';
     if (team.teamName) return team.teamName;
@@ -188,15 +188,15 @@ export const useTournamentData = ({
       .map(pid => playersCache[pid]?.displayName || 'Unknown')
       .join(' / ');
     return names;
-  };
+  }, [teams, playersCache]);
 
-  const getTeamPlayers = (teamId: string): UserProfile[] => {
+  const getTeamPlayers = useCallback((teamId: string): UserProfile[] => {
     const team = teams.find(t => t.id === teamId);
     if (!team) return [];
     return team.players
       .map(pid => playersCache[pid])
       .filter(Boolean) as UserProfile[];
-  };
+  }, [teams, playersCache]);
 
   return {
     // Data

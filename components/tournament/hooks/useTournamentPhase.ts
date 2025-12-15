@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import type { Match } from '../../types';
+import type { Match } from '../../../types';
 
 export type TournamentPhase = 'registration' | 'in_progress' | 'completed';
 

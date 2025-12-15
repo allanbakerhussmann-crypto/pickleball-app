@@ -40,6 +40,7 @@ import { Schedule } from './Schedule';
 import { BracketViewer } from './BracketViewer';
 import { Standings } from './Standings';
 import { TournamentRegistrationWizard } from './registration/TournamentRegistrationWizard';
+import { useTournamentPhase } from './tournament/hooks';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -50,7 +51,6 @@ interface TournamentManagerProps {
   clearWizardState?: () => void;
 }
 
-type TournamentPhase = 'registration' | 'in_progress' | 'completed';
 
 const validateScoreForDivision = (score1: number, score2: number, division: Division): string | null => {
   if (score1 < 0 || score2 < 0) return 'Scores cannot be negative.';
@@ -72,11 +72,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     'participants' | 'courts' | 'settings' | 'livecourts'
   >('livecourts');
 
-  // Local override for tournament phase (UI only)
-  const [phaseOverride, setPhaseOverride] = useState<TournamentPhase | null>(
-    null
-  );
-
+  
   // Wizard State
   const [showRegistrationWizard, setShowRegistrationWizard] = useState(false);
   const [wizardProps, setWizardProps] = useState<{
@@ -128,6 +124,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   const [teams, setTeams] = useState<Team[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [courts, setCourts] = useState<Court[]>([]);
+  // Tournament Phase (using new hook)
+  const {
+    tournamentPhase,
+    tournamentPhaseLabel,
+    tournamentPhaseClass,
+    handleStartTournament,
+  } = useTournamentPhase({ matches });
   const [autoAllocateCourts, setAutoAllocateCourts] = useState(false);
   const [playersCache, setPlayersCache] = useState<Record<string, UserProfile>>(
     {}
@@ -240,20 +243,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   );
 
   /* -------- Tournament phase derived from matches -------- */
-
-  const computedPhase: TournamentPhase = useMemo(() => {
-    if (matches.length === 0) return 'registration';
-    const anyNotCompleted = matches.some(m => m.status !== 'completed');
-    return anyNotCompleted ? 'in_progress' : 'completed';
-  }, [matches]);
-
-  useEffect(() => {
-    if (computedPhase === 'completed') {
-      setPhaseOverride('completed');
-    }
-  }, [computedPhase]);
-
-  const tournamentPhase: TournamentPhase = phaseOverride ?? computedPhase;
 
   // Load editable settings when active division changes
   useEffect(() => {
@@ -1114,26 +1103,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     await Promise.all(updates);
   };
 
-  /* -------- Tournament phase helpers (UI) -------- */
-
-  const handleStartTournament = () => {
-    setPhaseOverride('in_progress');
-  };
-
-  const tournamentPhaseLabel =
-    tournamentPhase === 'registration'
-      ? 'Registration'
-      : tournamentPhase === 'in_progress'
-      ? 'In Progress'
-      : 'Completed';
-
-  const tournamentPhaseClass =
-    tournamentPhase === 'registration'
-      ? 'bg-yellow-900 text-yellow-300'
-      : tournamentPhase === 'in_progress'
-      ? 'bg-green-900 text-green-300'
-      : 'bg-blue-900 text-blue-300';
-
+  
   /* -------- Player Start Match (from sidebar) -------- */
 
   const handlePlayerStartMatch = async (matchId: string) => {
