@@ -240,17 +240,92 @@ export {
 } from './validation';
 
 // ============================================
-// SERVICE EXPORTS (to be added as we build them)
+// PRICING SERVICE EXPORTS
 // ============================================
 
-// Pricing services
-// export * from './pricing';
+export {
+  // Types
+  type PricingContext,
+  
+  // Time helpers
+  parseTimeToMinutes,
+  getDayOfWeek,
+  isWeekend,
+  isPeakTime,
+  determinePriceType,
+  
+  // Price lookups
+  getBasePrice,
+  getGradeConfig,
+  
+  // Discount calculations
+  calculateMemberDiscount,
+  calculatePassDiscount,
+  calculateVisitorPremium,
+  
+  // Add-on calculations
+  calculateLightingFee,
+  calculateEquipmentFee,
+  calculateBallMachineFee,
+  calculateVisitorFee,
+  
+  // Main pricing function
+  calculateBookingPrice,
+  calculateMultiSlotPrice,
+  
+  // Utilities
+  isBookingFree,
+  getPriceSummary,
+  formatPrice,
+  getPriceTypeLabel,
+} from './pricing';
+
+// ============================================
+// PLATFORM FEE SERVICE EXPORTS
+// ============================================
+
+export {
+  // Types
+  type FeeCalculationResult,
+  type TaxCalculationResult,
+  
+  // Fee rate lookups
+  getFeeRateForType,
+  getFixedFee,
+  
+  // Fee calculations
+  calculatePlatformFee,
+  calculatePlatformFeeWithRate,
+  
+  // Tax calculations
+  getTaxRate,
+  calculateTax,
+  addTaxToBreakdown,
+  getTaxLabel,
+  
+  // Combined calculations
+  calculateAllFees,
+  calculateNetPayout,
+  
+  // Validation
+  validateFeeRate,
+  
+  // Display helpers
+  formatFeeRate,
+  formatFeeAmount,
+  getFeeSummary,
+  
+  // Stripe fee passthrough (optional)
+  calculateStripeProcessingFee,
+  calculateAmountWithStripeFee,
+} from './platformFees';
+
+// ============================================
+// SERVICE EXPORTS (to be added as we build them)
+// ============================================
 
 // Annual pass services
 // export * from './annualPass';
 
 // Refund services
 // export * from './refunds';
-
-// Platform fee services
-// export * from './platformFees';
