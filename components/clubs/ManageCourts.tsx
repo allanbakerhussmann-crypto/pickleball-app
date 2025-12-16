@@ -326,6 +326,12 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
     }));
   };
 
+  // Handle Done - go back to club page
+  const handleDone = () => {
+    setShowSuccess(false);
+    onBack();
+  };
+
   // Success screen
   if (showSuccess) {
     return (
@@ -357,7 +363,7 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
               Edit Settings
             </button>
             <button
-              onClick={onBack}
+              onClick={handleDone}
               className="px-5 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold"
             >
               Done

@@ -18,15 +18,12 @@ import {
   onSnapshot,
   updateDoc,
   deleteDoc,
-  writeBatch,
 } from '@firebase/firestore';
 import { db } from './config';
 import type {
   ClubCourt,
   ClubBookingSettings,
   CourtBooking,
-  BookingStatus,
-  DEFAULT_BOOKING_SETTINGS,
 } from '../../types';
 
 // ============================================
@@ -38,18 +35,29 @@ import type {
  */
 export const addClubCourt = async (
   clubId: string,
-  court: Omit<ClubCourt, 'id' | 'clubId' | 'createdAt' | 'updatedAt'>
+  court: Partial<ClubCourt>
 ): Promise<string> => {
   const courtRef = doc(collection(db, 'clubs', clubId, 'courts'));
   const now = Date.now();
   
   const newCourt: ClubCourt = {
-    ...court,
     id: courtRef.id,
     clubId,
+    name: court.name || 'New Court',
+    description: court.description || null,
+    isActive: court.isActive !== false,
+    order: court.order || 0,
     createdAt: now,
     updatedAt: now,
-  };
+    // Support enhanced fields if provided
+    ...(court.grade && { grade: court.grade }),
+    ...(court.location && { location: court.location }),
+    ...(court.surfaceType && { surfaceType: court.surfaceType }),
+    ...(court.features && { features: court.features }),
+    ...(court.additionalFees && { additionalFees: court.additionalFees }),
+    ...(court.useCustomPricing !== undefined && { useCustomPricing: court.useCustomPricing }),
+    ...(court.customBasePrice !== undefined && { customBasePrice: court.customBasePrice }),
+  } as ClubCourt;
   
   await setDoc(courtRef, newCourt);
   return courtRef.id;
@@ -76,16 +84,14 @@ export const deleteClubCourt = async (
   clubId: string,
   courtId: string
 ): Promise<void> => {
-  // Get all bookings for this court
   const bookingsQuery = query(
     collection(db, 'clubs', clubId, 'bookings'),
     where('courtId', '==', courtId)
   );
   
   const bookingsSnap = await getDocs(bookingsQuery);
-  
-  // Filter in JavaScript for future confirmed bookings
   const today = new Date().toISOString().split('T')[0];
+  
   const futureBookings = bookingsSnap.docs.filter(doc => {
     const booking = doc.data();
     return booking.date >= today && booking.status === 'confirmed';
@@ -126,6 +132,9 @@ export const subscribeToClubCourts = (
   return onSnapshot(q, (snap) => {
     const courts = snap.docs.map(d => d.data() as ClubCourt);
     callback(courts);
+  }, (error) => {
+    console.error('Error subscribing to courts:', error);
+    callback([]);
   });
 };
 
@@ -139,11 +148,16 @@ export const subscribeToClubCourts = (
 export const getClubBookingSettings = async (
   clubId: string
 ): Promise<ClubBookingSettings | null> => {
-  const docSnap = await getDoc(doc(db, 'clubs', clubId));
-  if (!docSnap.exists()) return null;
-  
-  const club = docSnap.data();
-  return club.bookingSettings || null;
+  try {
+    const docSnap = await getDoc(doc(db, 'clubs', clubId));
+    if (!docSnap.exists()) return null;
+    
+    const club = docSnap.data();
+    return club.bookingSettings || null;
+  } catch (error) {
+    console.error('Error getting booking settings:', error);
+    return null;
+  }
 };
 
 /**
@@ -172,14 +186,14 @@ export const createCourtBooking = async (
 ): Promise<string> => {
   // Validate no conflicts
   const existingBookings = await getBookingsForDate(clubId, booking.date);
-  const conflict = existingBookings.find(b => 
-    b.courtId === booking.courtId && 
-    b.startTime === booking.startTime &&
-    b.status === 'confirmed'
+  const conflict = existingBookings.find(
+    b => b.courtId === booking.courtId && 
+         b.startTime === booking.startTime && 
+         b.status === 'confirmed'
   );
   
   if (conflict) {
-    throw new Error('This time slot is already booked');
+    throw new Error('This slot is already booked');
   }
   
   const bookingRef = doc(collection(db, 'clubs', clubId, 'bookings'));
@@ -241,8 +255,7 @@ export const getBookingsForDateRange = async (
   const q = query(
     collection(db, 'clubs', clubId, 'bookings'),
     where('date', '>=', startDate),
-    where('date', '<=', endDate),
-    orderBy('date', 'asc')
+    where('date', '<=', endDate)
   );
   
   const snap = await getDocs(q);
@@ -265,6 +278,9 @@ export const subscribeToBookingsForDate = (
   return onSnapshot(q, (snap) => {
     const bookings = snap.docs.map(d => d.data() as CourtBooking);
     callback(bookings);
+  }, (error) => {
+    console.error('Error subscribing to bookings:', error);
+    callback([]);
   });
 };
 
@@ -333,22 +349,21 @@ export const canCancelBooking = (
 ): boolean => {
   const bookingDateTime = new Date(`${booking.date}T${booking.startTime}`);
   const now = new Date();
-  const diffMinutes = (bookingDateTime.getTime() - now.getTime()) / (1000 * 60);
-  
+  const diffMinutes = (bookingDateTime.getTime() - now.getTime()) / 60000;
   return diffMinutes >= cancellationMinutes;
 };
 
 // ============================================
-// HELPER FUNCTIONS
+// TIME SLOT HELPERS
 // ============================================
 
 /**
- * Generate time slots for a day based on settings
+ * Generate time slots for a day
  */
 export const generateTimeSlots = (
   openTime: string,
   closeTime: string,
-  slotDurationMinutes: number
+  durationMinutes: number
 ): string[] => {
   const slots: string[] = [];
   
@@ -358,32 +373,29 @@ export const generateTimeSlots = (
   let currentMinutes = openHour * 60 + openMin;
   const endMinutes = closeHour * 60 + closeMin;
   
-  while (currentMinutes + slotDurationMinutes <= endMinutes) {
-    const hours = Math.floor(currentMinutes / 60);
-    const mins = currentMinutes % 60;
-    slots.push(`${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`);
-    currentMinutes += slotDurationMinutes;
+  while (currentMinutes + durationMinutes <= endMinutes) {
+    const hour = Math.floor(currentMinutes / 60);
+    const min = currentMinutes % 60;
+    slots.push(`${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`);
+    currentMinutes += durationMinutes;
   }
   
   return slots;
 };
 
 /**
- * Calculate end time given start time and duration
+ * Calculate end time from start time and duration
  */
-export const calculateEndTime = (
-  startTime: string,
-  durationMinutes: number
-): string => {
-  const [hours, mins] = startTime.split(':').map(Number);
-  const totalMinutes = hours * 60 + mins + durationMinutes;
-  const endHours = Math.floor(totalMinutes / 60);
-  const endMins = totalMinutes % 60;
-  return `${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
+export const calculateEndTime = (startTime: string, durationMinutes: number): string => {
+  const [hour, min] = startTime.split(':').map(Number);
+  const totalMinutes = hour * 60 + min + durationMinutes;
+  const endHour = Math.floor(totalMinutes / 60);
+  const endMin = totalMinutes % 60;
+  return `${endHour.toString().padStart(2, '0')}:${endMin.toString().padStart(2, '0')}`;
 };
 
 /**
- * Check if a time slot is in the past
+ * Check if a slot is in the past
  */
 export const isSlotInPast = (date: string, time: string): boolean => {
   const slotDateTime = new Date(`${date}T${time}`);
@@ -393,11 +405,9 @@ export const isSlotInPast = (date: string, time: string): boolean => {
 /**
  * Format date for display
  */
-export const formatDateLabel = (dateStr: string): string => {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-US', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  });
+export const formatDateLabel = (dateString: string): string => {
+  const date = new Date(dateString);
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${days[date.getDay()]} ${date.getDate()} ${months[date.getMonth()]}`;
 };

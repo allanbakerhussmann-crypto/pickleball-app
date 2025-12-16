@@ -833,3 +833,315 @@ export interface CalendarDay {
   dateLabel: string;               // "Mon 16 Dec"
   slots: CalendarSlot[];
 }
+// ============================================
+// COURT BOOKING TYPES (ENHANCED)
+// ============================================
+
+// Court Grades
+export type CourtGrade = 'standard' | 'premium' | 'elite';
+
+export interface CourtGradeConfig {
+  id: CourtGrade;
+  name: string;
+  description: string;
+  icon: string;
+  basePrice: number;       // In cents
+  peakPrice: number;
+  weekendPrice: number;
+  memberPricing: 'free' | 'discounted' | 'full';
+  memberDiscountPercent?: number;
+  visitorPremiumPercent: number;
+}
+
+// Court Location & Surface
+export type CourtLocation = 'indoor' | 'outdoor' | 'covered';
+export type CourtSurface = 'concrete' | 'asphalt' | 'cushioned' | 'wood' | 'synthetic' | 'other';
+export type CourtStatus = 'active' | 'inactive' | 'maintenance';
+
+export interface CourtFeatures {
+  hasLights: boolean;
+  climateControlled: boolean;
+  ballMachineAvailable: boolean;
+  livestreamCapable: boolean;
+}
+
+export interface CourtAdditionalFee {
+  enabled: boolean;
+  amount: number;
+  description?: string;
+  appliesAfter?: string;
+}
+
+// Enhanced ClubCourt (replaces simpler version)
+export interface ClubCourtEnhanced {
+  id: string;
+  clubId: string;
+  name: string;
+  description?: string;
+  
+  // Grade
+  grade: CourtGrade;
+  
+  // Custom pricing override
+  useCustomPricing: boolean;
+  customBasePrice?: number;
+  customPeakPrice?: number;
+  customWeekendPrice?: number;
+  
+  // Details
+  location: CourtLocation;
+  surfaceType: CourtSurface;
+  features: CourtFeatures;
+  
+  // Additional fees
+  additionalFees: {
+    lighting?: CourtAdditionalFee;
+    equipment?: CourtAdditionalFee;
+    ballMachine?: CourtAdditionalFee;
+  };
+  
+  // Status
+  status: CourtStatus;
+  isActive: boolean;
+  order: number;
+  
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Visitor Settings
+export interface VisitorSettings {
+  allowVisitors: boolean;
+  visitorFeeEnabled: boolean;
+  visitorFee: number;
+  visitorFeeType: 'per_day' | 'per_booking';
+  visitorCourtPricing: 'same' | 'premium' | 'custom';
+  visitorPremiumPercent?: number;
+  visitorCustomPrice?: number;
+  requireMemberSignIn: boolean;
+  maxVisitorBookingsPerDay?: number;
+}
+
+// Payment Methods
+export interface PaymentMethodsConfig {
+  acceptPayAsYouGo: boolean;
+  acceptWallet: boolean;
+  walletTopUpAmounts: number[];
+  allowCustomTopUp: boolean;
+  minTopUp?: number;
+  maxTopUp?: number;
+  acceptAnnualPass: boolean;
+  annualPassPrice?: number;
+  annualPassBenefit: 'unlimited' | 'discounted';
+  annualPassDiscountPercent?: number;
+  annualPassPriorityDays?: number;
+  passFeeToCustomer: boolean;
+}
+
+// Peak Hours
+export interface PeakHoursConfig {
+  enabled: boolean;
+  startTime: string;
+  endTime: string;
+  days: number[];
+}
+
+// Enhanced ClubBookingSettings (replaces simpler version)
+export interface ClubBookingSettingsEnhanced {
+  enabled: boolean;
+  currency: 'nzd' | 'aud' | 'usd';
+  
+  // Time settings
+  slotDurationMinutes: 30 | 60 | 90;
+  openTime: string;
+  closeTime: string;
+  
+  // Peak hours
+  peakHours: PeakHoursConfig;
+  weekendPricingEnabled: boolean;
+  
+  // Court grades
+  courtGrades: Record<CourtGrade, CourtGradeConfig>;
+  useCustomGradeNames: boolean;
+  
+  // Visitors
+  visitors: VisitorSettings;
+  
+  // Booking rules
+  maxAdvanceBookingDays: number;
+  maxBookingsPerMemberPerDay: number;
+  cancellationMinutesBeforeSlot: number;
+  
+  // Payments
+  paymentMethods: PaymentMethodsConfig;
+  
+  // Stripe
+  stripeAccountId?: string;
+  stripeAccountStatus?: 'pending' | 'active' | 'restricted';
+}
+
+// Wallet
+export interface ClubWallet {
+  id: string;
+  odUserId: string;
+  odClubId: string;
+  balance: number;
+  currency: 'nzd' | 'aud' | 'usd';
+  totalLoaded: number;
+  totalSpent: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type WalletTransactionType = 'topup' | 'payment' | 'refund' | 'adjustment';
+
+export interface WalletTransaction {
+  id: string;
+  walletId: string;
+  odUserId: string;
+  odClubId: string;
+  type: WalletTransactionType;
+  amount: number;
+  balanceAfter: number;
+  stripePaymentIntentId?: string;
+  referenceType?: 'court_booking' | 'tournament' | 'league';
+  referenceId?: string;
+  referenceName?: string;
+  reason?: string;
+  adjustedByUserId?: string;
+  createdAt: number;
+}
+
+// Annual Pass
+export type AnnualPassStatus = 'active' | 'expired' | 'cancelled' | 'refunded';
+
+export interface AnnualPass {
+  id: string;
+  odUserId: string;
+  odClubId: string;
+  startDate: string;
+  endDate: string;
+  status: AnnualPassStatus;
+  amountPaid: number;
+  stripePaymentIntentId: string;
+  purchasedAt: number;
+  bookingsUsed: number;
+  autoRenew: boolean;
+  stripeSubscriptionId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Visitor Fee Payment
+export interface VisitorFeePayment {
+  id: string;
+  odUserId: string;
+  odClubId: string;
+  date: string;
+  amount: number;
+  stripePaymentIntentId?: string;
+  walletTransactionId?: string;
+  createdAt: number;
+}
+
+// Price Calculation Result
+export interface BookingPriceResult {
+  courtFee: number;
+  lightingFee: number;
+  equipmentFee: number;
+  visitorFee: number;
+  subtotal: number;
+  processingFee: number;
+  total: number;
+  breakdown: { label: string; amount: number }[];
+  discounts: { label: string; amount: number }[];
+  priceType: 'standard' | 'peak' | 'weekend';
+  courtGrade: CourtGrade;
+  isMember: boolean;
+  hasAnnualPass: boolean;
+  isVisitor: boolean;
+}
+
+// Default Configurations
+export const DEFAULT_COURT_GRADES: Record<CourtGrade, CourtGradeConfig> = {
+  standard: {
+    id: 'standard',
+    name: 'Standard',
+    description: 'Basic outdoor courts',
+    icon: '🥉',
+    basePrice: 500,
+    peakPrice: 800,
+    weekendPrice: 600,
+    memberPricing: 'discounted',
+    memberDiscountPercent: 50,
+    visitorPremiumPercent: 25,
+  },
+  premium: {
+    id: 'premium',
+    name: 'Premium',
+    description: 'Covered courts with quality surface',
+    icon: '🥈',
+    basePrice: 1000,
+    peakPrice: 1400,
+    weekendPrice: 1200,
+    memberPricing: 'discounted',
+    memberDiscountPercent: 50,
+    visitorPremiumPercent: 25,
+  },
+  elite: {
+    id: 'elite',
+    name: 'Elite',
+    description: 'Indoor climate-controlled courts',
+    icon: '🥇',
+    basePrice: 1500,
+    peakPrice: 2000,
+    weekendPrice: 1800,
+    memberPricing: 'discounted',
+    memberDiscountPercent: 30,
+    visitorPremiumPercent: 50,
+  },
+};
+
+export const DEFAULT_VISITOR_SETTINGS: VisitorSettings = {
+  allowVisitors: true,
+  visitorFeeEnabled: true,
+  visitorFee: 1000,
+  visitorFeeType: 'per_day',
+  visitorCourtPricing: 'premium',
+  visitorPremiumPercent: 25,
+  requireMemberSignIn: false,
+};
+
+export const DEFAULT_PAYMENT_METHODS: PaymentMethodsConfig = {
+  acceptPayAsYouGo: true,
+  acceptWallet: true,
+  walletTopUpAmounts: [2500, 5000, 10000],
+  allowCustomTopUp: false,
+  acceptAnnualPass: true,
+  annualPassPrice: 20000,
+  annualPassBenefit: 'unlimited',
+  annualPassPriorityDays: 7,
+  passFeeToCustomer: true,
+};
+
+export const DEFAULT_BOOKING_SETTINGS_ENHANCED: ClubBookingSettingsEnhanced = {
+  enabled: false,
+  currency: 'nzd',
+  slotDurationMinutes: 60,
+  openTime: '06:00',
+  closeTime: '22:00',
+  peakHours: {
+    enabled: true,
+    startTime: '17:00',
+    endTime: '20:00',
+    days: [1, 2, 3, 4, 5],
+  },
+  weekendPricingEnabled: true,
+  courtGrades: DEFAULT_COURT_GRADES,
+  useCustomGradeNames: false,
+  visitors: DEFAULT_VISITOR_SETTINGS,
+  maxAdvanceBookingDays: 14,
+  maxBookingsPerMemberPerDay: 2,
+  cancellationMinutesBeforeSlot: 60,
+  paymentMethods: DEFAULT_PAYMENT_METHODS,
+};

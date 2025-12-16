@@ -6,7 +6,7 @@
  * FILE LOCATION: components/ClubDetailPage.tsx
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { 
     subscribeToClub, 
@@ -47,6 +47,19 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     const [showManageCourts, setShowManageCourts] = useState(false);
     const [bookingSettings, setBookingSettings] = useState<ClubBookingSettings | null>(null);
 
+    // Function to load booking settings - can be called multiple times
+    const loadBookingSettings = useCallback(async () => {
+        try {
+            console.log('Loading booking settings for club:', clubId);
+            const settings = await getClubBookingSettings(clubId);
+            console.log('Loaded booking settings:', settings);
+            console.log('Settings enabled:', settings?.enabled);
+            setBookingSettings(settings);
+        } catch (e) {
+            console.error('Error loading booking settings:', e);
+        }
+    }, [clubId]);
+
     useEffect(() => {
         const unsub = subscribeToClub(clubId, (data) => {
             setClub(data);
@@ -64,13 +77,11 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
             
             setLoadingMembers(true);
             try {
-                // Try getUsersByIds first, fall back to getAllUsers
                 let profiles: UserProfile[] = [];
                 
                 if (typeof getUsersByIds === 'function') {
                     profiles = await getUsersByIds(club.members);
                 } else {
-                    // Fallback: get all users and filter
                     const allUsers = await getAllUsers();
                     profiles = allUsers.filter(u => club.members.includes(u.id));
                 }
@@ -90,10 +101,10 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
         loadMemberProfiles();
     }, [club?.members]);
 
-    // Load booking settings
+    // Load booking settings on mount
     useEffect(() => {
-        getClubBookingSettings(clubId).then(setBookingSettings);
-    }, [clubId]);
+        loadBookingSettings();
+    }, [loadBookingSettings]);
 
     // Track my pending request
     useEffect(() => {
@@ -160,6 +171,14 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
         }
     };
 
+    // Handle returning from ManageCourts - reload settings!
+    const handleBackFromManageCourts = () => {
+        console.log('Returning from ManageCourts, reloading settings...');
+        setShowManageCourts(false);
+        // Reload booking settings to reflect any changes
+        loadBookingSettings();
+    };
+
     // Show Court Calendar full screen
     if (showCourtCalendar) {
         return (
@@ -177,7 +196,7 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
         return (
             <ManageCourts
                 clubId={clubId}
-                onBack={() => setShowManageCourts(false)}
+                onBack={handleBackFromManageCourts}
             />
         );
     }

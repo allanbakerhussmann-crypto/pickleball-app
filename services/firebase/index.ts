@@ -157,6 +157,11 @@ export {
   getUserLeagues,
 } from './leagues';
 
+
+// ============================================
+// REPLACE THE COURT BOOKINGS SECTION IN services/firebase/index.ts WITH THIS:
+// ============================================
+
 // Court Bookings
 export {
   addClubCourt,
@@ -180,6 +185,7 @@ export {
   isSlotInPast,
   formatDateLabel,
 } from './courtBookings';
+
 
 // Audit
 export { logAudit } from './audit';
