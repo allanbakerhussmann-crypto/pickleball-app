@@ -76,18 +76,23 @@ export const deleteClubCourt = async (
   clubId: string,
   courtId: string
 ): Promise<void> => {
-  // Check for future bookings first
-  const today = new Date().toISOString().split('T')[0];
+  // Get all bookings for this court
   const bookingsQuery = query(
     collection(db, 'clubs', clubId, 'bookings'),
-    where('courtId', '==', courtId),
-    where('date', '>=', today),
-    where('status', '==', 'confirmed')
+    where('courtId', '==', courtId)
   );
   
   const bookingsSnap = await getDocs(bookingsQuery);
-  if (!bookingsSnap.empty) {
-    throw new Error('Cannot delete court with future bookings. Cancel bookings first.');
+  
+  // Filter in JavaScript for future confirmed bookings
+  const today = new Date().toISOString().split('T')[0];
+  const futureBookings = bookingsSnap.docs.filter(doc => {
+    const booking = doc.data();
+    return booking.date >= today && booking.status === 'confirmed';
+  });
+  
+  if (futureBookings.length > 0) {
+    throw new Error(`Cannot delete court with ${futureBookings.length} future booking(s). Cancel them first.`);
   }
   
   await deleteDoc(doc(db, 'clubs', clubId, 'courts', courtId));

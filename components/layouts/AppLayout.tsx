@@ -119,56 +119,57 @@ export const AppLayout: React.FC = () => {
 
   // Navigation handler for Header/BottomNav
   const handleNavigate = (view: string) => {
-    switch (view) {
-      case 'dashboard':
-        navigate(ROUTES.DASHBOARD);
-        break;
-      case 'tournaments':
-        navigate(ROUTES.TOURNAMENTS);
-        break;
-      case 'myTournaments':
-        navigate(ROUTES.MY_EVENTS);
-        break;
-      case 'createTournament':
-        navigate(ROUTES.TOURNAMENT_CREATE);
-        break;
-      case 'clubs':
-        navigate(ROUTES.CLUBS);
-        break;
-      case 'createClub':
-        navigate(ROUTES.CLUB_CREATE);
-        break;
-      case 'meetups':
-        navigate(ROUTES.MEETUPS);
-        break;
-      case 'create_meetup':
-        navigate(ROUTES.MEETUP_CREATE);
-        break;
-      case 'players':
-        navigate(ROUTES.PLAYERS);
-        break;
-      case 'profile':
-        navigate(ROUTES.PROFILE);
-        break;
-      case 'adminUsers':
-        navigate(ROUTES.ADMIN_USERS);
-        break;
-      case 'invites':
-        navigate(ROUTES.INVITES);
-        break;
-      case 'results':
-        navigate(ROUTES.RESULTS);
-        break;
-      case 'myResults':
-        navigate(ROUTES.MY_RESULTS);
-        break;
-      case 'leagues':
-        navigate(ROUTES.LEAGUES);
-        break;
-      default:
-        navigate(ROUTES.TOURNAMENTS);
-    }
-  };
+  switch (view) {
+    case 'home':
+    case 'dashboard':
+      navigate(ROUTES.HOME);
+      break;
+    case 'tournaments':
+      navigate(ROUTES.TOURNAMENTS);
+      break;
+    case 'createTournament':
+      navigate(ROUTES.TOURNAMENT_CREATE);
+      break;
+    case 'myTournaments':
+      navigate(ROUTES.MY_EVENTS);
+      break;
+    case 'clubs':
+      navigate(ROUTES.CLUBS);
+      break;
+    case 'createClub':
+      navigate(ROUTES.CLUB_CREATE);
+      break;
+    case 'meetups':
+      navigate(ROUTES.MEETUPS);
+      break;
+    case 'create_meetup':
+      navigate(ROUTES.MEETUP_CREATE);
+      break;
+    case 'players':
+      navigate(ROUTES.PLAYERS);
+      break;
+    case 'profile':
+      navigate(ROUTES.PROFILE);
+      break;
+    case 'invites':
+      navigate(ROUTES.INVITES);
+      break;
+    case 'adminUsers':
+      navigate(ROUTES.ADMIN_USERS);
+      break;
+    case 'results':
+      navigate(ROUTES.RESULTS);
+      break;
+    case 'myResults':
+      navigate(ROUTES.MY_RESULTS);
+      break;
+    case 'leagues':
+      navigate(ROUTES.LEAGUES);
+      break;
+    default:
+      navigate(ROUTES.HOME);  // Changed from ROUTES.TOURNAMENTS
+  }
+};
 
   // Handle accepting partner invite
   const handleAcceptInvite = async (tournamentId: string, divisionId: string) => {

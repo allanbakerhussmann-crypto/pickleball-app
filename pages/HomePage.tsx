@@ -9,15 +9,23 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { getMeetups, subscribeToTournaments } from '../services/firebase';
+import { getMeetups, subscribeToTournaments, subscribeToLeagues } from '../services/firebase';
 import { ROUTES, getRoute } from '../router/routes';
-import type { Meetup, Tournament } from '../types';
+import type { Meetup, Tournament, League } from '../types';
+
+// Chevron icon component
+const ChevronRightIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+  </svg>
+);
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser, isOrganizer } = useAuth();
   const [meetups, setMeetups] = useState<Meetup[]>([]);
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
+  const [leagues, setLeagues] = useState<League[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -40,59 +48,55 @@ const HomePage: React.FC = () => {
 
     // Subscribe to tournaments
     const userId = currentUser?.uid || '';
-    const unsubscribe = subscribeToTournaments(userId, (data) => {
-      const now = Date.now();
+    const unsubTournaments = subscribeToTournaments(userId, (data) => {
+      // Show all tournaments, or filter to upcoming if preferred
       const upcoming = data
-        .filter(t => new Date(t.startDate).getTime() >= now - 86400000)
+        .filter(t => t.status !== 'completed' && t.status !== 'cancelled')
         .slice(0, 4);
       setTournaments(upcoming);
     });
 
-    return () => unsubscribe();
+    // Subscribe to leagues
+    const unsubLeagues = subscribeToLeagues((data) => {
+      // Show active and registration open leagues
+      const activeLeagues = data
+        .filter(l => l.status === 'active' || l.status === 'registration')
+        .slice(0, 4);
+      setLeagues(activeLeagues);
+    });
+
+    return () => {
+      unsubTournaments();
+      unsubLeagues();
+    };
   }, [currentUser]);
 
   const formatDate = (timestamp: number) => {
     const date = new Date(timestamp);
-    return date.toLocaleDateString(undefined, { 
-      weekday: 'short', 
-      month: 'short', 
-      day: 'numeric' 
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
     });
   };
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
-    return date.toLocaleTimeString(undefined, { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
     });
   };
 
-  // Icon components for cleaner JSX
-  const CalendarIcon = () => (
-    <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-    </svg>
-  );
-
-  const LocationIcon = () => (
-    <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
-  );
-
-  const ChevronRightIcon = () => (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-    </svg>
-  );
-
-  const PlusIcon = () => (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-    </svg>
-  );
+  const formatTournamentDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+  };
 
   return (
     <div className="max-w-6xl mx-auto p-4 space-y-8">
@@ -138,37 +142,46 @@ const HomePage: React.FC = () => {
             ))}
           </div>
         ) : meetups.length === 0 ? (
-          <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
-            <p className="text-gray-400 mb-4">No upcoming meetups</p>
-            <button
-              onClick={() => navigate(ROUTES.MEETUP_CREATE)}
-              className="text-green-400 hover:text-green-300 font-semibold"
-            >
-              + Create the first one
-            </button>
+          <div className="bg-gray-800/50 rounded-xl p-8 text-center border border-gray-700">
+            <p className="text-gray-400">No upcoming meetups</p>
+            {currentUser && (
+              <button
+                onClick={() => navigate(ROUTES.MEETUP_CREATE)}
+                className="mt-3 text-green-400 hover:text-green-300 text-sm font-semibold"
+              >
+                Create a Meetup →
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {meetups.map(meetup => (
-              <div
+              <button
                 key={meetup.id}
                 onClick={() => navigate(getRoute.meetupDetail(meetup.id))}
-                className="bg-gray-800 rounded-xl p-4 border border-gray-700 hover:border-green-500/50 cursor-pointer transition-all group"
+                className="bg-gray-800 rounded-xl p-4 border border-gray-700 hover:border-green-600 transition-colors text-left"
               >
-                <h3 className="font-bold text-white group-hover:text-green-400 transition-colors mb-2 truncate">
-                  {meetup.title}
-                </h3>
+                <h3 className="font-bold text-white mb-2 truncate">{meetup.title}</h3>
                 <div className="text-sm text-gray-400 space-y-1">
                   <div className="flex items-center gap-2">
-                    <CalendarIcon />
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
                     <span>{formatDate(meetup.when)} • {formatTime(meetup.when)}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <LocationIcon />
-                    <span className="truncate">{meetup.locationName}</span>
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span className="truncate">
+                      {typeof meetup.location === 'string' 
+                        ? meetup.location 
+                        : meetup.locationName || 'Location set'}
+                    </span>
                   </div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -180,7 +193,7 @@ const HomePage: React.FC = () => {
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
               <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
               </svg>
             </div>
             <div>
@@ -197,21 +210,69 @@ const HomePage: React.FC = () => {
           </button>
         </div>
 
-        <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
-          <div className="w-16 h-16 bg-blue-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg className="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-            </svg>
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map(i => (
+              <div key={i} className="bg-gray-800 rounded-xl p-4 border border-gray-700 animate-pulse">
+                <div className="h-5 bg-gray-700 rounded w-3/4 mb-3"></div>
+                <div className="h-4 bg-gray-700 rounded w-1/2 mb-2"></div>
+                <div className="h-4 bg-gray-700 rounded w-2/3"></div>
+              </div>
+            ))}
           </div>
-          <h3 className="text-lg font-bold text-white mb-2">Leagues Coming Soon</h3>
-          <p className="text-gray-400 text-sm max-w-md mx-auto">
-            Recurring weekly play with standings, ratings, and season championships. 
-            Join the waitlist to be notified when leagues launch.
-          </p>
-          <button className="mt-4 px-6 py-2 bg-blue-600/20 text-blue-400 rounded-lg font-semibold hover:bg-blue-600/30 transition-colors">
-            Notify Me
-          </button>
-        </div>
+        ) : leagues.length === 0 ? (
+          <div className="bg-gray-800/50 rounded-xl p-8 text-center border border-gray-700">
+            <p className="text-gray-400">No active leagues</p>
+            {isOrganizer && (
+              <button
+                onClick={() => navigate(ROUTES.LEAGUES)}
+                className="mt-3 text-blue-400 hover:text-blue-300 text-sm font-semibold"
+              >
+                Create a League →
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {leagues.map(league => (
+              <button
+                key={league.id}
+                onClick={() => navigate(getRoute.leagueDetail(league.id))}
+                className="bg-gray-800 rounded-xl p-4 border border-gray-700 hover:border-blue-600 transition-colors text-left"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-bold text-white truncate">{league.name}</h3>
+                  <span className={`text-xs px-2 py-1 rounded-full ${
+                    league.status === 'active' 
+                      ? 'bg-green-900/50 text-green-400' 
+                      : 'bg-blue-900/50 text-blue-400'
+                  }`}>
+                    {league.status === 'active' ? 'Active' : 'Open'}
+                  </span>
+                </div>
+                <div className="text-sm text-gray-400 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span>{league.memberCount || 0} members</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="capitalize text-gray-500">{league.type} • {league.format}</span>
+                  </div>
+                  {league.location && (
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      </svg>
+                      <span className="truncate">{league.location}</span>
+                    </div>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* ==================== TOURNAMENTS SECTION ==================== */}
@@ -228,109 +289,94 @@ const HomePage: React.FC = () => {
               <p className="text-sm text-gray-400">Competitive bracket events</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {isOrganizer && (
-              <button
-                onClick={() => navigate(ROUTES.TOURNAMENT_CREATE)}
-                className="text-purple-400 hover:text-purple-300 text-sm font-semibold"
-              >
-                + Create
-              </button>
-            )}
-            <button
-              onClick={() => navigate(ROUTES.TOURNAMENTS)}
-              className="text-purple-400 hover:text-purple-300 text-sm font-semibold flex items-center gap-1"
-            >
-              View All
-              <ChevronRightIcon />
-            </button>
-          </div>
+          <button
+            onClick={() => navigate(ROUTES.TOURNAMENTS)}
+            className="text-purple-400 hover:text-purple-300 text-sm font-semibold flex items-center gap-1"
+          >
+            View All
+            <ChevronRightIcon />
+          </button>
         </div>
 
-        {tournaments.length === 0 ? (
-          <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
-            <p className="text-gray-400 mb-4">No upcoming tournaments</p>
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map(i => (
+              <div key={i} className="bg-gray-800 rounded-xl p-4 border border-gray-700 animate-pulse">
+                <div className="h-5 bg-gray-700 rounded w-3/4 mb-3"></div>
+                <div className="h-4 bg-gray-700 rounded w-1/2 mb-2"></div>
+                <div className="h-4 bg-gray-700 rounded w-2/3"></div>
+              </div>
+            ))}
+          </div>
+        ) : tournaments.length === 0 ? (
+          <div className="bg-gray-800/50 rounded-xl p-8 text-center border border-gray-700">
+            <p className="text-gray-400">No upcoming tournaments</p>
             {isOrganizer && (
               <button
                 onClick={() => navigate(ROUTES.TOURNAMENT_CREATE)}
-                className="text-purple-400 hover:text-purple-300 font-semibold"
+                className="mt-3 text-purple-400 hover:text-purple-300 text-sm font-semibold"
               >
-                + Create a tournament
+                Create a Tournament →
               </button>
             )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {tournaments.map(tournament => (
-              <div
+              <button
                 key={tournament.id}
                 onClick={() => navigate(getRoute.tournamentDetail(tournament.id))}
-                className="bg-gray-800 rounded-xl p-4 border border-gray-700 hover:border-purple-500/50 cursor-pointer transition-all group"
+                className="bg-gray-800 rounded-xl p-4 border border-gray-700 hover:border-purple-600 transition-colors text-left"
               >
-                <h3 className="font-bold text-white group-hover:text-purple-400 transition-colors mb-2 truncate">
-                  {tournament.name}
-                </h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-bold text-white truncate">{tournament.name}</h3>
+                  <span className={`text-xs px-2 py-1 rounded-full ${
+                    tournament.status === 'published' 
+                      ? 'bg-green-900/50 text-green-400' 
+                      : tournament.status === 'active'
+                      ? 'bg-blue-900/50 text-blue-400'
+                      : 'bg-gray-700 text-gray-400'
+                  }`}>
+                    {tournament.status === 'published' ? 'Open' : tournament.status}
+                  </span>
+                </div>
                 <div className="text-sm text-gray-400 space-y-1">
                   <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
-                    <span>{new Date(tournament.startDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                    <span>{formatTournamentDate(tournament.startDate)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span className="truncate">{tournament.venue}</span>
                   </div>
                   {tournament.clubName && (
-                    <div className="flex items-center gap-2">
-                      <svg className="w-4 h-4 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                      </svg>
-                      <span className="truncate">{tournament.clubName}</span>
+                    <div className="text-xs text-gray-500 truncate">
+                      by {tournament.clubName}
                     </div>
                   )}
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <span>{tournament.divisions?.length || 0} divisions</span>
-                  </div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
       </section>
 
-      {/* Quick Actions for logged in users */}
-      {currentUser && (
-        <section className="pt-4">
-          <div className="bg-gradient-to-r from-gray-800 to-gray-800/50 rounded-xl p-6 border border-gray-700">
-            <h3 className="text-lg font-bold text-white mb-4">Quick Actions</h3>
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => navigate(ROUTES.MEETUP_CREATE)}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold transition-colors"
-              >
-                <PlusIcon />
-                Host a Meetup
-              </button>
-              <button
-                onClick={() => navigate(ROUTES.CLUBS)}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5" />
-                </svg>
-                Browse Clubs
-              </button>
-              <button
-                onClick={() => navigate(ROUTES.PLAYERS)}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                Find Players
-              </button>
-            </div>
-          </div>
+      {/* Quick Actions for Logged Out Users */}
+      {!currentUser && (
+        <section className="bg-gradient-to-r from-green-900/30 to-blue-900/30 rounded-xl p-6 border border-gray-700 text-center">
+          <h2 className="text-xl font-bold text-white mb-2">Ready to Play?</h2>
+          <p className="text-gray-400 mb-4">Sign in to join meetups, leagues, and tournaments</p>
+          <button
+            onClick={() => navigate(ROUTES.TOURNAMENTS)}
+            className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold"
+          >
+            Get Started
+          </button>
         </section>
       )}
     </div>

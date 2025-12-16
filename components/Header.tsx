@@ -102,7 +102,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <div className="flex items-center gap-8">
                     {/* Logo */}
                     <button 
-                        onClick={() => onNavigate('tournaments')} 
+                        onClick={() => onNavigate('home')} 
                         className="flex items-center gap-2 focus:outline-none group"
                     >
                         <PickleballDirectorLogo className="h-6 w-auto flex-shrink-0 md:h-7" />

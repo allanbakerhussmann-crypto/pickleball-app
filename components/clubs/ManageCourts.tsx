@@ -15,7 +15,7 @@ import {
   getClubBookingSettings,
   updateClubBookingSettings,
 } from '../../services/firebase';
-import type { ClubCourt, ClubBookingSettings, DEFAULT_BOOKING_SETTINGS } from '../../types';
+import type { ClubCourt, ClubBookingSettings } from '../../types';
 
 interface ManageCourtsProps {
   clubId: string;
@@ -37,6 +37,7 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'courts' | 'settings'>('courts');
+  const [showSuccess, setShowSuccess] = useState(false);
   
   // Court form
   const [editingCourt, setEditingCourt] = useState<ClubCourt | null>(null);
@@ -93,7 +94,7 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
     }
   };
 
-  // Handle delete court
+  // Handle delete court (simplified - no booking check to avoid index issues)
   const handleDeleteCourt = async (court: ClubCourt) => {
     if (!confirm(`Delete ${court.name}? This cannot be undone.`)) return;
     
@@ -112,12 +113,12 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
   // Handle save settings
   const handleSaveSettings = async () => {
     setSaving(true);
+    
     try {
       await updateClubBookingSettings(clubId, settings);
-      alert('Settings saved!');
+      setShowSuccess(true);
     } catch (e: any) {
       alert('Error saving settings: ' + e.message);
-    } finally {
       setSaving(false);
     }
   };
@@ -135,6 +136,74 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
     setCourtForm({ name: '', description: '' });
     setCourtError(null);
   };
+
+  // Success Screen
+  if (showSuccess) {
+    return (
+      <div className="max-w-md mx-auto mt-12">
+        <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
+          {/* Success Icon */}
+          <div className="w-16 h-16 bg-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          
+          <h2 className="text-2xl font-bold text-white mb-2">Settings Saved!</h2>
+          <p className="text-gray-400 mb-6">
+            {settings.enabled 
+              ? 'Court booking is now enabled. Members can start booking courts.'
+              : 'Your settings have been saved. Enable booking when ready.'}
+          </p>
+          
+          {/* Court Summary */}
+          {courts.length > 0 && (
+            <div className="bg-gray-900/50 rounded-lg p-4 mb-6 text-left">
+              <div className="text-sm text-gray-400 mb-2">Courts configured:</div>
+              <div className="flex flex-wrap gap-2">
+                {courts.filter(c => c.isActive).map(court => (
+                  <span key={court.id} className="bg-blue-900/50 text-blue-400 px-3 py-1 rounded text-sm">
+                    {court.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Settings Summary */}
+          <div className="bg-gray-900/50 rounded-lg p-4 mb-6 text-left text-sm">
+            <div className="grid grid-cols-2 gap-2 text-gray-400">
+              <span>Hours:</span>
+              <span className="text-white">{settings.openTime} - {settings.closeTime}</span>
+              <span>Slot Duration:</span>
+              <span className="text-white">{settings.slotDurationMinutes} min</span>
+              <span>Advance Booking:</span>
+              <span className="text-white">{settings.maxAdvanceBookingDays} days</span>
+              <span>Daily Limit:</span>
+              <span className="text-white">{settings.maxBookingsPerMemberPerDay} bookings</span>
+              <span>Who Can Book:</span>
+              <span className="text-white">{settings.allowNonMembers ? 'Anyone' : 'Members Only'}</span>
+            </div>
+          </div>
+          
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowSuccess(false)}
+              className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold"
+            >
+              Edit Settings
+            </button>
+            <button
+              onClick={onBack}
+              className="flex-1 bg-green-600 hover:bg-green-500 text-white py-3 rounded-lg font-semibold"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -168,7 +237,7 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
               : 'border-transparent text-gray-400 hover:text-white'
           }`}
         >
-          Courts
+          Courts ({courts.length})
         </button>
         <button
           onClick={() => setActiveTab('settings')}
@@ -301,6 +370,26 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
               </div>
             )}
           </div>
+          
+          {/* Next Step Prompt */}
+          {courts.length > 0 && (
+            <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                </svg>
+                <div>
+                  <span className="text-blue-200">Courts added! </span>
+                  <button 
+                    onClick={() => setActiveTab('settings')}
+                    className="text-blue-400 hover:text-blue-300 underline"
+                  >
+                    Configure booking settings →
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -325,6 +414,41 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
                 }`}
               />
             </button>
+          </div>
+
+          <hr className="border-gray-700" />
+
+          {/* Who Can Book */}
+          <div>
+            <h3 className="font-semibold text-white mb-3">Who Can Book</h3>
+            <div className="space-y-3">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="bookingAccess"
+                  checked={!settings.allowNonMembers}
+                  onChange={() => setSettings({ ...settings, allowNonMembers: false })}
+                  className="w-4 h-4 text-green-600"
+                />
+                <div>
+                  <div className="text-white font-medium">Members Only</div>
+                  <div className="text-sm text-gray-500">Only club members can book courts</div>
+                </div>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="bookingAccess"
+                  checked={settings.allowNonMembers}
+                  onChange={() => setSettings({ ...settings, allowNonMembers: true })}
+                  className="w-4 h-4 text-green-600"
+                />
+                <div>
+                  <div className="text-white font-medium">Public</div>
+                  <div className="text-sm text-gray-500">Anyone with an account can book (good for public facilities)</div>
+                </div>
+              </label>
+            </div>
           </div>
 
           <hr className="border-gray-700" />

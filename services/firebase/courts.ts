@@ -1,5 +1,9 @@
 /**
- * Court Management
+ * Tournament Court Management
+ * 
+ * Courts for tournaments (not club court bookings)
+ * 
+ * FILE LOCATION: services/firebase/courts.ts
  */
 
 import { 
@@ -16,7 +20,7 @@ import { db } from './config';
 import type { Court } from '../../types';
 
 // ============================================
-// Court CRUD
+// Tournament Court CRUD
 // ============================================
 
 export const subscribeToCourts = (
