@@ -321,6 +321,54 @@ export {
 } from './platformFees';
 
 // ============================================
+// RETENTION & COMPLIANCE SERVICE EXPORTS
+// ============================================
+
+export {
+  // Constants
+  RETENTION_PERIODS,
+  CURRENCY_JURISDICTION,
+  FINANCIAL_COLLECTIONS,
+  
+  // Types
+  type FinancialCollection,
+  type RetentionMetadata,
+  type RetentionStatus,
+  type ComplianceCheckResult,
+  
+  // Date calculations
+  getRetentionPeriod,
+  calculateRetentionEndDate,
+  calculateCustomRetentionEndDate,
+  isInRetentionPeriod,
+  getDaysRemainingInRetention,
+  getRetentionStatus,
+  
+  // Metadata helpers
+  createRetentionMetadata,
+  addRetentionMetadata,
+  
+  // Archival functions
+  markAsArchived,
+  getRecordsReadyForArchival,
+  countRecordsReadyForArchival,
+  batchArchiveRecords,
+  
+  // Compliance helpers
+  checkRecordCompliance,
+  getRetentionSummary,
+  
+  // Tax year helpers
+  getTaxYear,
+  getTaxYearDateRange,
+  isTaxYearInRetention,
+  
+  // Display helpers
+  formatRetentionStatus,
+  getRetentionRequirementText,
+} from './retention';
+
+// ============================================
 // SERVICE EXPORTS (to be added as we build them)
 // ============================================
 
