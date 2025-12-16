@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 interface HelpModalProps {
@@ -24,7 +23,9 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
             onClick={onClose}
             className="text-gray-400 hover:text-white transition-colors p-1 rounded-full hover:bg-gray-700"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
 
@@ -43,11 +44,61 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
             </ul>
           </section>
 
-          {/* Section 2: For Players */}
+          {/* Section 2: Social Meetups */}
           <section>
             <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
               <span className="bg-green-600/20 text-green-400 text-xs px-2 py-1 rounded">2</span>
-              For Players
+              Social Meetups
+            </h3>
+            <div className="space-y-4 text-sm">
+              <p className="text-gray-400">
+                Meetups are casual, social games organized by players. Perfect for finding a quick game near you!
+              </p>
+              
+              <div className="bg-gray-700/30 p-3 rounded border border-gray-700">
+                <h4 className="font-bold text-white mb-1">Finding Meetups</h4>
+                <p>Go to the <strong>Meetups</strong> tab. Browse the list or switch to <strong>Map</strong> view to see meetups on a map. Click on any meetup to see details.</p>
+              </div>
+              
+              <div className="bg-gray-700/30 p-3 rounded border border-gray-700">
+                <h4 className="font-bold text-white mb-1">Creating a Meetup</h4>
+                <p>Click <strong>+ Create Meetup</strong> and fill in:</p>
+                <ul className="list-disc pl-5 mt-1 space-y-1 text-xs text-gray-400">
+                  <li><strong>Title:</strong> Give your meetup a catchy name</li>
+                  <li><strong>Date & Time:</strong> When will it happen</li>
+                  <li><strong>Location:</strong> Search for an address or click on the map</li>
+                  <li><strong>Max Players:</strong> Set a limit (0 = unlimited)</li>
+                  <li><strong>Description:</strong> Add skill level, what to bring, etc.</li>
+                </ul>
+              </div>
+
+              <div className="bg-gray-700/30 p-3 rounded border border-gray-700">
+                <h4 className="font-bold text-white mb-1">RSVP Options</h4>
+                <ul className="list-disc pl-5 mt-1 space-y-1 text-xs text-gray-400">
+                  <li><strong className="text-green-400">Going:</strong> You're definitely attending</li>
+                  <li><strong className="text-yellow-400">Maybe:</strong> You're not sure yet</li>
+                  <li><strong className="text-red-400">Withdraw:</strong> Remove your RSVP if plans change</li>
+                </ul>
+              </div>
+
+              <div className="bg-gray-700/30 p-3 rounded border border-gray-700">
+                <h4 className="font-bold text-white mb-1">Managing Your Meetup</h4>
+                <p>As the creator, you can:</p>
+                <ul className="list-disc pl-5 mt-1 space-y-1 text-xs text-gray-400">
+                  <li><strong>Edit:</strong> Update details anytime (pencil icon)</li>
+                  <li><strong>Cancel:</strong> Cancel with a reason (attendees will see it)</li>
+                  <li><strong>Delete:</strong> Permanently remove a cancelled meetup</li>
+                  <li><strong>Share:</strong> Copy link to share with friends</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          {/* Section 3: For Players */}
+          <section>
+            <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+              <span className="bg-purple-600/20 text-purple-400 text-xs px-2 py-1 rounded">3</span>
+              Tournaments
             </h3>
             <div className="space-y-4 text-sm">
               <div className="bg-gray-700/30 p-3 rounded border border-gray-700">
@@ -77,17 +128,52 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
             </div>
           </section>
 
-          {/* Section 3: For Organizers */}
+          {/* Section 4: Clubs */}
           <section>
             <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
-              <span className="bg-purple-600/20 text-purple-400 text-xs px-2 py-1 rounded">3</span>
+              <span className="bg-orange-600/20 text-orange-400 text-xs px-2 py-1 rounded">4</span>
+              Clubs
+            </h3>
+            <div className="space-y-4 text-sm">
+              <div className="bg-gray-700/30 p-3 rounded border border-gray-700">
+                <h4 className="font-bold text-white mb-1">Joining a Club</h4>
+                <p>Browse the <strong>Clubs</strong> tab to find clubs in your area. Click <strong>Request to Join</strong> and wait for approval if required.</p>
+              </div>
+              
+              <div className="bg-gray-700/30 p-3 rounded border border-gray-700">
+                <h4 className="font-bold text-white mb-1">Club Benefits</h4>
+                <ul className="list-disc pl-5 mt-1 space-y-1 text-xs text-gray-400">
+                  <li>Access to club-only tournaments</li>
+                  <li>Connect with local players</li>
+                  <li>Receive club announcements</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          {/* Section 5: For Organizers */}
+          <section>
+            <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+              <span className="bg-red-600/20 text-red-400 text-xs px-2 py-1 rounded">5</span>
               For Organizers
             </h3>
             <ul className="list-disc pl-5 space-y-2 text-sm">
-              <li><strong className="text-white">Create Club:</strong> You must be an admin of a Club to host events.</li>
+              <li><strong className="text-white">Create Club:</strong> You must be an admin of a Club to host tournaments.</li>
               <li><strong className="text-white">Create Tournament:</strong> Set up divisions (Singles, Doubles), age/rating limits, and formats (Round Robin, Single Elim, etc.).</li>
               <li><strong className="text-white">Manage:</strong> Use the "Manager View" to generate schedules, assign courts, and resolve score disputes.</li>
             </ul>
+          </section>
+
+          {/* Section 6: Leagues (Coming Soon) */}
+          <section>
+            <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+              <span className="bg-blue-600/20 text-blue-400 text-xs px-2 py-1 rounded">6</span>
+              Leagues
+              <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full ml-2">Coming Soon</span>
+            </h3>
+            <p className="text-sm text-gray-400">
+              Recurring weekly play with standings, ratings, and season championships. Click <strong>Notify Me</strong> on the home page to be notified when leagues launch!
+            </p>
           </section>
 
         </div>

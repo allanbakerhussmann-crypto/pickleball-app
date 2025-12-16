@@ -131,5 +131,31 @@ export {
   deleteSocialEvent,
 } from './social';
 
+// Leagues
+export {
+  createLeague,
+  getLeague,
+  updateLeague,
+  deleteLeague,
+  getLeagues,
+  subscribeToLeagues,
+  joinLeague,
+  leaveLeague,
+  getLeagueMemberByUserId,
+  getLeagueMembers,
+  subscribeToLeagueMembers,
+  updateMemberStats,
+  createLeagueMatch,
+  getLeagueMatches,
+  subscribeToLeagueMatches,
+  submitLeagueMatchResult,
+  confirmLeagueMatchResult,
+  disputeLeagueMatchResult,
+  createChallenge,
+  respondToChallenge,
+  getPendingChallenges,
+  getUserLeagues,
+} from './leagues';
+
 // Audit
 export { logAudit } from './audit';

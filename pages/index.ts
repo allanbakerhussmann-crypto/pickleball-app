@@ -22,3 +22,4 @@ export { default as ProfilePage } from './ProfilePage';
 export { default as AdminUsersPage } from './AdminUsersPage';
 export { default as InvitesPage } from './InvitesPage';
 export { default as PlaceholderPage } from './PlaceholderPage';
+export { default as LeaguesPage } from './LeaguesPage';

@@ -32,6 +32,7 @@ import ProfilePage from '../pages/ProfilePage';
 import AdminUsersPage from '../pages/AdminUsersPage';
 import InvitesPage from '../pages/InvitesPage';
 import PlaceholderPage from '../pages/PlaceholderPage';
+import LeaguesPage from '../pages/LeaguesPage';
 
 // ============================================
 // Router Configuration - Using HashRouter
@@ -188,13 +189,17 @@ export const router = createHashRouter([
       },
       {
         path: 'leagues',
-        element: <PlaceholderPage title="Leagues" message="Recurring competitive play with standings and ratings. Coming soon!" />,
+        element: <LeaguesPage />,
+      },
+      {
+        path: 'leagues/:id',
+        element: <LeaguesPage />,
       },
       {
         path: 'my-leagues',
         element: (
           <ProtectedRoute>
-            <PlaceholderPage title="My Leagues" message="Your league memberships and standings." />
+            <LeaguesPage />
           </ProtectedRoute>
         ),
       },

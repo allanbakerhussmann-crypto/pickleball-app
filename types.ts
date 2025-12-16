@@ -555,3 +555,188 @@ export interface TournamentSettings {
   // allowPlayersToEnterScores?: boolean;
   // requireScoreConfirmation?: boolean;
 }
+// ============================================
+// LEAGUE TYPES
+// ============================================
+
+export type LeagueType = 'singles' | 'doubles' | 'team';
+export type LeagueFormat = 'ladder' | 'round_robin' | 'swiss';
+export type LeagueStatus = 'draft' | 'registration' | 'active' | 'completed' | 'cancelled';
+
+export interface League {
+  id: string;
+  name: string;
+  description: string;
+  
+  type: LeagueType;
+  format: LeagueFormat;
+  
+  clubId?: string | null;
+  clubName?: string | null;
+  createdByUserId: string;
+  
+  seasonStart: number;
+  seasonEnd: number;
+  registrationDeadline?: number | null;
+  
+  status: LeagueStatus;
+  settings: LeagueSettings;
+  
+  location?: string | null;
+  region?: string | null;
+  visibility: 'public' | 'private' | 'club_only';
+  
+  memberCount: number;
+  matchesPlayed: number;
+  
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LeagueSettings {
+  minRating?: number | null;
+  maxRating?: number | null;
+  maxMembers?: number | null;
+  
+  pointsForWin: number;
+  pointsForDraw: number;
+  pointsForLoss: number;
+  
+  gamesPerMatch: 1 | 3 | 5;
+  pointsPerGame: 11 | 15 | 21;
+  winBy: 1 | 2;
+  
+  matchDays?: string[];
+  matchesPerWeek?: number | null;
+  
+  allowSelfReporting: boolean;
+  requireConfirmation: boolean;
+  
+  challengeRangeUp?: number | null;
+  challengeRangeDown?: number | null;
+  roundsCount?: number | null;
+}
+
+export type MembershipStatus = 'pending' | 'active' | 'suspended' | 'withdrawn';
+export type MemberRole = 'member' | 'captain' | 'admin';
+
+export interface LeagueMember {
+  id: string;
+  leagueId: string;
+  
+  userId: string;
+  partnerUserId?: string | null;
+  teamId?: string | null;
+  
+  displayName: string;
+  partnerDisplayName?: string | null;
+  teamName?: string | null;
+  
+  status: MembershipStatus;
+  role: MemberRole;
+  
+  currentRank: number;
+  previousRank?: number | null;
+  peakRank?: number | null;
+  
+  stats: MemberStats;
+  
+  joinedAt: number;
+  lastActiveAt: number;
+}
+
+export interface MemberStats {
+  played: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  points: number;
+  gamesWon: number;
+  gamesLost: number;
+  pointsFor: number;
+  pointsAgainst: number;
+  currentStreak: number;
+  bestWinStreak: number;
+  recentForm: ('W' | 'L' | 'D')[];
+}
+
+export type LeagueMatchStatus = 
+  | 'scheduled' 
+  | 'pending_confirmation' 
+  | 'completed' 
+  | 'disputed' 
+  | 'cancelled'
+  | 'forfeit';
+
+export type LeagueMatchType = 'regular' | 'challenge' | 'playoff';
+
+export interface LeagueMatch {
+  id: string;
+  leagueId: string;
+  
+  memberAId: string;
+  memberBId: string;
+  
+  userAId: string;
+  userBId: string;
+  partnerAId?: string | null;
+  partnerBId?: string | null;
+  
+  memberAName: string;
+  memberBName: string;
+  
+  matchType: LeagueMatchType;
+  weekNumber?: number | null;
+  roundNumber?: number | null;
+  
+  scheduledDate?: number | null;
+  court?: string | null;
+  
+  status: LeagueMatchStatus;
+  
+  scores: GameScore[];
+  winnerMemberId?: string | null;
+  
+  memberARankAtMatch?: number | null;
+  memberBRankAtMatch?: number | null;
+  
+  submittedByUserId?: string | null;
+  confirmedByUserId?: string | null;
+  disputeReason?: string | null;
+  
+  createdAt: number;
+  playedAt?: number | null;
+  completedAt?: number | null;
+}
+
+export interface GameScore {
+  gameNumber: number;
+  scoreA: number;
+  scoreB: number;
+}
+
+export type ChallengeStatus = 'pending' | 'accepted' | 'declined' | 'expired' | 'completed';
+
+export interface LeagueChallenge {
+  id: string;
+  leagueId: string;
+  matchId?: string | null;
+  
+  challengerMemberId: string;
+  challengerUserId: string;
+  challengerRank: number;
+  
+  defenderId: string;
+  defenderUserId: string;
+  defenderRank: number;
+  
+  status: ChallengeStatus;
+  
+  respondByDate: number;
+  playByDate?: number | null;
+  
+  declineReason?: string | null;
+  
+  createdAt: number;
+  respondedAt?: number | null;
+}

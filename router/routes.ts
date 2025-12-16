@@ -26,6 +26,11 @@ export const ROUTES = {
   MEETUPS: '/meetups',
   MEETUP_CREATE: '/meetups/create',
   MEETUP_DETAIL: '/meetups/:id',
+
+  // Leagues (update existing)
+  LEAGUES: '/leagues',
+  LEAGUE_DETAIL: '/leagues/:id',
+  MY_LEAGUES: '/my-leagues',
   
   // Players
   PLAYERS: '/players',
@@ -55,6 +60,13 @@ export const getRoute = {
   tournamentDetail: (id: string) => `/tournaments/${id}`,
   clubDetail: (id: string) => `/clubs/${id}`,
   meetupDetail: (id: string) => `/meetups/${id}`,
+};
+
+export const getRoute = {
+  tournamentDetail: (id: string) => `/tournaments/${id}`,
+  clubDetail: (id: string) => `/clubs/${id}`,
+  meetupDetail: (id: string) => `/meetups/${id}`,
+  leagueDetail: (id: string) => `/leagues/${id}`,  // ADD THIS
 };
 
 /**
