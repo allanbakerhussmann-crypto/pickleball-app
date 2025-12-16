@@ -8,12 +8,13 @@
  */
 
 import React from 'react';
-import { createHashRouter, Navigate } from 'react-router-dom';
+import { createHashRouter } from 'react-router-dom';
 import { AppLayout } from '../components/layouts/AppLayout';
 import { ProtectedRoute } from './ProtectedRoute';
 import { ROUTES } from './routes';
 
 // Direct imports (no lazy loading for AI Studio compatibility)
+import HomePage from '../pages/HomePage';
 import DashboardPage from '../pages/DashboardPage';
 import TournamentsPage from '../pages/TournamentsPage';
 import TournamentDetailPage from '../pages/TournamentDetailPage';
@@ -25,12 +26,12 @@ import CreateClubPage from '../pages/CreateClubPage';
 import MeetupsPage from '../pages/MeetupsPage';
 import MeetupDetailPage from '../pages/MeetupDetailPage';
 import CreateMeetupPage from '../pages/CreateMeetupPage';
+import EditMeetupPage from '../pages/EditMeetupPage';
 import PlayersPage from '../pages/PlayersPage';
 import ProfilePage from '../pages/ProfilePage';
 import AdminUsersPage from '../pages/AdminUsersPage';
 import InvitesPage from '../pages/InvitesPage';
 import PlaceholderPage from '../pages/PlaceholderPage';
-import EditMeetupPage from '../pages/EditMeetupPage';
 
 // ============================================
 // Router Configuration - Using HashRouter
@@ -42,20 +43,16 @@ export const router = createHashRouter([
     path: '/',
     element: <AppLayout />,
     children: [
-      // Redirect root to tournaments
+      // Home page - shows Meetups, Leagues, Tournaments overview
       {
         index: true,
-        element: <Navigate to={ROUTES.TOURNAMENTS} replace />,
+        element: <HomePage />,
       },
       
-      // Dashboard (requires auth)
+      // Dashboard - also shows HomePage (for logged in users)
       {
         path: 'dashboard',
-        element: (
-          <ProtectedRoute>
-            <DashboardPage />
-          </ProtectedRoute>
-        ),
+        element: <HomePage />,
       },
       
       // ==========================================
@@ -143,7 +140,7 @@ export const router = createHashRouter([
       },
       
       // ==========================================
-      // USER
+      // USER / PROFILE
       // ==========================================
       {
         path: 'profile',
@@ -179,58 +176,38 @@ export const router = createHashRouter([
       // ==========================================
       {
         path: 'results',
-        element: (
-          <PlaceholderPage 
-            title="Match Results" 
-            message="View recent match scores and tournament outcomes here soon." 
-          />
-        ),
+        element: <PlaceholderPage title="Results" message="View tournament results and match history." />,
       },
       {
         path: 'my-results',
         element: (
           <ProtectedRoute>
-            <PlaceholderPage 
-              title="My Results" 
-              message="Your personal match history and statistics across all tournaments." 
-            />
+            <PlaceholderPage title="My Results" message="Your personal match history and statistics." />
           </ProtectedRoute>
         ),
       },
       {
         path: 'leagues',
-        element: (
-          <PlaceholderPage 
-            title="Leagues" 
-            message="Join ladder leagues and season-long competitions." 
-          />
-        ),
+        element: <PlaceholderPage title="Leagues" message="Recurring competitive play with standings and ratings. Coming soon!" />,
       },
       {
         path: 'my-leagues',
         element: (
           <ProtectedRoute>
-            <PlaceholderPage 
-              title="My Leagues" 
-              message="Your league memberships and standings." 
-            />
+            <PlaceholderPage title="My Leagues" message="Your league memberships and standings." />
           </ProtectedRoute>
         ),
       },
-      
-      // ==========================================
-      // 404 - Catch all
-      // ==========================================
       {
-        path: '*',
+        path: 'team-leagues',
+        element: <PlaceholderPage title="Team Leagues" message="Team-based league competitions." />,
+      },
+      {
+        path: 'my-team-leagues',
         element: (
-          <div className="text-center py-20">
-            <h1 className="text-4xl font-bold text-gray-400 mb-4">404</h1>
-            <p className="text-gray-500 mb-4">Page not found</p>
-            <a href="#/tournaments" className="text-green-400 hover:underline">
-              Go to Tournaments
-            </a>
-          </div>
+          <ProtectedRoute>
+            <PlaceholderPage title="My Team Leagues" message="Your team league memberships." />
+          </ProtectedRoute>
         ),
       },
     ],
