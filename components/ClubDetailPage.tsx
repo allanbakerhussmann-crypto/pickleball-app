@@ -17,6 +17,7 @@ import {
     declineClubJoinRequest, 
     getAllUsers,
     getClubBookingSettings,
+    getUsersByIds,
 } from '../services/firebase';
 import type { Club, ClubJoinRequest, UserProfile, ClubBookingSettings } from '../types';
 import { BulkClubImport } from './BulkClubImport';
@@ -33,11 +34,14 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     const [club, setClub] = useState<Club | null>(null);
     const [requests, setRequests] = useState<ClubJoinRequest[]>([]);
     const [requestUsers, setRequestUsers] = useState<Record<string, UserProfile>>({});
+    const [memberProfiles, setMemberProfiles] = useState<Record<string, UserProfile>>({});
     const [pendingJoin, setPendingJoin] = useState(false);
     const [hasPendingRequest, setHasPendingRequest] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+    const [processingRequest, setProcessingRequest] = useState<string | null>(null);
+    const [loadingMembers, setLoadingMembers] = useState(false);
     
-    // NEW: Tab and court booking state
+    // Tab and court booking state
     const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'courts'>('overview');
     const [showCourtCalendar, setShowCourtCalendar] = useState(false);
     const [showManageCourts, setShowManageCourts] = useState(false);
@@ -49,6 +53,42 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
         });
         return () => unsub();
     }, [clubId]);
+
+    // Load member profiles when club changes
+    useEffect(() => {
+        const loadMemberProfiles = async () => {
+            if (!club?.members || club.members.length === 0) {
+                setMemberProfiles({});
+                return;
+            }
+            
+            setLoadingMembers(true);
+            try {
+                // Try getUsersByIds first, fall back to getAllUsers
+                let profiles: UserProfile[] = [];
+                
+                if (typeof getUsersByIds === 'function') {
+                    profiles = await getUsersByIds(club.members);
+                } else {
+                    // Fallback: get all users and filter
+                    const allUsers = await getAllUsers();
+                    profiles = allUsers.filter(u => club.members.includes(u.id));
+                }
+                
+                const profileMap: Record<string, UserProfile> = {};
+                profiles.forEach(p => {
+                    profileMap[p.id] = p;
+                });
+                setMemberProfiles(profileMap);
+            } catch (e) {
+                console.error('Error loading member profiles:', e);
+            } finally {
+                setLoadingMembers(false);
+            }
+        };
+        
+        loadMemberProfiles();
+    }, [club?.members]);
 
     // Load booking settings
     useEffect(() => {
@@ -64,8 +104,8 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     }, [clubId, currentUser]);
 
     // Admin Logic
-    const isAdmin = club && currentUser && (club.admins.includes(currentUser.uid) || isAppAdmin);
-    const isMember = club && currentUser && club.members.includes(currentUser.uid);
+    const isAdmin = club && currentUser && (club.admins?.includes(currentUser.uid) || isAppAdmin);
+    const isMember = club && currentUser && club.members?.includes(currentUser.uid);
 
     useEffect(() => {
         if (isAdmin) {
@@ -96,21 +136,27 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
         }
     };
 
-    const handleApprove = async (requestId: string) => {
+    const handleApprove = async (requestId: string, userId: string) => {
+        setProcessingRequest(requestId);
         try {
-            await approveClubJoinRequest(clubId, requestId);
+            await approveClubJoinRequest(clubId, requestId, userId);
         } catch (e) {
             console.error(e);
             alert("Failed to approve request.");
+        } finally {
+            setProcessingRequest(null);
         }
     };
 
     const handleDecline = async (requestId: string) => {
+        setProcessingRequest(requestId);
         try {
             await declineClubJoinRequest(clubId, requestId);
         } catch (e) {
             console.error(e);
             alert("Failed to decline request.");
+        } finally {
+            setProcessingRequest(null);
         }
     };
 
@@ -137,6 +183,21 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     }
 
     if (!club) return <div className="p-10 text-center">Loading Club...</div>;
+
+    // Helper to get gender icon
+    const getGenderIcon = (gender?: string) => {
+        if (gender === 'male') return <span className="text-blue-400">♂</span>;
+        if (gender === 'female') return <span className="text-pink-400">♀</span>;
+        return null;
+    };
+
+    // Helper to format DUPR rating
+    const formatDupr = (singles?: number, doubles?: number) => {
+        if (!singles && !doubles) return null;
+        const s = singles ? singles.toFixed(2) : '--';
+        const d = doubles ? doubles.toFixed(2) : '--';
+        return `${s} / ${d}`;
+    };
 
     return (
         <div className="max-w-6xl mx-auto p-4 animate-fade-in relative">
@@ -190,80 +251,78 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                 
                 <div className="flex gap-6 items-center">
                     {club.logoUrl ? (
-                        <img src={club.logoUrl} className="w-24 h-24 rounded-full border-4 border-gray-700 shadow-lg" alt="Logo" />
+                        <img src={club.logoUrl} alt={club.name} className="w-24 h-24 rounded-xl object-cover border border-gray-700" />
                     ) : (
-                        <div className="w-24 h-24 rounded-full bg-gray-700 flex items-center justify-center text-4xl font-bold text-gray-500">
+                        <div className="w-24 h-24 bg-gray-700 rounded-xl flex items-center justify-center text-4xl font-bold text-gray-500">
                             {club.name.charAt(0)}
                         </div>
                     )}
                     <div>
-                        <h1 className="text-4xl font-black text-white mb-2">{club.name}</h1>
-                        <div className="flex gap-4 text-sm text-gray-400">
-                            <span>{club.region}, {club.country}</span>
-                            <span>•</span>
-                            <span>{club.members.length} Members</span>
-                        </div>
+                        <h1 className="text-3xl font-bold text-white">{club.name}</h1>
+                        <p className="text-gray-400">{club.region}, {club.country} • {club.members?.length || 0} Members</p>
                     </div>
                 </div>
-                {club.description && <p className="mt-6 text-gray-300 max-w-2xl">{club.description}</p>}
+                
+                <p className="text-gray-400 mt-4">{club.description}</p>
                 
                 {isAdmin && (
-                    <div className="mt-6 pt-6 border-t border-gray-700 flex gap-4 flex-wrap">
-                         <button 
+                    <div className="mt-6 flex flex-wrap gap-3">
+                        <button 
                             onClick={() => setIsImportModalOpen(true)}
-                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold text-sm shadow flex items-center gap-2"
-                         >
-                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                             Bulk Import Members
-                         </button>
-                         <button 
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                            Bulk Import Members
+                        </button>
+                        <button 
                             onClick={() => setShowManageCourts(true)}
-                            className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded font-bold text-sm shadow flex items-center gap-2"
-                         >
-                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                             Manage Courts
-                         </button>
+                            className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            Manage Courts
+                        </button>
                     </div>
                 )}
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-4 mb-6 border-b border-gray-700">
+            <div className="flex gap-1 mb-6 bg-gray-800/50 p-1 rounded-lg w-fit">
                 <button
                     onClick={() => setActiveTab('overview')}
-                    className={`pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+                    className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
                         activeTab === 'overview'
-                            ? 'border-blue-500 text-blue-400'
-                            : 'border-transparent text-gray-400 hover:text-white'
+                            ? 'bg-gray-700 text-white'
+                            : 'text-gray-400 hover:text-white'
                     }`}
                 >
                     Overview
                 </button>
                 <button
                     onClick={() => setActiveTab('members')}
-                    className={`pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+                    className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
                         activeTab === 'members'
-                            ? 'border-blue-500 text-blue-400'
-                            : 'border-transparent text-gray-400 hover:text-white'
+                            ? 'bg-gray-700 text-white'
+                            : 'text-gray-400 hover:text-white'
                     }`}
                 >
                     Members
                 </button>
-                {(bookingSettings?.enabled || isAdmin) && (
-                    <button
-                        onClick={() => setActiveTab('courts')}
-                        className={`pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
-                            activeTab === 'courts'
-                                ? 'border-blue-500 text-blue-400'
-                                : 'border-transparent text-gray-400 hover:text-white'
-                        }`}
-                    >
-                        Courts
-                        {bookingSettings?.enabled && (
-                            <span className="ml-2 bg-green-600 text-white text-xs px-1.5 py-0.5 rounded">NEW</span>
-                        )}
-                    </button>
-                )}
+                <button
+                    onClick={() => setActiveTab('courts')}
+                    className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors flex items-center gap-2 ${
+                        activeTab === 'courts'
+                            ? 'bg-gray-700 text-white'
+                            : 'text-gray-400 hover:text-white'
+                    }`}
+                >
+                    Courts
+                    <span className="bg-green-600 text-white text-xs px-1.5 py-0.5 rounded font-bold">NEW</span>
+                </button>
             </div>
 
             {/* Overview Tab */}
@@ -271,13 +330,14 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Main Content */}
                     <div className="lg:col-span-2 space-y-6">
+                        {/* Tournaments */}
                         <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
                             <h2 className="text-xl font-bold text-white mb-4">Tournaments</h2>
                             <p className="text-gray-500 italic">No upcoming tournaments listed.</p>
                         </div>
-                        
-                        {/* Court Booking Quick Access */}
-                        {bookingSettings?.enabled && (isMember || isAdmin) && (
+
+                        {/* Court Booking Card */}
+                        {bookingSettings?.enabled && (
                             <div className="bg-gradient-to-r from-green-900/30 to-blue-900/30 rounded-lg p-6 border border-green-700/50">
                                 <div className="flex items-center justify-between">
                                     <div>
@@ -286,7 +346,7 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                                     </div>
                                     <button
                                         onClick={() => setShowCourtCalendar(true)}
-                                        className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-lg font-bold shadow-lg transition-colors flex items-center gap-2"
+                                        className="bg-green-600 hover:bg-green-500 text-white px-5 py-2.5 rounded-lg font-semibold flex items-center gap-2"
                                     >
                                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -298,46 +358,91 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                         )}
                     </div>
 
-                    {/* Sidebar: Requests */}
+                    {/* Sidebar: Membership Requests */}
                     {isAdmin && (
                         <div className="space-y-6">
-                            <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-                                <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                                    Membership Requests
-                                    {requests.length > 0 && <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{requests.length}</span>}
-                                </h2>
+                            <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                                <div className="bg-gray-700/50 px-4 py-3 border-b border-gray-700">
+                                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                        Membership Requests
+                                        {requests.length > 0 && (
+                                            <span className="bg-red-500 text-white text-xs w-5 h-5 flex items-center justify-center rounded-full">
+                                                {requests.length}
+                                            </span>
+                                        )}
+                                    </h2>
+                                </div>
                                 
-                                {requests.length === 0 ? (
-                                    <p className="text-gray-500 italic">No pending requests.</p>
-                                ) : (
-                                    <div className="space-y-3">
-                                        {requests.map((req) => {
-                                            const user = requestUsers[req.userId];
-                                            return (
-                                                <div key={req.id} className="bg-gray-700/50 rounded-lg p-3 flex items-center justify-between">
-                                                    <div>
-                                                        <div className="font-semibold text-white">{user?.displayName || 'Unknown'}</div>
-                                                        <div className="text-xs text-gray-400">{user?.email}</div>
+                                <div className="p-4">
+                                    {requests.length === 0 ? (
+                                        <div className="text-center py-6">
+                                            <svg className="w-12 h-12 text-gray-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                            </svg>
+                                            <p className="text-gray-500 text-sm">No pending requests</p>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {requests.map((req) => {
+                                                const user = requestUsers[req.userId];
+                                                const isProcessing = processingRequest === req.id;
+                                                
+                                                return (
+                                                    <div key={req.id} className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
+                                                        <div className="flex items-center gap-3 mb-3">
+                                                            <div className="w-10 h-10 bg-gray-700 rounded-full flex items-center justify-center text-white font-bold">
+                                                                {user?.displayName?.charAt(0) || '?'}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="font-semibold text-white truncate">
+                                                                    {user?.displayName || 'Unknown User'}
+                                                                </div>
+                                                                <div className="text-xs text-gray-500 truncate">
+                                                                    {user?.email || 'No email'}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        <div className="flex gap-2">
+                                                            <button
+                                                                onClick={() => handleApprove(req.id, req.userId)}
+                                                                disabled={isProcessing}
+                                                                className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+                                                            >
+                                                                {isProcessing ? (
+                                                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                                ) : (
+                                                                    <>
+                                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                                        </svg>
+                                                                        Approve
+                                                                    </>
+                                                                )}
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleDecline(req.id)}
+                                                                disabled={isProcessing}
+                                                                className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+                                                            >
+                                                                {isProcessing ? (
+                                                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                                ) : (
+                                                                    <>
+                                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                                                        </svg>
+                                                                        Decline
+                                                                    </>
+                                                                )}
+                                                            </button>
+                                                        </div>
                                                     </div>
-                                                    <div className="flex gap-2">
-                                                        <button
-                                                            onClick={() => handleApprove(req.id)}
-                                                            className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-sm font-semibold"
-                                                        >
-                                                            Approve
-                                                        </button>
-                                                        <button
-                                                            onClick={() => handleDecline(req.id)}
-                                                            className="bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-sm font-semibold"
-                                                        >
-                                                            Decline
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     )}
@@ -347,20 +452,132 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
             {/* Members Tab */}
             {activeTab === 'members' && (
                 <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-                    <h2 className="text-xl font-bold text-white mb-4">Members ({club.members.length})</h2>
-                    {club.members.length === 0 ? (
+                    {/* Privacy Gate: Only members/admins can see member list */}
+                    {!isMember && !isAdmin ? (
+                        <div className="text-center py-12">
+                            <svg className="w-16 h-16 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                            <h3 className="text-xl font-bold text-white mb-2">Members Only</h3>
+                            <p className="text-gray-400 mb-4">
+                                Join this club to see the member directory.
+                            </p>
+                            {!hasPendingRequest && currentUser && (
+                                <button
+                                    onClick={handleJoinRequest}
+                                    disabled={pendingJoin}
+                                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold"
+                                >
+                                    Request to Join
+                                </button>
+                            )}
+                            {hasPendingRequest && (
+                                <p className="text-yellow-400 text-sm">Your membership request is pending approval.</p>
+                            )}
+                            {!currentUser && (
+                                <p className="text-gray-500 text-sm">Sign in to request membership.</p>
+                            )}
+                        </div>
+                    ) : (
+                    <>
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-xl font-bold text-white">Members ({club.members?.length || 0})</h2>
+                        {loadingMembers && (
+                            <div className="flex items-center gap-2 text-gray-400 text-sm">
+                                <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                                Loading profiles...
+                            </div>
+                        )}
+                    </div>
+                    
+                    {(!club.members || club.members.length === 0) ? (
                         <p className="text-gray-500 italic">No members yet.</p>
                     ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                            {club.members.map((memberId) => (
-                                <div key={memberId} className="bg-gray-700/50 rounded-lg p-3 flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white font-bold">
-                                        {memberId.charAt(0).toUpperCase()}
-                                    </div>
-                                    <div className="text-sm text-gray-300 truncate">{memberId}</div>
-                                </div>
-                            ))}
+                        <div className="overflow-x-auto">
+                            <table className="w-full">
+                                <thead>
+                                    <tr className="border-b border-gray-700">
+                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Member</th>
+                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">DUPR (S/D)</th>
+                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Gender</th>
+                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Location</th>
+                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Role</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {club.members.map((memberId) => {
+                                        const profile = memberProfiles[memberId];
+                                        const isAdminMember = club.admins?.includes(memberId);
+                                        const dupr = formatDupr(profile?.duprSinglesRating, profile?.duprDoublesRating);
+                                        
+                                        return (
+                                            <tr key={memberId} className="border-b border-gray-700/50 hover:bg-gray-700/30">
+                                                <td className="py-3 px-4">
+                                                    <div className="flex items-center gap-3">
+                                                        {profile?.photoURL || profile?.photoData ? (
+                                                            <img 
+                                                                src={profile.photoData || profile.photoURL} 
+                                                                alt={profile.displayName} 
+                                                                className="w-10 h-10 rounded-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            <div className="w-10 h-10 bg-gray-600 rounded-full flex items-center justify-center text-white font-bold">
+                                                                {profile?.displayName?.charAt(0) || '?'}
+                                                            </div>
+                                                        )}
+                                                        <div>
+                                                            <div className="text-white font-medium">
+                                                                {profile?.displayName || 'Unknown'}
+                                                            </div>
+                                                            <div className="text-xs text-gray-500">
+                                                                {profile?.email || memberId.slice(0, 8) + '...'}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="py-3 px-4">
+                                                    {dupr ? (
+                                                        <span className="text-green-400 font-mono text-sm">{dupr}</span>
+                                                    ) : (
+                                                        <span className="text-gray-500">--</span>
+                                                    )}
+                                                </td>
+                                                <td className="py-3 px-4">
+                                                    {profile?.gender ? (
+                                                        <span className="flex items-center gap-1">
+                                                            {getGenderIcon(profile.gender)}
+                                                            <span className="text-gray-300 capitalize">{profile.gender}</span>
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-gray-500">--</span>
+                                                    )}
+                                                </td>
+                                                <td className="py-3 px-4">
+                                                    {profile?.region || profile?.country ? (
+                                                        <span className="text-gray-300">
+                                                            {[profile.region, profile.country].filter(Boolean).join(', ')}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-gray-500">--</span>
+                                                    )}
+                                                </td>
+                                                <td className="py-3 px-4">
+                                                    {isAdminMember ? (
+                                                        <span className="bg-yellow-600 text-yellow-100 text-xs px-2 py-1 rounded font-semibold">
+                                                            Admin
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-gray-400 text-sm">Member</span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
                         </div>
+                    )}
+                    </>
                     )}
                 </div>
             )}
@@ -368,91 +585,63 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
             {/* Courts Tab */}
             {activeTab === 'courts' && (
                 <div className="space-y-6">
-                    {!bookingSettings?.enabled ? (
-                        // Booking not enabled
-                        <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
-                            <div className="w-16 h-16 bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                </svg>
+                    {bookingSettings?.enabled ? (
+                        <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                            <div className="flex items-center justify-between mb-6">
+                                <div>
+                                    <h2 className="text-xl font-bold text-white">Court Booking</h2>
+                                    <p className="text-gray-400 text-sm">View availability and book courts</p>
+                                </div>
+                                <button
+                                    onClick={() => setShowCourtCalendar(true)}
+                                    className="bg-green-600 hover:bg-green-500 text-white px-5 py-2 rounded-lg font-semibold"
+                                >
+                                    Open Calendar
+                                </button>
                             </div>
-                            <h3 className="text-lg font-bold text-white mb-2">Court Booking Not Enabled</h3>
-                            <p className="text-gray-400 text-sm mb-4">
+                            
+                            <div className="bg-gray-700/30 rounded-lg p-4 text-sm text-gray-400">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div>
+                                        <div className="text-gray-500">Hours</div>
+                                        <div className="text-white font-medium">{bookingSettings.openTime} - {bookingSettings.closeTime}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-gray-500">Slot Duration</div>
+                                        <div className="text-white font-medium">{bookingSettings.slotDurationMinutes} min</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-gray-500">Advance Booking</div>
+                                        <div className="text-white font-medium">{bookingSettings.maxAdvanceBookingDays} days</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-gray-500">Daily Limit</div>
+                                        <div className="text-white font-medium">{bookingSettings.maxBookingsPerMemberPerDay} bookings</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="bg-gray-800 rounded-lg p-8 border border-gray-700 text-center">
+                            <svg className="w-16 h-16 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <h3 className="text-xl font-bold text-white mb-2">Court Booking Not Enabled</h3>
+                            <p className="text-gray-400 mb-4">
                                 {isAdmin 
-                                    ? 'Enable court booking in Manage Courts to allow members to book.'
-                                    : 'This club has not enabled court booking yet.'}
+                                    ? "Set up court booking to allow members to reserve courts."
+                                    : "Court booking is not available for this club yet."
+                                }
                             </p>
                             {isAdmin && (
                                 <button
                                     onClick={() => setShowManageCourts(true)}
-                                    className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg font-semibold"
+                                    className="bg-green-600 hover:bg-green-500 text-white px-5 py-2 rounded-lg font-semibold"
                                 >
-                                    Setup Court Booking
+                                    Set Up Courts
                                 </button>
                             )}
                         </div>
-                    ) : (
-                        // Booking is enabled
-                        <>
-                            {/* Book a Court */}
-                            {(isMember || isAdmin) && (
-                                <button
-                                    onClick={() => setShowCourtCalendar(true)}
-                                    className="w-full bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white py-4 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-3"
-                                >
-                                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                    </svg>
-                                    View Calendar & Book a Court
-                                </button>
-                            )}
-
-                            {/* Non-member message */}
-                            {!isMember && !isAdmin && (
-                                <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg p-4 text-center">
-                                    <p className="text-yellow-200">
-                                        Join this club to book courts.
-                                    </p>
-                                </div>
-                            )}
-
-                            {/* Admin: Manage Courts */}
-                            {isAdmin && (
-                                <button
-                                    onClick={() => setShowManageCourts(true)}
-                                    className="w-full bg-gray-700 hover:bg-gray-600 text-white py-3 rounded-xl font-semibold flex items-center justify-center gap-2"
-                                >
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                    </svg>
-                                    Manage Courts & Settings
-                                </button>
-                            )}
-
-                            {/* Booking Info */}
-                            <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-                                <h3 className="font-semibold text-white mb-3">Booking Information</h3>
-                                <div className="grid grid-cols-2 gap-4 text-sm">
-                                    <div>
-                                        <span className="text-gray-500">Hours:</span>
-                                        <span className="text-white ml-2">{bookingSettings.openTime} - {bookingSettings.closeTime}</span>
-                                    </div>
-                                    <div>
-                                        <span className="text-gray-500">Slot Duration:</span>
-                                        <span className="text-white ml-2">{bookingSettings.slotDurationMinutes} min</span>
-                                    </div>
-                                    <div>
-                                        <span className="text-gray-500">Advance Booking:</span>
-                                        <span className="text-white ml-2">{bookingSettings.maxAdvanceBookingDays} days</span>
-                                    </div>
-                                    <div>
-                                        <span className="text-gray-500">Daily Limit:</span>
-                                        <span className="text-white ml-2">{bookingSettings.maxBookingsPerMemberPerDay} bookings</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </>
                     )}
                 </div>
             )}
