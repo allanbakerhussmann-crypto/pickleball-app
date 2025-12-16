@@ -30,6 +30,7 @@ import ProfilePage from '../pages/ProfilePage';
 import AdminUsersPage from '../pages/AdminUsersPage';
 import InvitesPage from '../pages/InvitesPage';
 import PlaceholderPage from '../pages/PlaceholderPage';
+import EditMeetupPage from '../pages/EditMeetupPage';
 
 // ============================================
 // Router Configuration - Using HashRouter
@@ -123,6 +124,14 @@ export const router = createHashRouter([
       {
         path: 'meetups/:id',
         element: <MeetupDetailPage />,
+      },
+      {
+        path: 'meetups/:id/edit',
+        element: (
+          <ProtectedRoute>
+            <EditMeetupPage />
+          </ProtectedRoute>
+        ),
       },
       
       // ==========================================

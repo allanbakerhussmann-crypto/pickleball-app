@@ -115,6 +115,11 @@ export {
   getMeetupById,
   setMeetupRSVP,
   getMeetupRSVPs,
+  updateMeetup,
+  cancelMeetup,
+  deleteMeetup,
+  removeMeetupRSVP,
+  getMyMeetups,
 } from './meetups';
 
 // Social Events (Legacy)

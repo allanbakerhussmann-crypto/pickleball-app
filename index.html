@@ -18,6 +18,14 @@
       rel="stylesheet"
     />
 
+    <!-- Leaflet CSS for Maps -->
+    <link 
+      rel="stylesheet" 
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+
     <!-- Tailwind CDN (dev/preview) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -46,32 +54,69 @@
     <!-- PapaParse -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
+    <!-- Leaflet JS (loaded globally for compatibility) -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
     <!-- 
-      CORRECTED: Using AI Studio's built-in CDN (aistudiocdn.com)
-      This is the ONLY CDN that reliably works in AI Studio without CORS issues
+      Import Map for ES Modules
+      Using AI Studio's built-in CDN (aistudiocdn.com)
     -->
-<script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
-    "react-router-dom": "https://aistudiocdn.com/react-router-dom@^6.20.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.1",
-    "@firebase/app": "https://aistudiocdn.com/@firebase/app@^0.14.6",
-    "@firebase/auth": "https://aistudiocdn.com/@firebase/auth@^1.11.1",
-    "@firebase/firestore": "https://aistudiocdn.com/@firebase/firestore@^4.6.1",
-    "@firebase/storage": "https://aistudiocdn.com/@firebase/storage@^0.14.0",
-    "@firebase/functions": "https://aistudiocdn.com/@firebase/functions@^0.11.8",
-    "firebase-functions": "https://aistudiocdn.com/firebase-functions@^7.0.1",
-    "firebase-admin": "https://aistudiocdn.com/firebase-admin@^13.6.0"
-  }
-}
-</script>
-  <link rel="stylesheet" href="/index.css">
-</head>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://aistudiocdn.com/react@^19.2.0",
+        "react/": "https://aistudiocdn.com/react@^19.2.0/",
+        "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0",
+        "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+        "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
+        "react-router-dom": "https://aistudiocdn.com/react-router-dom@^6.20.0",
+        "@google/genai": "https://aistudiocdn.com/@google/genai@^1.29.1",
+        "@firebase/app": "https://aistudiocdn.com/@firebase/app@^0.14.6",
+        "@firebase/auth": "https://aistudiocdn.com/@firebase/auth@^1.11.1",
+        "@firebase/firestore": "https://aistudiocdn.com/@firebase/firestore@^4.6.1",
+        "@firebase/storage": "https://aistudiocdn.com/@firebase/storage@^0.14.0",
+        "@firebase/functions": "https://aistudiocdn.com/@firebase/functions@^0.11.8",
+        "firebase-functions": "https://aistudiocdn.com/firebase-functions@^7.0.1",
+        "firebase-admin": "https://aistudiocdn.com/firebase-admin@^13.6.0"
+      }
+    }
+    </script>
+
+    <!-- Custom Leaflet Styles for Dark Theme -->
+    <style>
+      /* Dark theme for Leaflet popups */
+      .leaflet-popup-content-wrapper {
+        background: #1f2937;
+        color: #fff;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      }
+      .leaflet-popup-tip {
+        background: #1f2937;
+      }
+      .leaflet-popup-content {
+        margin: 12px 16px;
+      }
+      /* Dark attribution */
+      .leaflet-control-attribution {
+        background: rgba(17, 24, 39, 0.8) !important;
+        color: #9ca3af !important;
+        font-size: 10px;
+      }
+      .leaflet-control-attribution a {
+        color: #60a5fa !important;
+      }
+      /* Custom marker styling */
+      .meetup-marker {
+        background: #22c55e;
+        border: 3px solid #fff;
+        border-radius: 50%;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      }
+    </style>
+
+    <link rel="stylesheet" href="/index.css">
+  </head>
 
   <body class="bg-gray-900 text-white">
     <div id="root"></div>

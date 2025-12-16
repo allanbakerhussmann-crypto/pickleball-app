@@ -102,6 +102,8 @@ export interface SocialEvent {
   createdAt: number;
 }
 
+export type MeetupStatus = 'active' | 'cancelled';
+
 export interface Meetup {
   id: string;
   title: string;
@@ -114,6 +116,11 @@ export interface Meetup {
   createdByUserId: string;
   createdAt: number;
   updatedAt: number;
+  
+  // Status fields
+  status?: MeetupStatus;
+  cancelledAt?: number;
+  cancelReason?: string;
 }
 
 export interface MeetupRSVP {

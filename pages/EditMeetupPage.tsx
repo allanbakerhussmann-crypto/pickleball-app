@@ -1,9 +1,9 @@
 import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { MeetupDetail } from '../components/meetups/MeetupDetail';
+import { EditMeetup } from '../components/meetups/EditMeetup';
 import { ROUTES } from '../router/routes';
 
-const MeetupDetailPage: React.FC = () => {
+const EditMeetupPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
@@ -22,12 +22,12 @@ const MeetupDetailPage: React.FC = () => {
   }
 
   return (
-    <MeetupDetail
+    <EditMeetup
       meetupId={id}
-      onBack={() => navigate(ROUTES.MEETUPS)}
-      onEdit={(meetupId) => navigate(`${ROUTES.MEETUPS}/${meetupId}/edit`)}
+      onBack={() => navigate(`${ROUTES.MEETUPS}/${id}`)}
+      onSaved={() => navigate(`${ROUTES.MEETUPS}/${id}`)}
     />
   );
 };
 
-export default MeetupDetailPage;
+export default EditMeetupPage;
