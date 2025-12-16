@@ -1,11 +1,227 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check auth
+    
+    // ============================================
+    // HELPER FUNCTIONS
+    // ============================================
+    
     function isAuthenticated() {
       return request.auth != null;
     }
-
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isClubAdmin(clubId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/clubs/$(clubId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/clubs/$(clubId)).data.admins;
+    }
+    
+    function isClubMember(clubId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/clubs/$(clubId)) &&
+        (request.auth.uid in get(/databases/$(database)/documents/clubs/$(clubId)).data.members ||
+         request.auth.uid in get(/databases/$(database)/documents/clubs/$(clubId)).data.admins);
+    }
+    
+    function isTournamentOrganizer(tournamentId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/tournaments/$(tournamentId)) &&
+        request.auth.uid == get(/databases/$(database)/documents/tournaments/$(tournamentId)).data.createdByUserId;
+    }
+    
+    function isLeagueAdmin(leagueId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/leagues/$(leagueId)) &&
+        request.auth.uid == get(/databases/$(database)/documents/leagues/$(leagueId)).data.createdByUserId;
+    }
+    
+    // ============================================
+    // PLATFORM SETTINGS (Admin only)
+    // ============================================
+    
+    match /platformSettings/{docId} {
+      allow read: if isAuthenticated();
+      // Write restricted to app admins (implement via Cloud Functions)
+      allow write: if false;
+    }
+    
+    // ============================================
+    // WALLET COLLECTIONS
+    // ============================================
+    
+    // Wallets - users can read their own, clubs can read member wallets
+    match /wallets/{walletId} {
+      allow read: if isAuthenticated() && (
+        resource.data.odUserId == request.auth.uid ||
+        isClubAdmin(resource.data.odClubId)
+      );
+      // All writes go through Cloud Functions for security
+      allow write: if false;
+    }
+    
+    // ============================================
+    // TRANSACTION COLLECTIONS
+    // ============================================
+    
+    // Transactions - users see their own, clubs see their transactions
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated() && (
+        resource.data.odUserId == request.auth.uid ||
+        (resource.data.odClubId != null && isClubAdmin(resource.data.odClubId)) ||
+        (resource.data.tournamentId != null && isTournamentOrganizer(resource.data.tournamentId)) ||
+        (resource.data.leagueId != null && isLeagueAdmin(resource.data.leagueId))
+      );
+      // All writes go through Cloud Functions
+      allow write: if false;
+    }
+    
+    // ============================================
+    // PAYMENT COLLECTIONS
+    // ============================================
+    
+    // Payments - similar access to transactions
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (
+        resource.data.odUserId == request.auth.uid ||
+        (resource.data.odClubId != null && isClubAdmin(resource.data.odClubId)) ||
+        (resource.data.tournamentId != null && isTournamentOrganizer(resource.data.tournamentId)) ||
+        (resource.data.leagueId != null && isLeagueAdmin(resource.data.leagueId))
+      );
+      allow write: if false;
+    }
+    
+    // Refunds - users see their own, admins see club refunds
+    match /refunds/{refundId} {
+      allow read: if isAuthenticated() && (
+        resource.data.odUserId == request.auth.uid ||
+        (resource.data.odClubId != null && isClubAdmin(resource.data.odClubId))
+      );
+      // Users can request refunds (create), processing via Cloud Functions
+      allow create: if isAuthenticated() && 
+        request.resource.data.requestedByUserId == request.auth.uid;
+      allow update, delete: if false;
+    }
+    
+    // ============================================
+    // ANNUAL PASSES
+    // ============================================
+    
+    match /annualPasses/{passId} {
+      allow read: if isAuthenticated() && (
+        resource.data.odUserId == request.auth.uid ||
+        isClubAdmin(resource.data.odClubId)
+      );
+      allow write: if false;
+    }
+    
+    // ============================================
+    // PAYOUT COLLECTIONS
+    // ============================================
+    
+    match /payouts/{payoutId} {
+      allow read: if isAuthenticated() && isClubAdmin(resource.data.odClubId);
+      allow write: if false;
+    }
+    
+    // ============================================
+    // RECEIPT COLLECTIONS
+    // ============================================
+    
+    match /receipts/{receiptId} {
+      allow read: if isAuthenticated() && (
+        resource.data.odUserId == request.auth.uid ||
+        (resource.data.odClubId != null && isClubAdmin(resource.data.odClubId))
+      );
+      allow write: if false;
+    }
+    
+    // ============================================
+    // ACCOUNT COLLECTIONS
+    // ============================================
+    
+    // User Accounts - users see their own financial summary
+    match /userAccounts/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if false;
+    }
+    
+    // Club Accounts - club admins see club finances
+    match /clubAccounts/{clubId} {
+      allow read: if isAuthenticated() && isClubAdmin(clubId);
+      allow write: if false;
+    }
+    
+    // Tournament Accounts - organizers see tournament finances
+    match /tournamentAccounts/{tournamentId} {
+      allow read: if isAuthenticated() && isTournamentOrganizer(tournamentId);
+      allow write: if false;
+    }
+    
+    // League Accounts - league admins see league finances
+    match /leagueAccounts/{leagueId} {
+      allow read: if isAuthenticated() && isLeagueAdmin(leagueId);
+      allow write: if false;
+    }
+    
+    // ============================================
+    // REPORT COLLECTIONS
+    // ============================================
+    
+    match /reports/{reportId} {
+      allow read: if isAuthenticated() && (
+        resource.data.generatedByUserId == request.auth.uid ||
+        (resource.data.odUserId != null && resource.data.odUserId == request.auth.uid) ||
+        (resource.data.odClubId != null && isClubAdmin(resource.data.odClubId)) ||
+        (resource.data.tournamentId != null && isTournamentOrganizer(resource.data.tournamentId)) ||
+        (resource.data.leagueId != null && isLeagueAdmin(resource.data.leagueId))
+      );
+      allow write: if false;
+    }
+    
+    match /scheduledReports/{scheduleId} {
+      allow read: if isAuthenticated() && (
+        resource.data.createdByUserId == request.auth.uid ||
+        (resource.data.odClubId != null && isClubAdmin(resource.data.odClubId))
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && 
+        resource.data.createdByUserId == request.auth.uid;
+    }
+    
+    match /exportRequests/{exportId} {
+      allow read: if isAuthenticated() && 
+        resource.data.requestedByUserId == request.auth.uid;
+      allow create: if isAuthenticated() && 
+        request.resource.data.requestedByUserId == request.auth.uid;
+      allow update, delete: if false;
+    }
+    
+    // ============================================
+    // AUDIT LOG COLLECTIONS
+    // ============================================
+    
+    // Payment audit logs - strict access
+    match /paymentAuditLogs/{logId} {
+      // Only platform admins can read audit logs directly
+      // Users access via reports/exports
+      allow read: if false;
+      allow write: if false;
+    }
+    
+    // General audit logs (existing)
+    match /audit_logs/{logId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // ============================================
+    // EXISTING COLLECTIONS (PRESERVED)
+    // ============================================
+    
     // Meetups collection
     match /meetups/{meetupId} {
       allow read: if isAuthenticated();
@@ -33,15 +249,27 @@ service cloud.firestore {
       match /scoreSubmissions/{subId} { allow read, write: if isAuthenticated(); }
     }
     
-    // Clubs - UPDATED WITH COURT BOOKING
+    // Clubs - UPDATED WITH PAYMENT SUBCOLLECTIONS
     match /clubs/{clubId} {
       allow read, write: if isAuthenticated();
       match /joinRequests/{requestId} { allow read, write: if isAuthenticated(); }
       match /courts/{courtId} { allow read, write: if isAuthenticated(); }
       match /bookings/{bookingId} { allow read, write: if isAuthenticated(); }
+      
+      // Club branding settings
+      match /branding/{brandingId} {
+        allow read: if isAuthenticated();
+        allow write: if isClubAdmin(clubId);
+      }
+      
+      // Club payout settings  
+      match /payoutSettings/{settingsId} {
+        allow read: if isClubAdmin(clubId);
+        allow write: if isClubAdmin(clubId);
+      }
     }
     
-    // Leagues - ADD THIS TOO
+    // Leagues
     match /leagues/{leagueId} {
       allow read, write: if isAuthenticated();
       match /members/{memberId} { allow read, write: if isAuthenticated(); }
@@ -49,7 +277,7 @@ service cloud.firestore {
       match /challenges/{challengeId} { allow read, write: if isAuthenticated(); }
     }
     
-    // Other collections
+    // Other existing collections
     match /tournament_registrations/{regId} {
       allow read, write: if isAuthenticated();
     }
@@ -60,6 +288,30 @@ service cloud.firestore {
       allow read, write: if isAuthenticated();
     }
     match /team_creation_audit/{auditId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Teams (root level)
+    match /teams/{teamId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Competitions
+    match /competitions/{competitionId} {
+      allow read, write: if isAuthenticated();
+      match /entries/{entryId} { allow read, write: if isAuthenticated(); }
+      match /matches/{matchId} { allow read, write: if isAuthenticated(); }
+    }
+    
+    match /competitionEntries/{entryId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /standings/{standingId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /matchScoreSubmissions/{submissionId} {
       allow read, write: if isAuthenticated();
     }
   }
