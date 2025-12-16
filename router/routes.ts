@@ -26,11 +26,13 @@ export const ROUTES = {
   MEETUPS: '/meetups',
   MEETUP_CREATE: '/meetups/create',
   MEETUP_DETAIL: '/meetups/:id',
-
-  // Leagues (update existing)
+  
+  // Leagues
   LEAGUES: '/leagues',
   LEAGUE_DETAIL: '/leagues/:id',
   MY_LEAGUES: '/my-leagues',
+  TEAM_LEAGUES: '/team-leagues',
+  MY_TEAM_LEAGUES: '/my-team-leagues',
   
   // Players
   PLAYERS: '/players',
@@ -39,15 +41,9 @@ export const ROUTES = {
   PROFILE: '/profile',
   INVITES: '/invites',
   
-  // Results (placeholders)
+  // Results
   RESULTS: '/results',
   MY_RESULTS: '/my-results',
-  
-  // Leagues (placeholders)
-  LEAGUES: '/leagues',
-  MY_LEAGUES: '/my-leagues',
-  TEAM_LEAGUES: '/team-leagues',
-  MY_TEAM_LEAGUES: '/my-team-leagues',
   
   // Admin
   ADMIN_USERS: '/admin/users',
@@ -60,13 +56,7 @@ export const getRoute = {
   tournamentDetail: (id: string) => `/tournaments/${id}`,
   clubDetail: (id: string) => `/clubs/${id}`,
   meetupDetail: (id: string) => `/meetups/${id}`,
-};
-
-export const getRoute = {
-  tournamentDetail: (id: string) => `/tournaments/${id}`,
-  clubDetail: (id: string) => `/clubs/${id}`,
-  meetupDetail: (id: string) => `/meetups/${id}`,
-  leagueDetail: (id: string) => `/leagues/${id}`,  // ADD THIS
+  leagueDetail: (id: string) => `/leagues/${id}`,
 };
 
 /**

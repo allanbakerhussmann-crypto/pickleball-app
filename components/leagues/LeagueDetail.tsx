@@ -17,8 +17,8 @@ import {
   getLeagueMemberByUserId,
   createChallenge,
   getPendingChallenges,
-} from '../../services/firebase/leagues';
-import type { League, LeagueMember, LeagueMatch, LeagueChallenge } from '../../types/league';
+} from '../../services/firebase';
+import type { League, LeagueMember, LeagueMatch, LeagueChallenge } from '../../types';
 
 interface LeagueDetailProps {
   leagueId: string;

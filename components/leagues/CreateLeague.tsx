@@ -8,10 +8,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { createLeague } from '../../services/firebase/leagues';
-import { getClubsForUser } from '../../services/firebase';
-import type { League, LeagueType, LeagueFormat, LeagueSettings, DEFAULT_LEAGUE_SETTINGS } from '../../types/league';
-import type { Club } from '../../types';
+import { createLeague, getClubsForUser } from '../../services/firebase';
+import type { League, LeagueType, LeagueFormat, LeagueSettings, Club } from '../../types';
 
 interface CreateLeagueProps {
   onBack: () => void;

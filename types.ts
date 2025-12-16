@@ -77,6 +77,9 @@ export interface Club {
 
   createdAt: number;
   updatedAt: number;
+
+  // Court Booking Settings (add this line)
+  bookingSettings?: ClubBookingSettings;
 }
 
 export interface ClubJoinRequest {
@@ -739,4 +742,94 @@ export interface LeagueChallenge {
   
   createdAt: number;
   respondedAt?: number | null;
+}
+// ============================================
+// COURT BOOKING TYPES
+// ============================================
+// Add these to the bottom of your types.ts file
+
+export interface ClubCourt {
+  id: string;
+  clubId: string;
+  name: string;                    // "Court 1", "Court 2"
+  description?: string | null;     // "Indoor, with lights"
+  isActive: boolean;
+  order: number;                   // Display order
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ClubBookingSettings {
+  enabled: boolean;                 // Is booking system active?
+  slotDurationMinutes: 30 | 60 | 90 | 120;  // Length of each slot
+  openTime: string;                 // "06:00" (24hr format)
+  closeTime: string;                // "22:00"
+  maxAdvanceBookingDays: number;    // How far ahead can book (e.g., 14)
+  maxBookingsPerMemberPerDay: number;  // Limit per member per day
+  cancellationMinutesBeforeSlot: number;  // Must cancel X mins before
+  allowNonMembers: boolean;         // Can non-members view calendar?
+}
+
+export type BookingStatus = 'confirmed' | 'cancelled';
+
+export interface CourtBooking {
+  id: string;
+  clubId: string;
+  courtId: string;
+  courtName: string;               // Denormalized for display
+  
+  // Date & Time
+  date: string;                    // "2024-12-16" (YYYY-MM-DD)
+  startTime: string;               // "09:00" (24hr format)
+  endTime: string;                 // "10:00"
+  
+  // Who booked
+  bookedByUserId: string;
+  bookedByName: string;
+  
+  // Other players (optional, for tracking who's playing)
+  players?: {
+    userId?: string;
+    name: string;
+  }[];
+  
+  // Status
+  status: BookingStatus;
+  cancelledAt?: number | null;
+  cancelledByUserId?: string | null;
+  
+  // Notes
+  notes?: string | null;
+  
+  // Timestamps
+  createdAt: number;
+  updatedAt: number;
+}
+
+// Default booking settings
+export const DEFAULT_BOOKING_SETTINGS: ClubBookingSettings = {
+  enabled: false,
+  slotDurationMinutes: 60,
+  openTime: '06:00',
+  closeTime: '22:00',
+  maxAdvanceBookingDays: 14,
+  maxBookingsPerMemberPerDay: 2,
+  cancellationMinutesBeforeSlot: 60,
+  allowNonMembers: false,
+};
+
+// Helper type for calendar view
+export interface CalendarSlot {
+  time: string;                    // "09:00"
+  courtId: string;
+  courtName: string;
+  booking: CourtBooking | null;    // null = available
+  isPast: boolean;
+  isBookable: boolean;
+}
+
+export interface CalendarDay {
+  date: string;                    // "2024-12-16"
+  dateLabel: string;               // "Mon 16 Dec"
+  slots: CalendarSlot[];
 }

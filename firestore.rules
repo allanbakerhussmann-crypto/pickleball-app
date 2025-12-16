@@ -1,4 +1,3 @@
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -11,21 +10,20 @@ service cloud.firestore {
     match /meetups/{meetupId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
-      // Only the creator can update or delete
       allow update, delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
 
-      // RSVPs subcollection
       match /rsvps/{userId} {
         allow read: if isAuthenticated();
-        // Users can only create/update/delete their own RSVP
         allow write: if isAuthenticated() && request.auth.uid == userId;
       }
     }
 
-    // Existing collections (simplified placeholders as requested)
+    // Users
     match /users/{userId} {
       allow read, write: if isAuthenticated();
     }
+    
+    // Tournaments
     match /tournaments/{tournamentId} {
       allow read, write: if isAuthenticated();
       match /divisions/{divisionId} { allow read, write: if isAuthenticated(); }
@@ -34,10 +32,24 @@ service cloud.firestore {
       match /courts/{courtId} { allow read, write: if isAuthenticated(); }
       match /scoreSubmissions/{subId} { allow read, write: if isAuthenticated(); }
     }
+    
+    // Clubs - UPDATED WITH COURT BOOKING
     match /clubs/{clubId} {
       allow read, write: if isAuthenticated();
       match /joinRequests/{requestId} { allow read, write: if isAuthenticated(); }
+      match /courts/{courtId} { allow read, write: if isAuthenticated(); }
+      match /bookings/{bookingId} { allow read, write: if isAuthenticated(); }
     }
+    
+    // Leagues - ADD THIS TOO
+    match /leagues/{leagueId} {
+      allow read, write: if isAuthenticated();
+      match /members/{memberId} { allow read, write: if isAuthenticated(); }
+      match /matches/{matchId} { allow read, write: if isAuthenticated(); }
+      match /challenges/{challengeId} { allow read, write: if isAuthenticated(); }
+    }
+    
+    // Other collections
     match /tournament_registrations/{regId} {
       allow read, write: if isAuthenticated();
     }
