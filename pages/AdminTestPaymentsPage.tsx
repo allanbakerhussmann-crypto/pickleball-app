@@ -4,7 +4,7 @@
  * TESTING ONLY - Remove before going live!
  * 
  * Allows admins to:
- * - Add funds to user wallets
+ * - Add funds to user wallets (per club)
  * - Simulate purchases (court bookings, tournaments, passes)
  * - View all transactions
  * - Test the complete payment flow
@@ -26,7 +26,7 @@ import {
   orderBy,
 } from '@firebase/firestore';
 import { db } from '../services/firebase';
-import type { UserProfile } from '../types';
+import type { UserProfile, Club } from '../types';
 
 // ============================================
 // TYPES
@@ -43,12 +43,14 @@ interface TestWallet {
   updatedAt: number;
   userName?: string;
   userEmail?: string;
+  clubName?: string;
 }
 
 interface TestTransaction {
   id: string;
   walletId: string;
   odUserId: string;
+  odClubId?: string;
   type: string;
   amount: number;
   currency: string;
@@ -96,6 +98,7 @@ const AdminTestPaymentsPage: React.FC = () => {
   
   // State
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [clubs, setClubs] = useState<Club[]>([]);
   const [wallets, setWallets] = useState<TestWallet[]>([]);
   const [transactions, setTransactions] = useState<TestTransaction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,13 +106,13 @@ const AdminTestPaymentsPage: React.FC = () => {
   
   // Wallet management state
   const [selectedUserId, setSelectedUserId] = useState<string>('');
-  const [addFundsAmount, setAddFundsAmount] = useState<string>('50');
+  const [selectedClubId, setSelectedClubId] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   
   // Purchase state
   const [selectedProduct, setSelectedProduct] = useState<typeof TEST_PRODUCTS.court_bookings[0] | null>(null);
-  const [purchaseUserId, setPurchaseUserId] = useState<string>('');
+  const [purchaseWalletId, setPurchaseWalletId] = useState<string>('');
 
   // ============================================
   // DATA LOADING
@@ -126,16 +129,23 @@ const AdminTestPaymentsPage: React.FC = () => {
         const usersData = usersSnap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
         setUsers(usersData);
 
+        // Load clubs
+        const clubsSnap = await getDocs(collection(db, 'clubs'));
+        const clubsData = clubsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Club));
+        setClubs(clubsData);
+
         // Load wallets
         const walletsSnap = await getDocs(collection(db, 'wallets'));
         const walletsData = walletsSnap.docs.map(d => {
           const data = d.data();
           const user = usersData.find(u => u.id === data.odUserId);
+          const club = clubsData.find(c => c.id === data.odClubId);
           return {
             id: d.id,
             ...data,
-            userName: user?.displayName || 'Unknown',
+            userName: user?.displayName || 'Unknown User',
             userEmail: user?.email || '',
+            clubName: club?.name || data.odClubId || 'Unknown Club',
           } as TestWallet;
         });
         setWallets(walletsData);
@@ -162,28 +172,47 @@ const AdminTestPaymentsPage: React.FC = () => {
   // WALLET FUNCTIONS
   // ============================================
 
-  const createWalletForUser = async (userId: string) => {
-    const user = users.find(u => u.id === userId);
-    if (!user) return;
+  const createWalletForUser = async () => {
+    if (!selectedUserId || !selectedClubId) {
+      setMessage({ type: 'error', text: 'Please select both a user and a club' });
+      return;
+    }
+
+    const user = users.find(u => u.id === selectedUserId);
+    const club = clubs.find(c => c.id === selectedClubId);
+    if (!user || !club) return;
+
+    // Check if wallet already exists
+    const existingWallet = wallets.find(
+      w => w.odUserId === selectedUserId && w.odClubId === selectedClubId
+    );
+    if (existingWallet) {
+      setMessage({ type: 'error', text: `Wallet already exists for ${user.displayName} at ${club.name}` });
+      return;
+    }
 
     setIsProcessing(true);
     try {
-      const walletId = `wallet-${userId}-test`;
+      // Use consistent wallet ID format: {userId}_{clubId}
+      const walletId = `${selectedUserId}_${selectedClubId}`;
+      
       await setDoc(doc(db, 'wallets', walletId), {
-        odUserId: userId,
-        odClubId: 'test-club',
+        odUserId: selectedUserId,
+        odClubId: selectedClubId,
         balance: 0,
         currency: 'nzd',
         status: 'active',
+        totalLoaded: 0,
+        totalSpent: 0,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
 
-      // Refresh wallets
+      // Add to local state
       const newWallet: TestWallet = {
         id: walletId,
-        odUserId: userId,
-        odClubId: 'test-club',
+        odUserId: selectedUserId,
+        odClubId: selectedClubId,
         balance: 0,
         currency: 'nzd',
         status: 'active',
@@ -191,9 +220,14 @@ const AdminTestPaymentsPage: React.FC = () => {
         updatedAt: Date.now(),
         userName: user.displayName,
         userEmail: user.email,
+        clubName: club.name,
       };
       setWallets(prev => [...prev, newWallet]);
-      setMessage({ type: 'success', text: `Wallet created for ${user.displayName}` });
+      setMessage({ type: 'success', text: `Wallet created for ${user.displayName} at ${club.name}` });
+      
+      // Reset selections
+      setSelectedUserId('');
+      setSelectedClubId('');
     } catch (err) {
       console.error('Failed to create wallet:', err);
       setMessage({ type: 'error', text: 'Failed to create wallet' });
@@ -253,6 +287,7 @@ const AdminTestPaymentsPage: React.FC = () => {
         id: txRef.id,
         walletId,
         odUserId: wallet.odUserId,
+        odClubId: wallet.odClubId,
         type: 'topup',
         amount: amountCents,
         currency: 'nzd',
@@ -263,8 +298,7 @@ const AdminTestPaymentsPage: React.FC = () => {
         createdAt: Date.now(),
       }, ...prev]);
 
-      setMessage({ type: 'success', text: `Added $${amountDollars.toFixed(2)} to wallet` });
-      setAddFundsAmount('50');
+      setMessage({ type: 'success', text: `Added $${amountDollars.toFixed(2)} to ${wallet.userName}'s wallet at ${wallet.clubName}` });
     } catch (err) {
       console.error('Failed to add funds:', err);
       setMessage({ type: 'error', text: 'Failed to add funds' });
@@ -278,14 +312,14 @@ const AdminTestPaymentsPage: React.FC = () => {
   // ============================================
 
   const processPurchase = async () => {
-    if (!selectedProduct || !purchaseUserId) {
-      setMessage({ type: 'error', text: 'Select a user and product' });
+    if (!selectedProduct || !purchaseWalletId) {
+      setMessage({ type: 'error', text: 'Select a wallet and product' });
       return;
     }
 
-    const wallet = wallets.find(w => w.odUserId === purchaseUserId);
+    const wallet = wallets.find(w => w.id === purchaseWalletId);
     if (!wallet) {
-      setMessage({ type: 'error', text: 'User has no wallet. Create one first!' });
+      setMessage({ type: 'error', text: 'Wallet not found' });
       return;
     }
 
@@ -339,6 +373,7 @@ const AdminTestPaymentsPage: React.FC = () => {
         id: txRef.id,
         walletId: wallet.id,
         odUserId: wallet.odUserId,
+        odClubId: wallet.odClubId,
         type: 'payment',
         amount: -selectedProduct.price,
         currency: 'nzd',
@@ -349,7 +384,7 @@ const AdminTestPaymentsPage: React.FC = () => {
         createdAt: Date.now(),
       }, ...prev]);
 
-      setMessage({ type: 'success', text: `Purchase complete! ${selectedProduct.name}` });
+      setMessage({ type: 'success', text: `Purchase complete! ${selectedProduct.name} for ${wallet.userName}` });
       setSelectedProduct(null);
     } catch (err) {
       console.error('Failed to process purchase:', err);
@@ -424,7 +459,7 @@ const AdminTestPaymentsPage: React.FC = () => {
           </span>
         </div>
         <p className="text-gray-400 text-sm">
-          Add funds, simulate purchases, and test the payment flow. Remove this page before going live!
+          Create club-specific wallets, add funds, and test the payment flow. Remove this page before going live!
         </p>
       </div>
 
@@ -472,30 +507,48 @@ const AdminTestPaymentsPage: React.FC = () => {
           {/* ==================== WALLETS TAB ==================== */}
           {activeTab === 'wallets' && (
             <div>
-              <h2 className="text-xl font-bold text-white mb-4">User Wallets</h2>
+              <h2 className="text-xl font-bold text-white mb-4">Club-Specific Wallets</h2>
+              
+              {/* Info Box */}
+              <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4 mb-6">
+                <p className="text-blue-300 text-sm">
+                  <strong>💡 Note:</strong> Each wallet is tied to a specific club. Users need a separate wallet for each club they want to make payments at.
+                </p>
+              </div>
               
               {/* Create Wallet Section */}
               <div className="bg-gray-900 rounded-lg p-4 mb-6">
-                <h3 className="text-sm font-medium text-gray-300 mb-3">Create Wallet for User</h3>
-                <div className="flex gap-3">
+                <h3 className="text-sm font-medium text-gray-300 mb-3">Create Wallet for User at Club</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <select
                     value={selectedUserId}
                     onChange={(e) => setSelectedUserId(e.target.value)}
-                    className="flex-1 bg-gray-800 text-white px-4 py-2 rounded border border-gray-600"
+                    className="bg-gray-800 text-white px-4 py-2 rounded border border-gray-600"
                   >
                     <option value="">Select a user...</option>
-                    {users
-                      .filter(u => !wallets.some(w => w.odUserId === u.id))
-                      .map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.displayName} ({u.email})
-                        </option>
-                      ))
-                    }
+                    {users.map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.displayName} ({u.email})
+                      </option>
+                    ))}
                   </select>
+                  
+                  <select
+                    value={selectedClubId}
+                    onChange={(e) => setSelectedClubId(e.target.value)}
+                    className="bg-gray-800 text-white px-4 py-2 rounded border border-gray-600"
+                  >
+                    <option value="">Select a club...</option>
+                    {clubs.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  
                   <button
-                    onClick={() => selectedUserId && createWalletForUser(selectedUserId)}
-                    disabled={!selectedUserId || isProcessing}
+                    onClick={createWalletForUser}
+                    disabled={!selectedUserId || !selectedClubId || isProcessing}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded font-medium"
                   >
                     Create Wallet
@@ -513,37 +566,46 @@ const AdminTestPaymentsPage: React.FC = () => {
                   {wallets.map((wallet) => (
                     <div
                       key={wallet.id}
-                      className="bg-gray-900 rounded-lg p-4 flex items-center justify-between"
+                      className="bg-gray-900 rounded-lg p-4"
                     >
-                      <div>
-                        <p className="text-white font-medium">{wallet.userName}</p>
-                        <p className="text-gray-400 text-sm">{wallet.userEmail}</p>
-                      </div>
-                      
-                      <div className="flex items-center gap-4">
-                        <div className="text-right">
-                          <p className="text-2xl font-bold text-green-400">
-                            {formatCurrency(wallet.balance)}
+                      <div className="flex items-center justify-between flex-wrap gap-4">
+                        <div>
+                          <p className="text-white font-medium">{wallet.userName}</p>
+                          <p className="text-gray-400 text-sm">{wallet.userEmail}</p>
+                          <p className="text-blue-400 text-xs mt-1">
+                            🏢 {wallet.clubName}
                           </p>
-                          <p className="text-xs text-gray-500">Balance</p>
                         </div>
                         
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min="1"
-                            max="1000"
-                            value={addFundsAmount}
-                            onChange={(e) => setAddFundsAmount(e.target.value)}
-                            className="w-20 bg-gray-800 text-white px-2 py-1 rounded border border-gray-600 text-center"
-                          />
-                          <button
-                            onClick={() => addFundsToWallet(wallet.id, parseFloat(addFundsAmount) || 0)}
-                            disabled={isProcessing}
-                            className="px-3 py-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded text-sm font-medium"
-                          >
-                            + Add $
-                          </button>
+                        <div className="flex items-center gap-4">
+                          <div className="text-right">
+                            <p className="text-2xl font-bold text-green-400">
+                              {formatCurrency(wallet.balance)}
+                            </p>
+                            <p className="text-xs text-gray-500">Balance</p>
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="1"
+                              max="1000"
+                              defaultValue="50"
+                              className="w-20 bg-gray-800 text-white px-2 py-1 rounded border border-gray-600 text-center"
+                              id={`amount-${wallet.id}`}
+                            />
+                            <button
+                              onClick={() => {
+                                const input = document.getElementById(`amount-${wallet.id}`) as HTMLInputElement;
+                                const amount = parseFloat(input?.value || '50');
+                                if (amount > 0) addFundsToWallet(wallet.id, amount);
+                              }}
+                              disabled={isProcessing}
+                              className="px-3 py-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded text-sm font-medium"
+                            >
+                              + Add $
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -558,26 +620,26 @@ const AdminTestPaymentsPage: React.FC = () => {
             <div>
               <h2 className="text-xl font-bold text-white mb-4">Test Purchase</h2>
               
-              {/* Select User */}
+              {/* Select Wallet */}
               <div className="mb-6">
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Select User (Buyer)
+                  Select Wallet (User + Club)
                 </label>
                 <select
-                  value={purchaseUserId}
-                  onChange={(e) => setPurchaseUserId(e.target.value)}
+                  value={purchaseWalletId}
+                  onChange={(e) => setPurchaseWalletId(e.target.value)}
                   className="w-full bg-gray-900 text-white px-4 py-3 rounded border border-gray-600"
                 >
-                  <option value="">Select a user...</option>
+                  <option value="">Select a wallet...</option>
                   {wallets.map(w => (
-                    <option key={w.odUserId} value={w.odUserId}>
-                      {w.userName} - Balance: {formatCurrency(w.balance)}
+                    <option key={w.id} value={w.id}>
+                      {w.userName} @ {w.clubName} - Balance: {formatCurrency(w.balance)}
                     </option>
                   ))}
                 </select>
-                {purchaseUserId && !wallets.some(w => w.odUserId === purchaseUserId) && (
+                {purchaseWalletId && wallets.find(w => w.id === purchaseWalletId)?.balance === 0 && (
                   <p className="text-yellow-400 text-sm mt-1">
-                    ⚠️ This user has no wallet. Create one in the Wallets tab first.
+                    ⚠️ This wallet has no funds. Add funds in the Wallets tab first.
                   </p>
                 )}
               </div>
@@ -628,7 +690,7 @@ const AdminTestPaymentsPage: React.FC = () => {
                   </div>
                   <button
                     onClick={processPurchase}
-                    disabled={!purchaseUserId || isProcessing}
+                    disabled={!purchaseWalletId || isProcessing}
                     className="w-full mt-4 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-bold text-lg transition-colors"
                   >
                     {isProcessing ? 'Processing...' : '💳 Complete Purchase'}
@@ -667,7 +729,7 @@ const AdminTestPaymentsPage: React.FC = () => {
                         <div className="flex-1 min-w-0">
                           <p className="text-white font-medium truncate">{tx.referenceName}</p>
                           <p className="text-gray-400 text-sm">
-                            {wallet?.userName || 'Unknown'} • {formatDate(tx.createdAt)}
+                            {wallet?.userName || 'Unknown'} @ {wallet?.clubName || 'Unknown Club'} • {formatDate(tx.createdAt)}
                           </p>
                         </div>
                         

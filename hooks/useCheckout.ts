@@ -133,33 +133,62 @@ export const useCheckout = (options: UseCheckoutOptions = {}): UseCheckoutReturn
   // ============================================
   
   useEffect(() => {
-    if (!currentUser || !clubId) return;
+    if (!currentUser) return;
     
     const loadPaymentData = async () => {
       try {
-        // Find wallet for this user and club
-        const walletQuery = query(
-          collection(db, 'wallets'),
-          where('odUserId', '==', currentUser.uid),
-          where('odClubId', '==', clubId)
-        );
-        const walletSnap = await getDocs(walletQuery);
+        // UPDATED: Find ANY wallet for this user
+        // First try club-specific wallet, then fall back to any wallet
+        let foundWallet: WalletData | null = null;
         
-        if (!walletSnap.empty) {
-          setWallet({ id: walletSnap.docs[0].id, ...walletSnap.docs[0].data() } as WalletData);
+        if (clubId) {
+          // Try to find wallet for this specific club
+          const clubWalletQuery = query(
+            collection(db, 'wallets'),
+            where('odUserId', '==', currentUser.uid),
+            where('odClubId', '==', clubId)
+          );
+          const clubWalletSnap = await getDocs(clubWalletQuery);
+          
+          if (!clubWalletSnap.empty) {
+            foundWallet = { id: clubWalletSnap.docs[0].id, ...clubWalletSnap.docs[0].data() } as WalletData;
+          }
         }
         
-        // Find annual pass
-        const passQuery = query(
-          collection(db, 'annualPasses'),
-          where('odUserId', '==', currentUser.uid),
-          where('odClubId', '==', clubId),
-          where('status', '==', 'active')
-        );
-        const passSnap = await getDocs(passQuery);
+        // If no club-specific wallet, find any wallet for this user
+        if (!foundWallet) {
+          const anyWalletQuery = query(
+            collection(db, 'wallets'),
+            where('odUserId', '==', currentUser.uid)
+          );
+          const anyWalletSnap = await getDocs(anyWalletQuery);
+          
+          if (!anyWalletSnap.empty) {
+            // Use the first wallet found (or the one with highest balance)
+            const wallets = anyWalletSnap.docs.map(d => ({ id: d.id, ...d.data() } as WalletData));
+            foundWallet = wallets.reduce((best, current) => 
+              current.balance > best.balance ? current : best
+            , wallets[0]);
+          }
+        }
         
-        if (!passSnap.empty) {
-          setAnnualPass({ id: passSnap.docs[0].id, ...passSnap.docs[0].data() } as AnnualPassData);
+        if (foundWallet) {
+          setWallet(foundWallet);
+        }
+        
+        // Find annual pass for this club
+        if (clubId) {
+          const passQuery = query(
+            collection(db, 'annualPasses'),
+            where('odUserId', '==', currentUser.uid),
+            where('odClubId', '==', clubId),
+            where('status', '==', 'active')
+          );
+          const passSnap = await getDocs(passQuery);
+          
+          if (!passSnap.empty) {
+            setAnnualPass({ id: passSnap.docs[0].id, ...passSnap.docs[0].data() } as AnnualPassData);
+          }
         }
       } catch (err) {
         console.error('Failed to load payment data:', err);
@@ -328,7 +357,7 @@ export const useCheckout = (options: UseCheckoutOptions = {}): UseCheckoutReturn
         const txRef = await addDoc(collection(db, 'transactions'), {
           walletId: wallet.id,
           odUserId: currentUser.uid,
-          odClubId: clubId,
+          odClubId: clubId || wallet.odClubId,
           type: 'payment',
           amount: -amount,
           currency: checkout.pricing.currency,
