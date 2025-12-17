@@ -1,60 +1,62 @@
 /**
  * Payment System Types
  * 
- * Core type definitions for the unified payment system.
- * All amounts are stored in CENTS (e.g., $10.00 = 1000)
+ * Core type definitions for the payment system.
+ * All monetary amounts are in CENTS (e.g., $10.00 = 1000 cents).
  * 
  * FILE LOCATION: services/firebase/payments/types.ts
  */
 
 // ============================================
-// CURRENCY & PLATFORM SETTINGS
+// CURRENCY & PLATFORM TYPES
 // ============================================
 
+/**
+ * Supported currencies (ISO 4217 codes, lowercase)
+ */
 export type SupportedCurrency = 'nzd' | 'aud' | 'usd';
 
+/**
+ * Platform fee configuration
+ */
 export interface PlatformFeeSettings {
-  /** Default platform fee rate (e.g., 0.015 = 1.5%) */
-  defaultRate: number;
-  /** Minimum allowed rate */
-  minRate: number;
-  /** Maximum allowed rate */
-  maxRate: number;
-  /** Fixed fee per transaction in cents (e.g., 30 = $0.30) */
-  perTransactionFee: number;
-  /** Override rates by transaction type */
-  rateByType: {
-    court_booking: number;
-    tournament: number;
-    league: number;
-    wallet_topup: number;
-    annual_pass: number;
-    membership: number;
-  };
+  /** Base percentage fee (e.g., 2.9 for 2.9%) */
+  percentageFee: number;
+  /** Fixed fee per transaction in cents */
+  fixedFee: number;
+  /** Minimum fee in cents */
+  minimumFee: number;
+  /** Maximum fee in cents (0 = no max) */
+  maximumFee: number;
 }
 
+/**
+ * Tax/GST settings
+ */
 export interface TaxSettings {
-  /** Whether tax calculation is enabled */
+  /** Whether tax is enabled */
   enabled: boolean;
-  /** Tax rates by currency/country */
-  rates: {
-    nzd: number;  // NZ GST: 0.15
-    aud: number;  // AU GST: 0.10
-    usd: number;  // US: 0 (varies by state)
-  };
-  /** Display prices inclusive of tax */
+  /** Tax rates by currency/jurisdiction */
+  rates: Record<SupportedCurrency, number>;
+  /** Whether to display prices as tax-inclusive */
   displayInclusive: boolean;
 }
 
+/**
+ * Data retention settings for financial records
+ */
 export interface RetentionSettings {
-  /** Years to retain financial records (7 for IRD compliance) */
+  /** Years to retain records (7 for NZ IRD compliance) */
   years: number;
-  /** Enable auto-archiving of old records */
+  /** Whether to archive old records */
   archiveEnabled: boolean;
-  /** Never auto-delete (always true for compliance) */
+  /** Prevent auto-deletion (always true for financial data) */
   autoDeleteDisabled: boolean;
 }
 
+/**
+ * Complete platform settings
+ */
 export interface PlatformSettings {
   fees: PlatformFeeSettings;
   currencies: {
@@ -65,21 +67,15 @@ export interface PlatformSettings {
   retention: RetentionSettings;
 }
 
-/** Default platform settings */
+/**
+ * Default platform settings
+ */
 export const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
   fees: {
-    defaultRate: 0.015, // 1.5%
-    minRate: 0.01,
-    maxRate: 0.03,
-    perTransactionFee: 0, // No fixed fee initially
-    rateByType: {
-      court_booking: 0.015,
-      tournament: 0.015,
-      league: 0.015,
-      wallet_topup: 0.015,
-      annual_pass: 0.015,
-      membership: 0.015,
-    },
+    percentageFee: 2.9,
+    fixedFee: 30, // 30 cents
+    minimumFee: 50, // 50 cents
+    maximumFee: 0, // No max
   },
   currencies: {
     supported: ['nzd', 'aud', 'usd'],
@@ -121,6 +117,8 @@ export interface Wallet {
   status: WalletStatus;
   createdAt: number;
   updatedAt: number;
+  /** Last top-up timestamp */
+  lastTopUpAt?: number;
 }
 
 /** Input for creating a new wallet */
@@ -327,6 +325,15 @@ export type RefundStatus =
 
 export type RefundMethod = 'original' | 'wallet' | 'credit';
 
+export type RefundReason =
+  | 'customer_request'
+  | 'booking_cancelled'
+  | 'event_cancelled'
+  | 'service_issue'
+  | 'duplicate_payment'
+  | 'pricing_error'
+  | 'other';
+
 export interface Refund {
   id: string;
   paymentId: string;
@@ -334,14 +341,22 @@ export interface Refund {
   odUserId: string;
   odClubId?: string;
   
-  /** Refund amount in cents */
-  amount: number;
+  /** Original payment amount */
+  originalAmount: number;
+  /** Requested refund amount */
+  requestedAmount: number;
+  /** Actual refund amount (after fees) */
+  refundAmount: number;
+  /** Whether this is a full refund */
+  isFullRefund: boolean;
   currency: SupportedCurrency;
   
   /** Reason for refund */
-  reason: string;
-  /** Additional notes */
-  notes?: string;
+  reason: RefundReason;
+  /** Additional details */
+  reasonDetails?: string;
+  /** Reference type from original payment */
+  referenceType: ReferenceType;
   
   status: RefundStatus;
   refundMethod: RefundMethod;
@@ -349,37 +364,44 @@ export interface Refund {
   /** Stripe refund ID if applicable */
   stripeRefundId?: string;
   
-  /** Who processed the refund */
-  requestedByUserId: string;
-  processedByUserId?: string;
+  /** Who requested/processed the refund */
+  requestedBy: string;
+  processedBy?: string;
   
   /** If rejected, why */
   rejectionReason?: string;
   
-  requestedAt: number;
+  /** Fee breakdown */
+  cancellationFee?: number;
+  platformFeeRefund?: number;
+  
+  createdAt: number;
   processedAt?: number;
 }
 
 /** Input for creating a refund request */
 export interface CreateRefundInput {
   paymentId: string;
-  amount: number;
-  reason: string;
-  refundMethod: RefundMethod;
-  requestedByUserId: string;
-  notes?: string;
+  amount?: number;
+  reason: RefundReason;
+  reasonDetails?: string;
+  refundMethod?: RefundMethod;
+  requestedBy: string;
 }
 
 // ============================================
-// ANNUAL PASS TYPES (Enhanced)
+// ANNUAL PASS TYPES
 // ============================================
 
-export type AnnualPassStatus = 'active' | 'expired' | 'cancelled' | 'refunded' | 'pending';
+export type AnnualPassStatus = 'active' | 'expired' | 'cancelled' | 'suspended' | 'pending';
 
 export interface AnnualPass {
   id: string;
   odUserId: string;
   odClubId: string;
+  
+  /** Pass type (standard, premium, etc.) */
+  passType: string;
   
   /** Pass validity */
   startDate: string; // YYYY-MM-DD
@@ -388,24 +410,23 @@ export interface AnnualPass {
   status: AnnualPassStatus;
   
   /** Payment info */
-  amountPaid: number;
+  purchasePrice: number;
   currency: SupportedCurrency;
   stripePaymentIntentId?: string;
   paymentId?: string;
+  transactionId?: string;
   
   /** Usage tracking */
-  bookingsUsed: number;
-  bookingsLimit?: number; // undefined = unlimited
+  usageCount: number;
+  totalSaved: number;
   
   /** Renewal settings */
-  autoRenew: boolean;
+  autoRenew?: boolean;
   stripeSubscriptionId?: string;
   renewalDate?: number;
+  renewedAt?: number;
+  renewalPrice?: number;
   gracePeriodEnd?: number;
-  
-  /** Benefit type */
-  benefitType: 'unlimited' | 'discounted';
-  discountPercent?: number;
   
   purchasedAt: number;
   createdAt: number;
@@ -418,6 +439,11 @@ export interface AnnualPass {
 export interface PurchaseAnnualPassInput {
   odUserId: string;
   odClubId: string;
+  purchasePrice: number;
+  currency: SupportedCurrency;
+  passType?: string;
+  startDate?: string;
+  durationDays?: number;
   stripePaymentIntentId?: string;
   autoRenew?: boolean;
 }
@@ -428,184 +454,164 @@ export interface PurchaseAnnualPassInput {
 
 export type PayoutStatus = 
   | 'pending'
-  | 'scheduled'
-  | 'in_transit'
-  | 'paid'
+  | 'processing'
+  | 'completed'
   | 'failed'
   | 'cancelled';
 
-export type PayoutFrequency = 'daily' | 'weekly' | 'monthly';
+export type PayoutFrequency = 'daily' | 'weekly' | 'monthly' | 'manual';
 
 export interface PayoutSettings {
   frequency: PayoutFrequency;
-  /** Day of week for weekly payouts (0=Sunday, 6=Saturday) */
-  dayOfWeek?: number;
-  /** Day of month for monthly payouts (1-28) */
-  dayOfMonth?: number;
-  /** Minimum amount to trigger payout (in cents) */
-  minimumPayout: number;
-  /** Days to hold funds before payout (fraud prevention) */
-  holdPeriodDays: number;
-  /** Stripe Connect account ID */
+  minimumAmount: number; // Minimum payout amount in cents
+  bankAccountId?: string;
   stripeAccountId?: string;
-  stripeAccountStatus?: 'pending' | 'active' | 'restricted';
 }
 
 export interface Payout {
   id: string;
   odClubId: string;
   
-  /** Payout amount in cents */
+  /** Amount in cents */
   amount: number;
   currency: SupportedCurrency;
   
   status: PayoutStatus;
   
-  /** Stripe references */
+  /** Stripe payout ID */
   stripePayoutId?: string;
-  stripeTransferId?: string;
   
-  /** Timing */
-  initiatedAt: number;
-  scheduledAt?: number;
-  expectedArrivalAt?: number;
-  paidAt?: number;
-  
-  /** For failed payouts */
-  failureReason?: string;
-  failureCode?: string;
+  /** Period this payout covers */
+  periodStart: number;
+  periodEnd: number;
   
   /** Transaction IDs included in this payout */
   transactionIds: string[];
   
-  /** Summary */
-  transactionCount: number;
-  grossAmount: number;
+  /** Fees deducted */
   platformFees: number;
+  stripeFees: number;
   netAmount: number;
+  
+  createdAt: number;
+  processedAt?: number;
+  
+  /** If failed */
+  failureReason?: string;
 }
 
 // ============================================
 // RECEIPT TYPES
 // ============================================
 
+export interface ReceiptItem {
+  label: string;
+  amount: number;
+  type: 'charge' | 'discount' | 'fee' | 'tax';
+  quantity?: number;
+  unitPrice?: number;
+}
+
 export interface Receipt {
   id: string;
-  transactionId: string;
-  paymentId?: string;
-  odUserId: string;
-  odClubId?: string;
-  
-  /** Sequential receipt number (e.g., CLUB-2024-00001) */
   receiptNumber: string;
+  
+  /** Associated records */
+  transactionId?: string;
+  paymentId?: string;
+  refundId?: string;
+  
+  /** User info */
+  odUserId: string;
+  userName?: string;
+  userEmail?: string;
+  
+  /** Club info */
+  odClubId?: string;
+  clubName?: string;
+  
+  /** Receipt type */
+  type: 'payment' | 'refund' | 'topup' | 'payout';
+  
+  /** What this is for */
+  referenceType: ReferenceType;
+  referenceName: string;
+  
+  /** Amounts */
+  amount: number;
+  currency: SupportedCurrency;
+  taxAmount?: number;
+  taxRate?: number;
   
   /** Line items */
   items: ReceiptItem[];
   
-  /** Amounts */
-  subtotal: number;
-  discounts: number;
-  tax: number;
-  total: number;
-  currency: SupportedCurrency;
+  /** Status */
+  status: 'draft' | 'generated' | 'sent' | 'voided';
   
-  /** PDF and email tracking */
+  /** URLs */
   pdfUrl?: string;
-  emailedAt?: number;
-  emailedTo?: string;
-  
-  /** Club branding applied */
-  brandingApplied: boolean;
   
   createdAt: number;
-}
-
-export interface ReceiptItem {
-  description: string;
-  quantity: number;
-  unitPrice: number;
-  total: number;
-  taxRate?: number;
+  sentAt?: number;
+  voidedAt?: number;
 }
 
 // ============================================
-// CLUB BRANDING TYPES
+// BRANDING TYPES
 // ============================================
 
 export interface ClubBranding {
-  /** Club logo URL for receipts */
-  logoUrl?: string;
-  /** Max logo width in pixels */
-  logoWidth?: number;
-  /** Primary brand color (hex) */
+  name: string;
+  logo?: string;
   primaryColor?: string;
-  /** Secondary/accent color (hex) */
   secondaryColor?: string;
-  /** Custom receipt footer text */
-  receiptFooter?: string;
-  /** Tax registration number (GST/ABN) */
-  taxNumber?: string;
-  /** Legal business name */
-  businessName?: string;
-  /** Business address for receipts */
-  businessAddress?: string;
-  /** Contact email */
-  contactEmail?: string;
-  /** Contact phone */
-  contactPhone?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  gstNumber?: string;
+  bankAccount?: string;
 }
 
 // ============================================
 // PRICING TYPES
 // ============================================
 
-export type PriceType = 'standard' | 'peak' | 'weekend' | 'holiday';
+export type PriceType = 'peak' | 'offpeak' | 'weekend' | 'member' | 'visitor';
 
 export interface PriceBreakdownItem {
   label: string;
   amount: number;
+  type: 'base' | 'discount' | 'surcharge' | 'fee' | 'tax';
 }
 
 export interface BookingPriceResult {
-  /** Base court fee */
-  courtFee: number;
-  /** Additional fees */
-  lightingFee: number;
-  equipmentFee: number;
-  ballMachineFee: number;
-  visitorFee: number;
-  
-  /** Subtotal before discounts */
-  subtotal: number;
-  
-  /** Discounts applied */
-  memberDiscount: number;
-  passDiscount: number;
-  promoDiscount: number;
-  totalDiscounts: number;
-  
-  /** Fees */
-  processingFee: number;
-  platformFee: number;
-  taxAmount: number;
-  
-  /** Final total */
-  total: number;
-  
-  /** Detailed breakdown for display */
-  breakdown: PriceBreakdownItem[];
-  discounts: PriceBreakdownItem[];
-  
-  /** Context */
+  basePrice: number;
+  finalPrice: number;
+  totalPrice: number;
   priceType: PriceType;
-  courtGrade: string;
-  isMember: boolean;
-  hasAnnualPass: boolean;
-  isVisitor: boolean;
-  currency: SupportedCurrency;
-  
-  /** Applied promo code */
-  promoCode?: string;
+  breakdown: PriceBreakdownItem[];
+  discounts: number;
+  surcharges: number;
+  savings: number;
+  isFree: boolean;
+}
+
+// ============================================
+// REFUND POLICY TYPES
+// ============================================
+
+export interface RefundPolicy {
+  allowFullRefund: boolean;
+  allowPartialRefunds: boolean;
+  fullRefundDeadlineHours: number;
+  partialRefundDeadlineHours: number;
+  cancellationFeePercent: number;
+  minimumRefundAmount: number;
+  refundToWalletOnly: boolean;
+  requireApproval: boolean;
+  approvalThresholdAmount: number;
 }
 
 // ============================================
@@ -689,7 +695,7 @@ export interface PayoutQueryOptions {
 }
 
 // ============================================
-// HELPER TYPE GUARDS
+// TYPE GUARDS / HELPERS
 // ============================================
 
 export const isWalletActive = (wallet: Wallet): boolean => 
@@ -702,7 +708,7 @@ export const isPaymentSuccessful = (payment: Payment): boolean =>
   payment.status === 'succeeded';
 
 export const isRefundPending = (refund: Refund): boolean => 
-  refund.status === 'pending' || refund.status === 'approved';
+  refund.status === 'pending';
 
 export const isPassActive = (pass: AnnualPass): boolean => {
   if (pass.status !== 'active') return false;
@@ -711,18 +717,15 @@ export const isPassActive = (pass: AnnualPass): boolean => {
 };
 
 // ============================================
-// AMOUNT HELPER FUNCTIONS
+// AMOUNT HELPERS
 // ============================================
 
-/** Convert dollars to cents */
 export const toCents = (dollars: number): number => 
   Math.round(dollars * 100);
 
-/** Convert cents to dollars */
 export const toDollars = (cents: number): number => 
   cents / 100;
 
-/** Format cents as currency string */
 export const formatCurrency = (
   cents: number, 
   currency: SupportedCurrency = 'nzd'
@@ -736,7 +739,6 @@ export const formatCurrency = (
   return `${symbols[currency]}${dollars.toFixed(2)}`;
 };
 
-/** Get currency symbol */
 export const getCurrencySymbol = (currency: SupportedCurrency): string => {
   const symbols: Record<SupportedCurrency, string> = {
     nzd: 'NZ$',
