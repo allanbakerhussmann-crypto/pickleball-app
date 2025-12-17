@@ -11,7 +11,7 @@ interface ClubsListProps {
 }
 
 export const ClubsList: React.FC<ClubsListProps> = ({ onCreateClub, onViewClub, onBack }) => {
-    const { isAppAdmin } = useAuth();
+    const { isAppAdmin, isOrganizer } = useAuth();
     const [clubs, setClubs] = useState<Club[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -38,7 +38,7 @@ export const ClubsList: React.FC<ClubsListProps> = ({ onCreateClub, onViewClub, 
 
             <div className="flex items-center justify-between mb-6">
                 <h1 className="text-2xl font-bold text-white">Clubs</h1>
-                {isAppAdmin && (
+                {(isAppAdmin || isOrganizer) && (
                     <button 
                         onClick={onCreateClub}
                         className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold shadow-lg transition-transform hover:scale-105"

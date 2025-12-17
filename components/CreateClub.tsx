@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { createClub } from '../services/firebase';
@@ -9,10 +8,9 @@ interface CreateClubProps {
     onCancel: () => void;
 }
 
-
-
 export const CreateClub: React.FC<CreateClubProps> = ({ onClubCreated, onCancel }) => {
-    const { currentUser, isAppAdmin } = useAuth();
+    // FIXED: Added isOrganizer to allow organizers to create clubs
+    const { currentUser, isAppAdmin, isOrganizer } = useAuth();
     const [name, setName] = useState('');
     const [slug, setSlug] = useState('');
     const [description, setDescription] = useState('');
@@ -27,8 +25,8 @@ export const CreateClub: React.FC<CreateClubProps> = ({ onClubCreated, onCancel 
     useEffect(() => {
         if (name) {
             const generated = name.toLowerCase()
-                .replace(/[^a-z0-9]+/g, '-') // Replace non-alphanumeric with hyphens
-                .replace(/^-+|-+$/g, ''); // Trim hyphens
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
             setSlug(generated);
         }
     }, [name]);
@@ -43,7 +41,6 @@ export const CreateClub: React.FC<CreateClubProps> = ({ onClubCreated, onCancel 
             return;
         }
         
-        // Validation for dropdowns
         if (!region && COUNTRY_REGIONS[country]) {
              setError('Please select a region.');
              return;
@@ -72,11 +69,12 @@ export const CreateClub: React.FC<CreateClubProps> = ({ onClubCreated, onCancel 
         }
     };
 
-    if (!isAppAdmin) {
+    // FIXED: Allow both App Admins AND Organizers to create clubs
+    if (!isAppAdmin && !isOrganizer) {
         return (
             <div className="p-8 text-center bg-gray-800 rounded-lg">
                 <h2 className="text-xl font-bold text-red-400">Restricted Access</h2>
-                <p className="text-gray-400 mt-2">Only App Admins can create new clubs.</p>
+                <p className="text-gray-400 mt-2">Only Organizers and App Admins can create new clubs.</p>
                 <button onClick={onCancel} className="mt-4 text-gray-400 hover:text-white underline">Back</button>
             </div>
         );
@@ -169,35 +167,36 @@ export const CreateClub: React.FC<CreateClubProps> = ({ onClubCreated, onCancel 
                         id="description"
                         value={description}
                         onChange={e => setDescription(e.target.value)}
-                        placeholder="Tell players about your club..."
-                        className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none h-24"
+                        placeholder="A brief description of your club..."
+                        rows={3}
+                        className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none resize-none"
                     />
                 </div>
 
                 <div>
-                    <label htmlFor="logoUrl" className="block text-sm font-medium text-gray-300 mb-1">Logo URL (Optional)</label>
+                    <label htmlFor="logoUrl" className="block text-sm font-medium text-gray-300 mb-1">Logo URL (optional)</label>
                     <input 
                         type="url" 
                         id="logoUrl"
                         value={logoUrl}
                         onChange={e => setLogoUrl(e.target.value)}
-                        placeholder="https://..."
+                        placeholder="https://example.com/logo.png"
                         className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
                     />
                 </div>
 
-                <div className="flex justify-end gap-4 pt-4 border-t border-gray-700">
-                    <button 
-                        type="button" 
+                <div className="flex justify-end gap-4 pt-4">
+                    <button
+                        type="button"
                         onClick={onCancel}
-                        className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+                        className="px-6 py-2 rounded font-semibold text-gray-400 hover:text-white transition-colors"
                     >
                         Cancel
                     </button>
-                    <button 
-                        type="submit" 
+                    <button
+                        type="submit"
                         disabled={isSubmitting}
-                        className="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-6 rounded shadow-lg transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed"
+                        className="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded font-bold transition-colors"
                     >
                         {isSubmitting ? 'Creating...' : 'Create Club'}
                     </button>
