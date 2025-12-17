@@ -146,6 +146,29 @@ export interface MeetupRSVP {
   createdAt: number;
   userProfile?: UserProfile;
 }
+// ============================================
+// GAME SESSION TYPES (Social Games)
+// ============================================
+
+export type GameSessionStatus = 'open' | 'full' | 'cancelled' | 'completed';
+
+export interface GameSession {
+  id: string;
+  hostId: string;
+  hostName: string;
+  title: string;
+  description: string;
+  location: string;
+  startDatetime: string;
+  durationMinutes: number;
+  courtCount: number;
+  maxPlayers: number;
+  minRating?: number;
+  maxRating?: number;
+  playerIds: string[];
+  status: GameSessionStatus;
+  createdAt: number;
+}
 
 // ============================================
 // TOURNAMENT TYPES

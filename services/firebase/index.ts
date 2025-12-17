@@ -122,14 +122,26 @@ export {
   getMyMeetups,
 } from './meetups';
 
-// Social Events (Legacy)
+// Social Events & Game Sessions
 export {
+  // Legacy Social Events
   createSocialEvent,
   subscribeToSocialEvents,
   joinSocialEvent,
   leaveSocialEvent,
   deleteSocialEvent,
+  // Game Sessions
+  createGameSession,
+  getGameSession,
+  subscribeToGameSessions,
+  joinGameSession,
+  leaveGameSession,
+  updateGameSessionStatus,
+  deleteGameSession,
 } from './social';
+
+
+
 
 // Leagues
 export {
