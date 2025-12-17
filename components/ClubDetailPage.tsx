@@ -2,6 +2,7 @@
  * ClubDetailPage Component
  * 
  * Shows club details, members, tournaments, and court booking
+ * Now includes Settings tab for admins with Stripe Connect
  * 
  * FILE LOCATION: components/ClubDetailPage.tsx
  */
@@ -23,6 +24,7 @@ import type { Club, ClubJoinRequest, UserProfile, ClubBookingSettings } from '..
 import { BulkClubImport } from './BulkClubImport';
 import { CourtBookingCalendar } from './clubs/CourtBookingCalendar';
 import { ManageCourts } from './clubs/ManageCourts';
+import { ClubStripeConnect } from './clubs/ClubStripeConnect';
 
 interface ClubDetailPageProps {
     clubId: string;
@@ -41,8 +43,8 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     const [processingRequest, setProcessingRequest] = useState<string | null>(null);
     const [loadingMembers, setLoadingMembers] = useState(false);
     
-    // Tab and court booking state
-    const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'courts'>('overview');
+    // Tab and court booking state - Added 'settings' tab
+    const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'courts' | 'settings'>('overview');
     const [showCourtCalendar, setShowCourtCalendar] = useState(false);
     const [showManageCourts, setShowManageCourts] = useState(false);
     const [bookingSettings, setBookingSettings] = useState<ClubBookingSettings | null>(null);
@@ -184,6 +186,7 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
         return (
             <CourtBookingCalendar
                 clubId={clubId}
+                clubName={club?.name}
                 isAdmin={!!isAdmin}
                 isMember={!!isMember}
                 onBack={() => setShowCourtCalendar(false)}
@@ -239,78 +242,66 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
             <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 shadow-xl mb-6 relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4">
                     {isAdmin ? (
-                        <span className="bg-red-900/30 text-red-400 px-3 py-1 rounded-full text-xs font-bold uppercase border border-red-900/50">Admin View</span>
+                        <span className="bg-yellow-600 text-yellow-100 text-xs px-2 py-1 rounded font-semibold">Admin</span>
                     ) : isMember ? (
-                        <span className="bg-green-900/30 text-green-400 px-3 py-1 rounded-full text-xs font-bold uppercase border border-green-900/50">Member</span>
-                    ) : hasPendingRequest ? (
-                         <div className="bg-yellow-900/30 text-yellow-400 px-5 py-2 rounded font-bold border border-yellow-900/50 shadow-lg flex items-center gap-2 cursor-default select-none animate-pulse">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                            <span>Awaiting Confirmation</span>
-                         </div>
-                    ) : (
-                        <button 
-                            onClick={handleJoinRequest}
-                            disabled={pendingJoin}
-                            className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded font-bold shadow-lg transition-colors flex items-center gap-2 disabled:bg-green-800 disabled:text-gray-300"
-                        >
-                             {pendingJoin ? (
-                                <>
-                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                    Requesting...
-                                </>
-                             ) : (
-                                <>
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" /></svg>
-                                    Join Club
-                                </>
-                             )}
-                        </button>
-                    )}
+                        <span className="bg-green-600 text-green-100 text-xs px-2 py-1 rounded font-semibold">Member</span>
+                    ) : null}
                 </div>
                 
-                <div className="flex gap-6 items-center">
-                    {club.logoUrl ? (
-                        <img src={club.logoUrl} alt={club.name} className="w-24 h-24 rounded-xl object-cover border border-gray-700" />
-                    ) : (
-                        <div className="w-24 h-24 bg-gray-700 rounded-xl flex items-center justify-center text-4xl font-bold text-gray-500">
-                            {club.name.charAt(0)}
-                        </div>
-                    )}
-                    <div>
-                        <h1 className="text-3xl font-bold text-white">{club.name}</h1>
-                        <p className="text-gray-400">{club.region}, {club.country} • {club.members?.length || 0} Members</p>
-                    </div>
+                <h1 className="text-3xl font-bold text-white mb-2">{club.name}</h1>
+                {club.description && <p className="text-gray-400 mb-4">{club.description}</p>}
+                
+                <div className="flex flex-wrap gap-4 text-sm text-gray-400">
+                    {club.region && <span>📍 {club.region}</span>}
+                    {club.country && <span>🌍 {club.country}</span>}
+                    <span>👥 {club.members?.length || 0} members</span>
                 </div>
-                
-                <p className="text-gray-400 mt-4">{club.description}</p>
-                
-                {isAdmin && (
-                    <div className="mt-6 flex flex-wrap gap-3">
-                        <button 
-                            onClick={() => setIsImportModalOpen(true)}
-                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold"
-                        >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                            </svg>
-                            Bulk Import Members
-                        </button>
-                        <button 
-                            onClick={() => setShowManageCourts(true)}
-                            className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold"
-                        >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            </svg>
-                            Manage Courts
-                        </button>
+
+                {/* Join Button */}
+                {currentUser && !isMember && !isAdmin && (
+                    <div className="mt-4">
+                        {hasPendingRequest ? (
+                            <span className="text-yellow-400 text-sm">⏳ Request pending approval</span>
+                        ) : (
+                            <button
+                                onClick={handleJoinRequest}
+                                disabled={pendingJoin}
+                                className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg font-semibold disabled:opacity-50"
+                            >
+                                {pendingJoin ? 'Requesting...' : 'Request to Join'}
+                            </button>
+                        )}
                     </div>
                 )}
             </div>
 
+            {/* Admin Controls */}
+            {isAdmin && (
+                <div className="flex flex-wrap gap-3 mb-6">
+                    <button
+                        onClick={() => setIsImportModalOpen(true)}
+                        className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Bulk Import Members
+                    </button>
+                    <button
+                        onClick={() => setShowManageCourts(true)}
+                        className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        Manage Courts
+                    </button>
+                </div>
+            )}
+
             {/* Tabs */}
-            <div className="flex gap-1 mb-6 bg-gray-800/50 p-1 rounded-lg w-fit">
+            <div className="flex gap-1 mb-6 bg-gray-800/50 p-1 rounded-lg w-fit overflow-x-auto">
                 <button
                     onClick={() => setActiveTab('overview')}
                     className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
@@ -342,6 +333,23 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                     Courts
                     <span className="bg-green-600 text-white text-xs px-1.5 py-0.5 rounded font-bold">NEW</span>
                 </button>
+                {/* Settings Tab - Admin Only */}
+                {isAdmin && (
+                    <button
+                        onClick={() => setActiveTab('settings')}
+                        className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors flex items-center gap-2 ${
+                            activeTab === 'settings'
+                                ? 'bg-gray-700 text-white'
+                                : 'text-gray-400 hover:text-white'
+                        }`}
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        Settings
+                    </button>
+                )}
             </div>
 
             {/* Overview Tab */}
@@ -377,195 +385,118 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                         )}
                     </div>
 
-                    {/* Sidebar: Membership Requests */}
-                    {isAdmin && (
-                        <div className="space-y-6">
-                            <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
-                                <div className="bg-gray-700/50 px-4 py-3 border-b border-gray-700">
-                                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                                        Membership Requests
-                                        {requests.length > 0 && (
-                                            <span className="bg-red-500 text-white text-xs w-5 h-5 flex items-center justify-center rounded-full">
-                                                {requests.length}
-                                            </span>
-                                        )}
-                                    </h2>
-                                </div>
-                                
-                                <div className="p-4">
-                                    {requests.length === 0 ? (
-                                        <div className="text-center py-6">
-                                            <svg className="w-12 h-12 text-gray-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                            </svg>
-                                            <p className="text-gray-500 text-sm">No pending requests</p>
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-3">
-                                            {requests.map((req) => {
-                                                const user = requestUsers[req.userId];
-                                                const isProcessing = processingRequest === req.id;
-                                                
-                                                return (
-                                                    <div key={req.id} className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
-                                                        <div className="flex items-center gap-3 mb-3">
-                                                            <div className="w-10 h-10 bg-gray-700 rounded-full flex items-center justify-center text-white font-bold">
-                                                                {user?.displayName?.charAt(0) || '?'}
-                                                            </div>
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="font-semibold text-white truncate">
-                                                                    {user?.displayName || 'Unknown User'}
-                                                                </div>
-                                                                <div className="text-xs text-gray-500 truncate">
-                                                                    {user?.email || 'No email'}
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        
-                                                        <div className="flex gap-2">
-                                                            <button
-                                                                onClick={() => handleApprove(req.id, req.userId)}
-                                                                disabled={isProcessing}
-                                                                className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
-                                                            >
-                                                                {isProcessing ? (
-                                                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                                ) : (
-                                                                    <>
-                                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                                                        </svg>
-                                                                        Approve
-                                                                    </>
-                                                                )}
-                                                            </button>
-                                                            <button
-                                                                onClick={() => handleDecline(req.id)}
-                                                                disabled={isProcessing}
-                                                                className="flex-1 bg-red-600 hover:bg-red-500 disabled:bg-red-800 disabled:opacity-50 text-white px-3 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
-                                                            >
-                                                                {isProcessing ? (
-                                                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                                ) : (
-                                                                    <>
-                                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                                                        </svg>
-                                                                        Decline
-                                                                    </>
-                                                                )}
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
+                    {/* Sidebar */}
+                    <div className="space-y-6">
+                        {/* Join Requests (Admin) */}
+                        {isAdmin && requests.length > 0 && (
+                            <div className="bg-gray-800 rounded-lg p-6 border border-yellow-700">
+                                <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                                    <span className="bg-yellow-600 text-white text-xs w-6 h-6 rounded-full flex items-center justify-center">
+                                        {requests.length}
+                                    </span>
+                                    Join Requests
+                                </h2>
+                                <div className="space-y-3">
+                                    {requests.map((req) => {
+                                        const user = requestUsers[req.userId];
+                                        return (
+                                            <div key={req.id} className="flex items-center justify-between bg-gray-900 rounded-lg p-3">
+                                                <div>
+                                                    <div className="text-white font-medium">{user?.displayName || 'Unknown'}</div>
+                                                    <div className="text-gray-500 text-xs">{user?.email}</div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        onClick={() => handleApprove(req.id, req.userId)}
+                                                        disabled={processingRequest === req.id}
+                                                        className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-sm font-semibold disabled:opacity-50"
+                                                    >
+                                                        ✓
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDecline(req.id)}
+                                                        disabled={processingRequest === req.id}
+                                                        className="bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-sm font-semibold disabled:opacity-50"
+                                                    >
+                                                        ✗
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
+                        )}
+
+                        {/* Quick Stats */}
+                        <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                            <h2 className="text-lg font-bold text-white mb-4">Club Stats</h2>
+                            <div className="space-y-3 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-400">Members</span>
+                                    <span className="text-white font-medium">{club.members?.length || 0}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-gray-400">Admins</span>
+                                    <span className="text-white font-medium">{club.admins?.length || 0}</span>
+                                </div>
+                                {bookingSettings?.enabled && (
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-400">Court Booking</span>
+                                        <span className="text-green-400 font-medium">Active</span>
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                    )}
+                    </div>
                 </div>
             )}
 
             {/* Members Tab */}
             {activeTab === 'members' && (
-                <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-                    {/* Privacy Gate: Only members/admins can see member list */}
-                    {!isMember && !isAdmin ? (
-                        <div className="text-center py-12">
-                            <svg className="w-16 h-16 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                            </svg>
-                            <h3 className="text-xl font-bold text-white mb-2">Members Only</h3>
-                            <p className="text-gray-400 mb-4">
-                                Join this club to see the member directory.
-                            </p>
-                            {!hasPendingRequest && currentUser && (
-                                <button
-                                    onClick={handleJoinRequest}
-                                    disabled={pendingJoin}
-                                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold"
-                                >
-                                    Request to Join
-                                </button>
-                            )}
-                            {hasPendingRequest && (
-                                <p className="text-yellow-400 text-sm">Your membership request is pending approval.</p>
-                            )}
-                            {!currentUser && (
-                                <p className="text-gray-500 text-sm">Sign in to request membership.</p>
-                            )}
-                        </div>
-                    ) : (
-                    <>
-                    <div className="flex items-center justify-between mb-6">
-                        <h2 className="text-xl font-bold text-white">Members ({club.members?.length || 0})</h2>
-                        {loadingMembers && (
-                            <div className="flex items-center gap-2 text-gray-400 text-sm">
-                                <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                                Loading profiles...
-                            </div>
-                        )}
+                <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                    <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+                        <h2 className="text-lg font-bold text-white">
+                            Members ({club.members?.length || 0})
+                        </h2>
                     </div>
                     
-                    {(!club.members || club.members.length === 0) ? (
-                        <p className="text-gray-500 italic">No members yet.</p>
+                    {loadingMembers ? (
+                        <div className="p-8 text-center text-gray-400">Loading members...</div>
+                    ) : (
+                    <>
+                    {club.members?.length === 0 ? (
+                        <div className="p-8 text-center text-gray-400">No members yet.</div>
                     ) : (
                         <div className="overflow-x-auto">
                             <table className="w-full">
-                                <thead>
-                                    <tr className="border-b border-gray-700">
-                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Member</th>
-                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">DUPR (S/D)</th>
-                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Gender</th>
-                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Location</th>
-                                        <th className="text-left py-3 px-4 text-gray-400 font-semibold text-sm">Role</th>
+                                <thead className="bg-gray-900/50">
+                                    <tr className="text-left text-gray-400 text-sm">
+                                        <th className="py-3 px-4 font-semibold">Name</th>
+                                        <th className="py-3 px-4 font-semibold">DUPR (S/D)</th>
+                                        <th className="py-3 px-4 font-semibold">Location</th>
+                                        <th className="py-3 px-4 font-semibold">Role</th>
                                     </tr>
                                 </thead>
-                                <tbody>
-                                    {club.members.map((memberId) => {
+                                <tbody className="divide-y divide-gray-700">
+                                    {club.members?.map((memberId) => {
                                         const profile = memberProfiles[memberId];
                                         const isAdminMember = club.admins?.includes(memberId);
-                                        const dupr = formatDupr(profile?.duprSinglesRating, profile?.duprDoublesRating);
                                         
                                         return (
-                                            <tr key={memberId} className="border-b border-gray-700/50 hover:bg-gray-700/30">
+                                            <tr key={memberId} className="hover:bg-gray-700/30">
                                                 <td className="py-3 px-4">
-                                                    <div className="flex items-center gap-3">
-                                                        {profile?.photoURL || profile?.photoData ? (
-                                                            <img 
-                                                                src={profile.photoData || profile.photoURL} 
-                                                                alt={profile.displayName} 
-                                                                className="w-10 h-10 rounded-full object-cover"
-                                                            />
-                                                        ) : (
-                                                            <div className="w-10 h-10 bg-gray-600 rounded-full flex items-center justify-center text-white font-bold">
-                                                                {profile?.displayName?.charAt(0) || '?'}
-                                                            </div>
-                                                        )}
-                                                        <div>
-                                                            <div className="text-white font-medium">
-                                                                {profile?.displayName || 'Unknown'}
-                                                            </div>
-                                                            <div className="text-xs text-gray-500">
-                                                                {profile?.email || memberId.slice(0, 8) + '...'}
-                                                            </div>
-                                                        </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-white font-medium">
+                                                            {profile?.displayName || 'Unknown'}
+                                                        </span>
+                                                        {profile?.gender && getGenderIcon(profile.gender)}
                                                     </div>
                                                 </td>
                                                 <td className="py-3 px-4">
-                                                    {dupr ? (
-                                                        <span className="text-green-400 font-mono text-sm">{dupr}</span>
-                                                    ) : (
-                                                        <span className="text-gray-500">--</span>
-                                                    )}
-                                                </td>
-                                                <td className="py-3 px-4">
-                                                    {profile?.gender ? (
-                                                        <span className="flex items-center gap-1">
-                                                            {getGenderIcon(profile.gender)}
-                                                            <span className="text-gray-300 capitalize">{profile.gender}</span>
+                                                    {profile?.ratingSingles || profile?.ratingDoubles ? (
+                                                        <span className="text-green-400 font-mono text-sm">
+                                                            {formatDupr(profile.ratingSingles, profile.ratingDoubles)}
                                                         </span>
                                                     ) : (
                                                         <span className="text-gray-500">--</span>
@@ -662,6 +593,62 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                             )}
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* Settings Tab - Admin Only */}
+            {activeTab === 'settings' && isAdmin && (
+                <div className="space-y-6">
+                    <h2 className="text-xl font-bold text-white mb-4">Club Settings</h2>
+                    
+                    {/* Stripe Connect */}
+                    <ClubStripeConnect
+                        clubId={clubId}
+                        clubName={club.name}
+                        clubEmail={(club as any).contactEmail}
+                        isAdmin={!!isAdmin}
+                    />
+                    
+                    {/* Club Information */}
+                    <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
+                        <h3 className="text-lg font-bold text-white mb-4">Club Information</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            <div className="bg-gray-900 rounded-lg p-4">
+                                <div className="text-gray-500 mb-1">Club ID</div>
+                                <div className="text-gray-300 font-mono text-xs break-all">{clubId}</div>
+                            </div>
+                            <div className="bg-gray-900 rounded-lg p-4">
+                                <div className="text-gray-500 mb-1">Members</div>
+                                <div className="text-white font-medium">{club.members?.length || 0}</div>
+                            </div>
+                            <div className="bg-gray-900 rounded-lg p-4">
+                                <div className="text-gray-500 mb-1">Admins</div>
+                                <div className="text-white font-medium">{club.admins?.length || 0}</div>
+                            </div>
+                            <div className="bg-gray-900 rounded-lg p-4">
+                                <div className="text-gray-500 mb-1">Court Booking</div>
+                                <div className={`font-medium ${bookingSettings?.enabled ? 'text-green-400' : 'text-gray-400'}`}>
+                                    {bookingSettings?.enabled ? 'Enabled' : 'Disabled'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Danger Zone */}
+                    <div className="bg-gray-800 rounded-xl border border-red-900/50 p-6">
+                        <h3 className="text-lg font-bold text-red-400 mb-2">Danger Zone</h3>
+                        <p className="text-gray-400 text-sm mb-4">
+                            These actions are irreversible. Please proceed with caution.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                disabled
+                                className="bg-red-900/30 text-red-400 px-4 py-2 rounded-lg text-sm font-medium border border-red-900/50 opacity-50 cursor-not-allowed"
+                            >
+                                Delete Club (Coming Soon)
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

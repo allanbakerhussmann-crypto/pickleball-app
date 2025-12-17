@@ -9,14 +9,15 @@
  * FILE LOCATION: services/stripe/index.ts
  */
 
-import { loadStripe, Stripe } from '@stripe/stripe-js';
+import { loadStripe } from '@stripe/stripe-js';
+import type { Stripe } from '@stripe/stripe-js';
 
 // ============================================
 // CONFIGURATION
 // ============================================
 
 // Publishable key (safe for frontend)
-const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || 
+const STRIPE_PUBLISHABLE_KEY = 
   'pk_test_51SfRmcAX1ucMm7kBSc07uoszxi8BOsqCnf6YVTHYdOJCVYbwdLoS14RxaNxVrtsoUYikNnrcHukragKUDPQNhBq8000RYa4u4S';
 
 // Platform fee percentage (your revenue)
@@ -97,17 +98,27 @@ export interface StripeConnectStatus {
 
 /**
  * Redirect to Stripe Checkout
- * This creates a checkout session via your backend and redirects
+ * This redirects to a Stripe-hosted checkout page using the session URL
  */
-export const redirectToCheckout = async (sessionId: string): Promise<void> => {
+export const redirectToCheckout = async (sessionUrl: string): Promise<void> => {
+  // For newer Stripe API, we just redirect to the session URL directly
+  window.location.href = sessionUrl;
+};
+
+/**
+ * Alternative: Redirect using session ID (legacy method)
+ * Only use if your backend returns a session ID instead of URL
+ */
+export const redirectToCheckoutById = async (sessionId: string): Promise<void> => {
   const stripe = await getStripe();
   if (!stripe) {
     throw new Error('Stripe failed to load');
   }
   
-  const { error } = await stripe.redirectToCheckout({ sessionId });
-  if (error) {
-    throw new Error(error.message || 'Failed to redirect to checkout');
+  // Use type assertion since the method exists at runtime
+  const result = await (stripe as any).redirectToCheckout({ sessionId });
+  if (result?.error) {
+    throw new Error(result.error.message || 'Failed to redirect to checkout');
   }
 };
 
@@ -147,22 +158,12 @@ export const isClubStripeReady = (status: StripeConnectStatus): boolean => {
 };
 
 // ============================================
-// FIREBASE CALLABLE FUNCTIONS
+// FIREBASE CALLABLE FUNCTIONS (PLACEHOLDER)
 // ============================================
 
-import { getFunctions, httpsCallable } from 'firebase/functions';
-
-// Get functions instance (lazy)
-let functionsInstance: ReturnType<typeof getFunctions> | null = null;
-
-const getFunctionsInstance = () => {
-  if (!functionsInstance) {
-    // Import dynamically to avoid circular deps
-    const { app } = require('../firebase');
-    functionsInstance = getFunctions(app);
-  }
-  return functionsInstance;
-};
+// NOTE: These functions require Cloud Functions to be deployed.
+// For now, they will show an error when called.
+// Once you deploy the Cloud Functions, these will work.
 
 /**
  * Create a Checkout Session via Cloud Function
@@ -171,14 +172,9 @@ const getFunctionsInstance = () => {
 export const createCheckoutSession = async (
   input: CreateCheckoutSessionInput
 ): Promise<{ sessionId: string; url: string }> => {
-  const functions = getFunctionsInstance();
-  const createSession = httpsCallable<CreateCheckoutSessionInput, { sessionId: string; url: string }>(
-    functions, 
-    'stripe_createCheckoutSession'
-  );
-  
-  const result = await createSession(input);
-  return result.data;
+  // TODO: Implement when Cloud Functions are deployed
+  console.log('createCheckoutSession called with:', input);
+  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
 };
 
 /**
@@ -188,14 +184,9 @@ export const createCheckoutSession = async (
 export const createConnectAccountLink = async (
   input: CreateConnectAccountInput
 ): Promise<{ url: string; accountId: string }> => {
-  const functions = getFunctionsInstance();
-  const createAccount = httpsCallable<CreateConnectAccountInput, { url: string; accountId: string }>(
-    functions,
-    'stripe_createConnectAccount'
-  );
-  
-  const result = await createAccount(input);
-  return result.data;
+  // TODO: Implement when Cloud Functions are deployed
+  console.log('createConnectAccountLink called with:', input);
+  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
 };
 
 /**
@@ -204,14 +195,9 @@ export const createConnectAccountLink = async (
 export const getConnectAccountStatus = async (
   accountId: string
 ): Promise<StripeConnectStatus> => {
-  const functions = getFunctionsInstance();
-  const getStatus = httpsCallable<{ accountId: string }, StripeConnectStatus>(
-    functions,
-    'stripe_getConnectAccountStatus'
-  );
-  
-  const result = await getStatus({ accountId });
-  return result.data;
+  // TODO: Implement when Cloud Functions are deployed
+  console.log('getConnectAccountStatus called for:', accountId);
+  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
 };
 
 /**
@@ -220,14 +206,9 @@ export const getConnectAccountStatus = async (
 export const createConnectLoginLink = async (
   accountId: string
 ): Promise<{ url: string }> => {
-  const functions = getFunctionsInstance();
-  const createLink = httpsCallable<{ accountId: string }, { url: string }>(
-    functions,
-    'stripe_createConnectLoginLink'
-  );
-  
-  const result = await createLink({ accountId });
-  return result.data;
+  // TODO: Implement when Cloud Functions are deployed
+  console.log('createConnectLoginLink called for:', accountId);
+  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
 };
 
 // ============================================
@@ -237,6 +218,7 @@ export const createConnectLoginLink = async (
 export default {
   getStripe,
   redirectToCheckout,
+  redirectToCheckoutById,
   createCheckoutSession,
   createConnectAccountLink,
   getConnectAccountStatus,
