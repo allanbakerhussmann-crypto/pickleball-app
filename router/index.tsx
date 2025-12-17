@@ -33,6 +33,8 @@ import AdminUsersPage from '../pages/AdminUsersPage';
 import InvitesPage from '../pages/InvitesPage';
 import PlaceholderPage from '../pages/PlaceholderPage';
 import LeaguesPage from '../pages/LeaguesPage';
+import PaymentDemoPage from '../pages/PaymentDemoPage';
+import AdminTestPaymentsPage from '../pages/AdminTestPaymentsPage';
 
 // ============================================
 // Router Configuration - Using HashRouter
@@ -170,6 +172,22 @@ export const router = createHashRouter([
             <AdminUsersPage />
           </ProtectedRoute>
         ),
+      },
+      {
+        path: 'admin/test-payments',
+        element: (
+          <ProtectedRoute requireAdmin>
+            <AdminTestPaymentsPage />
+          </ProtectedRoute>
+        ),
+      },
+      
+      // ==========================================
+      // PAYMENT DEMO (Testing)
+      // ==========================================
+      {
+        path: 'payment-demo',
+        element: <PaymentDemoPage />,
       },
       
       // ==========================================
