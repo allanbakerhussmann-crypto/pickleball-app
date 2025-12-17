@@ -1,7 +1,13 @@
 /**
  * CourtBookingCalendar Component
  * 
- * Main calendar view for booking courts
+ * Main calendar view for booking courts with integrated checkout system.
+ * 
+ * Features:
+ * - View available courts and time slots
+ * - Book courts with payment via CheckoutModal
+ * - Cancel bookings
+ * - Shows pending holds from other users
  * 
  * FILE LOCATION: components/clubs/CourtBookingCalendar.tsx
  */
@@ -21,10 +27,16 @@ import {
   isSlotInPast,
   formatDateLabel,
 } from '../../services/firebase';
-import type { ClubCourt, ClubBookingSettings, CourtBooking, DEFAULT_BOOKING_SETTINGS } from '../../types';
+import { CheckoutModal } from '../checkout/CheckoutModal';
+import { calculateCourtBookingPrice } from '../../services/firebase/pricing';
+import { getPendingCourtHolds } from '../../services/firebase/checkout';
+import type { ClubCourt, ClubBookingSettings, CourtBooking } from '../../types';
+import type { PriceCalculation } from '../../services/firebase/pricing';
+import type { CheckoutItem } from '../../services/firebase/checkout';
 
 interface CourtBookingCalendarProps {
   clubId: string;
+  clubName?: string;
   isAdmin: boolean;
   isMember: boolean;
   onBack: () => void;
@@ -32,6 +44,7 @@ interface CourtBookingCalendarProps {
 
 export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   clubId,
+  clubName = 'Club',
   isAdmin,
   isMember,
   onBack,
@@ -40,15 +53,20 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   const [courts, setCourts] = useState<ClubCourt[]>([]);
   const [settings, setSettings] = useState<ClubBookingSettings | null>(null);
   const [bookings, setBookings] = useState<CourtBooking[]>([]);
+  const [pendingHolds, setPendingHolds] = useState<CheckoutItem[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>(
     new Date().toISOString().split('T')[0]
   );
   const [loading, setLoading] = useState(true);
-  const [bookingModal, setBookingModal] = useState<{
-    courtId: string;
-    courtName: string;
+  
+  // Checkout modal state
+  const [checkoutModal, setCheckoutModal] = useState<{
+    court: ClubCourt;
     time: string;
+    pricing: PriceCalculation;
   } | null>(null);
+  
+  // Cancel modal state
   const [cancelModal, setCancelModal] = useState<CourtBooking | null>(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +100,24 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   useEffect(() => {
     const unsubscribe = subscribeToBookingsForDate(clubId, selectedDate, setBookings);
     return () => unsubscribe();
+  }, [clubId, selectedDate]);
+
+  // Load pending holds for selected date
+  useEffect(() => {
+    const loadHolds = async () => {
+      try {
+        const holds = await getPendingCourtHolds(clubId, selectedDate);
+        setPendingHolds(holds);
+      } catch (err) {
+        console.error('Failed to load pending holds:', err);
+        setPendingHolds([]);
+      }
+    };
+    loadHolds();
+    
+    // Refresh holds every 30 seconds
+    const interval = setInterval(loadHolds, 30000);
+    return () => clearInterval(interval);
   }, [clubId, selectedDate]);
 
   // Generate date options (today + maxAdvanceBookingDays)
@@ -119,47 +155,79 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     ) || null;
   };
 
+  // Check if slot has a pending hold
+  const getPendingHoldForSlot = (courtId: string, time: string): CheckoutItem | null => {
+    return pendingHolds.find(
+      h => h.itemDetails.courtId === courtId && h.itemDetails.startTime === time
+    ) || null;
+  };
+
   // Check if slot is bookable
   const isSlotBookable = (time: string): boolean => {
     if (!isMember && !isAdmin) return false;
     return !isSlotInPast(selectedDate, time);
   };
 
-  // Handle booking
-  const handleBook = async () => {
-    if (!bookingModal || !currentUser || !userProfile || !settings) return;
-    
+  // Handle clicking book button
+  const handleBookClick = async (court: ClubCourt, time: string) => {
+    if (!settings || !currentUser) return;
+
     setError(null);
-    setProcessing(true);
-    
+
+    // Check daily limit first
+    const { canBook: canBookMore } = await canUserBook(
+      clubId,
+      currentUser.uid,
+      selectedDate,
+      settings.maxBookingsPerMemberPerDay
+    );
+
+    if (!canBookMore && !isAdmin) {
+      setError(`You've reached your daily limit of ${settings.maxBookingsPerMemberPerDay} bookings`);
+      return;
+    }
+
+    // Calculate pricing
+    const endTime = calculateEndTime(time, settings.slotDurationMinutes);
+    const pricing = calculateCourtBookingPrice({
+      court,
+      date: selectedDate,
+      startTime: time,
+      durationMinutes: settings.slotDurationMinutes,
+      settings,
+      isMember,
+      hasAnnualPass: false, // TODO: Check user's annual pass
+      isVisitor: !isMember && !isAdmin,
+    });
+
+    // Open checkout modal
+    setCheckoutModal({
+      court,
+      time,
+      pricing,
+    });
+  };
+
+  // Handle checkout success
+  const handleCheckoutSuccess = async (checkout: CheckoutItem) => {
+    if (!settings || !currentUser || !userProfile) return;
+
     try {
-      // Check daily limit
-      const { canBook, currentCount } = await canUserBook(
-        clubId,
-        currentUser.uid,
-        selectedDate,
-        settings.maxBookingsPerMemberPerDay
-      );
-      
-      if (!canBook && !isAdmin) {
-        throw new Error(`You've reached your daily limit of ${settings.maxBookingsPerMemberPerDay} bookings`);
-      }
-      
+      // Create the actual booking
       await createCourtBooking(clubId, {
-        courtId: bookingModal.courtId,
-        courtName: bookingModal.courtName,
-        date: selectedDate,
-        startTime: bookingModal.time,
-        endTime: calculateEndTime(bookingModal.time, settings.slotDurationMinutes),
+        courtId: checkout.itemDetails.courtId!,
+        courtName: checkout.itemDetails.courtName!,
+        date: checkout.itemDetails.date!,
+        startTime: checkout.itemDetails.startTime!,
+        endTime: checkout.itemDetails.endTime!,
         bookedByUserId: currentUser.uid,
         bookedByName: userProfile.displayName || 'Unknown',
       });
-      
-      setBookingModal(null);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setProcessing(false);
+
+      setCheckoutModal(null);
+    } catch (err: any) {
+      console.error('Failed to create booking after payment:', err);
+      setError(err.message || 'Failed to complete booking');
     }
   };
 
@@ -233,6 +301,19 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
         </div>
       </div>
 
+      {/* Error Message */}
+      {error && (
+        <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-4">
+          {error}
+          <button 
+            onClick={() => setError(null)}
+            className="float-right text-red-300 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Date Selector */}
       <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
         {dateOptions.map((d) => (
@@ -295,8 +376,10 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
                   {/* Court Slots */}
                   {courts.map((court) => {
                     const booking = getBookingForSlot(court.id, time);
-                    const canBook = isSlotBookable(time) && !booking;
+                    const pendingHold = getPendingHoldForSlot(court.id, time);
+                    const canBook = isSlotBookable(time) && !booking && !pendingHold;
                     const isMyBooking = booking?.bookedByUserId === currentUser?.uid;
+                    const isMyHold = pendingHold?.userId === currentUser?.uid;
                     const canCancelThis = isMyBooking || isAdmin;
 
                     return (
@@ -323,10 +406,26 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
                             </div>
                             <div className="text-gray-400 truncate">{booking.bookedByName}</div>
                           </div>
+                        ) : pendingHold ? (
+                          // Pending hold (someone is checking out)
+                          <div
+                            className={`h-full rounded p-2 text-xs ${
+                              isMyHold
+                                ? 'bg-yellow-600/30 border border-yellow-500'
+                                : 'bg-orange-900/20 border border-orange-700/50'
+                            }`}
+                          >
+                            <div className={`font-semibold ${isMyHold ? 'text-yellow-300' : 'text-orange-300'}`}>
+                              {isMyHold ? 'Your Hold' : 'Reserved'}
+                            </div>
+                            <div className="text-gray-400 text-xs">
+                              {isMyHold ? 'Complete checkout' : 'Being booked...'}
+                            </div>
+                          </div>
                         ) : canBook ? (
                           // Available slot
                           <button
-                            onClick={() => setBookingModal({ courtId: court.id, courtName: court.name, time })}
+                            onClick={() => handleBookClick(court, time)}
                             className="w-full h-full rounded border-2 border-dashed border-gray-600 hover:border-green-500 hover:bg-green-900/20 text-gray-500 hover:text-green-400 text-xs font-semibold transition-colors flex items-center justify-center"
                           >
                             + Book
@@ -350,7 +449,7 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
       )}
 
       {/* Legend */}
-      <div className="flex gap-6 mt-4 text-xs text-gray-500">
+      <div className="flex flex-wrap gap-4 mt-4 text-xs text-gray-500">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded bg-blue-600/30 border border-blue-500"></div>
           <span>Your Booking</span>
@@ -360,57 +459,35 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
           <span>Booked</span>
         </div>
         <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-orange-900/20 border border-orange-700/50"></div>
+          <span>Being Reserved</span>
+        </div>
+        <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded border-2 border-dashed border-gray-600"></div>
           <span>Available</span>
         </div>
       </div>
 
-      {/* Booking Modal */}
-      {bookingModal && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => setBookingModal(null)}>
-          <div className="bg-gray-800 rounded-xl max-w-md w-full border border-gray-700 p-6" onClick={e => e.stopPropagation()}>
-            <h2 className="text-xl font-bold text-white mb-4">Confirm Booking</h2>
-            
-            {error && (
-              <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded-lg mb-4 text-sm">
-                {error}
-              </div>
-            )}
-            
-            <div className="space-y-3 mb-6">
-              <div className="flex justify-between">
-                <span className="text-gray-400">Court</span>
-                <span className="text-white font-semibold">{bookingModal.courtName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">Date</span>
-                <span className="text-white">{formatDateLabel(selectedDate)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">Time</span>
-                <span className="text-white">
-                  {formatTime(bookingModal.time)} - {formatTime(calculateEndTime(bookingModal.time, settings?.slotDurationMinutes || 60))}
-                </span>
-              </div>
-            </div>
-            
-            <div className="flex gap-3">
-              <button
-                onClick={() => setBookingModal(null)}
-                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg font-semibold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleBook}
-                disabled={processing}
-                className="flex-1 bg-green-600 hover:bg-green-500 text-white py-2 rounded-lg font-semibold disabled:bg-gray-600"
-              >
-                {processing ? 'Booking...' : 'Confirm Booking'}
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Checkout Modal */}
+      {checkoutModal && settings && (
+        <CheckoutModal
+          isOpen={true}
+          onClose={() => setCheckoutModal(null)}
+          type="court_booking"
+          itemDetails={{
+            clubId,
+            clubName,
+            courtId: checkoutModal.court.id,
+            courtName: checkoutModal.court.name,
+            date: selectedDate,
+            startTime: checkoutModal.time,
+            endTime: calculateEndTime(checkoutModal.time, settings.slotDurationMinutes),
+          }}
+          pricing={checkoutModal.pricing}
+          clubId={clubId}
+          onSuccess={handleCheckoutSuccess}
+          onError={(err) => setError(err.message)}
+        />
       )}
 
       {/* Cancel Modal */}
