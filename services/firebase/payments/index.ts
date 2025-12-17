@@ -576,3 +576,66 @@ export {
   getRecentWebhookEvents,
   retryWebhookEvent,
 } from './stripeWebhooks';
+
+// ============================================
+// RECEIPT SERVICE EXPORTS
+// ============================================
+
+export {
+  // Constants
+  RECEIPT_PREFIXES,
+  type ReceiptStatus,
+  
+  // Types
+  type GenerateReceiptInput,
+  type ReceiptTemplateData,
+  type EmailReceiptOptions,
+  type ReceiptSearchOptions,
+  
+  // ID generation
+  generateReceiptId,
+  generateReceiptNumber,
+  
+  // CRUD operations
+  createReceipt,
+  getReceipt,
+  getReceiptByNumber,
+  getReceiptForTransaction,
+  getUserReceipts,
+  getClubReceipts,
+  searchReceipts,
+  
+  // Subscriptions
+  subscribeToUserReceipts,
+  
+  // Status management
+  updateReceiptStatus,
+  markReceiptSent,
+  voidReceipt,
+  setReceiptPdfUrl,
+  
+  // Template data generation
+  buildReceiptTemplateData,
+  generateReceiptFromTransaction,
+  generateReceiptFromPayment,
+  generateReceiptFromRefund,
+  
+  // HTML generation
+  generateReceiptHtml,
+  
+  // Statistics
+  getClubReceiptStats,
+  getUserReceiptSummary,
+  
+  // Helpers
+  getCurrencySymbol,
+  formatAmount,
+  formatDate,
+  formatTime,
+  getTransactionTypeLabel,
+  getReferenceTypeLabel,
+  getReceiptTypeLabel,
+  getReceiptStatusColor,
+  canVoidReceipt,
+  generateReceiptFilename,
+} from './receipts';
