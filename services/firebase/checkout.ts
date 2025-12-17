@@ -22,7 +22,6 @@ import {
   where,
   orderBy,
   onSnapshot,
-  Timestamp,
 } from '@firebase/firestore';
 import { db } from './index';
 import type { PriceCalculation } from './pricing';
@@ -146,7 +145,9 @@ export const createPendingCheckout = async (input: CreateCheckoutInput): Promise
       clubId,
       itemDetails.courtId,
       itemDetails.date,
-      itemDetails.startTime
+      itemDetails.startTime,
+      undefined, // No checkout to exclude yet
+      userId     // But exclude user's own pending checkouts
     );
     if (hasConflict) {
       throw new Error('This time slot is no longer available');
@@ -218,17 +219,17 @@ export const confirmCheckout = async (input: ConfirmCheckoutInput): Promise<Chec
   }
   
   // For court bookings, verify slot is still available
+  // ONLY check the actual bookings collection, not checkout collection
   if (checkout.type === 'court_booking' && checkout.clubId) {
     const { courtId, date, startTime } = checkout.itemDetails;
     if (courtId && date && startTime) {
-      const hasConflict = await checkCourtBookingConflict(
+      const hasRealBooking = await checkExistingBooking(
         checkout.clubId,
         courtId,
         date,
-        startTime,
-        checkoutId // Exclude self
+        startTime
       );
-      if (hasConflict) {
+      if (hasRealBooking) {
         await updateDoc(checkoutRef, { status: 'failed' });
         throw new Error('This time slot was booked by someone else. Please try a different time.');
       }
@@ -311,7 +312,7 @@ export const expireOldCheckouts = async (): Promise<number> => {
 };
 
 // ============================================
-// CHECK FOR CONFLICTS
+// CHECK FOR CONFLICTS (Pending checkouts from others)
 // ============================================
 
 export const checkCourtBookingConflict = async (
@@ -319,40 +320,66 @@ export const checkCourtBookingConflict = async (
   courtId: string,
   date: string,
   startTime: string,
-  excludeCheckoutId?: string
+  excludeCheckoutId?: string,
+  excludeUserId?: string
 ): Promise<boolean> => {
-  // Check pending checkouts
+  const now = Date.now();
+  
+  // Only check PENDING checkouts (not confirmed - those create real bookings)
   const pendingQuery = query(
     collection(db, 'checkouts'),
     where('type', '==', 'court_booking'),
     where('clubId', '==', clubId),
-    where('status', 'in', ['pending', 'confirmed'])
+    where('status', '==', 'pending')
   );
   
   const pendingSnap = await getDocs(pendingQuery);
   
   for (const docSnap of pendingSnap.docs) {
+    // Skip if this is the checkout we're excluding
     if (excludeCheckoutId && docSnap.id === excludeCheckoutId) continue;
     
     const checkout = docSnap.data() as CheckoutItem;
     
+    // Skip if this is the user's own checkout
+    if (excludeUserId && checkout.userId === excludeUserId) continue;
+    
     // Check if expired
-    if (checkout.status === 'pending' && checkout.expiresAt > 0 && Date.now() > checkout.expiresAt) {
-      // Mark as expired
+    if (checkout.expiresAt > 0 && now > checkout.expiresAt) {
+      // Mark as expired and skip
       await updateDoc(docSnap.ref, { status: 'expired' });
       continue;
     }
     
+    // Check if same slot
     if (
       checkout.itemDetails.courtId === courtId &&
       checkout.itemDetails.date === date &&
       checkout.itemDetails.startTime === startTime
     ) {
-      return true; // Conflict found
+      return true; // Conflict found - someone else is checking out this slot
     }
   }
   
-  // Also check existing bookings (from the bookings collection)
+  // Also check if there's already a real booking
+  const hasRealBooking = await checkExistingBooking(clubId, courtId, date, startTime);
+  if (hasRealBooking) {
+    return true;
+  }
+  
+  return false;
+};
+
+// ============================================
+// CHECK EXISTING BOOKING (In bookings collection)
+// ============================================
+
+export const checkExistingBooking = async (
+  clubId: string,
+  courtId: string,
+  date: string,
+  startTime: string
+): Promise<boolean> => {
   try {
     const bookingsQuery = query(
       collection(db, 'clubs', clubId, 'bookings'),
@@ -363,15 +390,12 @@ export const checkCourtBookingConflict = async (
     );
     
     const bookingsSnap = await getDocs(bookingsQuery);
-    if (!bookingsSnap.empty) {
-      return true; // Existing booking found
-    }
+    return !bookingsSnap.empty;
   } catch (err) {
-    // Collection might not exist yet
+    // Collection might not exist yet - that's fine, no bookings
     console.warn('Could not check bookings collection:', err);
+    return false;
   }
-  
-  return false;
 };
 
 // ============================================
