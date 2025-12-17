@@ -11,6 +11,8 @@
 
 import { loadStripe } from '@stripe/stripe-js';
 import type { Stripe } from '@stripe/stripe-js';
+import { httpsCallable } from '@firebase/functions';
+import { functions } from '../firebase/config';
 
 // ============================================
 // CONFIGURATION
@@ -21,7 +23,7 @@ const STRIPE_PUBLISHABLE_KEY =
   'pk_test_51SfRmcAX1ucMm7kBSc07uoszxi8BOsqCnf6YVTHYdOJCVYbwdLoS14RxaNxVrtsoUYikNnrcHukragKUDPQNhBq8000RYa4u4S';
 
 // Platform fee percentage (your revenue)
-export const PLATFORM_FEE_PERCENT = 6; // 6% platform fee
+export const PLATFORM_FEE_PERCENT = 1.5; // 1.5% platform fee
 
 // Stripe instance (singleton)
 let stripePromise: Promise<Stripe | null> | null = null;
@@ -54,7 +56,7 @@ export interface CreateCheckoutSessionInput {
   
   // Who's receiving payment
   clubId: string;
-  clubStripeAccountId: string;
+  clubStripeAccountId?: string;
   
   // URLs
   successUrl: string;
@@ -158,12 +160,8 @@ export const isClubStripeReady = (status: StripeConnectStatus): boolean => {
 };
 
 // ============================================
-// FIREBASE CALLABLE FUNCTIONS (PLACEHOLDER)
+// FIREBASE CALLABLE FUNCTIONS
 // ============================================
-
-// NOTE: These functions require Cloud Functions to be deployed.
-// For now, they will show an error when called.
-// Once you deploy the Cloud Functions, these will work.
 
 /**
  * Create a Checkout Session via Cloud Function
@@ -172,9 +170,18 @@ export const isClubStripeReady = (status: StripeConnectStatus): boolean => {
 export const createCheckoutSession = async (
   input: CreateCheckoutSessionInput
 ): Promise<{ sessionId: string; url: string }> => {
-  // TODO: Implement when Cloud Functions are deployed
-  console.log('createCheckoutSession called with:', input);
-  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
+  try {
+    const callable = httpsCallable<CreateCheckoutSessionInput, { sessionId: string; url: string }>(
+      functions,
+      'stripe_createCheckoutSession'
+    );
+    
+    const result = await callable(input);
+    return result.data;
+  } catch (error: any) {
+    console.error('createCheckoutSession error:', error);
+    throw new Error(error.message || 'Failed to create checkout session');
+  }
 };
 
 /**
@@ -184,9 +191,18 @@ export const createCheckoutSession = async (
 export const createConnectAccountLink = async (
   input: CreateConnectAccountInput
 ): Promise<{ url: string; accountId: string }> => {
-  // TODO: Implement when Cloud Functions are deployed
-  console.log('createConnectAccountLink called with:', input);
-  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
+  try {
+    const callable = httpsCallable<CreateConnectAccountInput, { url: string; accountId: string }>(
+      functions,
+      'stripe_createConnectAccount'
+    );
+    
+    const result = await callable(input);
+    return result.data;
+  } catch (error: any) {
+    console.error('createConnectAccountLink error:', error);
+    throw new Error(error.message || 'Failed to create Connect account link');
+  }
 };
 
 /**
@@ -195,9 +211,18 @@ export const createConnectAccountLink = async (
 export const getConnectAccountStatus = async (
   accountId: string
 ): Promise<StripeConnectStatus> => {
-  // TODO: Implement when Cloud Functions are deployed
-  console.log('getConnectAccountStatus called for:', accountId);
-  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
+  try {
+    const callable = httpsCallable<{ accountId: string }, StripeConnectStatus>(
+      functions,
+      'stripe_getConnectAccountStatus'
+    );
+    
+    const result = await callable({ accountId });
+    return result.data;
+  } catch (error: any) {
+    console.error('getConnectAccountStatus error:', error);
+    throw new Error(error.message || 'Failed to get account status');
+  }
 };
 
 /**
@@ -206,9 +231,18 @@ export const getConnectAccountStatus = async (
 export const createConnectLoginLink = async (
   accountId: string
 ): Promise<{ url: string }> => {
-  // TODO: Implement when Cloud Functions are deployed
-  console.log('createConnectLoginLink called for:', accountId);
-  throw new Error('Cloud Functions not yet deployed. Please deploy functions/src/stripe.ts first.');
+  try {
+    const callable = httpsCallable<{ accountId: string }, { url: string }>(
+      functions,
+      'stripe_createConnectLoginLink'
+    );
+    
+    const result = await callable({ accountId });
+    return result.data;
+  } catch (error: any) {
+    console.error('createConnectLoginLink error:', error);
+    throw new Error(error.message || 'Failed to create login link');
+  }
 };
 
 // ============================================

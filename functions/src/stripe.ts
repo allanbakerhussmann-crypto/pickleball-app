@@ -19,19 +19,26 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
 
-// Initialize Stripe with your secret key
-const stripe = new Stripe(functions.config().stripe?.secret_key || process.env.STRIPE_SECRET_KEY || '', {
-  apiVersion: '2023-10-16',
-});
+// Initialize Firebase Admin if not already
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
 
-// Platform fee percentage
-const PLATFORM_FEE_PERCENT = 6;
+// Initialize Stripe with your secret key
+const stripe = new Stripe(
+  functions.config().stripe?.secret_key || 
+  'sk_test_51SfRmcAX1ucMm7kBCgn9NkrnydakcyyLBNQj2N3IFFfiPKvxaexcVjSYHYOJlS9Q5bnmDW1aP8ipEXkp1XJEHJbY00IfxbFOo7',
+  { apiVersion: '2025-12-15.clover' as any }
+);
+
+// Platform fee percentage (1.5%)
+const PLATFORM_FEE_PERCENT = 1.5;
 
 // ============================================
 // CREATE CONNECT ACCOUNT
 // ============================================
 
-export const createConnectAccount = functions.https.onCall(async (data, context) => {
+export const stripe_createConnectAccount = functions.https.onCall(async (data, context) => {
   // Verify user is authenticated
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
@@ -66,7 +73,7 @@ export const createConnectAccount = functions.https.onCall(async (data, context)
       const account = await stripe.accounts.create({
         type: 'express',
         country: 'NZ', // New Zealand
-        email: clubEmail,
+        email: clubEmail || undefined,
         capabilities: {
           card_payments: { requested: true },
           transfers: { requested: true },
@@ -115,7 +122,7 @@ export const createConnectAccount = functions.https.onCall(async (data, context)
 // GET CONNECT ACCOUNT STATUS
 // ============================================
 
-export const getConnectAccountStatus = functions.https.onCall(async (data, context) => {
+export const stripe_getConnectAccountStatus = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
   }
@@ -159,7 +166,7 @@ export const getConnectAccountStatus = functions.https.onCall(async (data, conte
 // CREATE CONNECT LOGIN LINK
 // ============================================
 
-export const createConnectLoginLink = functions.https.onCall(async (data, context) => {
+export const stripe_createConnectLoginLink = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
   }
@@ -186,7 +193,7 @@ export const createConnectLoginLink = functions.https.onCall(async (data, contex
 // CREATE CHECKOUT SESSION
 // ============================================
 
-export const createCheckoutSession = functions.https.onCall(async (data, context) => {
+export const stripe_createCheckoutSession = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
   }
@@ -201,7 +208,7 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
     metadata,
   } = data;
 
-  if (!items || !items.length || !clubStripeAccountId || !successUrl || !cancelUrl) {
+  if (!items || !items.length || !successUrl || !cancelUrl) {
     throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
   }
 
@@ -210,12 +217,12 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
     return sum + (item.amount * item.quantity);
   }, 0);
 
-  // Calculate platform fee
+  // Calculate platform fee (1.5%)
   const platformFee = Math.round(totalAmount * (PLATFORM_FEE_PERCENT / 100));
 
   try {
-    // Create Checkout Session with automatic transfer to connected account
-    const session = await stripe.checkout.sessions.create({
+    // Build session config
+    const sessionConfig: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ['card'],
       mode: 'payment',
       customer_email: customerEmail,
@@ -230,26 +237,33 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
         },
         quantity: item.quantity,
       })),
-      payment_intent_data: {
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: {
+        clubId: clubId || '',
+        odUserId: context.auth.uid,
+        platformFee: platformFee.toString(),
+        ...metadata,
+      },
+    };
+
+    // If club has connected Stripe account, split the payment
+    if (clubStripeAccountId) {
+      sessionConfig.payment_intent_data = {
         application_fee_amount: platformFee,
         transfer_data: {
           destination: clubStripeAccountId,
         },
         metadata: {
-          clubId,
-          userId: context.auth.uid,
+          clubId: clubId || '',
+          odUserId: context.auth.uid,
           ...metadata,
         },
-      },
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      metadata: {
-        clubId,
-        userId: context.auth.uid,
-        platformFee: platformFee.toString(),
-        ...metadata,
-      },
-    });
+      };
+    }
+
+    // Create Checkout Session
+    const session = await stripe.checkout.sessions.create(sessionConfig);
 
     return {
       sessionId: session.id,
@@ -265,19 +279,24 @@ export const createCheckoutSession = functions.https.onCall(async (data, context
 // STRIPE WEBHOOK HANDLER
 // ============================================
 
-export const stripeWebhook = functions.https.onRequest(async (req, res) => {
+export const stripe_webhook = functions.https.onRequest(async (req, res) => {
   const sig = req.headers['stripe-signature'];
   const webhookSecret = functions.config().stripe?.webhook_secret || process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!sig || !webhookSecret) {
-    res.status(400).send('Missing signature or webhook secret');
+  if (!sig) {
+    res.status(400).send('Missing signature');
     return;
   }
 
   let event: Stripe.Event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+    if (webhookSecret) {
+      event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+    } else {
+      // For testing without webhook secret
+      event = req.body as Stripe.Event;
+    }
   } catch (err: any) {
     console.error('Webhook signature verification failed:', err.message);
     res.status(400).send(`Webhook Error: ${err.message}`);
@@ -326,11 +345,11 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
 
   const metadata = session.metadata || {};
   const clubId = metadata.clubId;
-  const userId = metadata.userId;
+  const odUserId = metadata.odUserId;
   const bookingIds = metadata.bookingIds?.split(',') || [];
 
-  if (!clubId || !userId) {
-    console.error('Missing clubId or userId in session metadata');
+  if (!odUserId) {
+    console.error('Missing odUserId in session metadata');
     return;
   }
 
@@ -339,8 +358,8 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     await admin.firestore().collection('payments').add({
       stripeSessionId: session.id,
       stripePaymentIntentId: session.payment_intent,
-      clubId,
-      userId,
+      clubId: clubId || null,
+      odUserId,
       amount: session.amount_total,
       currency: session.currency,
       status: 'completed',
@@ -351,19 +370,21 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     });
 
     // Update any pending bookings to confirmed
-    for (const bookingId of bookingIds) {
-      if (bookingId) {
-        await admin.firestore()
-          .collection('clubs')
-          .doc(clubId)
-          .collection('bookings')
-          .doc(bookingId)
-          .update({
-            status: 'confirmed',
-            paymentStatus: 'paid',
-            stripeSessionId: session.id,
-            paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
+    if (clubId && bookingIds.length > 0) {
+      for (const bookingId of bookingIds) {
+        if (bookingId) {
+          await admin.firestore()
+            .collection('clubs')
+            .doc(clubId)
+            .collection('bookings')
+            .doc(bookingId)
+            .update({
+              status: 'confirmed',
+              paymentStatus: 'paid',
+              stripeSessionId: session.id,
+              paidAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+        }
       }
     }
 
@@ -404,13 +425,3 @@ async function handleAccountUpdated(account: Stripe.Account) {
     console.error('Error handling account update:', error);
   }
 }
-
-// ============================================
-// EXPORTS
-// ============================================
-
-export const stripe_createConnectAccount = createConnectAccount;
-export const stripe_getConnectAccountStatus = getConnectAccountStatus;
-export const stripe_createConnectLoginLink = createConnectLoginLink;
-export const stripe_createCheckoutSession = createCheckoutSession;
-export const stripe_webhook = stripeWebhook;
