@@ -65,11 +65,44 @@ export {
 } from './types';
 
 // ============================================
-// SERVICE EXPORTS (to be added as we build them)
+// USER ACCOUNT SERVICE EXPORTS
 // ============================================
 
-// User account services
-// export * from './userAccount';
+export {
+  // Get & Create
+  getUserAccount,
+  getOrCreateUserAccount,
+  subscribeToUserAccount,
+  
+  // Update operations
+  recordUserPayment,
+  recordUserRefund,
+  recordUserTopUp,
+  updateUserWalletCount,
+  updateUserPassCount,
+  
+  // Spending queries
+  getUserTotalSpending,
+  getUserMonthlySpending,
+  getUserClubSpending,
+  getUserSpendingByCategory,
+  getUserSpendingTrend,
+  getUserTopClubs,
+  
+  // Financial summary
+  getUserFinancialSummary,
+  
+  // Batch operations
+  recalculateUserAccount,
+  
+  // Helpers
+  formatSpendingAmount,
+  getSpendingCategoryLabel,
+} from './userAccount';
+
+// ============================================
+// SERVICE EXPORTS (to be added as we build them)
+// ============================================
 
 // Club account services
 // export * from './clubAccount';
