@@ -372,11 +372,129 @@ export {
 // SERVICE EXPORTS (to be added as we build them)
 // ============================================
 
-// Annual pass services
-// export * from './annualPass';
+// ============================================
+// ANNUAL PASS SERVICE EXPORTS
+// ============================================
+
+export {
+  // Constants
+  DEFAULT_PASS_DURATION_DAYS,
+  RENEWAL_GRACE_PERIOD_DAYS,
+  MAX_PASSES_PER_CLUB,
+  
+  // Types
+  type AnnualPassConfig,
+  type PassUsageRecord,
+  type PassValidationResult,
+  type PassUsageStats,
+  
+  // ID generation
+  generatePassId,
+  
+  // CRUD operations
+  createAnnualPass,
+  getAnnualPass,
+  getActivePassForUserAndClub,
+  getUserPasses,
+  getClubActivePasses,
+  
+  // Subscriptions
+  subscribeToUserPasses,
+  subscribeToPass,
+  
+  // Status management
+  updatePassStatus,
+  suspendPass,
+  reactivatePass,
+  cancelPass,
+  expirePass,
+  
+  // Renewal
+  isPassEligibleForRenewal,
+  renewPass,
+  getPassesExpiringSoon,
+  getExpiredPasses,
+  batchExpirePasses,
+  
+  // Validation & Usage
+  validatePassForBooking,
+  recordPassUsage,
+  getPassUsageHistory,
+  countPassUsageForDate,
+  getPassUsageForDateRange,
+  
+  // Statistics
+  getPassUsageStats,
+  getClubPassStats,
+  
+  // Helpers
+  calculateEndDate,
+  getDaysRemaining,
+  isPassActiveAndValid,
+  getPassStatusLabel,
+  getPassStatusColor,
+  formatSavings,
+  calculatePassValue,
+  createDefaultPassConfig,
+} from './annualPass';
 
 // Refund services
-// export * from './refunds';
+// ============================================
+// REFUND SERVICE EXPORTS
+// ============================================
+
+export {
+  // Constants
+  MAX_REFUND_WINDOW_DAYS,
+  MIN_REFUND_AMOUNT,
+  REFUND_REASONS,
+  type RefundReason,
+  
+  // Types
+  type RefundPolicy,
+  type RefundCalculation,
+  type RefundRequest,
+  type RefundApproval,
+  
+  // ID generation
+  generateRefundId,
+  
+  // CRUD operations
+  getRefund,
+  getRefundsForPayment,
+  getUserRefunds,
+  getClubRefunds,
+  getPendingRefunds,
+  
+  // Subscriptions
+  subscribeToUserRefunds,
+  subscribeToPendingRefunds,
+  
+  // Validation
+  validateRefundRequest,
+  calculateRefundAmounts,
+  canPaymentBeRefunded,
+  
+  // Processing
+  createRefundRequest,
+  processRefundApproval,
+  processApprovedRefund,
+  completeRefund,
+  failRefund,
+  
+  // Queries
+  getTotalRefundedForPayment,
+  getClubRefundStats,
+  
+  // Helpers
+  getRefundStatusLabel,
+  getRefundStatusColor,
+  getRefundReasonLabel,
+  formatRefundAmount,
+  createDefaultRefundPolicy,
+  isRefundProcessingDelayed,
+  estimateRefundCompletionTime,
+} from './refunds';
 
 // ============================================
 // STRIPE SERVICE EXPORTS
