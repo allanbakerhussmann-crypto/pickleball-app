@@ -5,14 +5,15 @@
  * 
  * Features:
  * - View available courts and time slots
- * - Book courts with payment via CheckoutModal
+ * - SELECT MULTIPLE SLOTS (cart system)
+ * - Book all selected slots with single payment
  * - Cancel bookings
  * - Shows pending holds from other users
  * 
  * FILE LOCATION: components/clubs/CourtBookingCalendar.tsx
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   subscribeToClubCourts,
@@ -28,11 +29,22 @@ import {
   formatDateLabel,
 } from '../../services/firebase';
 import { CheckoutModal } from '../checkout/CheckoutModal';
-import { calculateCourtBookingPrice } from '../../services/firebase/pricing';
+import { calculateCourtBookingPrice, formatCentsToDisplay } from '../../services/firebase/pricing';
 import { getPendingCourtHolds } from '../../services/firebase/checkout';
 import type { ClubCourt, ClubBookingSettings, CourtBooking } from '../../types';
-import type { PriceCalculation } from '../../services/firebase/pricing';
-import type { CheckoutItem } from '../../services/firebase/checkout';
+import type { PriceCalculation, PriceLineItem } from '../../services/firebase/pricing';
+import type { CheckoutItem, CheckoutItemDetails } from '../../services/firebase/checkout';
+
+// ============================================
+// TYPES
+// ============================================
+
+interface SelectedSlot {
+  courtId: string;
+  courtName: string;
+  time: string;
+  pricing: PriceCalculation;
+}
 
 interface CourtBookingCalendarProps {
   clubId: string;
@@ -41,6 +53,10 @@ interface CourtBookingCalendarProps {
   isMember: boolean;
   onBack: () => void;
 }
+
+// ============================================
+// COMPONENT
+// ============================================
 
 export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   clubId,
@@ -59,17 +75,24 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   );
   const [loading, setLoading] = useState(true);
   
+  // CART: Selected slots for multi-booking
+  const [selectedSlots, setSelectedSlots] = useState<SelectedSlot[]>([]);
+  
   // Checkout modal state
-  const [checkoutModal, setCheckoutModal] = useState<{
-    court: ClubCourt;
-    time: string;
-    pricing: PriceCalculation;
-  } | null>(null);
+  const [showCheckout, setShowCheckout] = useState(false);
   
   // Cancel modal state
   const [cancelModal, setCancelModal] = useState<CourtBooking | null>(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Format time for display - defined early so it can be used in useMemo hooks
+  const formatTime = (time: string): string => {
+    const [hours, mins] = time.split(':').map(Number);
+    const period = hours >= 12 ? 'PM' : 'AM';
+    const displayHours = hours % 12 || 12;
+    return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
+  };
 
   // Load settings
   useEffect(() => {
@@ -120,8 +143,13 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     return () => clearInterval(interval);
   }, [clubId, selectedDate]);
 
+  // Clear selected slots when date changes
+  useEffect(() => {
+    setSelectedSlots([]);
+  }, [selectedDate]);
+
   // Generate date options (today + maxAdvanceBookingDays)
-  const dateOptions = React.useMemo(() => {
+  const dateOptions = useMemo(() => {
     const dates: { value: string; label: string }[] = [];
     const maxDays = settings?.maxAdvanceBookingDays || 14;
     
@@ -139,7 +167,7 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   }, [settings?.maxAdvanceBookingDays]);
 
   // Generate time slots
-  const timeSlots = React.useMemo(() => {
+  const timeSlots = useMemo(() => {
     if (!settings) return [];
     return generateTimeSlots(
       settings.openTime,
@@ -162,71 +190,147 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     ) || null;
   };
 
+  // Check if slot is selected in cart
+  const isSlotSelected = (courtId: string, time: string): boolean => {
+    return selectedSlots.some(s => s.courtId === courtId && s.time === time);
+  };
+
   // Check if slot is bookable
   const isSlotBookable = (time: string): boolean => {
     if (!isMember && !isAdmin) return false;
     return !isSlotInPast(selectedDate, time);
   };
 
-  // Handle clicking book button
-  const handleBookClick = async (court: ClubCourt, time: string) => {
-    if (!settings || !currentUser) return;
+  // Toggle slot selection (add/remove from cart)
+  const toggleSlotSelection = (court: ClubCourt, time: string) => {
+    if (!settings) return;
 
-    setError(null);
+    const isCurrentlySelected = isSlotSelected(court.id, time);
 
-    // Check daily limit first
-    const { canBook: canBookMore } = await canUserBook(
-      clubId,
-      currentUser.uid,
-      selectedDate,
-      settings.maxBookingsPerMemberPerDay
-    );
+    if (isCurrentlySelected) {
+      // Remove from cart
+      setSelectedSlots(prev => prev.filter(s => !(s.courtId === court.id && s.time === time)));
+    } else {
+      // Check daily limit
+      const currentBookingsCount = bookings.filter(b => b.bookedByUserId === currentUser?.uid).length;
+      const totalAfterSelection = currentBookingsCount + selectedSlots.length + 1;
+      
+      if (!isAdmin && totalAfterSelection > (settings.maxBookingsPerMemberPerDay || 2)) {
+        setError(`You can only book ${settings.maxBookingsPerMemberPerDay} slots per day`);
+        return;
+      }
 
-    if (!canBookMore && !isAdmin) {
-      setError(`You've reached your daily limit of ${settings.maxBookingsPerMemberPerDay} bookings`);
-      return;
+      // Calculate pricing for this slot
+      const pricing = calculateCourtBookingPrice({
+        court,
+        date: selectedDate,
+        startTime: time,
+        durationMinutes: settings.slotDurationMinutes,
+        settings,
+        isMember,
+        hasAnnualPass: false,
+        isVisitor: !isMember && !isAdmin,
+      });
+
+      // Add to cart
+      setSelectedSlots(prev => [...prev, {
+        courtId: court.id,
+        courtName: court.name,
+        time,
+        pricing,
+      }]);
     }
 
-    // Calculate pricing
-    const endTime = calculateEndTime(time, settings.slotDurationMinutes);
-    const pricing = calculateCourtBookingPrice({
-      court,
-      date: selectedDate,
-      startTime: time,
-      durationMinutes: settings.slotDurationMinutes,
-      settings,
-      isMember,
-      hasAnnualPass: false, // TODO: Check user's annual pass
-      isVisitor: !isMember && !isAdmin,
-    });
-
-    // Open checkout modal
-    setCheckoutModal({
-      court,
-      time,
-      pricing,
-    });
+    setError(null);
   };
 
-  // Handle checkout success
+  // Calculate combined pricing for all selected slots
+  const combinedPricing = useMemo((): PriceCalculation | null => {
+    if (selectedSlots.length === 0) return null;
+
+    const lineItems: PriceLineItem[] = [];
+    let totalBase = 0;
+    let totalFinal = 0;
+    let totalSavings = 0;
+
+    selectedSlots.forEach(slot => {
+      // Add each slot's line items with court/time info
+      slot.pricing.lineItems.forEach(item => {
+        lineItems.push({
+          ...item,
+          label: `${slot.courtName} @ ${formatTime(slot.time)} - ${item.label}`,
+        });
+      });
+      totalBase += slot.pricing.basePrice;
+      totalFinal += slot.pricing.finalPrice;
+      totalSavings += slot.pricing.savings;
+    });
+
+    return {
+      productType: 'court_booking',
+      basePrice: totalBase,
+      finalPrice: totalFinal,
+      savings: totalSavings,
+      lineItems,
+      priceLabel: selectedSlots.length > 1 ? `${selectedSlots.length} Slots` : selectedSlots[0].pricing.priceLabel,
+      currency: 'nzd',
+      isFree: totalFinal === 0,
+    };
+  }, [selectedSlots]);
+
+  // Build combined item details for checkout
+  const combinedItemDetails = useMemo((): CheckoutItemDetails => {
+    if (selectedSlots.length === 0) return {};
+
+    if (selectedSlots.length === 1) {
+      const slot = selectedSlots[0];
+      return {
+        clubId,
+        clubName,
+        courtId: slot.courtId,
+        courtName: slot.courtName,
+        date: selectedDate,
+        startTime: slot.time,
+        endTime: calculateEndTime(slot.time, settings?.slotDurationMinutes || 60),
+      };
+    }
+
+    // Multiple slots - store as description
+    const slotDescriptions = selectedSlots.map(s => 
+      `${s.courtName} @ ${formatTime(s.time)}`
+    ).join(', ');
+
+    return {
+      clubId,
+      clubName,
+      date: selectedDate,
+      description: `${selectedSlots.length} court bookings: ${slotDescriptions}`,
+    };
+  }, [selectedSlots, selectedDate, clubId, clubName, settings]);
+
+  // Handle checkout success - create all bookings
   const handleCheckoutSuccess = async (checkout: CheckoutItem) => {
     if (!settings || !currentUser || !userProfile) return;
 
     try {
-      // Create the actual booking
-      await createCourtBooking(clubId, {
-        courtId: checkout.itemDetails.courtId!,
-        courtName: checkout.itemDetails.courtName!,
-        date: checkout.itemDetails.date!,
-        startTime: checkout.itemDetails.startTime!,
-        endTime: checkout.itemDetails.endTime!,
-        bookedByUserId: currentUser.uid,
-        bookedByName: userProfile.displayName || 'Unknown',
-      });
+      // Create a booking for each selected slot
+      for (const slot of selectedSlots) {
+        await createCourtBooking(clubId, {
+          courtId: slot.courtId,
+          courtName: slot.courtName,
+          date: selectedDate,
+          startTime: slot.time,
+          endTime: calculateEndTime(slot.time, settings.slotDurationMinutes),
+          bookedByUserId: currentUser.uid,
+          bookedByName: userProfile.displayName || 'Unknown',
+        });
+      }
 
-      setCheckoutModal(null);
+      // Clear cart and close checkout
+      setSelectedSlots([]);
+      setShowCheckout(false);
     } catch (err: any) {
-      console.error('Failed to create booking after payment:', err);
+      console.error('Failed to create bookings after payment:', err);
       setError(err.message || 'Failed to complete booking');
     }
   };
@@ -239,7 +343,6 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     setProcessing(true);
     
     try {
-      // Check if within cancellation window (unless admin)
       if (!isAdmin && !canCancelBooking(cancelModal, settings.cancellationMinutesBeforeSlot)) {
         throw new Error(`Bookings must be cancelled at least ${settings.cancellationMinutesBeforeSlot} minutes before the start time`);
       }
@@ -253,13 +356,9 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     }
   };
 
-  // Format time for display
-  const formatTime = (time: string): string => {
-    const [hours, mins] = time.split(':').map(Number);
-    const period = hours >= 12 ? 'PM' : 'AM';
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
-  };
+  // ============================================
+  // RENDER
+  // ============================================
 
   if (!settings?.enabled && !isAdmin) {
     return (
@@ -331,6 +430,57 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
         ))}
       </div>
 
+      {/* Selected Slots Cart */}
+      {selectedSlots.length > 0 && (
+        <div className="bg-green-900/30 border border-green-700 rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h3 className="text-green-400 font-semibold flex items-center gap-2">
+                <span>🛒</span>
+                {selectedSlots.length} {selectedSlots.length === 1 ? 'Slot' : 'Slots'} Selected
+              </h3>
+              <div className="text-sm text-gray-300 mt-1">
+                {selectedSlots.map((slot, i) => (
+                  <span key={`${slot.courtId}-${slot.time}`}>
+                    {i > 0 && ' • '}
+                    {slot.courtName} @ {formatTime(slot.time)}
+                  </span>
+                ))}
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <p className="text-gray-400 text-sm">Total</p>
+                <p className="text-green-400 font-bold text-xl">
+                  {combinedPricing?.isFree ? 'Free' : formatCentsToDisplay(combinedPricing?.finalPrice || 0)}
+                </p>
+                {combinedPricing && combinedPricing.savings > 0 && (
+                  <p className="text-green-300 text-xs">
+                    Save {formatCentsToDisplay(combinedPricing.savings)}
+                  </p>
+                )}
+              </div>
+              
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSelectedSlots([])}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={() => setShowCheckout(true)}
+                  className="px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold"
+                >
+                  Book {selectedSlots.length} {selectedSlots.length === 1 ? 'Slot' : 'Slots'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* No Courts Message */}
       {courts.length === 0 && (
         <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
@@ -377,6 +527,7 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
                   {courts.map((court) => {
                     const booking = getBookingForSlot(court.id, time);
                     const pendingHold = getPendingHoldForSlot(court.id, time);
+                    const isSelected = isSlotSelected(court.id, time);
                     const canBook = isSlotBookable(time) && !booking && !pendingHold;
                     const isMyBooking = booking?.bookedByUserId === currentUser?.uid;
                     const isMyHold = pendingHold?.userId === currentUser?.uid;
@@ -423,12 +574,16 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
                             </div>
                           </div>
                         ) : canBook ? (
-                          // Available slot
+                          // Available slot - clickable for cart
                           <button
-                            onClick={() => handleBookClick(court, time)}
-                            className="w-full h-full rounded border-2 border-dashed border-gray-600 hover:border-green-500 hover:bg-green-900/20 text-gray-500 hover:text-green-400 text-xs font-semibold transition-colors flex items-center justify-center"
+                            onClick={() => toggleSlotSelection(court, time)}
+                            className={`w-full h-full rounded border-2 text-xs font-semibold transition-all flex items-center justify-center ${
+                              isSelected
+                                ? 'bg-green-600/30 border-green-500 text-green-400'
+                                : 'border-dashed border-gray-600 hover:border-green-500 hover:bg-green-900/20 text-gray-500 hover:text-green-400'
+                            }`}
                           >
-                            + Book
+                            {isSelected ? '✓ Selected' : '+ Select'}
                           </button>
                         ) : (
                           // Unavailable (past or no permission)
@@ -451,6 +606,10 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
       {/* Legend */}
       <div className="flex flex-wrap gap-4 mt-4 text-xs text-gray-500">
         <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded bg-green-600/30 border border-green-500"></div>
+          <span>Selected</span>
+        </div>
+        <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded bg-blue-600/30 border border-blue-500"></div>
           <span>Your Booking</span>
         </div>
@@ -468,22 +627,19 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
         </div>
       </div>
 
+      {/* Instructions */}
+      <div className="mt-4 text-sm text-gray-400">
+        💡 Click slots to select them, then click "Book" to pay for all at once.
+      </div>
+
       {/* Checkout Modal */}
-      {checkoutModal && settings && (
+      {showCheckout && combinedPricing && settings && (
         <CheckoutModal
           isOpen={true}
-          onClose={() => setCheckoutModal(null)}
+          onClose={() => setShowCheckout(false)}
           type="court_booking"
-          itemDetails={{
-            clubId,
-            clubName,
-            courtId: checkoutModal.court.id,
-            courtName: checkoutModal.court.name,
-            date: selectedDate,
-            startTime: checkoutModal.time,
-            endTime: calculateEndTime(checkoutModal.time, settings.slotDurationMinutes),
-          }}
-          pricing={checkoutModal.pricing}
+          itemDetails={combinedItemDetails}
+          pricing={combinedPricing}
           clubId={clubId}
           onSuccess={handleCheckoutSuccess}
           onError={(err) => setError(err.message)}
