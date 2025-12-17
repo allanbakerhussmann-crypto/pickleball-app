@@ -91,3 +91,13 @@ export {
   type RevenueTrend,
   type UseClubFinancialsReturn,
 } from './useClubFinancials';
+
+// ============================================
+// REPORTS HOOK
+// ============================================
+
+export {
+  useReports,
+  type UseReportsOptions,
+  type UseReportsReturn,
+} from './useReports';

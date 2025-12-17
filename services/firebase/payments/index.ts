@@ -639,3 +639,48 @@ export {
   canVoidReceipt,
   generateReceiptFilename,
 } from './receipts';
+
+// ============================================
+// REPORTS SERVICE EXPORTS
+// ============================================
+
+export {
+  // Types
+  type ReportType,
+  type ReportPeriod,
+  type DateRange,
+  type BaseReport,
+  type RevenueSummaryReport,
+  type TransactionDetailReport,
+  type TaxSummaryReport,
+  type PayoutSummaryReport,
+  type RefundSummaryReport,
+  type AnnualPassSummaryReport,
+  type PlatformSummaryReport,
+  type ReportOptions,
+  
+  // ID generation
+  generateReportId,
+  
+  // Report generators
+  generateRevenueSummaryReport,
+  generateTransactionDetailReport,
+  generateTaxSummaryReport,
+  generatePayoutSummaryReport,
+  generateRefundSummaryReport,
+  generateAnnualPassSummaryReport,
+  
+  // Report storage
+  saveReport,
+  getReport,
+  getClubReports,
+  
+  // Helpers
+  calculatePercentChange,
+  getDateRangeForPeriod,
+  formatDateRange,
+  getReportTypeLabel,
+  getPeriodLabel,
+  formatReportAmount,
+  calculateGrowthRate,
+} from './reports';
