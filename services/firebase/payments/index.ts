@@ -377,3 +377,84 @@ export {
 
 // Refund services
 // export * from './refunds';
+
+// ============================================
+// STRIPE SERVICE EXPORTS
+// ============================================
+
+export {
+  // Types
+  type StripePaymentIntentStatus,
+  type CreatePaymentIntentParams,
+  type PaymentIntentResponse,
+  type StripeCustomer,
+  type StripeConnectAccount,
+  type StripeWebhookEvent,
+  
+  // Status mapping
+  mapStripeStatusToPaymentStatus,
+  
+  // Customer management
+  getStripeCustomer,
+  getStripeCustomerByStripeId,
+  saveStripeCustomer,
+  updateDefaultPaymentMethod,
+  
+  // Connect account management
+  getStripeConnectAccount,
+  getStripeConnectAccountByStripeId,
+  saveStripeConnectAccount,
+  updateStripeConnectAccountStatus,
+  canClubReceivePayments,
+  canClubReceivePayouts,
+  
+  // Payment management
+  createPendingPayment,
+  linkPaymentToStripeIntent,
+  getPayment,
+  getPaymentByStripeIntent,
+  updatePaymentStatus,
+  getUserPayments,
+  getClubPayments,
+  
+  // Webhook events
+  hasWebhookEventBeenProcessed,
+  recordWebhookEvent,
+  markWebhookEventProcessed,
+  
+  // Payment flow helpers
+  buildPaymentIntentMetadata,
+  calculateApplicationFee,
+  getStripeCurrency,
+  
+  // Refund helpers
+  recordPaymentRefund,
+  
+  // Validation
+  validatePaymentAmount,
+  isPaymentMethodValidForCurrency,
+  
+  // Display helpers
+  getPaymentStatusText,
+  getPaymentStatusColor,
+  formatPaymentAmount,
+} from './stripe';
+
+// ============================================
+// STRIPE WEBHOOK EXPORTS
+// ============================================
+
+export {
+  // Types
+  type StripeEvent,
+  type StripePaymentIntent,
+  type StripeRefund,
+  type WebhookHandlerResult,
+  
+  // Main processor
+  processStripeWebhook,
+  
+  // Utility
+  getRecentWebhookEvents,
+  retryWebhookEvent,
+} from './stripeWebhooks';
