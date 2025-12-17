@@ -2,6 +2,10 @@
  * useCourtManagement Hook
  * 
  * Manages court allocation, match assignment, and queue management.
+ * 
+ * FILE LOCATION: components/tournament/hooks/useCourtManagement.ts
+ * 
+ * FIXED: Changed team1Name/team2Name to teamAName/teamBName to match CourtAllocation.tsx
  */
 
 import { useMemo, useCallback } from 'react';
@@ -22,13 +26,14 @@ interface CourtViewModel {
   currentMatchId?: string;
 }
 
+// FIXED: Changed team1Name/team2Name to teamAName/teamBName
 interface CourtMatchModel {
   id: string;
   division: string;
   roundLabel: string;
   matchLabel: string;
-  team1Name: string;
-  team2Name: string;
+  teamAName: string;  // FIXED: was team1Name
+  teamBName: string;  // FIXED: was team2Name
   status: 'WAITING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED';
   courtId?: string;
   courtName?: string;
@@ -174,8 +179,8 @@ export const useCourtManagement = ({
         division: division?.name || 'Unknown',
         roundLabel: m.stage || `Round ${m.roundNumber || 1}`,
         matchLabel: `Match ${m.matchNumber ?? m.id.slice(-4)}`,
-        team1Name: m.teamAId || 'TBD',
-        team2Name: m.teamBId || 'TBD',
+        teamAName: m.teamAId || 'TBD',  // FIXED: was team1Name
+        teamBName: m.teamBId || 'TBD',  // FIXED: was team2Name
         status,
         courtId: court?.id,
         courtName: court?.name,
