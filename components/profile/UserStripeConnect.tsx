@@ -443,6 +443,13 @@ export const UserStripeConnect: React.FC = () => {
                     Platform fee: {PLATFORM_FEE_PERCENT}% per transaction
                   </li>
                 </ul>
+                
+                {/* Stripe Requirements Disclaimer */}
+                <div className="mt-3 pt-3 border-t border-gray-700">
+                  <p className="text-xs text-gray-500">
+                    <span className="text-yellow-500">⚠</span> To accept payments, you must be 18+ years old and have a valid NZ bank account. Stripe will verify your identity.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -575,6 +582,13 @@ export const UserStripeConnect: React.FC = () => {
               Platform fee: {PLATFORM_FEE_PERCENT}% per transaction
             </li>
           </ul>
+          
+          {/* Stripe Requirements Disclaimer */}
+          <div className="mt-3 pt-3 border-t border-gray-700">
+            <p className="text-xs text-gray-500">
+              <span className="text-yellow-500">⚠</span> You must be 18+ years old and have a valid NZ bank account. Stripe will verify your identity.
+            </p>
+          </div>
         </div>
       )}
 
