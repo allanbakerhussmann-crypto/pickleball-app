@@ -519,14 +519,14 @@ export const UserStripeConnect: React.FC = () => {
       {isConnected && (
         <div className="flex flex-wrap gap-2 mb-4">
           <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-            status?.chargesEnabled ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'
+            stripeData?.stripeChargesEnabled ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'
           }`}>
-            {status?.chargesEnabled ? '✓ Charges Enabled' : '⏳ Charges Pending'}
+            {stripeData?.stripeChargesEnabled ? '✓ Charges Enabled' : '⏳ Charges Pending'}
           </span>
           <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-            status?.payoutsEnabled ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'
+            stripeData?.stripePayoutsEnabled ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'
           }`}>
-            {status?.payoutsEnabled ? '✓ Payouts Enabled' : '⏳ Payouts Pending'}
+            {stripeData?.stripePayoutsEnabled ? '✓ Payouts Enabled' : '⏳ Payouts Pending'}
           </span>
         </div>
       )}
