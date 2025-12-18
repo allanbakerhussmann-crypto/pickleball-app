@@ -13,7 +13,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { FirebaseError } from '@firebase/app';
-import { updateProfile } from '@firebase/auth';
 import { fetchDuprRatings } from '../services/duprService';
 import { COUNTRIES, COUNTRY_REGIONS } from '../constants/locations';
 import { UserStripeConnect } from './profile/UserStripeConnect';
