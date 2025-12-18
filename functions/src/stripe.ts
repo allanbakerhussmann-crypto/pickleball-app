@@ -2,9 +2,9 @@
  * Stripe Cloud Functions
  * 
  * Backend functions for Stripe integration:
- * - Create Connect accounts for clubs
+ * - Create Connect accounts for clubs and users
  * - Create Checkout sessions
- * - Handle webhooks (creates bookings after payment)
+ * - Handle webhooks (creates bookings/RSVPs after payment)
  * 
  * FILE LOCATION: functions/src/stripe.ts
  */
@@ -29,11 +29,10 @@ const stripe = new Stripe(
 const PLATFORM_FEE_PERCENT = 1.5;
 
 // ============================================
-// CREATE CONNECT ACCOUNT
+// CREATE CONNECT ACCOUNT (FOR CLUBS)
 // ============================================
 
 export const stripe_createConnectAccount = functions.https.onCall(async (data, context) => {
-  // Verify user is authenticated
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
   }
@@ -51,10 +50,8 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
   }
 
   const clubData = clubDoc.data()!;
-  const isAdmin = clubData.admins?.includes(context.auth.uid) || clubData.createdByUserId === context.auth.uid;
-
-  if (!isAdmin) {
-    throw new functions.https.HttpsError('permission-denied', 'Must be club admin');
+  if (clubData.createdByUserId !== context.auth.uid) {
+    throw new functions.https.HttpsError('permission-denied', 'Only club owner can connect Stripe');
   }
 
   try {
@@ -62,7 +59,7 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
     let accountId = clubData.stripeConnectedAccountId;
 
     if (!accountId) {
-      // Create a new Express account
+      // Create new Express account
       const account = await stripe.accounts.create({
         type: 'express',
         country: 'NZ',
@@ -83,13 +80,11 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
 
       accountId = account.id;
 
-      // Save account ID to club document
+      // Save to club document
       await admin.firestore().collection('clubs').doc(clubId).update({
         stripeConnectedAccountId: accountId,
         stripeOnboardingComplete: false,
-        stripeChargesEnabled: false,
-        stripePayoutsEnabled: false,
-        stripeCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: Date.now(),
       });
     }
 
@@ -102,12 +97,99 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
     });
 
     return {
-      url: accountLink.url,
       accountId,
+      url: accountLink.url,
     };
   } catch (error: any) {
-    console.error('Create Connect account error:', error);
-    throw new functions.https.HttpsError('internal', error.message || 'Failed to create Connect account');
+    console.error('Create connect account error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create Stripe account');
+  }
+});
+
+// ============================================
+// CREATE USER CONNECT ACCOUNT (FOR ORGANIZERS)
+// ============================================
+
+export const stripe_createUserConnectAccount = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+  }
+
+  const { userId, userName, userEmail, returnUrl, refreshUrl } = data;
+
+  if (!userId || !userName || !returnUrl || !refreshUrl) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
+  }
+
+  // Verify user is creating for themselves
+  if (userId !== context.auth.uid) {
+    throw new functions.https.HttpsError('permission-denied', 'Can only create account for yourself');
+  }
+
+  // Verify user is an organizer
+  const userDoc = await admin.firestore().collection('users').doc(userId).get();
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'User not found');
+  }
+
+  const userData = userDoc.data()!;
+  const roles = userData.roles || [];
+  const isOrganizer = roles.includes('organizer') || roles.includes('admin') || userData.isRootAdmin;
+
+  if (!isOrganizer) {
+    throw new functions.https.HttpsError('permission-denied', 'Only organizers can connect Stripe');
+  }
+
+  try {
+    // Check if user already has a Stripe account
+    let accountId = userData.stripeConnectedAccountId;
+
+    if (!accountId) {
+      // Create new Express account
+      const account = await stripe.accounts.create({
+        type: 'express',
+        country: 'NZ',
+        email: userEmail || undefined,
+        business_type: 'individual',
+        individual: {
+          first_name: userName.split(' ')[0],
+          last_name: userName.split(' ').slice(1).join(' ') || undefined,
+        },
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true },
+        },
+        metadata: {
+          odUserId: userId,
+          userName,
+        },
+      });
+
+      accountId = account.id;
+
+      // Save to user document
+      await admin.firestore().collection('users').doc(userId).update({
+        stripeConnectedAccountId: accountId,
+        stripeOnboardingComplete: false,
+        updatedAt: Date.now(),
+      });
+    }
+
+    // Create account link for onboarding
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: refreshUrl,
+      return_url: returnUrl,
+      type: 'account_onboarding',
+    });
+
+    return {
+      accountId,
+      url: accountLink.url,
+    };
+  } catch (error: any) {
+    console.error('Create user connect account error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create Stripe account');
   }
 });
 
@@ -156,7 +238,7 @@ export const stripe_getConnectAccountStatus = functions.https.onCall(async (data
 });
 
 // ============================================
-// CREATE CONNECT LOGIN LINK
+// CREATE CONNECT LOGIN LINK (FOR CLUBS)
 // ============================================
 
 export const stripe_createConnectLoginLink = functions.https.onCall(async (data, context) => {
@@ -183,6 +265,39 @@ export const stripe_createConnectLoginLink = functions.https.onCall(async (data,
 });
 
 // ============================================
+// USER STRIPE CONNECT - LOGIN LINK
+// ============================================
+
+export const stripe_createUserConnectLoginLink = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+  }
+
+  const { accountId } = data;
+
+  if (!accountId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Account ID required');
+  }
+
+  // Verify user owns this account
+  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
+  if (!userDoc.exists || userDoc.data()?.stripeConnectedAccountId !== accountId) {
+    throw new functions.https.HttpsError('permission-denied', 'Not your Stripe account');
+  }
+
+  try {
+    const loginLink = await stripe.accounts.createLoginLink(accountId);
+
+    return {
+      url: loginLink.url,
+    };
+  } catch (error: any) {
+    console.error('Create user login link error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create login link');
+  }
+});
+
+// ============================================
 // CREATE CHECKOUT SESSION
 // ============================================
 
@@ -196,6 +311,7 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
     customerEmail,
     clubId,
     clubStripeAccountId,
+    organizerStripeAccountId,
     successUrl,
     cancelUrl,
     metadata,
@@ -212,6 +328,9 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
 
   // Calculate platform fee (1.5%)
   const platformFee = Math.round(totalAmount * (PLATFORM_FEE_PERCENT / 100));
+
+  // Determine destination account (club or organizer)
+  const destinationAccount = clubStripeAccountId || organizerStripeAccountId;
 
   try {
     // Build session config
@@ -240,12 +359,12 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
       },
     };
 
-    // If club has connected Stripe account, split the payment
-    if (clubStripeAccountId) {
+    // If connected account, split the payment
+    if (destinationAccount) {
       sessionConfig.payment_intent_data = {
         application_fee_amount: platformFee,
         transfer_data: {
-          destination: clubStripeAccountId,
+          destination: destinationAccount,
         },
         metadata: {
           clubId: clubId || '',
@@ -337,9 +456,8 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
   console.log('Checkout completed:', session.id);
 
   const metadata = session.metadata || {};
-  const clubId = metadata.clubId;
+  const paymentType = metadata.type;
   const odUserId = metadata.odUserId;
-  const slotsJson = metadata.slots;
 
   if (!odUserId) {
     console.error('Missing odUserId in session metadata');
@@ -347,302 +465,262 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
   }
 
   try {
-    // Get user info for booking
-    const userDoc = await admin.firestore().collection('users').doc(odUserId).get();
+    // Route to appropriate handler based on payment type
+    switch (paymentType) {
+      case 'meetup':
+        await handleMeetupPayment(session, metadata);
+        break;
+
+      case 'court_booking':
+        await handleCourtBookingPayment(session, metadata);
+        break;
+
+      case 'tournament':
+        await handleTournamentPayment(session, metadata);
+        break;
+
+      case 'league':
+        await handleLeaguePayment(session, metadata);
+        break;
+
+      default:
+        // Legacy: court booking without type
+        if (metadata.slots) {
+          await handleCourtBookingPayment(session, metadata);
+        } else {
+          console.log('Unknown payment type:', paymentType);
+        }
+    }
+  } catch (error) {
+    console.error('Error handling checkout complete:', error);
+  }
+}
+
+// ============================================
+// MEETUP PAYMENT HANDLER
+// ============================================
+
+async function handleMeetupPayment(
+  session: Stripe.Checkout.Session,
+  metadata: Record<string, string>
+) {
+  const meetupId = metadata.meetupId;
+  const odUserId = metadata.odUserId;
+
+  if (!meetupId || !odUserId) {
+    console.error('Missing meetupId or odUserId for meetup payment');
+    return;
+  }
+
+  console.log(`Processing meetup payment: meetup=${meetupId}, user=${odUserId}`);
+
+  const db = admin.firestore();
+
+  try {
+    // Get user info
+    const userDoc = await db.collection('users').doc(odUserId).get();
     const userData = userDoc.exists ? userDoc.data() : null;
-    const userName = userData?.displayName || userData?.name || 'User';
+    const userName = userData?.displayName || userData?.email || 'Unknown';
 
-    // Parse slots from metadata
-    let slots: Array<{
-      courtId: string;
-      date: string;
-      startTime: string;
-      endTime: string;
-    }> = [];
+    // Get meetup to verify and get pricing info
+    const meetupDoc = await db.collection('meetups').doc(meetupId).get();
+    if (!meetupDoc.exists) {
+      console.error('Meetup not found:', meetupId);
+      return;
+    }
 
+    const meetupData = meetupDoc.data()!;
+    const amountPaid = session.amount_total || 0;
+
+    // Create or update RSVP with payment info
+    const rsvpRef = db.collection('meetups').doc(meetupId).collection('rsvps').doc(odUserId);
+    
+    await rsvpRef.set({
+      userId: odUserId,
+      userName,
+      status: 'going',
+      paymentStatus: 'paid',
+      amountPaid,
+      paidAt: Date.now(),
+      stripeSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent as string,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }, { merge: true });
+
+    // Update meetup counters
+    const currentPaidPlayers = meetupData.paidPlayers || 0;
+    const currentTotalCollected = meetupData.totalCollected || 0;
+
+    await db.collection('meetups').doc(meetupId).update({
+      paidPlayers: currentPaidPlayers + 1,
+      totalCollected: currentTotalCollected + amountPaid,
+      updatedAt: Date.now(),
+    });
+
+    console.log(`Meetup payment successful: ${userName} paid ${amountPaid} cents for meetup ${meetupId}`);
+
+  } catch (error) {
+    console.error('Error processing meetup payment:', error);
+    throw error;
+  }
+}
+
+// ============================================
+// COURT BOOKING PAYMENT HANDLER
+// ============================================
+
+async function handleCourtBookingPayment(
+  session: Stripe.Checkout.Session,
+  metadata: Record<string, string>
+) {
+  const clubId = metadata.clubId;
+  const odUserId = metadata.odUserId;
+  const slotsJson = metadata.slots;
+
+  if (!clubId || !odUserId) {
+    console.error('Missing clubId or odUserId for court booking');
+    return;
+  }
+
+  console.log(`Processing court booking: club=${clubId}, user=${odUserId}`);
+
+  const db = admin.firestore();
+
+  try {
+    // Get user info for booking
+    const userDoc = await db.collection('users').doc(odUserId).get();
+    const userData = userDoc.exists ? userDoc.data() : null;
+    const userName = userData?.displayName || userData?.email || 'Unknown';
+
+    // Parse slots
+    let slots: Array<{ courtId: string; startTime: string; endTime: string }> = [];
     if (slotsJson) {
       try {
         slots = JSON.parse(slotsJson);
       } catch (e) {
         console.error('Failed to parse slots JSON:', e);
       }
-    } else if (metadata.courtId && metadata.date && metadata.startTime) {
-      // Single slot from individual metadata fields
-      slots = [{
-        courtId: metadata.courtId,
-        date: metadata.date,
-        startTime: metadata.startTime,
-        endTime: metadata.endTime || '',
-      }];
     }
 
     // Create bookings for each slot
-    const bookingIds: string[] = [];
+    for (const slot of slots) {
+      const bookingId = `${slot.courtId}_${slot.startTime}_${odUserId}`;
+      
+      await db.collection('clubs').doc(clubId).collection('court_bookings').doc(bookingId).set({
+        odUserId,
+        odClubId: clubId,
+        courtId: slot.courtId,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        status: 'confirmed',
+        paymentStatus: 'paid',
+        stripeSessionId: session.id,
+        stripePaymentIntentId: session.payment_intent,
+        bookedByName: userName,
+        bookedAt: Date.now(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
 
-    if (clubId && slots.length > 0) {
-      for (const slot of slots) {
-        // Get court info
-        const courtDoc = await admin.firestore()
-          .collection('clubs')
-          .doc(clubId)
-          .collection('courts')
-          .doc(slot.courtId)
-          .get();
-        
-        const courtData = courtDoc.exists ? courtDoc.data() : null;
-        const courtName = courtData?.name || 'Court';
-
-        // Create booking
-        const bookingRef = await admin.firestore()
-          .collection('clubs')
-          .doc(clubId)
-          .collection('bookings')
-          .add({
-            courtId: slot.courtId,
-            courtName,
-            date: slot.date,
-            startTime: slot.startTime,
-            endTime: slot.endTime,
-            bookedByUserId: odUserId,
-            bookedByName: userName,
-            status: 'confirmed',
-            paymentStatus: 'paid',
-            stripeSessionId: session.id,
-            stripePaymentIntentId: session.payment_intent,
-            amount: Math.round((session.amount_total || 0) / slots.length),
-            currency: session.currency || 'nzd',
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-
-        bookingIds.push(bookingRef.id);
-        console.log(`Created booking ${bookingRef.id} for court ${courtName} on ${slot.date} at ${slot.startTime}`);
-      }
+      console.log(`Created booking: ${bookingId}`);
     }
 
-    // Create payment record
-    await admin.firestore().collection('payments').add({
-      stripeSessionId: session.id,
-      stripePaymentIntentId: session.payment_intent,
-      clubId: clubId || null,
-      odUserId,
-      amount: session.amount_total,
-      currency: session.currency,
-      status: 'completed',
-      platformFee: parseInt(metadata.platformFee || '0'),
-      bookingIds,
-      metadata,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    console.log(`Court booking successful: ${slots.length} slots booked for ${userName}`);
 
-    console.log(`Payment recorded successfully with ${bookingIds.length} bookings`);
   } catch (error) {
-    console.error('Error handling checkout complete:', error);
+    console.error('Error processing court booking:', error);
+    throw error;
   }
 }
+
+// ============================================
+// TOURNAMENT PAYMENT HANDLER (PLACEHOLDER)
+// ============================================
+
+async function handleTournamentPayment(
+  session: Stripe.Checkout.Session,
+  metadata: Record<string, string>
+) {
+  const tournamentId = metadata.tournamentId;
+  const divisionId = metadata.divisionId;
+  const odUserId = metadata.odUserId;
+
+  console.log(`Tournament payment: tournament=${tournamentId}, division=${divisionId}, user=${odUserId}`);
+
+  // TODO: Implement tournament registration payment
+  // 1. Update registration paymentStatus to 'paid'
+  // 2. Update tournament account with revenue
+  // 3. Confirm team registration if applicable
+}
+
+// ============================================
+// LEAGUE PAYMENT HANDLER (PLACEHOLDER)
+// ============================================
+
+async function handleLeaguePayment(
+  session: Stripe.Checkout.Session,
+  metadata: Record<string, string>
+) {
+  const leagueId = metadata.leagueId;
+  const odUserId = metadata.odUserId;
+
+  console.log(`League payment: league=${leagueId}, user=${odUserId}`);
+
+  // TODO: Implement league membership payment
+  // 1. Update member paymentStatus to 'paid'
+  // 2. Update league account with revenue
+}
+
+// ============================================
+// ACCOUNT UPDATED HANDLER
+// ============================================
 
 async function handleAccountUpdated(account: Stripe.Account) {
   console.log('Account updated:', account.id);
 
+  const db = admin.firestore();
+
   try {
-    // Find club with this Stripe account
-    const clubsQuery = await admin.firestore()
-      .collection('clubs')
+    // Check if this is a club account
+    const clubsQuery = await db.collection('clubs')
       .where('stripeConnectedAccountId', '==', account.id)
       .limit(1)
       .get();
 
-    if (clubsQuery.empty) {
-      // Check if it's a user account instead
-      const usersQuery = await admin.firestore()
-        .collection('users')
-        .where('stripeConnectedAccountId', '==', account.id)
-        .limit(1)
-        .get();
-
-      if (!usersQuery.empty) {
-        const userDoc = usersQuery.docs[0];
-        await userDoc.ref.update({
-          stripeChargesEnabled: account.charges_enabled,
-          stripePayoutsEnabled: account.payouts_enabled,
-          stripeOnboardingComplete: account.details_submitted,
-          stripeUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        console.log('User Stripe status updated:', userDoc.id);
-        return;
-      }
-
-      console.log('No club or user found for account:', account.id);
+    if (!clubsQuery.empty) {
+      const clubDoc = clubsQuery.docs[0];
+      await clubDoc.ref.update({
+        stripeOnboardingComplete: account.details_submitted,
+        stripeChargesEnabled: account.charges_enabled,
+        stripePayoutsEnabled: account.payouts_enabled,
+        updatedAt: Date.now(),
+      });
+      console.log(`Updated club ${clubDoc.id} Stripe status`);
       return;
     }
 
-    const clubDoc = clubsQuery.docs[0];
+    // Check if this is a user account
+    const usersQuery = await db.collection('users')
+      .where('stripeConnectedAccountId', '==', account.id)
+      .limit(1)
+      .get();
 
-    // Update club with latest account status
-    await clubDoc.ref.update({
-      stripeChargesEnabled: account.charges_enabled,
-      stripePayoutsEnabled: account.payouts_enabled,
-      stripeOnboardingComplete: account.details_submitted,
-      stripeUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    if (!usersQuery.empty) {
+      const userDoc = usersQuery.docs[0];
+      await userDoc.ref.update({
+        stripeOnboardingComplete: account.details_submitted,
+        stripeChargesEnabled: account.charges_enabled,
+        stripePayoutsEnabled: account.payouts_enabled,
+        updatedAt: Date.now(),
+      });
+      console.log(`Updated user ${userDoc.id} Stripe status`);
+      return;
+    }
 
-    console.log('Club Stripe status updated:', clubDoc.id);
+    console.log('No matching club or user found for account:', account.id);
+
   } catch (error) {
     console.error('Error handling account update:', error);
   }
 }
-
-// ============================================
-// USER STRIPE CONNECT - CREATE ACCOUNT
-// ============================================
-
-export const stripe_createUserConnectAccount = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
-  }
-
-  const { userId, userName, userEmail, returnUrl, refreshUrl } = data;
-
-  if (!userId || !userName || !returnUrl || !refreshUrl) {
-    throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
-  }
-
-  // Verify the user is creating their own account
-  if (userId !== context.auth.uid) {
-    throw new functions.https.HttpsError('permission-denied', 'Can only create your own Stripe account');
-  }
-
-  try {
-    // Check if user already has a Stripe account
-    const userDoc = await admin.firestore().collection('users').doc(userId).get();
-    const userData = userDoc.exists ? userDoc.data() : null;
-    let accountId = userData?.stripeConnectedAccountId;
-
-    if (!accountId) {
-      // Create a new Express account for the user
-      const account = await stripe.accounts.create({
-        type: 'express',
-        country: 'NZ',
-        email: userEmail || undefined,
-        business_type: 'individual',
-        individual: {
-          email: userEmail || undefined,
-        },
-        capabilities: {
-          card_payments: { requested: true },
-          transfers: { requested: true },
-        },
-        metadata: {
-          odUserId: userId,
-          userName,
-          accountType: 'organizer',
-        },
-      });
-
-      accountId = account.id;
-
-      // Save account ID to user document
-      await admin.firestore().collection('users').doc(userId).update({
-        isOrganizer: true,
-        stripeConnectedAccountId: accountId,
-        stripeOnboardingComplete: false,
-        stripeChargesEnabled: false,
-        stripePayoutsEnabled: false,
-        stripeCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-    }
-
-    // Create account link for onboarding
-    const accountLink = await stripe.accountLinks.create({
-      account: accountId,
-      refresh_url: refreshUrl,
-      return_url: returnUrl,
-      type: 'account_onboarding',
-    });
-
-    return {
-      url: accountLink.url,
-      accountId,
-    };
-  } catch (error: any) {
-    console.error('Create user Connect account error:', error);
-    throw new functions.https.HttpsError('internal', error.message || 'Failed to create Connect account');
-  }
-});
-
-// ============================================
-// USER STRIPE CONNECT - GET STATUS
-// ============================================
-
-export const stripe_getUserConnectAccountStatus = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
-  }
-
-  const { accountId } = data;
-
-  if (!accountId) {
-    throw new functions.https.HttpsError('invalid-argument', 'Account ID required');
-  }
-
-  try {
-    const account = await stripe.accounts.retrieve(accountId);
-
-    return {
-      isConnected: true,
-      accountId: account.id,
-      chargesEnabled: account.charges_enabled,
-      payoutsEnabled: account.payouts_enabled,
-      detailsSubmitted: account.details_submitted,
-      requirements: {
-        currentlyDue: account.requirements?.currently_due || [],
-        eventuallyDue: account.requirements?.eventually_due || [],
-        pastDue: account.requirements?.past_due || [],
-      },
-    };
-  } catch (error: any) {
-    console.error('Get user account status error:', error);
-    
-    if (error.code === 'resource_missing') {
-      return {
-        isConnected: false,
-        accountId: null,
-      };
-    }
-
-    throw new functions.https.HttpsError('internal', error.message || 'Failed to get account status');
-  }
-});
-
-// ============================================
-// USER STRIPE CONNECT - LOGIN LINK
-// ============================================
-
-export const stripe_createUserConnectLoginLink = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
-  }
-
-  const { accountId } = data;
-
-  if (!accountId) {
-    throw new functions.https.HttpsError('invalid-argument', 'Account ID required');
-  }
-
-  // Verify user owns this account
-  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
-  if (!userDoc.exists || userDoc.data()?.stripeConnectedAccountId !== accountId) {
-    throw new functions.https.HttpsError('permission-denied', 'Not your Stripe account');
-  }
-
-  try {
-    const loginLink = await stripe.accounts.createLoginLink(accountId);
-
-    return {
-      url: loginLink.url,
-    };
-  } catch (error: any) {
-    console.error('Create user login link error:', error);
-    throw new functions.https.HttpsError('internal', error.message || 'Failed to create login link');
-  }
-});
