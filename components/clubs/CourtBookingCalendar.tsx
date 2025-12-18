@@ -417,27 +417,48 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   return (
     <div className="max-w-6xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-4">
-          <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-            Back
-          </button>
-          <h1 className="text-2xl font-bold text-white">Book a Court</h1>
+      <div className="flex items-center gap-4 mb-4">
+        <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          <span className="hidden sm:inline">Back</span>
+        </button>
+        <h1 className="text-xl sm:text-2xl font-bold text-white">Book a Court</h1>
+      </div>
+
+      {/* Mobile-Friendly Date Selector - Horizontal Scroll */}
+      <div className="mb-6">
+        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
+          {dateOptions.map((opt) => {
+            const isSelected = selectedDate === opt.value;
+            const dateObj = new Date(opt.value + 'T00:00:00');
+            const dayName = dateObj.toLocaleDateString('en-NZ', { weekday: 'short' });
+            const dayNum = dateObj.getDate();
+            const monthName = dateObj.toLocaleDateString('en-NZ', { month: 'short' });
+            const isToday = opt.value === new Date().toISOString().split('T')[0];
+            
+            return (
+              <button
+                key={opt.value}
+                onClick={() => setSelectedDate(opt.value)}
+                className={`flex-shrink-0 flex flex-col items-center px-3 py-2 rounded-lg border transition-all min-w-[70px] ${
+                  isSelected
+                    ? 'bg-green-600 border-green-500 text-white'
+                    : 'bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600'
+                }`}
+              >
+                <span className={`text-xs font-medium ${isSelected ? 'text-green-100' : 'text-gray-500'}`}>
+                  {isToday ? 'Today' : dayName}
+                </span>
+                <span className="text-lg font-bold">{dayNum}</span>
+                <span className={`text-xs ${isSelected ? 'text-green-100' : 'text-gray-500'}`}>
+                  {monthName}
+                </span>
+              </button>
+            );
+          })}
         </div>
-        
-        {/* Date Selector */}
-        <select
-          value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-        >
-          {dateOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
       </div>
 
       {/* Payment Success Banner */}
@@ -479,42 +500,52 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
 
       {/* Cart Summary Bar */}
       {selectedSlots.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 p-4 z-40">
-          <div className="max-w-6xl mx-auto flex items-center justify-between">
-            <div>
-              <p className="text-white font-semibold">
-                {selectedSlots.length} {selectedSlots.length === 1 ? 'slot' : 'slots'} selected
-              </p>
-              <p className="text-sm text-gray-400">
-                {selectedSlots.map(s => `${s.courtName} @ ${formatTime(s.time)}`).join(' • ')}
-              </p>
-            </div>
-            
-            <div className="flex items-center gap-4">
-              <div className="text-right">
-                <p className="text-xl font-bold text-white">
-                  {combinedPricing?.isFree ? 'Free' : formatCentsToDisplay(combinedPricing?.finalPrice || 0)}
-                </p>
-                {combinedPricing && combinedPricing.savings > 0 && (
-                  <p className="text-green-300 text-xs">
-                    Save {formatCentsToDisplay(combinedPricing.savings)}
+        <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 p-3 sm:p-4 z-40">
+          <div className="max-w-6xl mx-auto">
+            {/* Mobile Layout */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center justify-between sm:block">
+                <div>
+                  <p className="text-white font-semibold text-sm sm:text-base">
+                    {selectedSlots.length} {selectedSlots.length === 1 ? 'slot' : 'slots'} selected
                   </p>
-                )}
+                  <p className="text-xs sm:text-sm text-gray-400 truncate max-w-[200px] sm:max-w-none">
+                    {selectedSlots.map(s => `${s.courtName} @ ${formatTime(s.time)}`).join(' • ')}
+                  </p>
+                </div>
+                <div className="text-right sm:hidden">
+                  <p className="text-lg font-bold text-white">
+                    {combinedPricing?.isFree ? 'Free' : formatCentsToDisplay(combinedPricing?.finalPrice || 0)}
+                  </p>
+                </div>
               </div>
               
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setSelectedSlots([])}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium"
-                >
-                  Clear
-                </button>
-                <button
-                  onClick={() => setShowCheckout(true)}
-                  className="px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold"
-                >
-                  Book {selectedSlots.length} {selectedSlots.length === 1 ? 'Slot' : 'Slots'}
-                </button>
+              <div className="flex items-center gap-2 sm:gap-4">
+                <div className="text-right hidden sm:block">
+                  <p className="text-xl font-bold text-white">
+                    {combinedPricing?.isFree ? 'Free' : formatCentsToDisplay(combinedPricing?.finalPrice || 0)}
+                  </p>
+                  {combinedPricing && combinedPricing.savings > 0 && (
+                    <p className="text-green-300 text-xs">
+                      Save {formatCentsToDisplay(combinedPricing.savings)}
+                    </p>
+                  )}
+                </div>
+                
+                <div className="flex gap-2 flex-1 sm:flex-none">
+                  <button
+                    onClick={() => setSelectedSlots([])}
+                    className="px-3 sm:px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium text-sm"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    onClick={() => setShowCheckout(true)}
+                    className="flex-1 sm:flex-none px-4 sm:px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold text-sm sm:text-base"
+                  >
+                    Book Now
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -534,121 +565,134 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
       {/* Calendar Grid */}
       {!loading && courts.length > 0 && (
         <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden mb-24">
-          {/* Court Headers */}
-          <div className="grid border-b border-gray-700" style={{ gridTemplateColumns: `80px repeat(${courts.length}, 1fr)` }}>
-            <div className="p-3 bg-gray-900/50 text-xs text-gray-500 font-semibold">TIME</div>
-            {courts.map((court) => (
-              <div key={court.id} className="p-3 bg-gray-900/50 text-center border-l border-gray-700">
-                <div className="font-semibold text-white text-sm">{court.name}</div>
-                {court.description && (
-                  <div className="text-xs text-gray-500">{court.description}</div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Time Slots */}
-          <div className="max-h-[60vh] overflow-y-auto">
-            {timeSlots.map((time) => {
-              const isPast = isSlotInPast(selectedDate, time);
-              
-              return (
-                <div
-                  key={time}
-                  className="grid border-b border-gray-700 last:border-b-0"
-                  style={{ gridTemplateColumns: `80px repeat(${courts.length}, 1fr)` }}
-                >
-                  {/* Time Label */}
-                  <div className={`p-3 text-xs font-mono ${isPast ? 'text-gray-600' : 'text-gray-400'}`}>
-                    {formatTime(time)}
-                  </div>
-
-                  {/* Slots for each court */}
-                  {courts.map((court) => {
-                    const booking = getBookingForSlot(court.id, time);
-                    const pendingHold = getPendingHoldForSlot(court.id, time);
-                    const isSelected = isSlotSelected(court.id, time);
-                    const canBook = isSlotBookable(time);
-                    const isMyBooking = booking?.bookedByUserId === currentUser?.uid;
-                    const isMyHold = pendingHold?.userId === currentUser?.uid;
-
-                    // Determine cell state
-                    let cellClass = 'p-2 border-l border-gray-700 transition-colors ';
-                    let content = null;
-
-                    if (isPast) {
-                      cellClass += 'bg-gray-900/30';
-                      content = <span className="text-gray-600 text-xs">Past</span>;
-                    } else if (booking) {
-                      cellClass += isMyBooking 
-                        ? 'bg-blue-900/30 cursor-pointer hover:bg-blue-900/50' 
-                        : 'bg-red-900/20';
-                      content = (
-                        <div 
-                          className={`text-xs ${isMyBooking ? 'text-blue-300' : 'text-red-300'}`}
-                          onClick={() => isMyBooking && setCancelModal(booking)}
-                        >
-                          <div className="font-semibold">{isMyBooking ? '🎾 Your Booking' : '🔒 Booked'}</div>
-                          <div className="text-gray-400">{booking.bookedByName}</div>
-                        </div>
-                      );
-                    } else if (pendingHold && !isMyHold) {
-                      cellClass += 'bg-yellow-900/20';
-                      content = (
-                        <div className="text-xs text-yellow-300">
-                          <div>⏳ Hold</div>
-                        </div>
-                      );
-                    } else if (isSelected) {
-                      cellClass += 'bg-green-900/50 cursor-pointer hover:bg-green-900/70';
-                      content = (
-                        <button
-                          onClick={() => toggleSlotSelection(court, time)}
-                          className="w-full text-xs text-green-300 font-semibold"
-                        >
-                          ✓ Selected
-                        </button>
-                      );
-                    } else if (canBook) {
-                      cellClass += 'bg-gray-700/30 cursor-pointer hover:bg-green-900/30';
-                      
-                      // Calculate price for display
-                      const slotPricing = settings ? calculateCourtBookingPrice({
-                        court: court as any, // ClubCourt is compatible with Court for pricing
-                        date: selectedDate,
-                        startTime: time,
-                        durationMinutes: settings.slotDurationMinutes,
-                        settings,
-                        isMember,
-                        hasAnnualPass: false,
-                        isVisitor: !isMember && !isAdmin,
-                      }) : null;
-                      
-                      content = (
-                        <button
-                          onClick={() => toggleSlotSelection(court, time)}
-                          className="w-full text-xs"
-                        >
-                          <div className="text-green-400 font-semibold">
-                            {slotPricing?.isFree ? 'Free' : formatCentsToDisplay(slotPricing?.finalPrice || 0)}
-                          </div>
-                          <div className="text-gray-500">+ Select</div>
-                        </button>
-                      );
-                    } else {
-                      cellClass += 'bg-gray-900/30';
-                      content = <span className="text-gray-600 text-xs">—</span>;
-                    }
-
-                    return (
-                      <div key={court.id} className={cellClass}>
-                        {content}
-                      </div>
-                    );
-                  })}
+          {/* Scrollable container for mobile */}
+          <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
+            {/* Min-width ensures columns don't get too narrow on mobile */}
+            <div style={{ minWidth: `${80 + courts.length * 90}px` }}>
+              {/* Court Headers */}
+              <div 
+                className="grid border-b border-gray-700 sticky top-0 z-10 bg-gray-800"
+                style={{ gridTemplateColumns: `70px repeat(${courts.length}, minmax(80px, 1fr))` }}
+              >
+                <div className="p-2 bg-gray-900/50 text-xs text-gray-500 font-semibold flex items-center justify-center">
+                  TIME
                 </div>
-              );
-            })}
+                {courts.map((court) => (
+                  <div key={court.id} className="p-2 bg-gray-900/50 text-center border-l border-gray-700">
+                    <div className="font-semibold text-white text-xs sm:text-sm truncate">{court.name}</div>
+                    {court.description && (
+                      <div className="text-xs text-gray-500 truncate hidden sm:block">{court.description}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Time Slots */}
+              <div className="max-h-[55vh] overflow-y-auto">
+                {timeSlots.map((time) => {
+                  const isPast = isSlotInPast(selectedDate, time);
+                  
+                  return (
+                    <div
+                      key={time}
+                      className="grid border-b border-gray-700 last:border-b-0"
+                      style={{ gridTemplateColumns: `70px repeat(${courts.length}, minmax(80px, 1fr))` }}
+                    >
+                      {/* Time Label */}
+                      <div className={`p-2 text-xs font-mono flex items-center justify-center ${isPast ? 'text-gray-600' : 'text-gray-400'}`}>
+                        {formatTime(time)}
+                      </div>
+
+                      {/* Slots for each court */}
+                      {courts.map((court) => {
+                        const booking = getBookingForSlot(court.id, time);
+                        const pendingHold = getPendingHoldForSlot(court.id, time);
+                        const isSelected = isSlotSelected(court.id, time);
+                        const canBook = isSlotBookable(time);
+                        const isMyBooking = booking?.bookedByUserId === currentUser?.uid;
+                        const isMyHold = pendingHold?.userId === currentUser?.uid;
+
+                        // Determine cell state
+                        let cellClass = 'p-1.5 sm:p-2 border-l border-gray-700 transition-colors flex items-center justify-center min-h-[60px] ';
+                        let content = null;
+
+                        if (isPast) {
+                          cellClass += 'bg-gray-900/30';
+                          content = <span className="text-gray-600 text-xs">Past</span>;
+                        } else if (booking) {
+                          cellClass += isMyBooking 
+                            ? 'bg-blue-900/30 cursor-pointer hover:bg-blue-900/50' 
+                            : 'bg-red-900/20';
+                          content = (
+                            <div 
+                              className={`text-xs text-center ${isMyBooking ? 'text-blue-300' : 'text-red-300'}`}
+                              onClick={() => isMyBooking && setCancelModal(booking)}
+                            >
+                              <div className="font-semibold">{isMyBooking ? '🎾 Yours' : '🔒'}</div>
+                              <div className="text-gray-400 truncate text-[10px] sm:text-xs max-w-[70px]">{booking.bookedByName?.split(' ')[0]}</div>
+                            </div>
+                          );
+                        } else if (pendingHold && !isMyHold) {
+                          cellClass += 'bg-yellow-900/20';
+                          content = (
+                            <div className="text-xs text-yellow-300 text-center">
+                              <div>⏳</div>
+                              <div className="text-[10px]">Hold</div>
+                            </div>
+                          );
+                        } else if (isSelected) {
+                          cellClass += 'bg-green-900/50 cursor-pointer hover:bg-green-900/70';
+                          content = (
+                            <button
+                              onClick={() => toggleSlotSelection(court, time)}
+                              className="w-full text-xs text-green-300 font-semibold text-center"
+                            >
+                              <div>✓</div>
+                              <div className="text-[10px] sm:text-xs">Selected</div>
+                            </button>
+                          );
+                        } else if (canBook) {
+                          cellClass += 'bg-gray-700/30 cursor-pointer hover:bg-green-900/30';
+                          
+                          // Calculate price for display
+                          const slotPricing = settings ? calculateCourtBookingPrice({
+                            court: court as any,
+                            date: selectedDate,
+                            startTime: time,
+                            durationMinutes: settings.slotDurationMinutes,
+                            settings,
+                            isMember,
+                            hasAnnualPass: false,
+                            isVisitor: !isMember && !isAdmin,
+                          }) : null;
+                          
+                          content = (
+                            <button
+                              onClick={() => toggleSlotSelection(court, time)}
+                              className="w-full text-center"
+                            >
+                              <div className="text-green-400 font-semibold text-xs sm:text-sm">
+                                {slotPricing?.isFree ? 'Free' : formatCentsToDisplay(slotPricing?.finalPrice || 0)}
+                              </div>
+                              <div className="text-gray-500 text-[10px] sm:text-xs">Select</div>
+                            </button>
+                          );
+                        } else {
+                          cellClass += 'bg-gray-900/30';
+                          content = <span className="text-gray-600 text-xs">—</span>;
+                        }
+
+                        return (
+                          <div key={court.id} className={cellClass}>
+                            {content}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}

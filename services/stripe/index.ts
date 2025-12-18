@@ -1,41 +1,27 @@
 /**
  * Stripe Service
  * 
- * Handles Stripe integration for the platform:
- * - Stripe Checkout for payments
- * - Stripe Connect for club onboarding
- * - Payment processing and transfers
+ * Client-side Stripe integration for:
+ * - Checkout sessions
+ * - Connect accounts (clubs and users)
+ * - Payment calculations
  * 
  * FILE LOCATION: services/stripe/index.ts
  */
 
-import { loadStripe } from '@stripe/stripe-js';
-import type { Stripe } from '@stripe/stripe-js';
+import { loadStripe, Stripe } from '@stripe/stripe-js';
 import { httpsCallable } from '@firebase/functions';
-import { functions } from '../firebase/config';
+import { functions } from '../firebase';
 
 // ============================================
-// CONFIGURATION
+// STRIPE INITIALIZATION
 // ============================================
 
-// Publishable key (safe for frontend)
-const STRIPE_PUBLISHABLE_KEY = 
-  'pk_test_51SfRmcAX1ucMm7kBSc07uoszxi8BOsqCnf6YVTHYdOJCVYbwdLoS14RxaNxVrtsoUYikNnrcHukragKUDPQNhBq8000RYa4u4S';
-
-// Platform fee percentage (your revenue)
-export const PLATFORM_FEE_PERCENT = 1.5; // 1.5% platform fee
-
-// Stripe instance (singleton)
 let stripePromise: Promise<Stripe | null> | null = null;
 
-// ============================================
-// INITIALIZE STRIPE
-// ============================================
+const STRIPE_PUBLISHABLE_KEY = 'pk_test_51SfRmRAbckg8jC4DDLrQk7z3wG2Mu9L8JJvVeB86tJkWP8gF0mQB9VKxRzGcEqLlVPsqbh0vS5qKUPYHsG0lZwwF00hfBMHJJu';
 
-/**
- * Get the Stripe instance (lazy loaded)
- */
-export const getStripe = (): Promise<Stripe | null> => {
+export const getStripe = () => {
   if (!stripePromise) {
     stripePromise = loadStripe(STRIPE_PUBLISHABLE_KEY);
   }
@@ -43,47 +29,20 @@ export const getStripe = (): Promise<Stripe | null> => {
 };
 
 // ============================================
+// CONSTANTS
+// ============================================
+
+export const PLATFORM_FEE_PERCENT = 1.5;
+export const STRIPE_FEE_PERCENT = 2.9;
+export const STRIPE_FEE_FIXED = 30; // 30 cents
+
+// ============================================
 // TYPES
 // ============================================
 
-export interface CreateCheckoutSessionInput {
-  // What they're buying
-  items: CheckoutLineItem[];
-  
-  // Who's paying
-  customerEmail?: string;
-  customerId?: string;
-  
-  // Who's receiving payment
-  clubId: string;
-  clubStripeAccountId?: string;
-  
-  // URLs
-  successUrl: string;
-  cancelUrl: string;
-  
-  // Metadata for tracking
-  metadata?: Record<string, string>;
-}
-
-export interface CheckoutLineItem {
-  name: string;
-  description?: string;
-  amount: number; // in cents
-  quantity: number;
-}
-
-export interface CreateConnectAccountInput {
-  clubId: string;
-  clubName: string;
-  clubEmail: string;
-  returnUrl: string;
-  refreshUrl: string;
-}
-
 export interface StripeConnectStatus {
   isConnected: boolean;
-  accountId?: string;
+  accountId: string | null;
   chargesEnabled?: boolean;
   payoutsEnabled?: boolean;
   detailsSubmitted?: boolean;
@@ -94,78 +53,73 @@ export interface StripeConnectStatus {
   };
 }
 
+export interface CreateCheckoutSessionInput {
+  items: Array<{
+    name: string;
+    description?: string;
+    amount: number; // in cents
+    quantity: number;
+  }>;
+  customerEmail?: string;
+  clubId?: string;
+  clubStripeAccountId?: string;
+  organizerStripeAccountId?: string; // NEW: For meetup/league organizers
+  successUrl: string;
+  cancelUrl: string;
+  metadata?: Record<string, string>;
+}
+
+export interface CreateConnectAccountInput {
+  clubId: string;
+  clubName: string;
+  clubEmail?: string;
+  returnUrl: string;
+  refreshUrl: string;
+}
+
+// NEW: User connect account input
+export interface CreateUserConnectAccountInput {
+  userId: string;
+  userName: string;
+  userEmail?: string;
+  returnUrl: string;
+  refreshUrl: string;
+}
+
 // ============================================
-// CHECKOUT SESSION (Client-side redirect)
+// CHECKOUT FUNCTIONS
 // ============================================
 
 /**
- * Redirect to Stripe Checkout
- * This redirects to a Stripe-hosted checkout page using the session URL
+ * Redirect to Stripe Checkout page
  */
-export const redirectToCheckout = async (sessionUrl: string): Promise<void> => {
-  // For newer Stripe API, we just redirect to the session URL directly
-  window.location.href = sessionUrl;
+export const redirectToCheckout = async (url: string): Promise<void> => {
+  window.location.href = url;
 };
 
 /**
- * Alternative: Redirect using session ID (legacy method)
- * Only use if your backend returns a session ID instead of URL
+ * Redirect to Checkout using session ID
+ * Handles both old and new Stripe.js API versions
  */
 export const redirectToCheckoutById = async (sessionId: string): Promise<void> => {
   const stripe = await getStripe();
-  if (!stripe) {
-    throw new Error('Stripe failed to load');
+  if (!stripe) throw new Error('Stripe not loaded');
+
+  // Try the old API first (for compatibility)
+  if (typeof (stripe as any).redirectToCheckout === 'function') {
+    const { error } = await (stripe as any).redirectToCheckout({ sessionId });
+    if (error) {
+      throw new Error(error.message);
+    }
+  } else {
+    // Fallback: redirect directly to Stripe checkout URL
+    // This works when you have the session URL from createCheckoutSession
+    throw new Error('Please use redirectToCheckout(url) with the session URL instead');
   }
-  
-  // Use type assertion since the method exists at runtime
-  const result = await (stripe as any).redirectToCheckout({ sessionId });
-  if (result?.error) {
-    throw new Error(result.error.message || 'Failed to redirect to checkout');
-  }
 };
-
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
-
-/**
- * Calculate platform fee in cents
- */
-export const calculatePlatformFee = (amount: number, feePercent: number = PLATFORM_FEE_PERCENT): number => {
-  return Math.round(amount * (feePercent / 100));
-};
-
-/**
- * Calculate club payout (after platform fee)
- */
-export const calculateClubPayout = (amount: number, feePercent: number = PLATFORM_FEE_PERCENT): number => {
-  const platformFee = calculatePlatformFee(amount, feePercent);
-  return amount - platformFee;
-};
-
-/**
- * Format amount for Stripe (already in cents, just validate)
- */
-export const formatAmountForStripe = (cents: number): number => {
-  return Math.round(cents);
-};
-
-/**
- * Check if club has completed Stripe onboarding
- */
-export const isClubStripeReady = (status: StripeConnectStatus): boolean => {
-  return status.isConnected && 
-         status.chargesEnabled === true && 
-         status.payoutsEnabled === true;
-};
-
-// ============================================
-// FIREBASE CALLABLE FUNCTIONS
-// ============================================
 
 /**
  * Create a Checkout Session via Cloud Function
- * Returns session ID and URL to redirect to
  */
 export const createCheckoutSession = async (
   input: CreateCheckoutSessionInput
@@ -184,9 +138,12 @@ export const createCheckoutSession = async (
   }
 };
 
+// ============================================
+// CLUB STRIPE CONNECT FUNCTIONS
+// ============================================
+
 /**
- * Create a Connect Account onboarding link
- * Returns URL to redirect club admin to
+ * Create a Connect Account onboarding link for clubs
  */
 export const createConnectAccountLink = async (
   input: CreateConnectAccountInput
@@ -246,6 +203,168 @@ export const createConnectLoginLink = async (
 };
 
 // ============================================
+// USER STRIPE CONNECT FUNCTIONS (NEW)
+// ============================================
+
+/**
+ * Create a Connect Account onboarding link for individual organizers
+ */
+export const createUserConnectAccountLink = async (
+  input: CreateUserConnectAccountInput
+): Promise<{ url: string; accountId: string }> => {
+  try {
+    const callable = httpsCallable<CreateUserConnectAccountInput, { url: string; accountId: string }>(
+      functions,
+      'stripe_createUserConnectAccount'
+    );
+    
+    const result = await callable(input);
+    return result.data;
+  } catch (error: any) {
+    console.error('createUserConnectAccountLink error:', error);
+    throw new Error(error.message || 'Failed to create user Connect account link');
+  }
+};
+
+/**
+ * Get User Connect Account status
+ */
+export const getUserConnectAccountStatus = async (
+  accountId: string
+): Promise<StripeConnectStatus> => {
+  try {
+    const callable = httpsCallable<{ accountId: string }, StripeConnectStatus>(
+      functions,
+      'stripe_getUserConnectAccountStatus'
+    );
+    
+    const result = await callable({ accountId });
+    return result.data;
+  } catch (error: any) {
+    console.error('getUserConnectAccountStatus error:', error);
+    throw new Error(error.message || 'Failed to get user account status');
+  }
+};
+
+/**
+ * Create a User Connect Account login link (for dashboard access)
+ */
+export const createUserConnectLoginLink = async (
+  accountId: string
+): Promise<{ url: string }> => {
+  try {
+    const callable = httpsCallable<{ accountId: string }, { url: string }>(
+      functions,
+      'stripe_createUserConnectLoginLink'
+    );
+    
+    const result = await callable({ accountId });
+    return result.data;
+  } catch (error: any) {
+    console.error('createUserConnectLoginLink error:', error);
+    throw new Error(error.message || 'Failed to create user login link');
+  }
+};
+
+// ============================================
+// FEE CALCULATIONS
+// ============================================
+
+export interface FeeCalculation {
+  subtotal: number;           // Base price
+  platformFee: number;        // Our 1.5%
+  stripeFee: number;          // Stripe's ~2.9% + 30¢
+  totalFees: number;          // Platform + Stripe
+  organizerReceives: number;  // What organizer gets
+  playerPays: number;         // Total player pays (if fees passed on)
+}
+
+/**
+ * Calculate all fees for a transaction
+ * @param amount - Base amount in cents
+ * @param feesPaidBy - Who pays the platform and stripe fees
+ */
+export const calculateFees = (
+  amount: number,
+  feesPaidBy: 'organizer' | 'player' = 'organizer'
+): FeeCalculation => {
+  const platformFee = Math.round(amount * (PLATFORM_FEE_PERCENT / 100));
+  const stripeFee = Math.round(amount * (STRIPE_FEE_PERCENT / 100)) + STRIPE_FEE_FIXED;
+  const totalFees = platformFee + stripeFee;
+
+  if (feesPaidBy === 'organizer') {
+    // Organizer absorbs fees
+    return {
+      subtotal: amount,
+      platformFee,
+      stripeFee,
+      totalFees,
+      organizerReceives: amount - totalFees,
+      playerPays: amount,
+    };
+  } else {
+    // Player pays fees - we need to calculate the amount that after fees equals original
+    // player_pays - stripe_fee(player_pays) - platform_fee = amount
+    // player_pays * (1 - stripe_rate) - stripe_fixed - platform_fee = amount
+    // We'll use a simpler approach: add fees on top
+    const playerPays = amount + totalFees;
+    const actualStripeFee = Math.round(playerPays * (STRIPE_FEE_PERCENT / 100)) + STRIPE_FEE_FIXED;
+    
+    return {
+      subtotal: amount,
+      platformFee,
+      stripeFee: actualStripeFee,
+      totalFees: platformFee + actualStripeFee,
+      organizerReceives: amount,
+      playerPays,
+    };
+  }
+};
+
+/**
+ * Calculate platform fee only
+ */
+export const calculatePlatformFee = (amount: number): number => {
+  return Math.round(amount * (PLATFORM_FEE_PERCENT / 100));
+};
+
+/**
+ * Calculate what club/organizer receives after platform fee
+ */
+export const calculateOrganizerPayout = (amount: number): number => {
+  const platformFee = calculatePlatformFee(amount);
+  return amount - platformFee;
+};
+
+// Legacy alias
+export const calculateClubPayout = calculateOrganizerPayout;
+
+/**
+ * Format amount for Stripe (already in cents, just validate)
+ */
+export const formatAmountForStripe = (cents: number): number => {
+  return Math.round(cents);
+};
+
+/**
+ * Check if club has completed Stripe onboarding
+ */
+export const isClubStripeReady = (status: StripeConnectStatus): boolean => {
+  return status.isConnected && 
+         status.chargesEnabled === true && 
+         status.payoutsEnabled === true;
+};
+
+/**
+ * Check if user has completed Stripe onboarding
+ */
+export const isUserStripeReady = (status: StripeConnectStatus): boolean => {
+  return status.isConnected && 
+         status.chargesEnabled === true && 
+         status.payoutsEnabled === true;
+};
+
+// ============================================
 // EXPORTS
 // ============================================
 
@@ -254,11 +373,22 @@ export default {
   redirectToCheckout,
   redirectToCheckoutById,
   createCheckoutSession,
+  // Club connect
   createConnectAccountLink,
   getConnectAccountStatus,
   createConnectLoginLink,
-  calculatePlatformFee,
-  calculateClubPayout,
   isClubStripeReady,
+  // User connect
+  createUserConnectAccountLink,
+  getUserConnectAccountStatus,
+  createUserConnectLoginLink,
+  isUserStripeReady,
+  // Calculations
+  calculateFees,
+  calculatePlatformFee,
+  calculateOrganizerPayout,
+  calculateClubPayout,
   PLATFORM_FEE_PERCENT,
+  STRIPE_FEE_PERCENT,
+  STRIPE_FEE_FIXED,
 };

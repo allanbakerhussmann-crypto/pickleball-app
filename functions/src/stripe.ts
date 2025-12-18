@@ -453,7 +453,26 @@ async function handleAccountUpdated(account: Stripe.Account) {
       .get();
 
     if (clubsQuery.empty) {
-      console.log('No club found for account:', account.id);
+      // Check if it's a user account instead
+      const usersQuery = await admin.firestore()
+        .collection('users')
+        .where('stripeConnectedAccountId', '==', account.id)
+        .limit(1)
+        .get();
+
+      if (!usersQuery.empty) {
+        const userDoc = usersQuery.docs[0];
+        await userDoc.ref.update({
+          stripeChargesEnabled: account.charges_enabled,
+          stripePayoutsEnabled: account.payouts_enabled,
+          stripeOnboardingComplete: account.details_submitted,
+          stripeUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log('User Stripe status updated:', userDoc.id);
+        return;
+      }
+
+      console.log('No club or user found for account:', account.id);
       return;
     }
 
@@ -472,3 +491,158 @@ async function handleAccountUpdated(account: Stripe.Account) {
     console.error('Error handling account update:', error);
   }
 }
+
+// ============================================
+// USER STRIPE CONNECT - CREATE ACCOUNT
+// ============================================
+
+export const stripe_createUserConnectAccount = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+  }
+
+  const { userId, userName, userEmail, returnUrl, refreshUrl } = data;
+
+  if (!userId || !userName || !returnUrl || !refreshUrl) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
+  }
+
+  // Verify the user is creating their own account
+  if (userId !== context.auth.uid) {
+    throw new functions.https.HttpsError('permission-denied', 'Can only create your own Stripe account');
+  }
+
+  try {
+    // Check if user already has a Stripe account
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    const userData = userDoc.exists ? userDoc.data() : null;
+    let accountId = userData?.stripeConnectedAccountId;
+
+    if (!accountId) {
+      // Create a new Express account for the user
+      const account = await stripe.accounts.create({
+        type: 'express',
+        country: 'NZ',
+        email: userEmail || undefined,
+        business_type: 'individual',
+        individual: {
+          email: userEmail || undefined,
+        },
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true },
+        },
+        metadata: {
+          odUserId: userId,
+          userName,
+          accountType: 'organizer',
+        },
+      });
+
+      accountId = account.id;
+
+      // Save account ID to user document
+      await admin.firestore().collection('users').doc(userId).update({
+        isOrganizer: true,
+        stripeConnectedAccountId: accountId,
+        stripeOnboardingComplete: false,
+        stripeChargesEnabled: false,
+        stripePayoutsEnabled: false,
+        stripeCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Create account link for onboarding
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: refreshUrl,
+      return_url: returnUrl,
+      type: 'account_onboarding',
+    });
+
+    return {
+      url: accountLink.url,
+      accountId,
+    };
+  } catch (error: any) {
+    console.error('Create user Connect account error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create Connect account');
+  }
+});
+
+// ============================================
+// USER STRIPE CONNECT - GET STATUS
+// ============================================
+
+export const stripe_getUserConnectAccountStatus = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+  }
+
+  const { accountId } = data;
+
+  if (!accountId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Account ID required');
+  }
+
+  try {
+    const account = await stripe.accounts.retrieve(accountId);
+
+    return {
+      isConnected: true,
+      accountId: account.id,
+      chargesEnabled: account.charges_enabled,
+      payoutsEnabled: account.payouts_enabled,
+      detailsSubmitted: account.details_submitted,
+      requirements: {
+        currentlyDue: account.requirements?.currently_due || [],
+        eventuallyDue: account.requirements?.eventually_due || [],
+        pastDue: account.requirements?.past_due || [],
+      },
+    };
+  } catch (error: any) {
+    console.error('Get user account status error:', error);
+    
+    if (error.code === 'resource_missing') {
+      return {
+        isConnected: false,
+        accountId: null,
+      };
+    }
+
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to get account status');
+  }
+});
+
+// ============================================
+// USER STRIPE CONNECT - LOGIN LINK
+// ============================================
+
+export const stripe_createUserConnectLoginLink = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+  }
+
+  const { accountId } = data;
+
+  if (!accountId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Account ID required');
+  }
+
+  // Verify user owns this account
+  const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
+  if (!userDoc.exists || userDoc.data()?.stripeConnectedAccountId !== accountId) {
+    throw new functions.https.HttpsError('permission-denied', 'Not your Stripe account');
+  }
+
+  try {
+    const loginLink = await stripe.accounts.createLoginLink(accountId);
+
+    return {
+      url: loginLink.url,
+    };
+  } catch (error: any) {
+    console.error('Create user login link error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create login link');
+  }
+});
