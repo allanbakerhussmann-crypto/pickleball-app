@@ -3,12 +3,13 @@
  * 
  * Shows club details, members, tournaments, and court booking
  * Includes Settings tab for admins with Stripe Connect
- * Handles payment success/cancel URL parameters
+ * Handles payment success/cancel URL parameters (HashRouter compatible)
  * 
  * FILE LOCATION: components/ClubDetailPage.tsx
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { 
     subscribeToClub, 
@@ -35,6 +36,8 @@ interface ClubDetailPageProps {
 
 export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }) => {
     const { currentUser, isAppAdmin } = useAuth();
+    const [searchParams, setSearchParams] = useSearchParams();
+    
     const [club, setClub] = useState<Club | null>(null);
     const [requests, setRequests] = useState<ClubJoinRequest[]>([]);
     const [requestUsers, setRequestUsers] = useState<Record<string, UserProfile>>({});
@@ -56,11 +59,12 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     const [paymentSuccess, setPaymentSuccess] = useState(false);
     const [paymentError, setPaymentError] = useState<string | null>(null);
 
-    // Check URL parameters for tab and payment status
+    // Check URL parameters for tab and payment status (HashRouter compatible)
     useEffect(() => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const tabParam = urlParams.get('tab');
-        const paymentParam = urlParams.get('payment');
+        const tabParam = searchParams.get('tab');
+        const paymentParam = searchParams.get('payment');
+        
+        console.log('URL Params:', { tabParam, paymentParam });
         
         // Handle tab parameter
         if (tabParam === 'booking') {
@@ -70,21 +74,22 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
         
         // Handle payment success
         if (paymentParam === 'success') {
+            console.log('Payment success detected!');
             setPaymentSuccess(true);
             setActiveTab('courts');
             setShowCourtCalendar(true);
-            // Banner stays until user dismisses it
+            
+            // Clear URL params after reading them
+            setSearchParams({});
         } else if (paymentParam === 'cancelled') {
             setPaymentError('Payment was cancelled. Your booking was not completed.');
             setActiveTab('courts');
             setShowCourtCalendar(true);
+            
+            // Clear URL params
+            setSearchParams({});
         }
-        
-        // Clear URL params
-        if (tabParam || paymentParam) {
-            window.history.replaceState({}, '', window.location.pathname);
-        }
-    }, []);
+    }, [searchParams, setSearchParams]);
 
     // Function to load booking settings - can be called multiple times
     const loadBookingSettings = useCallback(async () => {

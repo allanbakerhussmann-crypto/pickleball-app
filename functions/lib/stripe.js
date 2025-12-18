@@ -57,7 +57,7 @@ if (!admin.apps.length) {
 }
 // Initialize Stripe with your secret key
 const stripe = new stripe_1.default(((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.secret_key) ||
-    'sk_test_51SfRmcAX1ucMm7kBCgn9NkrnydakcyyLBNQj2N3IFFfiPKvxaexcVjSYHYOJlS9Q5bnmDW1aP8ipEXkp1XJEHJbY00IfxbFOo7', { apiVersion: '2025-12-15.clover' });
+    'sk_test_51SfRmRAbckg8jC4DL2WMiwN3KWk4NP3GzP1RsLp8mrk8PALZF734VhcHwbnAIIPeHCKM0A0xviOhKch7V8AMzOWS0032p75RHd', { apiVersion: '2023-10-16' });
 // Platform fee percentage (1.5%)
 const PLATFORM_FEE_PERCENT = 1.5;
 // ============================================
@@ -79,7 +79,7 @@ exports.stripe_createConnectAccount = functions.https.onCall(async (data, contex
         throw new functions.https.HttpsError('not-found', 'Club not found');
     }
     const clubData = clubDoc.data();
-    const isAdmin = ((_a = clubData.adminIds) === null || _a === void 0 ? void 0 : _a.includes(context.auth.uid)) || clubData.createdBy === context.auth.uid;
+    const isAdmin = ((_a = clubData.admins) === null || _a === void 0 ? void 0 : _a.includes(context.auth.uid)) || clubData.createdByUserId === context.auth.uid;
     if (!isAdmin) {
         throw new functions.https.HttpsError('permission-denied', 'Must be club admin');
     }

@@ -21,8 +21,8 @@ if (!admin.apps.length) {
 // Initialize Stripe with your secret key
 const stripe = new Stripe(
   functions.config().stripe?.secret_key || 
-  'sk_test_51SfRmcAX1ucMm7kBCgn9NkrnydakcyyLBNQj2N3IFFfiPKvxaexcVjSYHYOJlS9Q5bnmDW1aP8ipEXkp1XJEHJbY00IfxbFOo7',
-  { apiVersion: '2025-12-15.clover' as any }
+  'sk_test_51SfRmRAbckg8jC4DL2WMiwN3KWk4NP3GzP1RsLp8mrk8PALZF734VhcHwbnAIIPeHCKM0A0xviOhKch7V8AMzOWS0032p75RHd',
+  { apiVersion: '2023-10-16' as any }
 );
 
 // Platform fee percentage (1.5%)
@@ -51,7 +51,7 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
   }
 
   const clubData = clubDoc.data()!;
-  const isAdmin = clubData.adminIds?.includes(context.auth.uid) || clubData.createdBy === context.auth.uid;
+  const isAdmin = clubData.admins?.includes(context.auth.uid) || clubData.createdByUserId === context.auth.uid;
 
   if (!isAdmin) {
     throw new functions.https.HttpsError('permission-denied', 'Must be club admin');
