@@ -17,8 +17,7 @@ import {
   collection, 
   query, 
   where, 
-  orderBy, 
-  onSnapshot,
+  getDocs,
   Timestamp,
 } from '@firebase/firestore';
 import { db } from '../../services/firebase';
@@ -92,22 +91,75 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Subscribe to user's bookings
+  // Load user's bookings - using getDocs instead of onSnapshot to avoid index issues
   useEffect(() => {
     if (!currentUser) {
       setLoading(false);
       return;
     }
 
-    const bookingsRef = collection(db, 'clubs', clubId, 'bookings');
-    const q = query(
-      bookingsRef,
-      where('bookedByUserId', '==', currentUser.uid),
-      orderBy('date', 'desc')
-    );
+    const loadBookings = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        // Simple query with just one where clause - no composite index needed
+        const bookingsRef = collection(db, 'clubs', clubId, 'bookings');
+        const q = query(
+          bookingsRef,
+          where('bookedByUserId', '==', currentUser.uid)
+        );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+        const snapshot = await getDocs(q);
+        const bookingsList: CourtBookingWithPayment[] = [];
+        
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          bookingsList.push({
+            id: doc.id,
+            ...data,
+            createdAt: data.createdAt instanceof Timestamp 
+              ? data.createdAt.toMillis() 
+              : data.createdAt || Date.now(),
+            updatedAt: data.updatedAt instanceof Timestamp
+              ? data.updatedAt.toMillis()
+              : data.updatedAt || Date.now(),
+          } as CourtBookingWithPayment);
+        });
+        
+        // Sort by date descending in JavaScript
+        bookingsList.sort((a, b) => {
+          const dateCompare = b.date.localeCompare(a.date);
+          if (dateCompare !== 0) return dateCompare;
+          return b.startTime.localeCompare(a.startTime);
+        });
+        
+        setBookings(bookingsList);
+      } catch (err: any) {
+        console.error('Failed to load bookings:', err);
+        setError('Failed to load your bookings. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadBookings();
+  }, [clubId, currentUser]);
+
+  // Refresh bookings after cancel
+  const refreshBookings = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const bookingsRef = collection(db, 'clubs', clubId, 'bookings');
+      const q = query(
+        bookingsRef,
+        where('bookedByUserId', '==', currentUser.uid)
+      );
+
+      const snapshot = await getDocs(q);
       const bookingsList: CourtBookingWithPayment[] = [];
+      
       snapshot.forEach((doc) => {
         const data = doc.data();
         bookingsList.push({
@@ -115,23 +167,28 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
           ...data,
           createdAt: data.createdAt instanceof Timestamp 
             ? data.createdAt.toMillis() 
-            : data.createdAt,
+            : data.createdAt || Date.now(),
+          updatedAt: data.updatedAt instanceof Timestamp
+            ? data.updatedAt.toMillis()
+            : data.updatedAt || Date.now(),
         } as CourtBookingWithPayment);
       });
+      
+      bookingsList.sort((a, b) => {
+        const dateCompare = b.date.localeCompare(a.date);
+        if (dateCompare !== 0) return dateCompare;
+        return b.startTime.localeCompare(a.startTime);
+      });
+      
       setBookings(bookingsList);
-      setLoading(false);
-    }, (err) => {
-      console.error('Failed to load bookings:', err);
-      setError('Failed to load your bookings');
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [clubId, currentUser]);
+    } catch (err) {
+      console.error('Failed to refresh bookings:', err);
+    }
+  };
 
   // Filter bookings
   const filteredBookings = bookings.filter((booking) => {
-    // Check if cancelled (cancelledAt field exists)
+    // Check if cancelled
     const isCancelled = !!booking.cancelledAt;
     
     if (isCancelled) {
@@ -176,6 +233,9 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
       
       await cancelCourtBooking(clubId, cancelModal.id, currentUser.uid);
       setCancelModal(null);
+      
+      // Refresh the list
+      await refreshBookings();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -207,6 +267,18 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
           </button>
           <h1 className="text-2xl font-bold text-white">My Bookings</h1>
         </div>
+        
+        {/* Refresh Button */}
+        <button
+          onClick={refreshBookings}
+          disabled={loading}
+          className="text-gray-400 hover:text-white p-2"
+          title="Refresh"
+        >
+          <svg className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
       </div>
 
       {/* Stats */}

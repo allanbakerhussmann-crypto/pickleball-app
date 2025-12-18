@@ -267,15 +267,20 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         metadata.endTime = itemDetails.endTime || '';
       }
 
+      // IMPORTANT: Use hash-based URLs for HashRouter compatibility
+      // The app uses createHashRouter, so URLs are like /#/clubs/123
+      const baseUrl = window.location.origin;
+      const successUrl = `${baseUrl}/#/clubs/${clubId}?tab=booking&payment=success&session_id={CHECKOUT_SESSION_ID}`;
+      const cancelUrl = `${baseUrl}/#/clubs/${clubId}?tab=booking&payment=cancelled`;
+
       // Create Stripe Checkout session
-      // IMPORTANT: Redirect back to booking tab with payment=success
       const { url } = await createCheckoutSession({
         items: lineItems,
         customerEmail: currentUser.email || undefined,
         clubId,
         clubStripeAccountId: clubStripeAccountId || undefined,
-        successUrl: `${window.location.origin}/clubs/${clubId}?tab=booking&payment=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancelUrl: `${window.location.origin}/clubs/${clubId}?tab=booking&payment=cancelled`,
+        successUrl,
+        cancelUrl,
         metadata,
       });
 
