@@ -1,14 +1,14 @@
 /**
  * CourtBookingCalendar Component
  * 
- * Main calendar view for booking courts with integrated checkout system.
+ * Main calendar view for booking courts with Stripe checkout integration.
  * 
  * Features:
  * - View available courts and time slots
  * - SELECT MULTIPLE SLOTS (cart system)
- * - Book all selected slots with single payment
+ * - Pay via Stripe Checkout
  * - Cancel bookings
- * - Shows pending holds from other users
+ * - Handle payment success/cancel returns
  * 
  * FILE LOCATION: components/clubs/CourtBookingCalendar.tsx
  */
@@ -21,7 +21,6 @@ import {
   getClubBookingSettings,
   createCourtBooking,
   cancelCourtBooking,
-  canUserBook,
   canCancelBooking,
   generateTimeSlots,
   calculateEndTime,
@@ -81,6 +80,9 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   // Checkout modal state
   const [showCheckout, setShowCheckout] = useState(false);
   
+  // Payment success state
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  
   // Cancel modal state
   const [cancelModal, setCancelModal] = useState<CourtBooking | null>(null);
   const [processing, setProcessing] = useState(false);
@@ -93,6 +95,24 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     const displayHours = hours % 12 || 12;
     return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
   };
+
+  // Check for payment success/cancel from URL
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentStatus = urlParams.get('payment');
+    
+    if (paymentStatus === 'success') {
+      setPaymentSuccess(true);
+      // Clear the URL params
+      window.history.replaceState({}, '', window.location.pathname);
+      
+      // Auto-hide success message after 5 seconds
+      setTimeout(() => setPaymentSuccess(false), 5000);
+    } else if (paymentStatus === 'cancelled') {
+      setError('Payment was cancelled. Your booking was not completed.');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   // Load settings
   useEffect(() => {
@@ -222,7 +242,7 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
 
       // Calculate pricing for this slot
       const pricing = calculateCourtBookingPrice({
-        court,
+        court: court as any, // ClubCourt is compatible with Court for pricing
         date: selectedDate,
         startTime: time,
         durationMinutes: settings.slotDurationMinutes,
@@ -272,7 +292,8 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
       finalPrice: totalFinal,
       savings: totalSavings,
       lineItems,
-      priceLabel: selectedSlots.length > 1 ? `${selectedSlots.length} Slots` : selectedSlots[0].pricing.priceLabel,
+      priceLabel: selectedSlots.length > 1 ? 
+        `${selectedSlots.length} Slots` : selectedSlots[0].pricing.priceLabel,
       currency: 'nzd',
       isFree: totalFinal === 0,
     };
@@ -308,8 +329,22 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     };
   }, [selectedSlots, selectedDate, clubId, clubName, settings]);
 
-  // Handle checkout success - create all bookings
-  const handleCheckoutSuccess = async (checkout: CheckoutItem) => {
+  // Build allSlots array for CheckoutModal
+  const allSlotsForCheckout = useMemo(() => {
+    if (!settings) return [];
+    
+    return selectedSlots.map(slot => ({
+      courtId: slot.courtId,
+      courtName: slot.courtName,
+      date: selectedDate,
+      startTime: slot.time,
+      endTime: calculateEndTime(slot.time, settings.slotDurationMinutes),
+      pricing: slot.pricing,
+    }));
+  }, [selectedSlots, selectedDate, settings]);
+
+  // Handle checkout success (for free bookings)
+  const handleCheckoutSuccess = async (_checkout: CheckoutItem) => {
     if (!settings || !currentUser || !userProfile) return;
 
     try {
@@ -329,6 +364,8 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
       // Clear cart and close checkout
       setSelectedSlots([]);
       setShowCheckout(false);
+      setPaymentSuccess(true);
+      setTimeout(() => setPaymentSuccess(false), 5000);
     } catch (err: any) {
       console.error('Failed to create bookings after payment:', err);
       setError(err.message || 'Failed to complete booking');
@@ -371,16 +408,8 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
         </button>
         <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
           <h2 className="text-xl font-bold text-white mb-2">Court Booking Not Available</h2>
-          <p className="text-gray-400">This club hasn't enabled court booking yet.</p>
+          <p className="text-gray-400">This club has not enabled court booking yet.</p>
         </div>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
       </div>
     );
   }
@@ -389,20 +418,47 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
     <div className="max-w-6xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white mb-2">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
-            Back to Club
+            Back
           </button>
-          <h1 className="text-2xl font-bold text-white">Court Booking</h1>
+          <h1 className="text-2xl font-bold text-white">Book a Court</h1>
         </div>
+        
+        {/* Date Selector */}
+        <select
+          value={selectedDate}
+          onChange={(e) => setSelectedDate(e.target.value)}
+          className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+        >
+          {dateOptions.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
       </div>
 
-      {/* Error Message */}
+      {/* Payment Success Banner */}
+      {paymentSuccess && (
+        <div className="bg-green-900/50 border border-green-700 text-green-200 px-4 py-3 rounded-lg mb-6 flex items-center gap-3">
+          <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          <span className="font-medium">Payment successful! Your booking has been confirmed.</span>
+          <button 
+            onClick={() => setPaymentSuccess(false)}
+            className="ml-auto text-green-300 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Error Banner */}
       {error && (
-        <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-4">
+        <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-6">
           {error}
           <button 
             onClick={() => setError(null)}
@@ -413,46 +469,30 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
         </div>
       )}
 
-      {/* Date Selector */}
-      <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
-        {dateOptions.map((d) => (
-          <button
-            key={d.value}
-            onClick={() => setSelectedDate(d.value)}
-            className={`px-4 py-2 rounded-lg whitespace-nowrap transition-colors ${
-              selectedDate === d.value
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-            }`}
-          >
-            {d.label}
-          </button>
-        ))}
-      </div>
+      {/* Loading */}
+      {loading && (
+        <div className="text-center py-12">
+          <div className="animate-spin w-8 h-8 border-4 border-green-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p className="text-gray-400">Loading courts...</p>
+        </div>
+      )}
 
-      {/* Selected Slots Cart */}
+      {/* Cart Summary Bar */}
       {selectedSlots.length > 0 && (
-        <div className="bg-green-900/30 border border-green-700 rounded-xl p-4 mb-6">
-          <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 p-4 z-40">
+          <div className="max-w-6xl mx-auto flex items-center justify-between">
             <div>
-              <h3 className="text-green-400 font-semibold flex items-center gap-2">
-                <span>🛒</span>
-                {selectedSlots.length} {selectedSlots.length === 1 ? 'Slot' : 'Slots'} Selected
-              </h3>
-              <div className="text-sm text-gray-300 mt-1">
-                {selectedSlots.map((slot, i) => (
-                  <span key={`${slot.courtId}-${slot.time}`}>
-                    {i > 0 && ' • '}
-                    {slot.courtName} @ {formatTime(slot.time)}
-                  </span>
-                ))}
-              </div>
+              <p className="text-white font-semibold">
+                {selectedSlots.length} {selectedSlots.length === 1 ? 'slot' : 'slots'} selected
+              </p>
+              <p className="text-sm text-gray-400">
+                {selectedSlots.map(s => `${s.courtName} @ ${formatTime(s.time)}`).join(' • ')}
+              </p>
             </div>
             
             <div className="flex items-center gap-4">
               <div className="text-right">
-                <p className="text-gray-400 text-sm">Total</p>
-                <p className="text-green-400 font-bold text-xl">
+                <p className="text-xl font-bold text-white">
                   {combinedPricing?.isFree ? 'Free' : formatCentsToDisplay(combinedPricing?.finalPrice || 0)}
                 </p>
                 {combinedPricing && combinedPricing.savings > 0 && (
@@ -482,7 +522,7 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
       )}
 
       {/* No Courts Message */}
-      {courts.length === 0 && (
+      {!loading && courts.length === 0 && (
         <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
           <h3 className="text-lg font-bold text-white mb-2">No Courts Available</h3>
           <p className="text-gray-400 text-sm">
@@ -492,8 +532,8 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
       )}
 
       {/* Calendar Grid */}
-      {courts.length > 0 && (
-        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+      {!loading && courts.length > 0 && (
+        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden mb-24">
           {/* Court Headers */}
           <div className="grid border-b border-gray-700" style={{ gridTemplateColumns: `80px repeat(${courts.length}, 1fr)` }}>
             <div className="p-3 bg-gray-900/50 text-xs text-gray-500 font-semibold">TIME</div>
@@ -523,76 +563,86 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
                     {formatTime(time)}
                   </div>
 
-                  {/* Court Slots */}
+                  {/* Slots for each court */}
                   {courts.map((court) => {
                     const booking = getBookingForSlot(court.id, time);
                     const pendingHold = getPendingHoldForSlot(court.id, time);
                     const isSelected = isSlotSelected(court.id, time);
-                    const canBook = isSlotBookable(time) && !booking && !pendingHold;
+                    const canBook = isSlotBookable(time);
                     const isMyBooking = booking?.bookedByUserId === currentUser?.uid;
                     const isMyHold = pendingHold?.userId === currentUser?.uid;
-                    const canCancelThis = isMyBooking || isAdmin;
+
+                    // Determine cell state
+                    let cellClass = 'p-2 border-l border-gray-700 transition-colors ';
+                    let content = null;
+
+                    if (isPast) {
+                      cellClass += 'bg-gray-900/30';
+                      content = <span className="text-gray-600 text-xs">Past</span>;
+                    } else if (booking) {
+                      cellClass += isMyBooking 
+                        ? 'bg-blue-900/30 cursor-pointer hover:bg-blue-900/50' 
+                        : 'bg-red-900/20';
+                      content = (
+                        <div 
+                          className={`text-xs ${isMyBooking ? 'text-blue-300' : 'text-red-300'}`}
+                          onClick={() => isMyBooking && setCancelModal(booking)}
+                        >
+                          <div className="font-semibold">{isMyBooking ? '🎾 Your Booking' : '🔒 Booked'}</div>
+                          <div className="text-gray-400">{booking.bookedByName}</div>
+                        </div>
+                      );
+                    } else if (pendingHold && !isMyHold) {
+                      cellClass += 'bg-yellow-900/20';
+                      content = (
+                        <div className="text-xs text-yellow-300">
+                          <div>⏳ Hold</div>
+                        </div>
+                      );
+                    } else if (isSelected) {
+                      cellClass += 'bg-green-900/50 cursor-pointer hover:bg-green-900/70';
+                      content = (
+                        <button
+                          onClick={() => toggleSlotSelection(court, time)}
+                          className="w-full text-xs text-green-300 font-semibold"
+                        >
+                          ✓ Selected
+                        </button>
+                      );
+                    } else if (canBook) {
+                      cellClass += 'bg-gray-700/30 cursor-pointer hover:bg-green-900/30';
+                      
+                      // Calculate price for display
+                      const slotPricing = settings ? calculateCourtBookingPrice({
+                        court: court as any, // ClubCourt is compatible with Court for pricing
+                        date: selectedDate,
+                        startTime: time,
+                        durationMinutes: settings.slotDurationMinutes,
+                        settings,
+                        isMember,
+                        hasAnnualPass: false,
+                        isVisitor: !isMember && !isAdmin,
+                      }) : null;
+                      
+                      content = (
+                        <button
+                          onClick={() => toggleSlotSelection(court, time)}
+                          className="w-full text-xs"
+                        >
+                          <div className="text-green-400 font-semibold">
+                            {slotPricing?.isFree ? 'Free' : formatCentsToDisplay(slotPricing?.finalPrice || 0)}
+                          </div>
+                          <div className="text-gray-500">+ Select</div>
+                        </button>
+                      );
+                    } else {
+                      cellClass += 'bg-gray-900/30';
+                      content = <span className="text-gray-600 text-xs">—</span>;
+                    }
 
                     return (
-                      <div
-                        key={`${court.id}-${time}`}
-                        className={`p-2 border-l border-gray-700 min-h-[60px] ${
-                          isPast ? 'bg-gray-900/30' : ''
-                        }`}
-                      >
-                        {booking ? (
-                          // Booked slot
-                          <div
-                            onClick={() => canCancelThis && setCancelModal(booking)}
-                            className={`h-full rounded p-2 text-xs ${
-                              isMyBooking
-                                ? 'bg-blue-600/30 border border-blue-500 cursor-pointer hover:bg-blue-600/40'
-                                : canCancelThis
-                                ? 'bg-red-900/30 border border-red-700 cursor-pointer hover:bg-red-900/40'
-                                : 'bg-gray-700/50 border border-gray-600'
-                            }`}
-                          >
-                            <div className={`font-semibold ${isMyBooking ? 'text-blue-300' : 'text-gray-300'}`}>
-                              {isMyBooking ? 'Your Booking' : 'Booked'}
-                            </div>
-                            <div className="text-gray-400 truncate">{booking.bookedByName}</div>
-                          </div>
-                        ) : pendingHold ? (
-                          // Pending hold (someone is checking out)
-                          <div
-                            className={`h-full rounded p-2 text-xs ${
-                              isMyHold
-                                ? 'bg-yellow-600/30 border border-yellow-500'
-                                : 'bg-orange-900/20 border border-orange-700/50'
-                            }`}
-                          >
-                            <div className={`font-semibold ${isMyHold ? 'text-yellow-300' : 'text-orange-300'}`}>
-                              {isMyHold ? 'Your Hold' : 'Reserved'}
-                            </div>
-                            <div className="text-gray-400 text-xs">
-                              {isMyHold ? 'Complete checkout' : 'Being booked...'}
-                            </div>
-                          </div>
-                        ) : canBook ? (
-                          // Available slot - clickable for cart
-                          <button
-                            onClick={() => toggleSlotSelection(court, time)}
-                            className={`w-full h-full rounded border-2 text-xs font-semibold transition-all flex items-center justify-center ${
-                              isSelected
-                                ? 'bg-green-600/30 border-green-500 text-green-400'
-                                : 'border-dashed border-gray-600 hover:border-green-500 hover:bg-green-900/20 text-gray-500 hover:text-green-400'
-                            }`}
-                          >
-                            {isSelected ? '✓ Selected' : '+ Select'}
-                          </button>
-                        ) : (
-                          // Unavailable (past or no permission)
-                          <div className="h-full rounded bg-gray-900/20 flex items-center justify-center">
-                            <span className="text-gray-600 text-xs">
-                              {isPast ? 'Past' : '—'}
-                            </span>
-                          </div>
-                        )}
+                      <div key={court.id} className={cellClass}>
+                        {content}
                       </div>
                     );
                   })}
@@ -603,35 +653,6 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
         </div>
       )}
 
-      {/* Legend */}
-      <div className="flex flex-wrap gap-4 mt-4 text-xs text-gray-500">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-green-600/30 border border-green-500"></div>
-          <span>Selected</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-blue-600/30 border border-blue-500"></div>
-          <span>Your Booking</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-gray-700/50 border border-gray-600"></div>
-          <span>Booked</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-orange-900/20 border border-orange-700/50"></div>
-          <span>Being Reserved</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded border-2 border-dashed border-gray-600"></div>
-          <span>Available</span>
-        </div>
-      </div>
-
-      {/* Instructions */}
-      <div className="mt-4 text-sm text-gray-400">
-        💡 Click slots to select them, then click "Book" to pay for all at once.
-      </div>
-
       {/* Checkout Modal */}
       {showCheckout && combinedPricing && settings && (
         <CheckoutModal
@@ -641,6 +662,7 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
           itemDetails={combinedItemDetails}
           pricing={combinedPricing}
           clubId={clubId}
+          allSlots={allSlotsForCheckout}
           onSuccess={handleCheckoutSuccess}
           onError={(err) => setError(err.message)}
         />
