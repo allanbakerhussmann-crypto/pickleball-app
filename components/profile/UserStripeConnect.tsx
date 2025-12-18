@@ -2,13 +2,14 @@
  * UserStripeConnect Component
  * 
  * Allows ORGANIZERS to connect their Stripe account to receive payments.
- * Regular players see a message to request organizer access.
+ * Regular players can REQUEST to become an organizer (in-app request system).
  * 
  * Features:
  * - Connect Stripe account (Express onboarding) - ORGANIZERS ONLY
  * - Show connection status
  * - Access Stripe dashboard
- * - Non-organizers see request access message
+ * - Non-organizers can submit request to become organizer
+ * - Shows pending/denied request status
  * 
  * FILE LOCATION: components/profile/UserStripeConnect.tsx
  */
@@ -24,6 +25,11 @@ import {
   PLATFORM_FEE_PERCENT,
   type StripeConnectStatus,
 } from '../../services/stripe';
+import {
+  createOrganizerRequest,
+  getOrganizerRequestByUserId,
+  type OrganizerRequest,
+} from '../../services/firebase/organizerRequests';
 
 // ============================================
 // TYPES
@@ -48,6 +54,14 @@ export const UserStripeConnect: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Request state (for non-organizers)
+  const [existingRequest, setExistingRequest] = useState<OrganizerRequest | null>(null);
+  const [showRequestForm, setShowRequestForm] = useState(false);
+  const [requestReason, setRequestReason] = useState('');
+  const [requestExperience, setRequestExperience] = useState('');
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [requestSuccess, setRequestSuccess] = useState(false);
 
   // ============================================
   // LOAD USER STRIPE DATA
@@ -72,6 +86,25 @@ export const UserStripeConnect: React.FC = () => {
 
     return () => unsubscribe();
   }, [currentUser]);
+
+  // ============================================
+  // LOAD EXISTING REQUEST (for non-organizers)
+  // ============================================
+
+  useEffect(() => {
+    if (!currentUser || isOrganizer) return;
+    
+    const loadRequest = async () => {
+      try {
+        const request = await getOrganizerRequestByUserId(currentUser.uid);
+        setExistingRequest(request);
+      } catch (err) {
+        console.error('Failed to load existing request:', err);
+      }
+    };
+    
+    loadRequest();
+  }, [currentUser, isOrganizer]);
 
   // ============================================
   // LOAD STRIPE ACCOUNT STATUS
@@ -158,6 +191,41 @@ export const UserStripeConnect: React.FC = () => {
     }
   };
 
+  const handleSubmitRequest = async () => {
+    if (!currentUser || !userProfile) return;
+    
+    if (!requestReason.trim()) {
+      setError('Please tell us why you want to become an organizer');
+      return;
+    }
+    
+    setSubmittingRequest(true);
+    setError(null);
+    
+    try {
+      await createOrganizerRequest({
+        odUserId: currentUser.uid,
+        userEmail: currentUser.email || '',
+        userName: userProfile.displayName || 'User',
+        userPhotoURL: userProfile.photoURL || userProfile.photoData,
+        reason: requestReason.trim(),
+        experience: requestExperience.trim() || undefined,
+      });
+      
+      setRequestSuccess(true);
+      setShowRequestForm(false);
+      
+      // Reload the request to show pending status
+      const request = await getOrganizerRequestByUserId(currentUser.uid);
+      setExistingRequest(request);
+    } catch (err: any) {
+      console.error('Failed to submit request:', err);
+      setError(err.message || 'Failed to submit request');
+    } finally {
+      setSubmittingRequest(false);
+    }
+  };
+
   // ============================================
   // COMPUTED VALUES
   // ============================================
@@ -183,74 +251,215 @@ export const UserStripeConnect: React.FC = () => {
   }
 
   // ============================================
-  // RENDER - NON-ORGANIZER (RESTRICTED)
+  // RENDER - NON-ORGANIZER (REQUEST SYSTEM)
   // ============================================
 
   if (!isOrganizer) {
     return (
       <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
+        {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center">
-            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
+            {existingRequest?.status === 'pending' ? (
+              <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : existingRequest?.status === 'denied' ? (
+              <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            )}
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Become a Paid Organizer</h3>
-            <p className="text-sm text-gray-400">Organizer access required</p>
+            <h3 className="text-lg font-bold text-white">
+              {existingRequest?.status === 'pending' 
+                ? 'Request Pending'
+                : existingRequest?.status === 'denied'
+                  ? 'Request Denied'
+                  : 'Become a Paid Organizer'
+              }
+            </h3>
+            <p className="text-sm text-gray-400">
+              {existingRequest?.status === 'pending'
+                ? 'Your request is being reviewed'
+                : existingRequest?.status === 'denied'
+                  ? 'You can submit a new request'
+                  : 'Request organizer access to accept payments'
+              }
+            </p>
           </div>
         </div>
 
-        <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg p-4 mb-4">
-          <p className="text-blue-200 text-sm">
-            To accept payments for meetups and leagues, you need to be an <strong>Organizer</strong>.
-          </p>
-        </div>
+        {/* Error */}
+        {error && (
+          <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded-lg mb-4 text-sm">
+            {error}
+            <button onClick={() => setError(null)} className="float-right text-red-300 hover:text-red-100">✕</button>
+          </div>
+        )}
 
-        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
-          <h4 className="text-white font-medium mb-3">What organizers can do:</h4>
-          <ul className="space-y-2 text-sm text-gray-300">
-            <li className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {/* Success Message */}
+        {requestSuccess && (
+          <div className="bg-green-900/50 border border-green-700 text-green-200 px-4 py-3 rounded-lg mb-4">
+            <div className="flex items-center gap-2">
+              <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              Create paid meetups with entry fees
-            </li>
-            <li className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              Collect prize pool contributions
-            </li>
-            <li className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              Organize paid leagues and tournaments
-            </li>
-            <li className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              Get paid directly to your bank account
-            </li>
-          </ul>
-        </div>
+              <span className="font-medium">Request submitted successfully!</span>
+            </div>
+            <p className="text-sm text-green-300/80 mt-1">We'll review your request and get back to you soon.</p>
+          </div>
+        )}
 
-        <div className="text-center">
-          <p className="text-gray-400 text-sm mb-3">
-            Interested in becoming an organizer?
-          </p>
-          <a
-            href="mailto:support@pickleballdirector.com?subject=Request%20Organizer%20Access"
-            className="inline-flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-            Request Organizer Access
-          </a>
-        </div>
+        {/* Pending Request Status */}
+        {existingRequest?.status === 'pending' && (
+          <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div>
+                <p className="text-yellow-200 font-medium">Your request is pending review</p>
+                <p className="text-yellow-300/70 text-sm mt-1">
+                  Submitted {new Date(existingRequest.createdAt).toLocaleDateString()}
+                </p>
+                <p className="text-gray-400 text-sm mt-2 italic">"{existingRequest.reason}"</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Denied Request Status */}
+        {existingRequest?.status === 'denied' && (
+          <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div>
+                <p className="text-red-200 font-medium">Your previous request was denied</p>
+                {existingRequest.denialReason && (
+                  <p className="text-red-300/70 text-sm mt-1">
+                    Reason: {existingRequest.denialReason}
+                  </p>
+                )}
+                <p className="text-gray-400 text-sm mt-2">
+                  You can submit a new request if your situation has changed.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Request Form */}
+        {showRequestForm ? (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Why do you want to become an organizer? <span className="text-red-400">*</span>
+              </label>
+              <textarea
+                value={requestReason}
+                onChange={(e) => setRequestReason(e.target.value)}
+                placeholder="e.g., I want to organize weekly meetups at my local courts and collect entry fees for prizes..."
+                rows={3}
+                className="w-full bg-gray-800 text-white rounded-lg px-4 py-3 border border-gray-600 focus:border-purple-500 focus:outline-none resize-none"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Experience organizing events <span className="text-gray-500">(optional)</span>
+              </label>
+              <textarea
+                value={requestExperience}
+                onChange={(e) => setRequestExperience(e.target.value)}
+                placeholder="e.g., I've been running a weekly pickleball group of 20+ players for 6 months..."
+                rows={2}
+                className="w-full bg-gray-800 text-white rounded-lg px-4 py-3 border border-gray-600 focus:border-purple-500 focus:outline-none resize-none"
+              />
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowRequestForm(false)}
+                className="flex-1 py-2 px-4 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitRequest}
+                disabled={submittingRequest || !requestReason.trim()}
+                className="flex-1 py-2 px-4 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2"
+              >
+                {submittingRequest ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Submitting...
+                  </>
+                ) : (
+                  'Submit Request'
+                )}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Benefits List (only show if no pending request) */}
+            {existingRequest?.status !== 'pending' && (
+              <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
+                <h4 className="text-white font-medium mb-3">What organizers can do:</h4>
+                <ul className="space-y-2 text-sm text-gray-300">
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Create paid meetups with entry fees
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Collect prize pool contributions
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Organize paid leagues and tournaments
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Get paid directly to your bank account
+                  </li>
+                  <li className="flex items-center gap-2 text-gray-500">
+                    <span className="text-xs">ℹ</span>
+                    Platform fee: {PLATFORM_FEE_PERCENT}% per transaction
+                  </li>
+                </ul>
+              </div>
+            )}
+
+            {/* Request Button */}
+            {existingRequest?.status !== 'pending' && (
+              <button
+                onClick={() => setShowRequestForm(true)}
+                className="w-full bg-purple-600 hover:bg-purple-500 text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {existingRequest?.status === 'denied' ? 'Submit New Request' : 'Request Organizer Access'}
+              </button>
+            )}
+          </>
+        )}
       </div>
     );
   }

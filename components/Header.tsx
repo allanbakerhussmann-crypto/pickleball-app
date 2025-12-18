@@ -1,3 +1,15 @@
+/**
+ * Header Component
+ * 
+ * Main navigation header with:
+ * - Logo and branding
+ * - Desktop navigation links
+ * - User profile menu
+ * - Partner invites notifications
+ * - Admin menu (for admins)
+ * 
+ * FILE LOCATION: components/Header.tsx
+ */
 
 import React, { useState, useRef, useEffect } from 'react';
 import { PickleballDirectorLogo } from './icons/PickleballDirectorLogo';
@@ -11,8 +23,8 @@ interface HeaderProps {
     onNavigate: (view: string) => void;
     onLoginClick: () => void;
     onLogout: () => void;
-    currentUser: any; // Auth User
-    userProfile: UserProfile | null; // Extended Profile
+    currentUser: any;
+    userProfile: UserProfile | null;
     onAcceptInvite?: (tournamentId: string, divisionId: string) => void;
 }
 
@@ -29,7 +41,8 @@ export const Header: React.FC<HeaderProps> = ({
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   
-  const { invites, loading: invitesLoading } = usePartnerInvites(currentUser?.uid);
+  // Note: invitesLoading removed as it was unused
+  const { invites } = usePartnerInvites(currentUser?.uid);
   const [inviteMeta, setInviteMeta] = useState<Record<string, { tName: string, uName: string }>>({});
 
   // Resolve Names for Invites
@@ -77,9 +90,7 @@ export const Header: React.FC<HeaderProps> = ({
       try {
           const result = await respondToPartnerInvite(inv, 'accepted');
           if (result && currentUser && onAcceptInvite) {
-               // Ensure reg exists
                await ensureRegistrationForUser(result.tournamentId, currentUser.uid, result.divisionId);
-               // Trigger Wizard
                onAcceptInvite(result.tournamentId, result.divisionId);
                setIsProfileMenuOpen(false);
           }
@@ -120,8 +131,8 @@ export const Header: React.FC<HeaderProps> = ({
                                     onClick={() => onNavigate(link.id)}
                                     className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                                         activeView === link.id
-                                        ? 'text-white bg-gray-800'
-                                        : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                                        ? 'text-green-400 bg-green-900/30'
+                                        : 'text-gray-300 hover:text-white hover:bg-gray-800'
                                     }`}
                                 >
                                     {link.label}
@@ -131,15 +142,17 @@ export const Header: React.FC<HeaderProps> = ({
                     )}
                 </div>
 
-                {/* RIGHT: User Profile or Login */}
+                {/* RIGHT: Help + Profile */}
                 <div className="flex items-center gap-3">
                     {/* Help Button */}
-                    <button 
+                    <button
                         onClick={() => setIsHelpModalOpen(true)}
-                        className="w-8 h-8 rounded-full border border-gray-600 flex items-center justify-center text-gray-400 hover:text-white hover:border-gray-400 hover:bg-gray-800 transition-colors focus:outline-none"
-                        title="Help / Guide"
+                        className="text-gray-400 hover:text-white p-2 rounded-full hover:bg-gray-800 transition-colors"
+                        title="Help"
                     >
-                        <span className="font-bold text-sm">?</span>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
                     </button>
 
                     {currentUser ? (
@@ -148,32 +161,53 @@ export const Header: React.FC<HeaderProps> = ({
                             <div ref={profileMenuRef} className="relative">
                                 <button 
                                     onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
-                                    className="flex items-center gap-2 md:gap-3 bg-gray-800 hover:bg-gray-700 py-1 pl-1 pr-2 rounded-full transition-colors border border-gray-700 focus:outline-none"
+                                    className="flex items-center gap-2 p-1 rounded-full hover:bg-gray-800 transition-colors focus:outline-none focus:ring-2 focus:ring-green-500"
                                 >
-                                    <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center overflow-hidden border border-gray-600">
+                                    <div className="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm overflow-hidden border-2 border-green-500">
                                         {profileImageSrc ? (
-                                            <img 
-                                                src={profileImageSrc} 
-                                                alt="Profile" 
-                                                className="w-full h-full object-cover"
-                                            />
+                                            <img src={profileImageSrc} alt="Profile" className="w-full h-full object-cover" />
                                         ) : (
-                                            <div className="w-full h-full bg-green-600 flex items-center justify-center text-xs font-bold text-white">
-                                                {currentUser.displayName?.charAt(0) || currentUser.email?.charAt(0) || 'U'}
-                                            </div>
+                                            currentUser.displayName?.charAt(0) || currentUser.email?.charAt(0) || '?'
                                         )}
                                     </div>
-                                    <svg className={`w-3 h-3 text-gray-400 transition-transform hidden md:block ${isProfileMenuOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                    </svg>
+                                    {invites.length > 0 && (
+                                        <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-white text-xs flex items-center justify-center font-bold animate-pulse">
+                                            {invites.length}
+                                        </span>
+                                    )}
                                 </button>
 
+                                {/* Dropdown Menu */}
                                 {isProfileMenuOpen && (
-                                    <div className="absolute right-0 top-full mt-2 w-72 bg-gray-800 rounded-lg shadow-xl border border-gray-700 py-1 z-50 animate-fade-in">
-                                        <div className="px-4 py-3 border-b border-gray-700">
-                                            <p className="text-sm text-white font-bold truncate">{currentUser.displayName}</p>
-                                            <p className="text-xs text-gray-500 truncate">{currentUser.email}</p>
+                                    <div className="absolute right-0 mt-2 w-72 bg-gray-800 rounded-lg shadow-xl border border-gray-700 py-2 z-50">
+                                        {/* User Info Header */}
+                                        <div className="px-4 py-2 border-b border-gray-700">
+                                            <p className="font-bold text-white truncate">{currentUser.displayName || 'User'}</p>
+                                            <p className="text-xs text-gray-400 truncate">{currentUser.email}</p>
                                         </div>
+
+                                        {/* Pending Invites */}
+                                        {invites.length > 0 && (
+                                            <div className="px-4 py-2 border-b border-gray-700 bg-yellow-900/20">
+                                                <p className="text-xs font-bold text-yellow-400 uppercase mb-2">Partner Invites</p>
+                                                <div className="space-y-2 max-h-40 overflow-y-auto">
+                                                    {invites.map(inv => (
+                                                        <div key={inv.id} className="bg-gray-900/50 rounded p-2">
+                                                            <p className="text-sm text-white truncate">{inviteMeta[inv.id]?.tName || 'Loading...'}</p>
+                                                            <p className="text-xs text-gray-400">From: {inviteMeta[inv.id]?.uName || '...'}</p>
+                                                            <button 
+                                                                onClick={() => handleAcceptInvite(inv)}
+                                                                className="mt-1 text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded"
+                                                            >
+                                                                Accept & Register
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Navigation Items */}
                                         <button 
                                             onClick={() => { onNavigate('dashboard'); setIsProfileMenuOpen(false); }}
                                             className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center gap-2"
@@ -189,85 +223,33 @@ export const Header: React.FC<HeaderProps> = ({
                                             Edit Profile
                                         </button>
                                         
+                                        {/* Admin Section */}
                                         {isAppAdmin && (
                                             <>
                                                 <div className="h-px bg-gray-700 my-1 mx-2"></div>
+                                                <div className="px-2 py-1">
+                                                    <p className="text-xs font-bold text-red-400 uppercase px-2 mb-1">Admin</p>
+                                                </div>
                                                 <button 
                                                     onClick={() => { onNavigate('adminUsers'); setIsProfileMenuOpen(false); }}
-                                                    className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2 font-bold"
+                                                    className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2"
                                                 >
                                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-                                                    Admin Users
+                                                    Manage Users
+                                                </button>
+                                                <button 
+                                                    onClick={() => { onNavigate('adminOrganizerRequests'); setIsProfileMenuOpen(false); }}
+                                                    className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2"
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                    Organizer Requests
                                                 </button>
                                             </>
                                         )}
 
                                         <div className="h-px bg-gray-700 my-1 mx-2"></div>
                                         
-                                        <button 
-                                            onClick={() => { onNavigate('myTournaments'); setIsProfileMenuOpen(false); }}
-                                            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center gap-2"
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
-                                            My Tournaments
-                                        </button>
-                                        <button 
-                                            onClick={() => { onNavigate('invites'); setIsProfileMenuOpen(false); }}
-                                            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center gap-2"
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" /></svg>
-                                            My Invites Page
-                                        </button>
-
-                                        {/* Partner Invites Widget */}
-                                        <div className="mt-4 border-t border-gray-700 pt-3 px-3 pb-3">
-                                        <div className="flex justify-between items-center mb-2">
-                                            <span className="text-xs font-bold text-gray-400 uppercase">My Invites</span>
-                                            {!invitesLoading && invites.length > 0 && (
-                                            <span className="text-[10px] bg-green-700 text-white px-2 py-0.5 rounded-full">
-                                                {invites.length}
-                                            </span>
-                                            )}
-                                        </div>
-
-                                        {invitesLoading ? (
-                                            <div className="text-xs text-gray-500">Loading…</div>
-                                        ) : invites.length === 0 ? (
-                                            <div className="text-xs text-gray-500 italic">No pending invites.</div>
-                                        ) : (
-                                            <div className="space-y-2 max-h-64 overflow-y-auto">
-                                            {invites.map((inv) => (
-                                                <div
-                                                key={inv.id}
-                                                className="bg-gray-800 border border-gray-700 rounded p-2 text-xs text-gray-200"
-                                                >
-                                                <div className="font-semibold mb-1 text-white">
-                                                    {inviteMeta[inv.id]?.tName || 'Loading...'}
-                                                </div>
-                                                <div className="text-gray-400 mb-2 truncate">
-                                                    From: <span className="font-bold text-gray-300">{inviteMeta[inv.id]?.uName || 'Loading...'}</span>
-                                                </div>
-                                                <div className="flex gap-2 justify-end">
-                                                    <button
-                                                    className="px-2 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-[11px]"
-                                                    onClick={(e) => { e.stopPropagation(); handleAcceptInvite(inv); }}
-                                                    >
-                                                    Accept
-                                                    </button>
-                                                    <button
-                                                    className="px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white text-[11px]"
-                                                    onClick={(e) => { e.stopPropagation(); respondToPartnerInvite(inv, 'declined'); }}
-                                                    >
-                                                    Decline
-                                                    </button>
-                                                </div>
-                                                </div>
-                                            ))}
-                                            </div>
-                                        )}
-                                        </div>
-
-                                        <div className="h-px bg-gray-700 my-1 mx-2"></div>
+                                        {/* Logout */}
                                         <button 
                                             onClick={() => { onLogout(); setIsProfileMenuOpen(false); }}
                                             className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-900/20 flex items-center gap-2"

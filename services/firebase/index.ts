@@ -3,6 +3,8 @@
  * 
  * This file re-exports all Firebase functionality for backwards compatibility.
  * Import from here: import { ... } from './services/firebase';
+ * 
+ * FILE LOCATION: services/firebase/index.ts
  */
 
 // Re-export config and core instances
@@ -140,9 +142,6 @@ export {
   deleteGameSession,
 } from './social';
 
-
-
-
 // Leagues
 export {
   createLeague,
@@ -169,11 +168,6 @@ export {
   getUserLeagues,
 } from './leagues';
 
-
-// ============================================
-// REPLACE THE COURT BOOKINGS SECTION IN services/firebase/index.ts WITH THIS:
-// ============================================
-
 // Court Bookings
 export {
   addClubCourt,
@@ -198,6 +192,24 @@ export {
   formatDateLabel,
 } from './courtBookings';
 
+// Organizer Requests (NEW)
+export {
+  createOrganizerRequest,
+  getOrganizerRequest,
+  getOrganizerRequestByUserId,
+  getPendingOrganizerRequests,
+  getAllOrganizerRequests,
+  subscribeToPendingOrganizerRequests,
+  subscribeToAllOrganizerRequests,
+  approveOrganizerRequest,
+  denyOrganizerRequest,
+  deleteOrganizerRequest,
+  hasUserPendingRequest,
+  getUserRequestStatus,
+  type OrganizerRequest,
+  type OrganizerRequestStatus,
+  type CreateOrganizerRequestInput,
+} from './organizerRequests';
 
 // Audit
 export { logAudit } from './audit';

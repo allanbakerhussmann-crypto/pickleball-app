@@ -47,6 +47,8 @@ export const ROUTES = {
   
   // Admin
   ADMIN_USERS: '/admin/users',
+  ADMIN_ORGANIZER_REQUESTS: '/admin/organizer-requests',
+  ADMIN_TEST_PAYMENTS: '/admin/test-payments',
 } as const;
 
 /**
@@ -74,6 +76,7 @@ export const VIEW_TO_ROUTE: Record<string, string> = {
   'players': ROUTES.PLAYERS,
   'profile': ROUTES.PROFILE,
   'adminUsers': ROUTES.ADMIN_USERS,
+  'adminOrganizerRequests': ROUTES.ADMIN_ORGANIZER_REQUESTS,
   'invites': ROUTES.INVITES,
   'results': ROUTES.RESULTS,
   'myResults': ROUTES.MY_RESULTS,

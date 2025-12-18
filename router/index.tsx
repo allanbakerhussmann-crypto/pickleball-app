@@ -7,15 +7,12 @@
  * FILE LOCATION: router/index.tsx
  */
 
-import React from 'react';
 import { createHashRouter } from 'react-router-dom';
 import { AppLayout } from '../components/layouts/AppLayout';
 import { ProtectedRoute } from './ProtectedRoute';
-import { ROUTES } from './routes';
 
 // Direct imports (no lazy loading for AI Studio compatibility)
 import HomePage from '../pages/HomePage';
-import DashboardPage from '../pages/DashboardPage';
 import TournamentsPage from '../pages/TournamentsPage';
 import TournamentDetailPage from '../pages/TournamentDetailPage';
 import CreateTournamentPage from '../pages/CreateTournamentPage';
@@ -30,6 +27,7 @@ import EditMeetupPage from '../pages/EditMeetupPage';
 import PlayersPage from '../pages/PlayersPage';
 import ProfilePage from '../pages/ProfilePage';
 import AdminUsersPage from '../pages/AdminUsersPage';
+import AdminOrganizerRequestsPage from '../pages/AdminOrganizerRequestsPage';
 import InvitesPage from '../pages/InvitesPage';
 import PlaceholderPage from '../pages/PlaceholderPage';
 import LeaguesPage from '../pages/LeaguesPage';
@@ -170,6 +168,14 @@ export const router = createHashRouter([
         element: (
           <ProtectedRoute requireAdmin>
             <AdminUsersPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/organizer-requests',
+        element: (
+          <ProtectedRoute requireAdmin>
+            <AdminOrganizerRequestsPage />
           </ProtectedRoute>
         ),
       },
