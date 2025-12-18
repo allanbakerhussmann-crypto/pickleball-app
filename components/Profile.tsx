@@ -1,3 +1,14 @@
+/**
+ * Profile Component
+ * 
+ * User profile management with:
+ * - Personal info (name, email, DOB, etc.)
+ * - DUPR ratings sync
+ * - Profile photo upload
+ * - Stripe Connect for organizers (NEW)
+ * 
+ * FILE LOCATION: components/Profile.tsx
+ */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
@@ -5,6 +16,7 @@ import { FirebaseError } from '@firebase/app';
 import { updateProfile } from '@firebase/auth';
 import { fetchDuprRatings } from '../services/duprService';
 import { COUNTRIES, COUNTRY_REGIONS } from '../constants/locations';
+import { UserStripeConnect } from './profile/UserStripeConnect';
 import type { UserGender } from '../types';
 
 const getFriendlyErrorMessage = (error: FirebaseError): string => {
@@ -20,9 +32,7 @@ const getFriendlyErrorMessage = (error: FirebaseError): string => {
     }
 };
 
-
-
-const HEIGHT_OPTIONS = [];
+const HEIGHT_OPTIONS: string[] = [];
 for (let f = 4; f <= 7; f++) {
     for (let i = 0; i < 12; i++) {
         if (f === 7 && i > 2) break; // Stop at 7'2"
@@ -54,7 +64,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [playsHand, setPlaysHand] = useState<'right'|'left'|''>('');
     const [height, setHeight] = useState('');
     
-    // New Image States
+    // Image States
     const [photoData, setPhotoData] = useState('');
     const [photoMimeType, setPhotoMimeType] = useState('');
 
@@ -96,7 +106,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
 
     // Construct the display source: Data URI -> Storage URL -> Initials Placeholder
     const displayPhotoSrc = useMemo(() => {
-        if (photoData) return photoData; // Data URI contains mime type usually
+        if (photoData) return photoData;
         if (userProfile?.photoURL) return userProfile.photoURL;
         if (currentUser?.photoURL) return currentUser.photoURL;
         return null;
@@ -106,7 +116,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
         if (!dob) return null;
         try {
             const birthDate = new Date(dob);
-            if (isNaN(birthDate.getTime())) return null; // Invalid date
+            if (isNaN(birthDate.getTime())) return null;
             const today = new Date();
             let age = today.getFullYear() - birthDate.getFullYear();
             const m = today.getMonth() - birthDate.getMonth();
@@ -124,7 +134,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             const file = event.target.files[0];
             
             // Basic validation
-            if (file.size > 1024 * 1024) { // Limit to 1MB for database storage
+            if (file.size > 1024 * 1024) {
                 setError("Image size must be less than 1MB for database storage.");
                 return;
             }
@@ -139,7 +149,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             const reader = new FileReader();
             reader.onloadend = () => {
                 const result = reader.result as string;
-                setPhotoData(result); // "data:image/jpeg;base64,..."
+                setPhotoData(result);
                 setPhotoMimeType(file.type);
             };
             reader.readAsDataURL(file);
@@ -154,23 +164,20 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
         setSuccessMessage(null);
 
         try {
-            // Prefer ID if explicitly set, otherwise try to extract from URL
             let idToUse = duprId;
             
             if (!idToUse && duprProfileUrl) {
-                // Remove trailing slash
                 const cleanUrl = duprProfileUrl.replace(/\/$/, "");
                 const parts = cleanUrl.split('/');
                 const lastPart = parts[parts.length - 1];
                 
-                // Simple check if it looks like an ID
                 if (lastPart && lastPart.length > 4) {
                     idToUse = lastPart;
-                    setDuprId(lastPart); // Auto-fill ID field
+                    setDuprId(lastPart);
                 }
             }
 
-            if (!idToUse) idToUse = "test-id"; // Mock ID fallback
+            if (!idToUse) idToUse = "test-id";
 
             const ratings = await fetchDuprRatings(idToUse);
             
@@ -223,13 +230,11 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             phone,
             duprId,
             duprProfileUrl,
-            // Ensure we parse as floats to preserve decimals
             duprSinglesRating: duprSinglesRating ? parseFloat(duprSinglesRating) : null,
             duprDoublesRating: duprDoublesRating ? parseFloat(duprDoublesRating) : null,
             duprLastUpdatedManually: Date.now(),
             playsHand: playsHand as 'right' | 'left',
             height,
-            // Save image data directly
             photoData: photoData || null,
             photoMimeType: photoMimeType || null,
             updatedAt: Date.now()
@@ -244,7 +249,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             }
             setIsEditingEmail(false);
         } catch (err: any) {
-             if (err instanceof FirebaseError) {
+            if (err instanceof FirebaseError) {
                 setError(getFriendlyErrorMessage(err));
             } else {
                 setError('An unexpected error occurred during update.');
@@ -263,7 +268,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
 
     return (
         <div className="max-w-4xl mx-auto">
-             <button
+            <button
                 onClick={onBack}
                 className="flex items-center gap-2 text-sm text-gray-400 hover:text-green-400 transition-colors mb-4 focus:outline-none focus:ring-2 focus:ring-green-500 rounded-md p-1"
             >
@@ -272,6 +277,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                 </svg>
                 Back to Dashboard
             </button>
+            
             <div className="bg-gray-800 rounded-lg p-8 shadow-lg border border-gray-700">
                 <h2 className="text-3xl font-bold mb-6 text-green-400">My Profile</h2>
 
@@ -279,50 +285,40 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                     
                     {/* Profile Picture Upload Section */}
                     <div className="flex flex-col items-center justify-center mb-8">
-                         <div className="relative group">
+                        <div className="relative group">
                             <div className="w-32 h-32 rounded-full bg-gray-700 border-4 border-gray-600 overflow-hidden flex items-center justify-center shadow-2xl relative">
                                 {displayPhotoSrc ? (
                                     <img src={displayPhotoSrc} alt="Profile" className="w-full h-full object-cover" />
                                 ) : (
-                                    <div className="text-4xl font-bold text-gray-500 select-none">
-                                        {firstName[0]}{lastName[0] || ''}
-                                    </div>
+                                    <span className="text-4xl font-bold text-gray-500">
+                                        {firstName?.charAt(0) || currentUser?.displayName?.charAt(0) || '?'}
+                                    </span>
                                 )}
-                                
-                                {/* Hover Overlay for Upload */}
-                                <div 
-                                    className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer z-10"
-                                    onClick={() => fileInputRef.current?.click()}
-                                >
-                                    <svg className="w-8 h-8 text-white mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                    <span className="text-xs font-bold text-white">Change Photo</span>
-                                </div>
                             </div>
-                            
-                            {/* Camera Icon Button (Floating) */}
-                            <button 
-                                type="button" 
+                            <button
+                                type="button"
                                 onClick={() => fileInputRef.current?.click()}
-                                className="absolute bottom-0 right-0 bg-green-600 hover:bg-green-500 text-white p-2 rounded-full shadow-lg border-2 border-gray-800 z-20 transition-transform hover:scale-110"
-                                title="Upload Photo"
+                                className="absolute bottom-0 right-0 bg-green-600 hover:bg-green-500 text-white p-2.5 rounded-full shadow-lg transition-transform transform group-hover:scale-110"
+                                title="Change Photo"
                             >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                                </svg>
                             </button>
-                         </div>
-                         
-                         {/* Hidden Input */}
-                         <input 
+                        </div>
+                        
+                        <input 
                             type="file" 
                             ref={fileInputRef} 
                             onChange={handleFileChange} 
                             accept="image/*" 
                             className="hidden" 
-                         />
-                         <p className="text-xs text-gray-500 mt-2">
-                             JPG or PNG (Max 1MB).
-                         </p>
+                        />
+                        <p className="text-xs text-gray-500 mt-2">JPG or PNG (Max 1MB).</p>
                     </div>
 
+                    {/* Name Fields */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label htmlFor="firstName" className="block text-sm font-medium text-gray-300 mb-2">First Name</label>
@@ -343,96 +339,71 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                                 {isEditingEmail ? 'Cancel' : 'Edit'}
                             </button>
                         </div>
-                        {isEditingEmail && <p className="text-xs text-yellow-400 mt-2">Changing your email will require re-verification.</p>}
                     </div>
 
                     {/* DOB and Gender */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label htmlFor="dob" className="block text-sm font-medium text-gray-300 mb-2">Date of Birth</label>
-                                <input
-                                    type="date"
-                                    id="dob"
-                                    value={dob}
-                                    onChange={e => setDob(e.target.value)}
-                                    className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
-                                    style={{ colorScheme: 'dark' }}
-                                />
-                            </div>
-                            <div>
-                                <label htmlFor="age" className="block text-sm font-medium text-gray-300 mb-2">Age</label>
-                                <div className="w-full bg-gray-700/50 text-gray-300 rounded-md px-4 py-2 border border-gray-600/50 h-[42px] flex items-center justify-center font-medium">
-                                    {calculatedAge !== null ? calculatedAge : '--'}
-                                </div>
-                            </div>
+                        <div>
+                            <label htmlFor="dob" className="block text-sm font-medium text-gray-300 mb-2">
+                                Date of Birth {calculatedAge !== null && <span className="text-gray-500">({calculatedAge} years old)</span>}
+                            </label>
+                            <input type="date" id="dob" value={dob} onChange={e => setDob(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
                         </div>
                         <div>
                             <label htmlFor="gender" className="block text-sm font-medium text-gray-300 mb-2">Gender</label>
-                            <select 
-                                id="gender" 
-                                value={gender} 
-                                onChange={e => setGender(e.target.value as UserGender)} 
-                                className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
-                            >
-                                <option value="">Select...</option>
+                            <select id="gender" value={gender} onChange={e => setGender(e.target.value as UserGender | '')} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                                <option value="">Prefer not to say</option>
                                 <option value="male">Male</option>
                                 <option value="female">Female</option>
+                                <option value="other">Other</option>
                             </select>
                         </div>
                     </div>
 
-                    {/* Country & Region */}
+                    {/* Country and Region */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                             <label htmlFor="country" className="block text-sm font-medium text-gray-300 mb-2">Country</label>
-                            <select 
-                                id="country" 
-                                value={country} 
-                                onChange={e => { setCountry(e.target.value); setRegion(''); }} 
-                                className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
-                            >
+                            <select id="country" value={country} onChange={e => { setCountry(e.target.value); setRegion(''); }} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
                                 {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
                             </select>
                         </div>
                         <div>
-                            <label htmlFor="region" className="block text-sm font-medium text-gray-300 mb-2">Region / State</label>
-                            {availableRegions ? (
-                                <select id="region" value={region} onChange={e => setRegion(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                                    <option value="">Select Region...</option>
-                                    {availableRegions.map(r => <option key={r} value={r}>{r}</option>)}
-                                </select>
-                            ) : (
-                                <input type="text" id="region" value={region} onChange={e => setRegion(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600" />
-                            )}
+                            <label htmlFor="region" className="block text-sm font-medium text-gray-300 mb-2">Region/State</label>
+                            <select id="region" value={region} onChange={e => setRegion(e.target.value)} disabled={!availableRegions || availableRegions.length === 0} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50">
+                                <option value="">Select region...</option>
+                                {availableRegions?.map((r: string) => <option key={r} value={r}>{r}</option>)}
+                            </select>
                         </div>
                     </div>
 
-                    {/* Hand & Height */}
+                    {/* Phone and Hand */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
-                            <label htmlFor="playsHand" className="block text-sm font-medium text-gray-300 mb-2">Plays Hand</label>
-                            <select id="playsHand" value={playsHand} onChange={e => setPlaysHand(e.target.value as any)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                            <label htmlFor="phone" className="block text-sm font-medium text-gray-300 mb-2">Phone Number <span className="text-gray-500">(Optional)</span></label>
+                            <input type="tel" id="phone" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+1 555-0123" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
+                        </div>
+                        <div>
+                            <label htmlFor="playsHand" className="block text-sm font-medium text-gray-300 mb-2">Playing Hand</label>
+                            <select id="playsHand" value={playsHand} onChange={e => setPlaysHand(e.target.value as 'right' | 'left' | '')} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
                                 <option value="">Select...</option>
-                                <option value="right">Right</option>
-                                <option value="left">Left</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label htmlFor="height" className="block text-sm font-medium text-gray-300 mb-2">Height</label>
-                            <select id="height" value={height} onChange={e => setHeight(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                                <option value="">Select Height...</option>
-                                {HEIGHT_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                <option value="right">Right-Handed</option>
+                                <option value="left">Left-Handed</option>
                             </select>
                         </div>
                     </div>
 
-                    {/* Phone & DUPR ID */}
+                    {/* Height */}
+                    <div>
+                        <label htmlFor="height" className="block text-sm font-medium text-gray-300 mb-2">Height <span className="text-gray-500">(Optional)</span></label>
+                        <select id="height" value={height} onChange={e => setHeight(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                            <option value="">Select...</option>
+                            {HEIGHT_OPTIONS.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                    </div>
+
+                    {/* DUPR Section */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label htmlFor="phone" className="block text-sm font-medium text-gray-300 mb-2">Phone <span className="text-gray-500">(Optional)</span></label>
-                            <input type="tel" id="phone" value={phone} onChange={e => setPhone(e.target.value)} placeholder="e.g. +1 555-0123" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                        </div>
                         <div>
                             <label htmlFor="duprId" className="block text-sm font-medium text-gray-300 mb-2">DUPR ID <span className="text-gray-500">(Optional)</span></label>
                             <input type="text" id="duprId" value={duprId} onChange={e => setDuprId(e.target.value)} placeholder="e.g., 123456" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
@@ -464,34 +435,34 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                                     </>
                                 ) : (
                                     <>
-                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                        </svg>
                                         Sync
                                     </>
                                 )}
                             </button>
                         </div>
-                        <p className="text-xs text-gray-500 mt-1">
-                            Enter your DUPR ID or URL and click Sync to auto-update ratings.
-                        </p>
+                        <p className="text-xs text-gray-500 mt-1">Enter your DUPR ID or URL and click Sync to auto-update ratings.</p>
                     </div>
 
                     {/* Ratings Display */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                         <div>
-                             <label htmlFor="duprDoublesRating" className="block text-sm font-medium text-gray-300 mb-2">DUPR Doubles Rating</label>
-                             <input type="number" step="0.001" id="duprDoublesRating" value={duprDoublesRating} onChange={e => setDuprDoublesRating(e.target.value)} placeholder="e.g., 4.250" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                         </div>
-                         <div>
-                             <label htmlFor="duprSinglesRating" className="block text-sm font-medium text-gray-300 mb-2">DUPR Singles Rating</label>
-                             <input type="number" step="0.001" id="duprSinglesRating" value={duprSinglesRating} onChange={e => setDuprSinglesRating(e.target.value)} placeholder="e.g., 4.250" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                         </div>
+                        <div>
+                            <label htmlFor="duprDoublesRating" className="block text-sm font-medium text-gray-300 mb-2">DUPR Doubles Rating</label>
+                            <input type="number" step="0.001" id="duprDoublesRating" value={duprDoublesRating} onChange={e => setDuprDoublesRating(e.target.value)} placeholder="e.g., 4.250" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
+                        </div>
+                        <div>
+                            <label htmlFor="duprSinglesRating" className="block text-sm font-medium text-gray-300 mb-2">DUPR Singles Rating</label>
+                            <input type="number" step="0.001" id="duprSinglesRating" value={duprSinglesRating} onChange={e => setDuprSinglesRating(e.target.value)} placeholder="e.g., 4.250" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
+                        </div>
                     </div>
                     
                     {error && <p className="text-red-400 text-sm text-center bg-red-900/50 p-3 rounded-md">{error}</p>}
                     {successMessage && <p className="text-green-300 text-sm text-center bg-green-900/50 p-3 rounded-md">{successMessage}</p>}
 
                     <div className="pt-4">
-                         <button
+                        <button
                             type="submit"
                             disabled={isLoading}
                             className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-500 disabled:cursor-not-allowed"
@@ -500,6 +471,13 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                         </button>
                     </div>
                 </form>
+                
+                {/* ============================================ */}
+                {/* STRIPE CONNECT SECTION - NEW */}
+                {/* ============================================ */}
+                <div className="mt-8 pt-8 border-t border-gray-700">
+                    <UserStripeConnect />
+                </div>
             </div>
         </div>
     );
