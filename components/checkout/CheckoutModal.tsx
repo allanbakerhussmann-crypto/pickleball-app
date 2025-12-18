@@ -7,8 +7,8 @@
  * 1. User selects slots → Opens modal
  * 2. Shows price breakdown
  * 3. User clicks "Pay with Card" → Redirects to Stripe Checkout
- * 4. After payment → Stripe webhook confirms booking
- * 5. User returns to success page
+ * 4. After payment → Stripe webhook creates bookings
+ * 5. User returns to booking calendar with success message
  * 
  * FILE LOCATION: components/checkout/CheckoutModal.tsx
  */
@@ -252,7 +252,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         clubId,
       };
 
-      // Add booking IDs for court bookings
+      // Add booking details for court bookings
       if (allSlots && allSlots.length > 0) {
         metadata.slots = JSON.stringify(allSlots.map(s => ({
           courtId: s.courtId,
@@ -268,13 +268,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       }
 
       // Create Stripe Checkout session
+      // IMPORTANT: Redirect back to booking tab with payment=success
       const { url } = await createCheckoutSession({
         items: lineItems,
         customerEmail: currentUser.email || undefined,
         clubId,
         clubStripeAccountId: clubStripeAccountId || undefined,
-        successUrl: `${window.location.origin}/clubs/${clubId}?payment=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancelUrl: `${window.location.origin}/clubs/${clubId}?payment=cancelled`,
+        successUrl: `${window.location.origin}/clubs/${clubId}?tab=booking&payment=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${window.location.origin}/clubs/${clubId}?tab=booking&payment=cancelled`,
         metadata,
       });
 

@@ -4,15 +4,9 @@
  * Backend functions for Stripe integration:
  * - Create Connect accounts for clubs
  * - Create Checkout sessions
- * - Handle webhooks
+ * - Handle webhooks (creates bookings after payment)
  * 
  * FILE LOCATION: functions/src/stripe.ts
- * 
- * SETUP:
- * 1. cd functions
- * 2. npm install stripe
- * 3. firebase functions:config:set stripe.secret_key="sk_test_xxx"
- * 4. firebase deploy --only functions
  */
 
 import * as functions from 'firebase-functions';
@@ -57,34 +51,33 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
   }
 
   const clubData = clubDoc.data()!;
-  const isAdmin = clubData.admins?.includes(context.auth.uid) || 
-                  clubData.createdBy === context.auth.uid;
+  const isAdmin = clubData.adminIds?.includes(context.auth.uid) || clubData.createdBy === context.auth.uid;
 
   if (!isAdmin) {
     throw new functions.https.HttpsError('permission-denied', 'Must be club admin');
   }
 
   try {
-    // Check if account already exists
+    // Check if club already has a Stripe account
     let accountId = clubData.stripeConnectedAccountId;
 
     if (!accountId) {
-      // Create new Express account
+      // Create a new Express account
       const account = await stripe.accounts.create({
         type: 'express',
-        country: 'NZ', // New Zealand
+        country: 'NZ',
         email: clubEmail || undefined,
-        capabilities: {
-          card_payments: { requested: true },
-          transfers: { requested: true },
-        },
         business_type: 'company',
         company: {
           name: clubName,
         },
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true },
+        },
         metadata: {
           clubId,
-          platform: 'pickleball-director',
+          clubName,
         },
       });
 
@@ -96,7 +89,7 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
         stripeOnboardingComplete: false,
         stripeChargesEnabled: false,
         stripePayoutsEnabled: false,
-        stripeUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        stripeCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     }
 
@@ -113,8 +106,8 @@ export const stripe_createConnectAccount = functions.https.onCall(async (data, c
       accountId,
     };
   } catch (error: any) {
-    console.error('Stripe Connect error:', error);
-    throw new functions.https.HttpsError('internal', error.message || 'Failed to create Stripe account');
+    console.error('Create Connect account error:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create Connect account');
   }
 });
 
@@ -222,7 +215,7 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
 
   try {
     // Build session config
-    const sessionConfig: Stripe.Checkout.SessionCreateParams = {
+    const sessionConfig: any = {
       payment_method_types: ['card'],
       mode: 'payment',
       customer_email: customerEmail,
@@ -346,7 +339,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
   const metadata = session.metadata || {};
   const clubId = metadata.clubId;
   const odUserId = metadata.odUserId;
-  const bookingIds = metadata.bookingIds?.split(',') || [];
+  const slotsJson = metadata.slots;
 
   if (!odUserId) {
     console.error('Missing odUserId in session metadata');
@@ -354,6 +347,79 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
   }
 
   try {
+    // Get user info for booking
+    const userDoc = await admin.firestore().collection('users').doc(odUserId).get();
+    const userData = userDoc.exists ? userDoc.data() : null;
+    const userName = userData?.displayName || userData?.name || 'User';
+
+    // Parse slots from metadata
+    let slots: Array<{
+      courtId: string;
+      date: string;
+      startTime: string;
+      endTime: string;
+    }> = [];
+
+    if (slotsJson) {
+      try {
+        slots = JSON.parse(slotsJson);
+      } catch (e) {
+        console.error('Failed to parse slots JSON:', e);
+      }
+    } else if (metadata.courtId && metadata.date && metadata.startTime) {
+      // Single slot from individual metadata fields
+      slots = [{
+        courtId: metadata.courtId,
+        date: metadata.date,
+        startTime: metadata.startTime,
+        endTime: metadata.endTime || '',
+      }];
+    }
+
+    // Create bookings for each slot
+    const bookingIds: string[] = [];
+
+    if (clubId && slots.length > 0) {
+      for (const slot of slots) {
+        // Get court info
+        const courtDoc = await admin.firestore()
+          .collection('clubs')
+          .doc(clubId)
+          .collection('courts')
+          .doc(slot.courtId)
+          .get();
+        
+        const courtData = courtDoc.exists ? courtDoc.data() : null;
+        const courtName = courtData?.name || 'Court';
+
+        // Create booking
+        const bookingRef = await admin.firestore()
+          .collection('clubs')
+          .doc(clubId)
+          .collection('bookings')
+          .add({
+            courtId: slot.courtId,
+            courtName,
+            date: slot.date,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            bookedByUserId: odUserId,
+            bookedByName: userName,
+            status: 'confirmed',
+            paymentStatus: 'paid',
+            stripeSessionId: session.id,
+            stripePaymentIntentId: session.payment_intent,
+            amount: Math.round((session.amount_total || 0) / slots.length),
+            currency: session.currency || 'nzd',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            paidAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+        bookingIds.push(bookingRef.id);
+        console.log(`Created booking ${bookingRef.id} for court ${courtName} on ${slot.date} at ${slot.startTime}`);
+      }
+    }
+
     // Create payment record
     await admin.firestore().collection('payments').add({
       stripeSessionId: session.id,
@@ -369,26 +435,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // Update any pending bookings to confirmed
-    if (clubId && bookingIds.length > 0) {
-      for (const bookingId of bookingIds) {
-        if (bookingId) {
-          await admin.firestore()
-            .collection('clubs')
-            .doc(clubId)
-            .collection('bookings')
-            .doc(bookingId)
-            .update({
-              status: 'confirmed',
-              paymentStatus: 'paid',
-              stripeSessionId: session.id,
-              paidAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-        }
-      }
-    }
-
-    console.log('Payment recorded successfully');
+    console.log(`Payment recorded successfully with ${bookingIds.length} bookings`);
   } catch (error) {
     console.error('Error handling checkout complete:', error);
   }
