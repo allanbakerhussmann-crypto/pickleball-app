@@ -539,7 +539,7 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
               </button>
             </div>
           </div>
-        </div>
+        </div>  
       )}
     </div>  
   );
