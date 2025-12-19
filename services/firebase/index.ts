@@ -5,6 +5,7 @@
  * Import from here: import { ... } from './services/firebase';
  * 
  * FILE LOCATION: services/firebase/index.ts
+ * VERSION: V05.17
  */
 
 // Re-export config and core instances
@@ -142,30 +143,72 @@ export {
   deleteGameSession,
 } from './social';
 
-// Leagues
+// ============================================
+// LEAGUES (UPDATED V05.17)
+// ============================================
 export {
+  // League CRUD
   createLeague,
   getLeague,
   updateLeague,
   deleteLeague,
   getLeagues,
   subscribeToLeagues,
+  getUserLeagues,
+  
+  // League Divisions (NEW)
+  createLeagueDivision,
+  getLeagueDivisions,
+  subscribeToLeagueDivisions,
+  updateLeagueDivision,
+  deleteLeagueDivision,
+  
+  // League Members
   joinLeague,
   leaveLeague,
   getLeagueMemberByUserId,
   getLeagueMembers,
   subscribeToLeagueMembers,
   updateMemberStats,
+  updateMemberPaymentStatus,
+  
+  // League Teams (NEW - for doubles)
+  createLeagueTeam,
+  getOpenLeagueTeams,
+  updateLeagueTeam,
+  
+  // Partner Invites (NEW)
+  createLeaguePartnerInvite,
+  getPendingLeagueInvites,
+  respondToLeaguePartnerInvite,
+  
+  // League Matches
   createLeagueMatch,
   getLeagueMatches,
   subscribeToLeagueMatches,
   submitLeagueMatchResult,
   confirmLeagueMatchResult,
   disputeLeagueMatchResult,
+  
+  // Challenges (Ladder)
   createChallenge,
   respondToChallenge,
   getPendingChallenges,
-  getUserLeagues,
+  completeChallenge,
+  subscribeToUserChallenges,
+  
+  // Ladder Rankings (NEW)
+  swapLadderPositions,
+  
+  // Registration (NEW)
+  saveLeagueRegistration,
+  getLeagueRegistration,
+  
+  // Status Transitions (NEW)
+  openLeagueRegistration,
+  startLeague,
+  completeLeague,
+  cancelLeague,
 } from './leagues';
 
 // Court Bookings
@@ -192,7 +235,7 @@ export {
   formatDateLabel,
 } from './courtBookings';
 
-// Organizer Requests (NEW)
+// Organizer Requests
 export {
   createOrganizerRequest,
   getOrganizerRequest,
