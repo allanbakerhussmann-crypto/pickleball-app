@@ -64,25 +64,63 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [paymentCancelled, setPaymentCancelled] = useState(false);
   const [editForm, setEditForm] = useState({
+    // Basic Info
     name: '',
     description: '',
     location: '',
     venue: '',
+    visibility: 'public' as 'public' | 'private' | 'club_only',
+    
+    // Schedule
     seasonStart: '',
     seasonEnd: '',
     registrationDeadline: '',
+    registrationOpens: '',
+    
+    // Capacity & Restrictions
     maxMembers: '',
-    visibility: 'public' as 'public' | 'private' | 'club_only',
-    // Match format
+    minRating: '',
+    maxRating: '',
+    minAge: '',
+    maxAge: '',
+    
+    // Match Format
     bestOf: 3 as 1 | 3 | 5,
     gamesTo: 11 as 11 | 15 | 21,
     winBy: 2 as 1 | 2,
-    // Scoring
+    matchDeadlineDays: 7,
+    allowSelfReporting: true,
+    requireConfirmation: true,
+    
+    // Scoring Points
     pointsForWin: 3,
     pointsForDraw: 1,
     pointsForLoss: 0,
+    pointsForForfeit: 0,
+    pointsForNoShow: -1,
+    
     // Pricing
+    pricingEnabled: false,
     entryFee: 0,
+    entryFeeType: 'per_player' as 'per_player' | 'per_team',
+    feesPaidBy: 'player' as 'player' | 'organizer',
+    refundPolicy: 'partial' as 'full' | 'partial' | 'none',
+    
+    // Early Bird
+    earlyBirdEnabled: false,
+    earlyBirdFee: 0,
+    earlyBirdDeadline: '',
+    
+    // Late Fee
+    lateFeeEnabled: false,
+    lateFee: 0,
+    lateRegistrationStart: '',
+    
+    // Format-specific (Round Robin)
+    roundRobinRounds: 1,
+    
+    // Format-specific (Swiss)
+    swissRounds: 4,
   });
   const [saving, setSaving] = useState(false);
 
@@ -102,25 +140,61 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         };
         
         setEditForm({
+          // Basic Info
           name: data.name || '',
           description: data.description || '',
           location: data.location || '',
           venue: data.venue || '',
+          visibility: data.visibility || 'public',
+          
+          // Schedule
           seasonStart: formatDateForInput(data.seasonStart),
           seasonEnd: formatDateForInput(data.seasonEnd),
           registrationDeadline: formatDateForInput(data.registrationDeadline),
+          registrationOpens: formatDateForInput(data.registrationOpens),
+          
+          // Capacity & Restrictions
           maxMembers: data.settings?.maxMembers?.toString() || '',
-          visibility: data.visibility || 'public',
-          // Match format
+          minRating: data.settings?.minRating?.toString() || '',
+          maxRating: data.settings?.maxRating?.toString() || '',
+          minAge: data.settings?.minAge?.toString() || '',
+          maxAge: data.settings?.maxAge?.toString() || '',
+          
+          // Match Format
           bestOf: data.settings?.matchFormat?.bestOf || 3,
           gamesTo: data.settings?.matchFormat?.gamesTo || 11,
           winBy: data.settings?.matchFormat?.winBy || 2,
-          // Scoring
+          matchDeadlineDays: data.settings?.matchDeadlineDays ?? 7,
+          allowSelfReporting: data.settings?.allowSelfReporting ?? true,
+          requireConfirmation: data.settings?.requireConfirmation ?? true,
+          
+          // Scoring Points
           pointsForWin: data.settings?.pointsForWin ?? 3,
           pointsForDraw: data.settings?.pointsForDraw ?? 1,
           pointsForLoss: data.settings?.pointsForLoss ?? 0,
+          pointsForForfeit: data.settings?.pointsForForfeit ?? 0,
+          pointsForNoShow: data.settings?.pointsForNoShow ?? -1,
+          
           // Pricing
+          pricingEnabled: data.pricing?.enabled || false,
           entryFee: data.pricing?.entryFee || 0,
+          entryFeeType: data.pricing?.entryFeeType || 'per_player',
+          feesPaidBy: data.pricing?.feesPaidBy || 'player',
+          refundPolicy: data.pricing?.refundPolicy || 'partial',
+          
+          // Early Bird
+          earlyBirdEnabled: data.pricing?.earlyBirdEnabled || false,
+          earlyBirdFee: data.pricing?.earlyBirdFee || 0,
+          earlyBirdDeadline: formatDateForInput(data.pricing?.earlyBirdDeadline),
+          
+          // Late Fee
+          lateFeeEnabled: data.pricing?.lateFeeEnabled || false,
+          lateFee: data.pricing?.lateFee || 0,
+          lateRegistrationStart: formatDateForInput(data.pricing?.lateRegistrationStart),
+          
+          // Format-specific
+          roundRobinRounds: data.settings?.roundRobinSettings?.rounds || 1,
+          swissRounds: data.settings?.swissSettings?.rounds || 4,
         });
       }
       setLoading(false);
@@ -1113,11 +1187,11 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         );
       })()}
 
-      {/* Edit League Modal - Expanded */}
+      {/* Edit League Modal - Full Featured */}
       {showEditModal && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-gray-800 w-full max-w-2xl rounded-xl border border-gray-700 overflow-hidden my-4">
-            <div className="bg-gray-900 px-6 py-4 border-b border-gray-700 sticky top-0">
+          <div className="bg-gray-800 w-full max-w-3xl rounded-xl border border-gray-700 overflow-hidden my-4">
+            <div className="bg-gray-900 px-6 py-4 border-b border-gray-700 sticky top-0 z-10">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold text-white">✏️ Edit League</h2>
                 <button 
@@ -1131,10 +1205,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </div>
             </div>
             
-            <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-              {/* Basic Info Section */}
-              <div>
-                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Basic Information</h3>
+            <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+              
+              {/* ========== BASIC INFO ========== */}
+              <div className="bg-gray-900/50 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-blue-400 uppercase mb-4 flex items-center gap-2">
+                  <span>📋</span> Basic Information
+                </h3>
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">League Name *</label>
@@ -1195,10 +1272,30 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 </div>
               </div>
               
-              {/* Schedule Section */}
-              <div>
-                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Schedule</h3>
+              {/* ========== SCHEDULE ========== */}
+              <div className="bg-gray-900/50 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-green-400 uppercase mb-4 flex items-center gap-2">
+                  <span>📅</span> Schedule
+                </h3>
                 <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Registration Opens</label>
+                    <input
+                      type="date"
+                      value={editForm.registrationOpens}
+                      onChange={(e) => setEditForm({ ...editForm, registrationOpens: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Registration Deadline</label>
+                    <input
+                      type="date"
+                      value={editForm.registrationDeadline}
+                      onChange={(e) => setEditForm({ ...editForm, registrationDeadline: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Season Start</label>
                     <input
@@ -1217,15 +1314,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Registration Deadline</label>
-                    <input
-                      type="date"
-                      value={editForm.registrationDeadline}
-                      onChange={(e) => setEditForm({ ...editForm, registrationDeadline: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
+                </div>
+              </div>
+              
+              {/* ========== CAPACITY & RESTRICTIONS ========== */}
+              <div className="bg-gray-900/50 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-yellow-400 uppercase mb-4 flex items-center gap-2">
+                  <span>👥</span> Capacity & Restrictions
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Max Players/Teams</label>
                     <input
@@ -1237,13 +1334,63 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       min="2"
                     />
                   </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Min Rating</label>
+                    <input
+                      type="number"
+                      value={editForm.minRating}
+                      onChange={(e) => setEditForm({ ...editForm, minRating: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      placeholder="Any"
+                      step="0.1"
+                      min="1"
+                      max="8"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Max Rating</label>
+                    <input
+                      type="number"
+                      value={editForm.maxRating}
+                      onChange={(e) => setEditForm({ ...editForm, maxRating: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      placeholder="Any"
+                      step="0.1"
+                      min="1"
+                      max="8"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Min Age</label>
+                    <input
+                      type="number"
+                      value={editForm.minAge}
+                      onChange={(e) => setEditForm({ ...editForm, minAge: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      placeholder="Any"
+                      min="1"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Max Age</label>
+                    <input
+                      type="number"
+                      value={editForm.maxAge}
+                      onChange={(e) => setEditForm({ ...editForm, maxAge: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      placeholder="Any"
+                      min="1"
+                    />
+                  </div>
                 </div>
               </div>
               
-              {/* Match Format Section */}
-              <div>
-                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Match Format</h3>
-                <div className="grid grid-cols-3 gap-4">
+              {/* ========== MATCH FORMAT ========== */}
+              <div className="bg-gray-900/50 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-purple-400 uppercase mb-4 flex items-center gap-2">
+                  <span>🎾</span> Match Format
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Best Of</label>
                     <select
@@ -1279,71 +1426,287 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       <option value={2}>2 Points</option>
                     </select>
                   </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Match Deadline (Days)</label>
+                    <input
+                      type="number"
+                      value={editForm.matchDeadlineDays}
+                      onChange={(e) => setEditForm({ ...editForm, matchDeadlineDays: parseInt(e.target.value) || 7 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      min="1"
+                      max="30"
+                    />
+                  </div>
+                </div>
+                
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editForm.allowSelfReporting}
+                      onChange={(e) => setEditForm({ ...editForm, allowSelfReporting: e.target.checked })}
+                      className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-300">Allow Self-Reporting</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editForm.requireConfirmation}
+                      onChange={(e) => setEditForm({ ...editForm, requireConfirmation: e.target.checked })}
+                      className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-300">Require Score Confirmation</span>
+                  </label>
                 </div>
               </div>
               
-              {/* Scoring Points Section */}
-              <div>
-                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Standings Points</h3>
-                <div className="grid grid-cols-3 gap-4">
+              {/* ========== FORMAT SPECIFIC (Round Robin / Swiss) ========== */}
+              {(league?.format === 'round_robin' || league?.format === 'swiss') && (
+                <div className="bg-gray-900/50 rounded-lg p-4">
+                  <h3 className="text-sm font-bold text-cyan-400 uppercase mb-4 flex items-center gap-2">
+                    <span>🔄</span> {league.format === 'round_robin' ? 'Round Robin Settings' : 'Swiss Settings'}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    {league.format === 'round_robin' && (
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Number of Rounds</label>
+                        <input
+                          type="number"
+                          value={editForm.roundRobinRounds}
+                          onChange={(e) => setEditForm({ ...editForm, roundRobinRounds: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          min="1"
+                          max="5"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">How many times each player plays each opponent</p>
+                      </div>
+                    )}
+                    {league.format === 'swiss' && (
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Number of Rounds</label>
+                        <input
+                          type="number"
+                          value={editForm.swissRounds}
+                          onChange={(e) => setEditForm({ ...editForm, swissRounds: parseInt(e.target.value) || 4 })}
+                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          min="1"
+                          max="10"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Total rounds to play (typically log2 of participants)</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* ========== SCORING POINTS ========== */}
+              <div className="bg-gray-900/50 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-orange-400 uppercase mb-4 flex items-center gap-2">
+                  <span>🏆</span> Standings Points
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">Win Points</label>
+                    <label className="block text-sm text-gray-400 mb-1">Win</label>
                     <input
                       type="number"
                       value={editForm.pointsForWin}
                       onChange={(e) => setEditForm({ ...editForm, pointsForWin: parseInt(e.target.value) || 0 })}
                       className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      min="0"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">Draw Points</label>
+                    <label className="block text-sm text-gray-400 mb-1">Draw</label>
                     <input
                       type="number"
                       value={editForm.pointsForDraw}
                       onChange={(e) => setEditForm({ ...editForm, pointsForDraw: parseInt(e.target.value) || 0 })}
                       className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      min="0"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-400 mb-1">Loss Points</label>
+                    <label className="block text-sm text-gray-400 mb-1">Loss</label>
                     <input
                       type="number"
                       value={editForm.pointsForLoss}
                       onChange={(e) => setEditForm({ ...editForm, pointsForLoss: parseInt(e.target.value) || 0 })}
                       className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Forfeit</label>
+                    <input
+                      type="number"
+                      value={editForm.pointsForForfeit}
+                      onChange={(e) => setEditForm({ ...editForm, pointsForForfeit: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">No-Show</label>
+                    <input
+                      type="number"
+                      value={editForm.pointsForNoShow}
+                      onChange={(e) => setEditForm({ ...editForm, pointsForNoShow: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
                     />
                   </div>
                 </div>
               </div>
               
-              {/* Pricing Section - Only show if pricing was enabled */}
-              {league?.pricing?.enabled && (
-                <div>
-                  <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Entry Fee</h3>
-                  <div className="flex items-center gap-3">
-                    <span className="text-gray-400">$</span>
-                    <input
-                      type="number"
-                      value={(editForm.entryFee / 100).toFixed(2)}
-                      onChange={(e) => setEditForm({ ...editForm, entryFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
-                      className="w-32 bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      min="0"
-                      step="0.01"
-                    />
-                    <span className="text-gray-400">NZD per {league.pricing.entryFeeType === 'per_team' ? 'team' : 'player'}</span>
+              {/* ========== PRICING ========== */}
+              <div className="bg-gray-900/50 rounded-lg p-4">
+                <h3 className="text-sm font-bold text-green-400 uppercase mb-4 flex items-center gap-2">
+                  <span>💰</span> Pricing
+                </h3>
+                
+                <label className="flex items-center gap-2 cursor-pointer mb-4">
+                  <input
+                    type="checkbox"
+                    checked={editForm.pricingEnabled}
+                    onChange={(e) => setEditForm({ ...editForm, pricingEnabled: e.target.checked })}
+                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500"
+                  />
+                  <span className="text-sm text-gray-300">Enable Paid Registration</span>
+                </label>
+                
+                {editForm.pricingEnabled && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Entry Fee ($)</label>
+                        <input
+                          type="number"
+                          value={(editForm.entryFee / 100).toFixed(2)}
+                          onChange={(e) => setEditForm({ ...editForm, entryFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          min="0"
+                          step="0.01"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Fee Type</label>
+                        <select
+                          value={editForm.entryFeeType}
+                          onChange={(e) => setEditForm({ ...editForm, entryFeeType: e.target.value as 'per_player' | 'per_team' })}
+                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="per_player">Per Player</option>
+                          <option value="per_team">Per Team</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Processing Fees Paid By</label>
+                        <select
+                          value={editForm.feesPaidBy}
+                          onChange={(e) => setEditForm({ ...editForm, feesPaidBy: e.target.value as 'player' | 'organizer' })}
+                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="player">Player pays fees</option>
+                          <option value="organizer">Organizer absorbs fees</option>
+                        </select>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Refund Policy</label>
+                      <select
+                        value={editForm.refundPolicy}
+                        onChange={(e) => setEditForm({ ...editForm, refundPolicy: e.target.value as 'full' | 'partial' | 'none' })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      >
+                        <option value="full">Full refund before league starts</option>
+                        <option value="partial">50% refund before league starts</option>
+                        <option value="none">No refunds</option>
+                      </select>
+                    </div>
+                    
+                    {/* Early Bird */}
+                    <div className="border-t border-gray-700 pt-4">
+                      <label className="flex items-center gap-2 cursor-pointer mb-3">
+                        <input
+                          type="checkbox"
+                          checked={editForm.earlyBirdEnabled}
+                          onChange={(e) => setEditForm({ ...editForm, earlyBirdEnabled: e.target.checked })}
+                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500"
+                        />
+                        <span className="text-sm text-gray-300">🎉 Enable Early Bird Pricing</span>
+                      </label>
+                      
+                      {editForm.earlyBirdEnabled && (
+                        <div className="grid grid-cols-2 gap-4 ml-6">
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-1">Early Bird Fee ($)</label>
+                            <input
+                              type="number"
+                              value={(editForm.earlyBirdFee / 100).toFixed(2)}
+                              onChange={(e) => setEditForm({ ...editForm, earlyBirdFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                              min="0"
+                              step="0.01"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-1">Early Bird Deadline</label>
+                            <input
+                              type="date"
+                              value={editForm.earlyBirdDeadline}
+                              onChange={(e) => setEditForm({ ...editForm, earlyBirdDeadline: e.target.value })}
+                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Late Fee */}
+                    <div className="border-t border-gray-700 pt-4">
+                      <label className="flex items-center gap-2 cursor-pointer mb-3">
+                        <input
+                          type="checkbox"
+                          checked={editForm.lateFeeEnabled}
+                          onChange={(e) => setEditForm({ ...editForm, lateFeeEnabled: e.target.checked })}
+                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-red-500 focus:ring-red-500"
+                        />
+                        <span className="text-sm text-gray-300">⏰ Enable Late Registration Fee</span>
+                      </label>
+                      
+                      {editForm.lateFeeEnabled && (
+                        <div className="grid grid-cols-2 gap-4 ml-6">
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-1">Late Fee ($)</label>
+                            <input
+                              type="number"
+                              value={(editForm.lateFee / 100).toFixed(2)}
+                              onChange={(e) => setEditForm({ ...editForm, lateFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                              min="0"
+                              step="0.01"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-1">Late Fee Starts</label>
+                            <input
+                              type="date"
+                              value={editForm.lateRegistrationStart}
+                              onChange={(e) => setEditForm({ ...editForm, lateRegistrationStart: e.target.value })}
+                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
               
+              {/* Note */}
               <p className="text-xs text-gray-500 bg-gray-900 p-3 rounded-lg">
-                💡 <strong>Tip:</strong> League type ({league?.type}) and format ({league?.format}) cannot be changed after creation. 
-                Create a new league if you need different settings.
+                💡 <strong>Note:</strong> League type ({league?.type}) and format ({league?.format}) cannot be changed after creation.
               </p>
             </div>
             
+            {/* Footer Buttons */}
             <div className="bg-gray-900 px-6 py-4 border-t border-gray-700 flex gap-3 sticky bottom-0">
               <button
                 onClick={() => setShowEditModal(false)}
@@ -1363,21 +1726,56 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                     const settingsUpdate = {
                       ...league?.settings,
                       maxMembers: editForm.maxMembers ? parseInt(editForm.maxMembers) : null,
+                      minRating: editForm.minRating ? parseFloat(editForm.minRating) : null,
+                      maxRating: editForm.maxRating ? parseFloat(editForm.maxRating) : null,
+                      minAge: editForm.minAge ? parseInt(editForm.minAge) : null,
+                      maxAge: editForm.maxAge ? parseInt(editForm.maxAge) : null,
                       pointsForWin: editForm.pointsForWin,
                       pointsForDraw: editForm.pointsForDraw,
                       pointsForLoss: editForm.pointsForLoss,
+                      pointsForForfeit: editForm.pointsForForfeit,
+                      pointsForNoShow: editForm.pointsForNoShow,
+                      matchDeadlineDays: editForm.matchDeadlineDays,
+                      allowSelfReporting: editForm.allowSelfReporting,
+                      requireConfirmation: editForm.requireConfirmation,
                       matchFormat: {
                         bestOf: editForm.bestOf,
                         gamesTo: editForm.gamesTo,
                         winBy: editForm.winBy,
                       },
+                      ...(league?.format === 'round_robin' && {
+                        roundRobinSettings: {
+                          rounds: editForm.roundRobinRounds,
+                          matchesPerWeek: league?.settings?.roundRobinSettings?.matchesPerWeek ?? 2,
+                          scheduleGeneration: league?.settings?.roundRobinSettings?.scheduleGeneration ?? 'auto',
+                        },
+                      }),
+                      ...(league?.format === 'swiss' && {
+                        swissSettings: {
+                          rounds: editForm.swissRounds,
+                          pairingMethod: league?.settings?.swissSettings?.pairingMethod ?? 'adjacent',
+                        },
+                      }),
                     };
                     
-                    // Build pricing update if enabled
-                    const pricingUpdate = league?.pricing?.enabled ? {
-                      ...league.pricing,
+                    // Build pricing update - use null when disabled, full object when enabled
+                    const pricingUpdate = editForm.pricingEnabled ? {
+                      enabled: true,
                       entryFee: editForm.entryFee,
-                    } : undefined;
+                      entryFeeType: editForm.entryFeeType,
+                      feesPaidBy: editForm.feesPaidBy,
+                      refundPolicy: editForm.refundPolicy,
+                      earlyBirdEnabled: editForm.earlyBirdEnabled,
+                      earlyBirdFee: editForm.earlyBirdEnabled ? editForm.earlyBirdFee : null,
+                      earlyBirdDeadline: editForm.earlyBirdEnabled && editForm.earlyBirdDeadline 
+                        ? new Date(editForm.earlyBirdDeadline).getTime() : null,
+                      lateFeeEnabled: editForm.lateFeeEnabled,
+                      lateFee: editForm.lateFeeEnabled ? editForm.lateFee : null,
+                      lateRegistrationStart: editForm.lateFeeEnabled && editForm.lateRegistrationStart 
+                        ? new Date(editForm.lateRegistrationStart).getTime() : null,
+                      prizePool: league?.pricing?.prizePool || { enabled: false, type: 'none' as const, amount: 0 },
+                      currency: 'nzd',
+                    } : null;
                     
                     await updateLeague(leagueId, {
                       name: editForm.name.trim(),
@@ -1387,9 +1785,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       visibility: editForm.visibility,
                       seasonStart: editForm.seasonStart ? new Date(editForm.seasonStart).getTime() : undefined,
                       seasonEnd: editForm.seasonEnd ? new Date(editForm.seasonEnd).getTime() : undefined,
+                      registrationOpens: editForm.registrationOpens ? new Date(editForm.registrationOpens).getTime() : undefined,
                       registrationDeadline: editForm.registrationDeadline ? new Date(editForm.registrationDeadline).getTime() : undefined,
                       settings: settingsUpdate,
-                      ...(pricingUpdate && { pricing: pricingUpdate }),
+                      ...(pricingUpdate !== null && { pricing: pricingUpdate }),
                     });
                     const updated = await getLeague(leagueId);
                     if (updated) setLeague(updated);
