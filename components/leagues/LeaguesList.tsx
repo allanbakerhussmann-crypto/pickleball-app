@@ -1,20 +1,30 @@
 /**
  * LeaguesList Component
  * 
- * Browse and discover leagues
+ * Browse and discover leagues with filtering and search.
+ * Updated for V05.17 with format filter, improved cards, mixed doubles support.
  * 
  * FILE LOCATION: components/leagues/LeaguesList.tsx
+ * VERSION: V05.17
  */
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { subscribeToLeagues, getUserLeagues } from '../../services/firebase';
-import type { League, LeagueType, LeagueStatus } from '../../types';
+import type { League, LeagueType, LeagueFormat, LeagueStatus } from '../../types';
+
+// ============================================
+// TYPES
+// ============================================
 
 interface LeaguesListProps {
   onSelectLeague: (leagueId: string) => void;
   onCreateLeague: () => void;
 }
+
+// ============================================
+// COMPONENT
+// ============================================
 
 export const LeaguesList: React.FC<LeaguesListProps> = ({
   onSelectLeague,
@@ -25,17 +35,24 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
   const [myLeagues, setMyLeagues] = useState<League[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'browse' | 'my'>('browse');
+  const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<LeagueType | 'all'>('all');
+  const [formatFilter, setFormatFilter] = useState<LeagueFormat | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<LeagueStatus | 'all'>('all');
+
+  // ============================================
+  // DATA LOADING
+  // ============================================
 
   useEffect(() => {
     const unsubscribe = subscribeToLeagues((data) => {
-      setLeagues(data);
+      // Only show non-draft leagues to public
+      const publicLeagues = data.filter(l => l.status !== 'draft' || l.createdByUserId === currentUser?.uid);
+      setLeagues(publicLeagues);
       setLoading(false);
     });
-
     return () => unsubscribe();
-  }, []);
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     if (currentUser) {
@@ -43,19 +60,60 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
     }
   }, [currentUser]);
 
+  // ============================================
+  // FILTERING
+  // ============================================
+
   const filteredLeagues = leagues.filter(league => {
+    // Search filter
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      const matchesSearch = 
+        league.name.toLowerCase().includes(term) ||
+        (league.description || '').toLowerCase().includes(term) ||
+        (league.location || '').toLowerCase().includes(term) ||
+        (league.clubName || '').toLowerCase().includes(term);
+      if (!matchesSearch) return false;
+    }
+    
+    // Type filter
     if (typeFilter !== 'all' && league.type !== typeFilter) return false;
+    
+    // Format filter
+    if (formatFilter !== 'all' && league.format !== formatFilter) return false;
+    
+    // Status filter
     if (statusFilter !== 'all' && league.status !== statusFilter) return false;
+    
     return true;
   });
 
   const displayLeagues = activeTab === 'my' ? myLeagues : filteredLeagues;
 
+  // Sort: active first, then registration, then by date
+  const sortedLeagues = [...displayLeagues].sort((a, b) => {
+    const statusOrder: Record<string, number> = {
+      active: 0,
+      registration: 1,
+      playoffs: 2,
+      draft: 3,
+      completed: 4,
+      cancelled: 5,
+    };
+    const orderA = statusOrder[a.status] ?? 10;
+    const orderB = statusOrder[b.status] ?? 10;
+    if (orderA !== orderB) return orderA - orderB;
+    return b.createdAt - a.createdAt;
+  });
+
+  // ============================================
+  // HELPERS
+  // ============================================
+
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
-      year: 'numeric',
     });
   };
 
@@ -64,6 +122,7 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
       draft: 'bg-gray-600 text-gray-200',
       registration: 'bg-blue-600 text-blue-100',
       active: 'bg-green-600 text-green-100',
+      playoffs: 'bg-yellow-600 text-yellow-100',
       completed: 'bg-purple-600 text-purple-100',
       cancelled: 'bg-red-600 text-red-100',
     };
@@ -71,6 +130,7 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
       draft: 'Draft',
       registration: 'Open',
       active: 'Active',
+      playoffs: 'Playoffs',
       completed: 'Ended',
       cancelled: 'Cancelled',
     };
@@ -85,23 +145,54 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
     const styles: Record<LeagueType, string> = {
       singles: 'bg-green-900/50 text-green-400 border-green-700',
       doubles: 'bg-blue-900/50 text-blue-400 border-blue-700',
+      mixed_doubles: 'bg-pink-900/50 text-pink-400 border-pink-700',
       team: 'bg-purple-900/50 text-purple-400 border-purple-700',
     };
+    const labels: Record<LeagueType, string> = {
+      singles: 'Singles',
+      doubles: 'Doubles',
+      mixed_doubles: 'Mixed',
+      team: 'Team',
+    };
     return (
-      <span className={`text-xs px-2 py-0.5 rounded border ${styles[type]}`}>
-        {type.charAt(0).toUpperCase() + type.slice(1)}
+      <span className={`text-xs px-2 py-0.5 rounded border ${styles[type] || 'bg-gray-700 text-gray-300 border-gray-600'}`}>
+        {labels[type] || type}
       </span>
     );
   };
 
-  const getFormatLabel = (format: string) => {
-    const labels: Record<string, string> = {
-      ladder: '🪜 Ladder',
-      round_robin: '🔄 Round Robin',
-      swiss: '🎯 Swiss',
+  const getFormatIcon = (format: LeagueFormat) => {
+    const icons: Record<LeagueFormat, string> = {
+      ladder: '🪜',
+      round_robin: '🔄',
+      swiss: '🎯',
+      box_league: '📦',
+    };
+    return icons[format] || '📋';
+  };
+
+  const getFormatLabel = (format: LeagueFormat) => {
+    const labels: Record<LeagueFormat, string> = {
+      ladder: 'Ladder',
+      round_robin: 'Round Robin',
+      swiss: 'Swiss',
+      box_league: 'Box League',
     };
     return labels[format] || format;
   };
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setTypeFilter('all');
+    setFormatFilter('all');
+    setStatusFilter('all');
+  };
+
+  const hasActiveFilters = searchTerm || typeFilter !== 'all' || formatFilter !== 'all' || statusFilter !== 'all';
+
+  // ============================================
+  // RENDER
+  // ============================================
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -155,30 +246,74 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
         )}
       </div>
 
-      {/* Filters (only for browse tab) */}
+      {/* Search & Filters (only for browse tab) */}
       {activeTab === 'browse' && (
-        <div className="flex flex-wrap gap-3 mb-6">
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value as LeagueType | 'all')}
-            className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"
-          >
-            <option value="all">All Types</option>
-            <option value="singles">Singles</option>
-            <option value="doubles">Doubles</option>
-            <option value="team">Team</option>
-          </select>
+        <div className="space-y-3 mb-6">
+          {/* Search */}
+          <div className="relative">
+            <svg
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search leagues..."
+              className="w-full bg-gray-800 border border-gray-700 text-white pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:border-blue-500"
+            />
+          </div>
 
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as LeagueStatus | 'all')}
-            className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"
-          >
-            <option value="all">All Status</option>
-            <option value="registration">Open for Registration</option>
-            <option value="active">In Progress</option>
-            <option value="completed">Completed</option>
-          </select>
+          {/* Filter Row */}
+          <div className="flex flex-wrap gap-3">
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value as LeagueType | 'all')}
+              className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">All Types</option>
+              <option value="singles">Singles</option>
+              <option value="doubles">Doubles</option>
+              <option value="mixed_doubles">Mixed Doubles</option>
+              <option value="team">Team</option>
+            </select>
+
+            <select
+              value={formatFilter}
+              onChange={(e) => setFormatFilter(e.target.value as LeagueFormat | 'all')}
+              className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">All Formats</option>
+              <option value="ladder">🪜 Ladder</option>
+              <option value="round_robin">🔄 Round Robin</option>
+              <option value="swiss">🎯 Swiss</option>
+              <option value="box_league">📦 Box League</option>
+            </select>
+
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as LeagueStatus | 'all')}
+              className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">All Status</option>
+              <option value="registration">Open for Registration</option>
+              <option value="active">In Progress</option>
+              <option value="completed">Completed</option>
+            </select>
+
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="text-sm text-gray-400 hover:text-white px-3 py-2"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -190,7 +325,7 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
       )}
 
       {/* Empty State */}
-      {!loading && displayLeagues.length === 0 && (
+      {!loading && sortedLeagues.length === 0 && (
         <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
           <div className="w-16 h-16 bg-blue-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
             <svg className="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -203,7 +338,9 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
           <p className="text-gray-400 text-sm mb-4">
             {activeTab === 'my'
               ? "You haven't joined any leagues yet."
-              : 'No leagues match your current filters.'}
+              : hasActiveFilters 
+                ? 'No leagues match your current filters.'
+                : 'No leagues available at the moment.'}
           </p>
           {activeTab === 'my' && (
             <button
@@ -213,84 +350,123 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
               Browse available leagues →
             </button>
           )}
+          {activeTab === 'browse' && hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="text-blue-400 hover:text-blue-300 font-semibold"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Results Count */}
+      {!loading && sortedLeagues.length > 0 && activeTab === 'browse' && hasActiveFilters && (
+        <div className="text-sm text-gray-400 mb-4">
+          Showing {sortedLeagues.length} league{sortedLeagues.length !== 1 ? 's' : ''}
         </div>
       )}
 
       {/* Leagues List */}
-      {!loading && displayLeagues.length > 0 && (
+      {!loading && sortedLeagues.length > 0 && (
         <div className="space-y-4">
-          {displayLeagues.map((league) => (
-            <div
-              key={league.id}
-              onClick={() => onSelectLeague(league.id)}
-              className="bg-gray-800 rounded-xl p-5 border border-gray-700 hover:border-blue-500/50 cursor-pointer transition-all group"
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="text-lg font-bold text-white group-hover:text-blue-400 transition-colors">
-                      {league.name}
-                    </h3>
-                    {getStatusBadge(league.status)}
+          {sortedLeagues.map((league) => {
+            const isMyLeague = myLeagues.some(l => l.id === league.id);
+            const isDoublesOrMixed = league.type === 'doubles' || league.type === 'mixed_doubles';
+            // Use optional chaining for registrationDeadline which may not exist on all leagues
+            const regDeadline = (league as any).registrationDeadline;
+            
+            return (
+              <div
+                key={league.id}
+                onClick={() => onSelectLeague(league.id)}
+                className={`bg-gray-800 rounded-xl p-5 border cursor-pointer transition-all group ${
+                  isMyLeague 
+                    ? 'border-blue-500/50 hover:border-blue-500' 
+                    : 'border-gray-700 hover:border-gray-600'
+                }`}
+              >
+                {/* Top Row: Title + Status */}
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <h3 className="text-lg font-bold text-white group-hover:text-blue-400 transition-colors truncate">
+                        {league.name}
+                      </h3>
+                      {getStatusBadge(league.status)}
+                      {isMyLeague && activeTab === 'browse' && (
+                        <span className="text-xs bg-blue-900/50 text-blue-400 px-2 py-0.5 rounded">
+                          Joined
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* Type + Format Badges */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {getTypeBadge(league.type)}
+                      <span className="text-sm text-gray-500">
+                        {getFormatIcon(league.format)} {getFormatLabel(league.format)}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {getTypeBadge(league.type)}
-                    <span className="text-sm text-gray-500">
-                      {getFormatLabel(league.format)}
-                    </span>
+
+                  {/* Right Side: Member Count */}
+                  <div className="text-right ml-4 flex-shrink-0">
+                    <div className="text-2xl font-bold text-white">
+                      {league.memberCount || 0}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {isDoublesOrMixed ? 'teams' : 'players'}
+                    </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-white">{league.memberCount}</div>
-                  <div className="text-xs text-gray-500">members</div>
-                </div>
-              </div>
 
-              {league.description && (
-                <p className="text-gray-400 text-sm mb-3 line-clamp-2">
-                  {league.description}
-                </p>
-              )}
+                {/* Description (truncated) */}
+                {league.description && (
+                  <p className="text-sm text-gray-400 mb-3 line-clamp-2">
+                    {league.description}
+                  </p>
+                )}
 
-              <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500">
-                <div className="flex items-center gap-1">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
+                {/* Bottom Info Row */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
                   <span>
-                    {formatDate(league.seasonStart)} - {formatDate(league.seasonEnd)}
+                    📅 {formatDate(league.seasonStart)} - {formatDate(league.seasonEnd)}
                   </span>
+                  {league.location && (
+                    <span>📍 {league.location}</span>
+                  )}
+                  {league.clubName && (
+                    <span>🏢 {league.clubName}</span>
+                  )}
+                  {league.pricing?.enabled && (
+                    <span className="text-green-400">
+                      💰 ${(league.pricing.entryFee / 100).toFixed(0)}
+                    </span>
+                  )}
+                  {!league.pricing?.enabled && (
+                    <span className="text-green-400">Free</span>
+                  )}
                 </div>
 
-                {league.clubName && (
-                  <div className="flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5" />
-                    </svg>
-                    <span>{league.clubName}</span>
-                  </div>
-                )}
-
-                {league.matchesPlayed > 0 && (
-                  <div className="flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                    <span>{league.matchesPlayed} matches</span>
-                  </div>
-                )}
-
-                {league.location && (
-                  <div className="flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                    </svg>
-                    <span>{league.location}</span>
+                {/* Registration Deadline Warning */}
+                {league.status === 'registration' && regDeadline && (
+                  <div className="mt-3 pt-3 border-t border-gray-700">
+                    {regDeadline > Date.now() ? (
+                      <span className="text-xs text-yellow-400">
+                        ⏰ Registration closes {formatDate(regDeadline)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-red-400">
+                        Registration closed
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
