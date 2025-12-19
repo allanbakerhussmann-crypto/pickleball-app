@@ -150,11 +150,11 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       const leaguePricing: LeaguePricing | null = pricingEnabled ? {
         enabled: true, entryFee: pricing.entryFee, entryFeeType: pricing.entryFeeType, memberDiscount: pricing.memberDiscount,
         earlyBirdEnabled: pricing.earlyBirdEnabled, earlyBirdFee: pricing.earlyBirdFee,
-        earlyBirdDeadline: pricing.earlyBirdEnabled && schedule.registrationDeadline ? new Date(schedule.registrationDeadline).getTime() - 604800000 : undefined,
+        earlyBirdDeadline: pricing.earlyBirdEnabled && schedule.registrationDeadline ? new Date(schedule.registrationDeadline).getTime() - 604800000 : null,
         lateFeeEnabled: pricing.lateFeeEnabled, lateFee: pricing.lateFee,
-        lateRegistrationStart: pricing.lateFeeEnabled && schedule.registrationDeadline ? new Date(schedule.registrationDeadline).getTime() - 259200000 : undefined,
+        lateRegistrationStart: pricing.lateFeeEnabled && schedule.registrationDeadline ? new Date(schedule.registrationDeadline).getTime() - 259200000 : null,
         prizePool: pricing.prizePool, feesPaidBy: pricing.feesPaidBy, refundPolicy: pricing.refundPolicy,
-        refundDeadline: schedule.seasonStart ? new Date(schedule.seasonStart).getTime() : undefined, currency: 'nzd',
+        refundDeadline: schedule.seasonStart ? new Date(schedule.seasonStart).getTime() : null, currency: 'nzd',
       } : null;
 
       const stripeAccountId = basicInfo.clubId && clubHasStripe ? selectedClub?.stripeConnectedAccountId : hasStripeAccount ? userProfile.stripeConnectedAccountId : null;

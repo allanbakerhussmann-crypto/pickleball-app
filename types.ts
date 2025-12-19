@@ -634,17 +634,17 @@ export interface LeaguePricing {
   entryFeeType: 'per_player' | 'per_team';
   
   // Member discount (if league is club-linked)
-  memberDiscount?: number;          // Percentage (0-100)
+  memberDiscount?: number | null;   // Percentage (0-100)
   
   // Early bird pricing
   earlyBirdEnabled: boolean;
-  earlyBirdFee?: number;            // In cents
-  earlyBirdDeadline?: number;       // Timestamp
+  earlyBirdFee?: number | null;     // In cents
+  earlyBirdDeadline?: number | null; // Timestamp
   
   // Late registration fee
   lateFeeEnabled: boolean;
-  lateFee?: number;                 // Additional fee in cents
-  lateRegistrationStart?: number;   // Timestamp
+  lateFee?: number | null;          // Additional fee in cents
+  lateRegistrationStart?: number | null; // Timestamp
   
   // Prize pool
   prizePool: LeaguePrizePool;
@@ -654,7 +654,7 @@ export interface LeaguePricing {
   
   // Refund policy
   refundPolicy: RefundPolicy;
-  refundDeadline?: number;          // Timestamp - after this, no refunds
+  refundDeadline?: number | null;   // Timestamp - after this, no refunds
   
   // Currency (always NZD for NZ app)
   currency: string;
