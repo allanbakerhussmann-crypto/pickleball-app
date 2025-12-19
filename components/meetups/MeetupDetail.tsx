@@ -58,6 +58,7 @@ interface ExtendedMeetup extends Meetup {
 }
 
 interface ExtendedMeetupRSVP extends MeetupRSVP {
+  userName?: string;
   paymentStatus?: 'not_required' | 'pending' | 'paid' | 'refunded' | 'waived';
   amountPaid?: number;
   paidAt?: number;
@@ -309,6 +310,11 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
     return `$${(cents / 100).toFixed(2)}`;
   };
 
+  // Helper to get display name from RSVP
+  const getRsvpDisplayName = (rsvp: ExtendedMeetupRSVP): string => {
+    return rsvp.userName || (rsvp as any).userProfile?.displayName || 'User';
+  };
+
   // ============================================
   // RENDER - LOADING
   // ============================================
@@ -353,17 +359,17 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
         <div className="flex items-center gap-2">
           <button
             onClick={handleShare}
-            className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-700"
+            className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
             title="Share"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
             </svg>
           </button>
-          {isCreator && !isCancelled && onEdit && (
+          {isCreator && onEdit && (
             <button
               onClick={() => onEdit(meetupId)}
-              className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-700"
+              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
               title="Edit"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -376,40 +382,33 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
 
       {/* Share Toast */}
       {showShareToast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50">
-          Link copied to clipboard!
+        <div className="fixed top-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-fade-in">
+          Link copied!
         </div>
       )}
 
       {/* Main Card */}
       <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-        {/* Cancelled Banner */}
-        {isCancelled && (
-          <div className="bg-red-900/50 border-b border-red-700 px-4 py-3">
-            <p className="text-red-200 font-medium">This meetup has been cancelled</p>
-            {meetup.cancelReason && (
-              <p className="text-red-300/80 text-sm mt-1">Reason: {meetup.cancelReason}</p>
-            )}
-          </div>
-        )}
-
-        {/* Past Event Banner */}
-        {isPast && !isCancelled && (
-          <div className="bg-gray-700/50 border-b border-gray-600 px-4 py-3">
-            <p className="text-gray-300 font-medium">This meetup has ended</p>
-          </div>
-        )}
-
         {/* Title & Organizer */}
         <div className="p-6 border-b border-gray-700">
-          <h1 className="text-2xl font-bold text-white mb-2">{meetup.title}</h1>
-          {meetup.organizerName && (
-            <p className="text-gray-400 text-sm">Organized by {meetup.organizerName}</p>
+          <h1 className="text-2xl font-bold text-white mb-1">{meetup.title}</h1>
+          <p className="text-gray-400 text-sm">Organized by {meetup.organizerName || 'Unknown'}</p>
+          
+          {/* Status Badges */}
+          {isCancelled && (
+            <div className="mt-3 inline-block bg-red-900/50 text-red-400 px-3 py-1 rounded-full text-sm font-medium">
+              Cancelled
+            </div>
+          )}
+          {isPast && !isCancelled && (
+            <div className="mt-3 inline-block bg-gray-700 text-gray-400 px-3 py-1 rounded-full text-sm font-medium">
+              Past Event
+            </div>
           )}
         </div>
 
-        {/* Details Grid */}
-        <div className="p-6 border-b border-gray-700 grid gap-4">
+        {/* Event Details */}
+        <div className="p-6 border-b border-gray-700 space-y-4">
           {/* Date & Time */}
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-lg bg-green-900/50 flex items-center justify-center flex-shrink-0">
@@ -419,10 +418,7 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
             </div>
             <div>
               <p className="text-white font-medium">{formatDate(meetup.when)}</p>
-              <p className="text-gray-400 text-sm">
-                {formatTime(meetup.when)}
-                {meetup.endTime && ` - ${formatTime(meetup.endTime)}`}
-              </p>
+              <p className="text-gray-400 text-sm">{formatTime(meetup.when)}</p>
             </div>
           </div>
 
@@ -516,17 +512,60 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
               </div>
             )}
 
-            {/* Fee Breakdown */}
-            <div className="mt-3 text-xs text-gray-500">
-              {meetup.pricing.entryFee > 0 && (
-                <span>Entry: {formatCurrency(meetup.pricing.entryFee)}</span>
-              )}
-              {meetup.pricing.prizePoolEnabled && meetup.pricing.prizePoolContribution > 0 && (
-                <span> • Prize pool: {formatCurrency(meetup.pricing.prizePoolContribution)}</span>
-              )}
-              {meetup.pricing.feesPaidBy === 'player' && (
-                <span> • Fees included</span>
-              )}
+            {/* Fee Breakdown - IMPROVED VERSION */}
+            <div className="mt-4 bg-gray-800/50 rounded-lg p-3">
+              <p className="text-xs text-gray-400 uppercase tracking-wider mb-2 font-semibold">
+                What You're Paying For
+              </p>
+              <div className="space-y-1.5 text-sm">
+                {/* Entry Fee */}
+                {meetup.pricing.entryFee > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Entry fee (goes to organizer)</span>
+                    <span className="text-white">{formatCurrency(meetup.pricing.entryFee)}</span>
+                  </div>
+                )}
+                
+                {/* Prize Pool Contribution */}
+                {meetup.pricing.prizePoolEnabled && meetup.pricing.prizePoolContribution > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Prize pool contribution</span>
+                    <span className="text-yellow-400">{formatCurrency(meetup.pricing.prizePoolContribution)}</span>
+                  </div>
+                )}
+                
+                {/* Processing Fees */}
+                {meetup.pricing.feesPaidBy === 'player' && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-500">Processing fees</span>
+                    <span className="text-gray-500">
+                      {formatCurrency(
+                        meetup.pricing.totalPerPerson - 
+                        meetup.pricing.entryFee - 
+                        (meetup.pricing.prizePoolContribution || 0)
+                      )}
+                    </span>
+                  </div>
+                )}
+                
+                {/* Total */}
+                <div className="border-t border-gray-700 pt-1.5 mt-1.5">
+                  <div className="flex justify-between items-center font-semibold">
+                    <span className="text-gray-300">Total you pay</span>
+                    <span className="text-green-400">{formatCurrency(meetup.pricing.totalPerPerson)}</span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Helpful note */}
+              <p className="text-xs text-gray-500 mt-2 italic">
+                {meetup.pricing.prizePoolEnabled 
+                  ? "Your prize pool contribution goes directly into the winner's pot!"
+                  : meetup.pricing.feesPaidBy === 'player'
+                    ? "Includes payment processing fees."
+                    : "Entry fee goes directly to the organizer."
+                }
+              </p>
             </div>
           </div>
         )}
@@ -676,28 +715,25 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
           </h4>
           
           {goingList.length === 0 ? (
-            <p className="text-gray-500 italic text-sm">Be the first to join!</p>
+            <p className="text-gray-500 text-sm">No one has joined yet. Be the first!</p>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
-              {goingList.map(rsvp => (
-                <div key={rsvp.userId} className="flex items-center gap-2 bg-gray-900 p-2 rounded border border-gray-700">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-                    rsvp.paymentStatus === 'paid' 
-                      ? 'bg-green-900 text-green-300' 
-                      : 'bg-gray-700 text-gray-400'
-                  }`}>
-                    {rsvp.userProfile?.displayName?.charAt(0) || '?'}
+            <div className="flex flex-wrap gap-2">
+              {goingList.map((rsvp) => (
+                <div
+                  key={rsvp.userId}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg ${
+                    rsvp.paymentStatus === 'paid'
+                      ? 'bg-green-900/30 border border-green-800'
+                      : 'bg-gray-700'
+                  }`}
+                >
+                  <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-sm font-bold text-white">
+                    {getRsvpDisplayName(rsvp)[0].toUpperCase()}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="text-sm text-gray-200 truncate block">
-                      {rsvp.userProfile?.displayName || 'User'}
-                    </span>
-                    {isPaid && (
-                      <span className={`text-xs ${
-                        rsvp.paymentStatus === 'paid' ? 'text-green-400' : 'text-gray-500'
-                      }`}>
-                        {rsvp.paymentStatus === 'paid' ? '✓ Paid' : 'Pending'}
-                      </span>
+                  <div>
+                    <p className="text-white text-sm font-medium">{getRsvpDisplayName(rsvp)}</p>
+                    {rsvp.paymentStatus === 'paid' && (
+                      <p className="text-green-400 text-xs">✓ Paid</p>
                     )}
                   </div>
                 </div>
@@ -707,18 +743,21 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
 
           {/* Maybe List */}
           {maybeList.length > 0 && (
-            <div>
-              <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4 mt-6">
+            <div className="mt-6">
+              <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">
                 Maybe ({maybeList.length})
               </h4>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {maybeList.map(rsvp => (
-                  <div key={rsvp.userId} className="flex items-center gap-2 bg-gray-900/50 p-2 rounded border border-gray-700/50">
-                    <div className="w-8 h-8 rounded-full bg-yellow-900/50 flex items-center justify-center text-yellow-300 text-xs font-bold flex-shrink-0">
-                      {rsvp.userProfile?.displayName?.charAt(0) || '?'}
+              <div className="flex flex-wrap gap-2">
+                {maybeList.map((rsvp) => (
+                  <div
+                    key={rsvp.userId}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700/50"
+                  >
+                    <div className="w-6 h-6 rounded-full bg-gray-600 flex items-center justify-center text-xs font-bold text-white">
+                      {getRsvpDisplayName(rsvp)[0].toUpperCase()}
                     </div>
                     <span className="text-sm text-gray-400 truncate">
-                      {rsvp.userProfile?.displayName || 'User'}
+                      {getRsvpDisplayName(rsvp)}
                     </span>
                   </div>
                 ))}

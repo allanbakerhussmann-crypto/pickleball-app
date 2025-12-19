@@ -6,12 +6,13 @@
  * - Desktop navigation links
  * - User profile menu
  * - Partner invites notifications
- * - Admin menu (for admins)
+ * - Admin menu (for admins) - includes Dashboard & Debug tools
  * 
  * FILE LOCATION: components/Header.tsx
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { PickleballDirectorLogo } from './icons/PickleballDirectorLogo';
 import type { UserProfile } from '../types';
 import { usePartnerInvites } from '../hooks/usePartnerInvites';
@@ -37,11 +38,11 @@ export const Header: React.FC<HeaderProps> = ({
     userProfile,
     onAcceptInvite
 }) => {
+  const navigate = useNavigate();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   
-  // Note: invitesLoading removed as it was unused
   const { invites } = usePartnerInvites(currentUser?.uid);
   const [inviteMeta, setInviteMeta] = useState<Record<string, { tName: string, uName: string }>>({});
 
@@ -101,7 +102,11 @@ export const Header: React.FC<HeaderProps> = ({
 
   // Determine profile image to show
   const profileImageSrc = userProfile?.photoData || userProfile?.photoURL || currentUser?.photoURL;
-  const isAppAdmin = userProfile?.roles?.includes('admin');
+  
+  // Check if user is app admin - use 'admin' role (the correct UserRole type)
+  const isAppAdmin = userProfile?.roles?.includes('admin') || 
+                     (userProfile as any)?.isAppAdmin || 
+                     (userProfile as any)?.isRootAdmin;
 
   return (
     <>
@@ -223,13 +228,39 @@ export const Header: React.FC<HeaderProps> = ({
                                             Edit Profile
                                         </button>
                                         
-                                        {/* Admin Section */}
+                                        {/* Admin Section - Only visible to App Admins */}
                                         {isAppAdmin && (
                                             <>
                                                 <div className="h-px bg-gray-700 my-1 mx-2"></div>
                                                 <div className="px-2 py-1">
                                                     <p className="text-xs font-bold text-red-400 uppercase px-2 mb-1">Admin</p>
                                                 </div>
+                                                
+                                                {/* Admin Dashboard */}
+                                                <button 
+                                                    onClick={() => { navigate('/admin'); setIsProfileMenuOpen(false); }}
+                                                    className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2"
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                                    </svg>
+                                                    Admin Dashboard
+                                                </button>
+                                                
+                                                {/* Stripe Debug */}
+                                                <button 
+                                                    onClick={() => { navigate('/debug/stripe'); setIsProfileMenuOpen(false); }}
+                                                    className="w-full text-left px-4 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300 flex items-center gap-2"
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                                    </svg>
+                                                    Stripe Debug
+                                                    <span className="ml-auto text-xs bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded">DEV</span>
+                                                </button>
+                                                
+                                                {/* Manage Users */}
                                                 <button 
                                                     onClick={() => { onNavigate('adminUsers'); setIsProfileMenuOpen(false); }}
                                                     className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2"
@@ -237,40 +268,57 @@ export const Header: React.FC<HeaderProps> = ({
                                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
                                                     Manage Users
                                                 </button>
+                                                
+                                                {/* Organizer Requests */}
                                                 <button 
                                                     onClick={() => { onNavigate('adminOrganizerRequests'); setIsProfileMenuOpen(false); }}
                                                     className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2"
                                                 >
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>
                                                     Organizer Requests
+                                                </button>
+                                                
+                                                {/* Test Payments */}
+                                                <button 
+                                                    onClick={() => { navigate('/admin/test-payments'); setIsProfileMenuOpen(false); }}
+                                                    className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2"
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+                                                    Test Payments
                                                 </button>
                                             </>
                                         )}
-
-                                        <div className="h-px bg-gray-700 my-1 mx-2"></div>
                                         
                                         {/* Logout */}
+                                        <div className="h-px bg-gray-700 my-1 mx-2"></div>
                                         <button 
                                             onClick={() => { onLogout(); setIsProfileMenuOpen(false); }}
-                                            className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-900/20 flex items-center gap-2"
+                                            className="w-full text-left px-4 py-2 text-sm text-gray-400 hover:bg-gray-700 hover:text-white flex items-center gap-2"
                                         >
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-                                            Logout
+                                            Sign Out
                                         </button>
                                     </div>
                                 )}
                             </div>
                         </>
                     ) : (
-                        <button onClick={onLoginClick} className="bg-green-600 hover:bg-green-700 text-white font-bold py-1.5 px-4 rounded-full transition-colors duration-200 text-sm shadow-lg shadow-green-900/20">
-                            Log In
+                        <button
+                            onClick={onLoginClick}
+                            className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+                        >
+                            Sign In
                         </button>
                     )}
                 </div>
             </div>
         </div>
         </header>
+
+        {/* Help Modal - rendered conditionally, only takes onClose prop */}
         {isHelpModalOpen && <HelpModal onClose={() => setIsHelpModalOpen(false)} />}
     </>
   );
 };
+
+export default Header;
