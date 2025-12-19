@@ -3,17 +3,17 @@
  * 
  * Simple registration wizard for leagues.
  * For singles: direct join
- * For doubles: partner selection with invite/open/join modes
+ * For doubles: partner selection with invite/open modes
  * 
  * FILE LOCATION: components/leagues/LeagueRegistrationWizard.tsx
  * VERSION: V05.17
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   joinLeague,
-  searchEligiblePartners,
+  searchUsers,
 } from '../../services/firebase';
 import type { League, UserProfile } from '../../types';
 
@@ -27,7 +27,7 @@ interface LeagueRegistrationWizardProps {
   onComplete: () => void;
 }
 
-type PartnerMode = 'invite' | 'open_team' | 'join_open';
+type PartnerMode = 'invite' | 'open_team';
 
 interface PartnerSelection {
   mode: PartnerMode;
@@ -74,7 +74,8 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
     
     setSearchLoading(true);
     try {
-      const results = await searchEligiblePartners(term, undefined, userProfile!);
+      // Use basic searchUsers for league partner search
+      const results = await searchUsers(term);
       // Filter out current user
       const filtered = results.filter(u => u.id !== currentUser?.uid);
       setSearchResults(filtered);
@@ -115,15 +116,16 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
         throw new Error('Please select a partner to invite');
       }
       
-      // Join the league
+      // Join the league - pass all required arguments
+      // joinLeague(leagueId, userId, displayName, divisionId?, partnerUserId?, partnerDisplayName?)
       await joinLeague(
         league.id,
         currentUser.uid,
-        userProfile.displayName || 'Player'
+        userProfile.displayName || 'Player',
+        null, // divisionId - null for now
+        isDoubles ? (partnerSelection.partnerUserId || null) : null,
+        isDoubles ? (partnerSelection.partnerName || null) : null
       );
-      
-      // TODO: Handle doubles partner invite if needed
-      // For now, just join as singles and partner can be added later
       
       onComplete();
     } catch (e: any) {
@@ -141,7 +143,7 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   const canProceed = () => {
     if (step === 1 && isDoubles) {
       if (partnerSelection.mode === 'invite' && !partnerSelection.partnerUserId) return false;
-      // open_team and join_open don't require selection to proceed
+      // open_team doesn't require selection to proceed
     }
     return true;
   };
