@@ -19,7 +19,7 @@ import type { League, LeagueType, LeagueFormat, LeagueStatus } from '../../types
 
 interface LeaguesListProps {
   onSelectLeague: (leagueId: string) => void;
-  onCreateLeague: () => void;
+  onCreateLeague?: () => void;
 }
 
 // ============================================
@@ -202,7 +202,7 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
           <h1 className="text-2xl font-bold text-white">Leagues</h1>
           <p className="text-sm text-gray-400">Ongoing competitive play with standings</p>
         </div>
-        {isOrganizer && (
+        {isOrganizer && onCreateLeague && (
           <button
             onClick={onCreateLeague}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold transition-colors"

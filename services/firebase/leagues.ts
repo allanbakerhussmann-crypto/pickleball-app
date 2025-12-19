@@ -33,13 +33,10 @@ import type {
   LeagueTeam,
   LeaguePartnerInvite,
   LeagueRegistration,
-  LeagueSettings,
   LeagueStatus,
   LeagueType,
   MemberStats,
   GameScore,
-  GenderCategory,
-  EventType,
 } from '../../types';
 
 // ============================================

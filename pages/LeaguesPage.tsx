@@ -24,7 +24,7 @@ const LeaguesPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, isOrganizer } = useAuth();
+  const { isOrganizer } = useAuth();
   
   // Determine view mode based on route
   const [viewMode, setViewMode] = useState<ViewMode>('list');

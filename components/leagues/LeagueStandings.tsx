@@ -191,7 +191,7 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
     return (
       <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
         <div className="max-h-96 overflow-y-auto">
-          {sortedMembers.slice(0, 10).map((member, index) => {
+          {sortedMembers.slice(0, 10).map((member) => {
             const isMe = member.userId === currentUserId;
             const rankBadge = getRankBadge(member.currentRank);
 

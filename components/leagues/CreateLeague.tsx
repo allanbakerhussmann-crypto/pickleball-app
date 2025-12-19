@@ -43,12 +43,13 @@ const LEAGUE_FORMAT_OPTIONS: { value: LeagueFormat; label: string; desc: string 
   { value: 'box_league', label: '📦 Box League', desc: 'Groups with promotion' },
 ];
 
-const TIEBREAKER_OPTIONS: { value: LeagueTiebreaker; label: string }[] = [
-  { value: 'head_to_head', label: 'Head-to-Head' },
-  { value: 'game_diff', label: 'Game Difference' },
-  { value: 'games_won', label: 'Games Won' },
-  { value: 'points_for', label: 'Points Scored' },
-];
+// TIEBREAKER_OPTIONS - Available for future tiebreaker selection UI
+// const TIEBREAKER_OPTIONS: { value: LeagueTiebreaker; label: string }[] = [
+//   { value: 'head_to_head', label: 'Head-to-Head' },
+//   { value: 'game_diff', label: 'Game Difference' },
+//   { value: 'games_won', label: 'Games Won' },
+//   { value: 'points_for', label: 'Points Scored' },
+// ];
 
 export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated }) => {
   const { currentUser, userProfile } = useAuth();
@@ -87,9 +88,9 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   const [matchFormat, setMatchFormat] = useState<LeagueMatchFormat>({ bestOf: 3, gamesTo: 11, winBy: 2, allowDraw: false });
   const [challengeRules, setChallengeRules] = useState<LeagueChallengeRules>({ challengeRange: 3, responseDeadlineHours: 48, completionDeadlineDays: 7, forfeitOnDecline: false, maxActiveChallenges: 2, cooldownDays: 7 });
   const [roundRobinSettings, setRoundRobinSettings] = useState<LeagueRoundRobinSettings>({ rounds: 1, matchesPerWeek: 2, scheduleGeneration: 'auto' });
-  const [swissSettings, setSwissSettings] = useState<LeagueSwissSettings>({ rounds: 5, pairingMethod: 'adjacent' });
-  const [boxSettings, setBoxSettings] = useState<LeagueBoxSettings>({ playersPerBox: 4, promotionSpots: 1, relegationSpots: 1, roundsPerBox: 1 });
-  const [tiebreakers, setTiebreakers] = useState<LeagueTiebreaker[]>(['head_to_head', 'game_diff', 'games_won']);
+  const [swissSettings] = useState<LeagueSwissSettings>({ rounds: 5, pairingMethod: 'adjacent' });
+  const [boxSettings] = useState<LeagueBoxSettings>({ playersPerBox: 4, promotionSpots: 1, relegationSpots: 1, roundsPerBox: 1 });
+  const [tiebreakers] = useState<LeagueTiebreaker[]>(['head_to_head', 'game_diff', 'games_won']);
   const [scoreReporting, setScoreReporting] = useState({ allowSelfReporting: true, requireConfirmation: true, matchDeadlineDays: 7 });
   
   // Step 6: Payments

@@ -5,6 +5,7 @@
  * No lazy loading - direct imports for reliability.
  * 
  * FILE LOCATION: router/index.tsx
+ * VERSION: V05.17
  */
 
 import { createHashRouter } from 'react-router-dom';
@@ -34,7 +35,7 @@ import LeaguesPage from '../pages/LeaguesPage';
 import PaymentDemoPage from '../pages/PaymentDemoPage';
 import AdminTestPaymentsPage from '../pages/AdminTestPaymentsPage';
 
-// NEW: Admin Dashboard and Debug pages
+// Admin Dashboard and Debug pages
 import AdminDashboard from '../pages/AdminDashboard';
 import StripeDebugPage from '../pages/StripeDebugPage';
 
@@ -168,7 +169,7 @@ export const router = createHashRouter([
       // ADMIN
       // ==========================================
       
-      // Admin Dashboard (NEW)
+      // Admin Dashboard
       {
         path: 'admin',
         element: (
@@ -206,7 +207,7 @@ export const router = createHashRouter([
       // DEBUG TOOLS (Admin Only)
       // ==========================================
       
-      // Stripe Debug Page (NEW)
+      // Stripe Debug Page
       {
         path: 'debug/stripe',
         element: (
@@ -241,11 +242,19 @@ export const router = createHashRouter([
       },
       
       // ==========================================
-      // LEAGUES
+      // LEAGUES (UPDATED V05.17)
       // ==========================================
       {
         path: 'leagues',
         element: <LeaguesPage />,
+      },
+      {
+        path: 'leagues/create',
+        element: (
+          <ProtectedRoute requireOrganizer>
+            <LeaguesPage />
+          </ProtectedRoute>
+        ),
       },
       {
         path: 'leagues/:id',
