@@ -7,9 +7,12 @@
  * - Create Checkout sessions
  * - Handle webhooks (creates bookings/RSVPs after payment)
  *
+ * UPDATED: Now supports TWO webhook secrets:
+ * - stripe.webhook_secret = Account webhook (for checkout.session.completed)
+ * - stripe.connect_webhook_secret = Connect webhook (for account.updated)
+ *
  * FILE LOCATION: functions/src/stripe.ts
  */
-// Updated webhook secret
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -57,50 +60,48 @@ if (!admin.apps.length) {
     admin.initializeApp();
 }
 // Initialize Stripe with your secret key
-const stripe = new stripe_1.default(((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.secret_key) ||
-    'sk_test_51SfRmRAbckg8jC4DL2WMiwN3KWk4NP3GzP1RsLp8mrk8PALZF734VhcHwbnAIIPeHCKM0A0xviOhKch7V8AMzOWS0032p75RHd', { apiVersion: '2023-10-16' });
+const stripe = new stripe_1.default(((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.secret_key) || process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2024-11-20.acacia' });
 // Platform fee percentage (1.5%)
 const PLATFORM_FEE_PERCENT = 1.5;
 // ============================================
 // CREATE CONNECT ACCOUNT (FOR CLUBS)
 // ============================================
 exports.stripe_createConnectAccount = functions.https.onCall(async (data, context) => {
+    var _a;
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
     const { clubId, clubName, clubEmail, returnUrl, refreshUrl } = data;
-    if (!clubId || !clubName || !returnUrl || !refreshUrl) {
-        throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
-    }
-    // Verify user is club admin
-    const clubDoc = await admin.firestore().collection('clubs').doc(clubId).get();
-    if (!clubDoc.exists) {
-        throw new functions.https.HttpsError('not-found', 'Club not found');
-    }
-    const clubData = clubDoc.data();
-    if (clubData.createdByUserId !== context.auth.uid) {
-        throw new functions.https.HttpsError('permission-denied', 'Only club owner can connect Stripe');
+    if (!clubId || !clubName) {
+        throw new functions.https.HttpsError('invalid-argument', 'Club ID and name required');
     }
     try {
-        // Check if club already has a Stripe account
-        let accountId = clubData.stripeConnectedAccountId;
-        if (!accountId) {
+        // Check if club already has an account
+        const clubDoc = await admin.firestore().collection('clubs').doc(clubId).get();
+        const existingAccountId = (_a = clubDoc.data()) === null || _a === void 0 ? void 0 : _a.stripeConnectedAccountId;
+        let accountId;
+        if (existingAccountId) {
+            // Use existing account
+            accountId = existingAccountId;
+        }
+        else {
             // Create new Express account
             const account = await stripe.accounts.create({
                 type: 'express',
                 country: 'NZ',
-                email: clubEmail || undefined,
-                business_type: 'company',
-                company: {
-                    name: clubName,
-                },
+                email: clubEmail,
                 capabilities: {
                     card_payments: { requested: true },
                     transfers: { requested: true },
                 },
+                business_type: 'company',
+                business_profile: {
+                    name: clubName,
+                    mcc: '7941', // Sports clubs
+                },
                 metadata: {
                     clubId,
-                    clubName,
+                    platform: 'pickleball-director',
                 },
             });
             accountId = account.id;
@@ -129,52 +130,44 @@ exports.stripe_createConnectAccount = functions.https.onCall(async (data, contex
     }
 });
 // ============================================
-// CREATE USER CONNECT ACCOUNT (FOR ORGANIZERS)
+// USER STRIPE CONNECT - CREATE ACCOUNT
 // ============================================
 exports.stripe_createUserConnectAccount = functions.https.onCall(async (data, context) => {
+    var _a;
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
     const { userId, userName, userEmail, returnUrl, refreshUrl } = data;
-    if (!userId || !userName || !returnUrl || !refreshUrl) {
-        throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
-    }
-    // Verify user is creating for themselves
-    if (userId !== context.auth.uid) {
-        throw new functions.https.HttpsError('permission-denied', 'Can only create account for yourself');
-    }
-    // Verify user is an organizer
-    const userDoc = await admin.firestore().collection('users').doc(userId).get();
-    if (!userDoc.exists) {
-        throw new functions.https.HttpsError('not-found', 'User not found');
-    }
-    const userData = userDoc.data();
-    const roles = userData.roles || [];
-    const isOrganizer = roles.includes('organizer') || roles.includes('admin') || userData.isRootAdmin;
-    if (!isOrganizer) {
-        throw new functions.https.HttpsError('permission-denied', 'Only organizers can connect Stripe');
+    if (!userId) {
+        throw new functions.https.HttpsError('invalid-argument', 'User ID required');
     }
     try {
-        // Check if user already has a Stripe account
-        let accountId = userData.stripeConnectedAccountId;
-        if (!accountId) {
-            // Create new Express account
+        // Check if user already has an account
+        const userDoc = await admin.firestore().collection('users').doc(userId).get();
+        const existingAccountId = (_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.stripeConnectedAccountId;
+        let accountId;
+        if (existingAccountId) {
+            accountId = existingAccountId;
+        }
+        else {
+            // Create new Express account for individual organizer
             const account = await stripe.accounts.create({
                 type: 'express',
                 country: 'NZ',
-                email: userEmail || undefined,
-                business_type: 'individual',
-                individual: {
-                    first_name: userName.split(' ')[0],
-                    last_name: userName.split(' ').slice(1).join(' ') || undefined,
-                },
+                email: userEmail,
                 capabilities: {
                     card_payments: { requested: true },
                     transfers: { requested: true },
                 },
+                business_type: 'individual',
+                business_profile: {
+                    name: userName || 'Pickleball Organizer',
+                    mcc: '7941', // Sports clubs/promoters
+                },
                 metadata: {
                     odUserId: userId,
-                    userName,
+                    platform: 'pickleball-director',
+                    accountType: 'organizer',
                 },
             });
             accountId = account.id;
@@ -277,7 +270,7 @@ exports.stripe_createUserConnectLoginLink = functions.https.onCall(async (data, 
     // Verify user owns this account
     const userDoc = await admin.firestore().collection('users').doc(context.auth.uid).get();
     if (!userDoc.exists || ((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.stripeConnectedAccountId) !== accountId) {
-        throw new functions.https.HttpsError('permission-denied', 'Not your Stripe account');
+        throw new functions.https.HttpsError('permission-denied', 'You do not own this Stripe account');
     }
     try {
         const loginLink = await stripe.accounts.createLoginLink(accountId);
@@ -297,38 +290,36 @@ exports.stripe_createCheckoutSession = functions.https.onCall(async (data, conte
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
-    const { items, customerEmail, clubId, clubStripeAccountId, organizerStripeAccountId, successUrl, cancelUrl, metadata, } = data;
-    if (!items || !items.length || !successUrl || !cancelUrl) {
-        throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
+    const { items, customerEmail, successUrl, cancelUrl, clubId, clubStripeAccountId, organizerStripeAccountId, metadata = {}, } = data;
+    if (!items || items.length === 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'Items required');
     }
-    // Calculate total amount
-    const totalAmount = items.reduce((sum, item) => {
-        return sum + (item.amount * item.quantity);
-    }, 0);
-    // Calculate platform fee (1.5%)
-    const platformFee = Math.round(totalAmount * (PLATFORM_FEE_PERCENT / 100));
-    // Determine destination account (club or organizer)
-    const destinationAccount = clubStripeAccountId || organizerStripeAccountId;
     try {
-        // Build session config
+        // Calculate total and platform fee
+        const totalAmount = items.reduce((sum, item) => sum + item.amount * item.quantity, 0);
+        const platformFee = Math.round(totalAmount * (PLATFORM_FEE_PERCENT / 100));
+        // Determine destination account (club or organizer)
+        const destinationAccount = clubStripeAccountId || organizerStripeAccountId;
+        // Build line items
+        const lineItems = items.map((item) => ({
+            price_data: {
+                currency: 'nzd',
+                product_data: {
+                    name: item.name,
+                    description: item.description,
+                },
+                unit_amount: item.amount,
+            },
+            quantity: item.quantity,
+        }));
+        // Session config
         const sessionConfig = {
-            payment_method_types: ['card'],
             mode: 'payment',
             customer_email: customerEmail,
-            line_items: items.map((item) => ({
-                price_data: {
-                    currency: 'nzd',
-                    product_data: {
-                        name: item.name,
-                        description: item.description,
-                    },
-                    unit_amount: item.amount,
-                },
-                quantity: item.quantity,
-            })),
+            line_items: lineItems,
             success_url: successUrl,
             cancel_url: cancelUrl,
-            metadata: Object.assign({ clubId: clubId || '', odUserId: context.auth.uid, platformFee: platformFee.toString() }, metadata),
+            metadata: Object.assign({ clubId: clubId || '', odUserId: context.auth.uid }, metadata),
         };
         // If connected account, split the payment
         if (destinationAccount) {
@@ -354,39 +345,64 @@ exports.stripe_createCheckoutSession = functions.https.onCall(async (data, conte
 });
 // ============================================
 // STRIPE WEBHOOK HANDLER
+// Supports TWO webhook secrets (Account + Connect)
 // ============================================
 exports.stripe_webhook = functions.https.onRequest(async (req, res) => {
-    var _a;
+    var _a, _b;
     const sig = req.headers['stripe-signature'];
-    const webhookSecret = ((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.webhook_secret) || process.env.STRIPE_WEBHOOK_SECRET;
+    // Get BOTH webhook secrets
+    const accountWebhookSecret = ((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.webhook_secret) || process.env.STRIPE_WEBHOOK_SECRET;
+    const connectWebhookSecret = ((_b = functions.config().stripe) === null || _b === void 0 ? void 0 : _b.connect_webhook_secret) || process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
     if (!sig) {
+        console.error('Missing stripe-signature header');
         res.status(400).send('Missing signature');
         return;
     }
     let event;
+    // Try to verify with Account webhook secret first (for checkout.session.completed)
+    // If that fails, try Connect webhook secret (for account.updated)
     try {
-        if (webhookSecret) {
-            event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+        if (accountWebhookSecret) {
+            event = stripe.webhooks.constructEvent(req.rawBody, sig, accountWebhookSecret);
+            console.log('✅ Verified with Account webhook secret');
         }
         else {
-            // For testing without webhook secret
-            event = req.body;
+            throw new Error('No account webhook secret configured');
         }
     }
-    catch (err) {
-        console.error('Webhook signature verification failed:', err.message);
-        res.status(400).send(`Webhook Error: ${err.message}`);
-        return;
+    catch (err1) {
+        // First secret failed, try the Connect secret
+        console.log('Account webhook verification failed, trying Connect secret...');
+        try {
+            if (connectWebhookSecret) {
+                event = stripe.webhooks.constructEvent(req.rawBody, sig, connectWebhookSecret);
+                console.log('✅ Verified with Connect webhook secret');
+            }
+            else {
+                throw new Error('No connect webhook secret configured');
+            }
+        }
+        catch (err2) {
+            // Both secrets failed
+            console.error('❌ Webhook signature verification failed with BOTH secrets');
+            console.error('Account secret error:', err1.message);
+            console.error('Connect secret error:', err2.message);
+            res.status(400).send(`Webhook Error: Signature verification failed`);
+            return;
+        }
     }
+    console.log(`📩 Received webhook event: ${event.type}`);
     // Handle the event
     switch (event.type) {
         case 'checkout.session.completed': {
             const session = event.data.object;
+            console.log('Processing checkout.session.completed:', session.id);
             await handleCheckoutComplete(session);
             break;
         }
         case 'account.updated': {
             const account = event.data.object;
+            console.log('Processing account.updated:', account.id);
             await handleAccountUpdated(account);
             break;
         }
@@ -398,6 +414,12 @@ exports.stripe_webhook = functions.https.onRequest(async (req, res) => {
         case 'payment_intent.payment_failed': {
             const paymentIntent = event.data.object;
             console.log('Payment failed:', paymentIntent.id);
+            break;
+        }
+        case 'charge.refunded': {
+            const charge = event.data.object;
+            console.log('Charge refunded:', charge.id);
+            // TODO: Handle refund - update RSVP status, etc.
             break;
         }
         default:
@@ -493,7 +515,7 @@ async function handleMeetupPayment(session, metadata) {
             totalCollected: currentTotalCollected + amountPaid,
             updatedAt: Date.now(),
         });
-        console.log(`Meetup payment successful: ${userName} paid ${amountPaid} cents for meetup ${meetupId}`);
+        console.log(`✅ Meetup payment successful: ${userName} paid ${amountPaid} cents for meetup ${meetupId}`);
     }
     catch (error) {
         console.error('Error processing meetup payment:', error);
@@ -504,6 +526,7 @@ async function handleMeetupPayment(session, metadata) {
 // COURT BOOKING PAYMENT HANDLER
 // ============================================
 async function handleCourtBookingPayment(session, metadata) {
+    var _a;
     const clubId = metadata.clubId;
     const odUserId = metadata.odUserId;
     const slotsJson = metadata.slots;
@@ -518,7 +541,7 @@ async function handleCourtBookingPayment(session, metadata) {
         const userDoc = await db.collection('users').doc(odUserId).get();
         const userData = userDoc.exists ? userDoc.data() : null;
         const userName = (userData === null || userData === void 0 ? void 0 : userData.displayName) || (userData === null || userData === void 0 ? void 0 : userData.email) || 'Unknown';
-        // Parse slots
+        // Parse slots if provided
         let slots = [];
         if (slotsJson) {
             try {
@@ -528,27 +551,50 @@ async function handleCourtBookingPayment(session, metadata) {
                 console.error('Failed to parse slots JSON:', e);
             }
         }
+        else if (metadata.courtId && metadata.date && metadata.startTime) {
+            // Single slot from metadata
+            slots = [{
+                    courtId: metadata.courtId,
+                    date: metadata.date,
+                    startTime: metadata.startTime,
+                    endTime: metadata.endTime || '',
+                }];
+        }
         // Create bookings for each slot
         for (const slot of slots) {
-            const bookingId = `${slot.courtId}_${slot.startTime}_${odUserId}`;
-            await db.collection('clubs').doc(clubId).collection('court_bookings').doc(bookingId).set({
-                odUserId,
-                odClubId: clubId,
+            // Get court name
+            let courtName = 'Court';
+            try {
+                const courtDoc = await db.collection('clubs').doc(clubId).collection('courts').doc(slot.courtId).get();
+                if (courtDoc.exists) {
+                    courtName = ((_a = courtDoc.data()) === null || _a === void 0 ? void 0 : _a.name) || 'Court';
+                }
+            }
+            catch (e) {
+                console.warn('Could not get court name:', e);
+            }
+            // Create booking document
+            const bookingRef = db.collection('clubs').doc(clubId).collection('bookings').doc();
+            await bookingRef.set({
+                id: bookingRef.id,
+                clubId,
                 courtId: slot.courtId,
+                courtName,
+                date: slot.date,
                 startTime: slot.startTime,
                 endTime: slot.endTime,
+                bookedByUserId: odUserId,
+                bookedByName: userName,
                 status: 'confirmed',
                 paymentStatus: 'paid',
                 stripeSessionId: session.id,
                 stripePaymentIntentId: session.payment_intent,
-                bookedByName: userName,
-                bookedAt: Date.now(),
+                amountPaid: session.amount_total || 0,
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
             });
-            console.log(`Created booking: ${bookingId}`);
+            console.log(`✅ Court booking created: ${courtName} on ${slot.date} at ${slot.startTime}`);
         }
-        console.log(`Court booking successful: ${slots.length} slots booked for ${userName}`);
     }
     catch (error) {
         console.error('Error processing court booking:', error);
@@ -556,72 +602,106 @@ async function handleCourtBookingPayment(session, metadata) {
     }
 }
 // ============================================
-// TOURNAMENT PAYMENT HANDLER (PLACEHOLDER)
+// TOURNAMENT PAYMENT HANDLER (Placeholder)
 // ============================================
 async function handleTournamentPayment(session, metadata) {
     const tournamentId = metadata.tournamentId;
-    const divisionId = metadata.divisionId;
     const odUserId = metadata.odUserId;
-    console.log(`Tournament payment: tournament=${tournamentId}, division=${divisionId}, user=${odUserId}`);
-    // TODO: Implement tournament registration payment
-    // 1. Update registration paymentStatus to 'paid'
-    // 2. Update tournament account with revenue
-    // 3. Confirm team registration if applicable
+    console.log(`Tournament payment: tournament=${tournamentId}, user=${odUserId}`);
+    // TODO: Implement tournament registration payment handling
+    // 1. Update registration status to 'paid'
+    // 2. Add user to tournament participants
+    // 3. Send confirmation email
 }
 // ============================================
-// LEAGUE PAYMENT HANDLER (PLACEHOLDER)
+// LEAGUE PAYMENT HANDLER (Placeholder)
 // ============================================
 async function handleLeaguePayment(session, metadata) {
     const leagueId = metadata.leagueId;
     const odUserId = metadata.odUserId;
     console.log(`League payment: league=${leagueId}, user=${odUserId}`);
-    // TODO: Implement league membership payment
-    // 1. Update member paymentStatus to 'paid'
-    // 2. Update league account with revenue
+    // TODO: Implement league membership payment handling
+    // 1. Update membership status to 'paid'
+    // 2. Add user to league members
+    // 3. Send confirmation email
 }
 // ============================================
-// ACCOUNT UPDATED HANDLER
+// ACCOUNT UPDATED HANDLER (Connect Onboarding)
 // ============================================
 async function handleAccountUpdated(account) {
+    var _a, _b, _c;
     console.log('Account updated:', account.id);
+    console.log('  - charges_enabled:', account.charges_enabled);
+    console.log('  - payouts_enabled:', account.payouts_enabled);
+    console.log('  - details_submitted:', account.details_submitted);
     const db = admin.firestore();
+    // Check metadata to determine if this is a club or user account
+    const accountType = (_a = account.metadata) === null || _a === void 0 ? void 0 : _a.accountType;
+    const odUserId = (_b = account.metadata) === null || _b === void 0 ? void 0 : _b.odUserId;
+    const clubId = (_c = account.metadata) === null || _c === void 0 ? void 0 : _c.clubId;
     try {
-        // Check if this is a club account
-        const clubsQuery = await db.collection('clubs')
-            .where('stripeConnectedAccountId', '==', account.id)
-            .limit(1)
-            .get();
-        if (!clubsQuery.empty) {
-            const clubDoc = clubsQuery.docs[0];
-            await clubDoc.ref.update({
-                stripeOnboardingComplete: account.details_submitted,
+        if (accountType === 'organizer' && odUserId) {
+            // Update user document
+            console.log(`Updating user ${odUserId} with Stripe status`);
+            await db.collection('users').doc(odUserId).update({
                 stripeChargesEnabled: account.charges_enabled,
                 stripePayoutsEnabled: account.payouts_enabled,
+                stripeOnboardingComplete: account.details_submitted,
                 updatedAt: Date.now(),
             });
-            console.log(`Updated club ${clubDoc.id} Stripe status`);
-            return;
+            console.log(`✅ User ${odUserId} Stripe status updated`);
         }
-        // Check if this is a user account
-        const usersQuery = await db.collection('users')
-            .where('stripeConnectedAccountId', '==', account.id)
-            .limit(1)
-            .get();
-        if (!usersQuery.empty) {
-            const userDoc = usersQuery.docs[0];
-            await userDoc.ref.update({
-                stripeOnboardingComplete: account.details_submitted,
+        else if (clubId) {
+            // Update club document
+            console.log(`Updating club ${clubId} with Stripe status`);
+            await db.collection('clubs').doc(clubId).update({
                 stripeChargesEnabled: account.charges_enabled,
                 stripePayoutsEnabled: account.payouts_enabled,
+                stripeOnboardingComplete: account.details_submitted,
                 updatedAt: Date.now(),
             });
-            console.log(`Updated user ${userDoc.id} Stripe status`);
-            return;
+            console.log(`✅ Club ${clubId} Stripe status updated`);
         }
-        console.log('No matching club or user found for account:', account.id);
+        else {
+            // Try to find by stripeConnectedAccountId in users first, then clubs
+            console.log('No metadata, searching by account ID...');
+            // Search users
+            const usersSnapshot = await db.collection('users')
+                .where('stripeConnectedAccountId', '==', account.id)
+                .limit(1)
+                .get();
+            if (!usersSnapshot.empty) {
+                const userDoc = usersSnapshot.docs[0];
+                await userDoc.ref.update({
+                    stripeChargesEnabled: account.charges_enabled,
+                    stripePayoutsEnabled: account.payouts_enabled,
+                    stripeOnboardingComplete: account.details_submitted,
+                    updatedAt: Date.now(),
+                });
+                console.log(`✅ Found and updated user ${userDoc.id}`);
+                return;
+            }
+            // Search clubs
+            const clubsSnapshot = await db.collection('clubs')
+                .where('stripeConnectedAccountId', '==', account.id)
+                .limit(1)
+                .get();
+            if (!clubsSnapshot.empty) {
+                const clubDoc = clubsSnapshot.docs[0];
+                await clubDoc.ref.update({
+                    stripeChargesEnabled: account.charges_enabled,
+                    stripePayoutsEnabled: account.payouts_enabled,
+                    stripeOnboardingComplete: account.details_submitted,
+                    updatedAt: Date.now(),
+                });
+                console.log(`✅ Found and updated club ${clubDoc.id}`);
+                return;
+            }
+            console.warn('Could not find user or club for account:', account.id);
+        }
     }
     catch (error) {
-        console.error('Error handling account update:', error);
+        console.error('Error handling account updated:', error);
     }
 }
 //# sourceMappingURL=stripe.js.map
