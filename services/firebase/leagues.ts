@@ -153,23 +153,33 @@ export const getLeagues = async (filters?: {
 
 /**
  * Subscribe to leagues (real-time)
+ * Note: Simple query without filters to avoid index requirements
  */
 export const subscribeToLeagues = (
   callback: (leagues: League[]) => void,
   filters?: { status?: LeagueStatus; clubId?: string }
 ): (() => void) => {
-  let q = query(collection(db, 'leagues'), orderBy('createdAt', 'desc'));
-  
-  if (filters?.status) {
-    q = query(q, where('status', '==', filters.status));
-  }
-  if (filters?.clubId) {
-    q = query(q, where('clubId', '==', filters.clubId));
-  }
+  // Simple query - just get all leagues, sort client-side
+  const q = query(collection(db, 'leagues'));
   
   return onSnapshot(q, (snap) => {
-    const leagues = snap.docs.map(d => d.data() as League);
+    let leagues = snap.docs.map(d => d.data() as League);
+    
+    // Apply filters client-side
+    if (filters?.status) {
+      leagues = leagues.filter(l => l.status === filters.status);
+    }
+    if (filters?.clubId) {
+      leagues = leagues.filter(l => l.clubId === filters.clubId);
+    }
+    
+    // Sort by createdAt descending (newest first)
+    leagues.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    
     callback(leagues);
+  }, (error) => {
+    console.error('Error subscribing to leagues:', error);
+    callback([]);
   });
 };
 
@@ -365,67 +375,81 @@ export const leaveLeague = async (
 
 /**
  * Get league member by user ID
+ * Note: Simple query to avoid index requirements
  */
 export const getLeagueMemberByUserId = async (
   leagueId: string,
   userId: string
 ): Promise<LeagueMember | null> => {
-  const q = query(
-    collection(db, 'leagues', leagueId, 'members'),
-    where('userId', '==', userId),
-    where('status', '==', 'active'),
-    limit(1)
-  );
+  // Get all members and filter client-side
+  const q = query(collection(db, 'leagues', leagueId, 'members'));
   
   const snap = await getDocs(q);
-  if (snap.empty) return null;
-  return snap.docs[0].data() as LeagueMember;
+  const members = snap.docs.map(d => d.data() as LeagueMember);
+  
+  // Find active member with matching userId
+  const member = members.find(m => m.userId === userId && m.status === 'active');
+  return member || null;
 };
 
 /**
  * Get all members of a league
+ * Note: Filtering and sorting done client-side to avoid index requirements
  */
 export const getLeagueMembers = async (
   leagueId: string,
   divisionId?: string | null
 ): Promise<LeagueMember[]> => {
-  let q = query(
-    collection(db, 'leagues', leagueId, 'members'),
-    where('status', '==', 'active'),
-    orderBy('currentRank', 'asc')
-  );
-  
-  if (divisionId) {
-    q = query(q, where('divisionId', '==', divisionId));
-  }
+  // Simple query - get all members
+  const q = query(collection(db, 'leagues', leagueId, 'members'));
   
   const snap = await getDocs(q);
-  return snap.docs.map(d => d.data() as LeagueMember);
+  let members = snap.docs.map(d => d.data() as LeagueMember);
+  
+  // Filter to active members only
+  members = members.filter(m => m.status === 'active');
+  
+  // Filter by division if specified
+  if (divisionId) {
+    members = members.filter(m => m.divisionId === divisionId);
+  }
+  
+  // Sort by currentRank ascending
+  members.sort((a, b) => (a.currentRank || 999) - (b.currentRank || 999));
+  
+  return members;
 };
 
 /**
  * Subscribe to league members (for real-time standings)
+ * Note: Filtering and sorting done client-side to avoid index requirements
  */
 export const subscribeToLeagueMembers = (
   leagueId: string,
   callback: (members: LeagueMember[]) => void,
   divisionId?: string | null
 ): (() => void) => {
-  let q = query(
-    collection(db, 'leagues', leagueId, 'members'),
-    where('status', '==', 'active'),
-    orderBy('currentRank', 'asc')
-  );
-  
-  // Note: Can't combine where with orderBy on different fields in Firestore
-  // If divisionId filter needed, would need composite index
+  // Simple query - get all members, filter/sort client-side
+  const q = query(collection(db, 'leagues', leagueId, 'members'));
   
   return onSnapshot(q, (snap) => {
     let members = snap.docs.map(d => d.data() as LeagueMember);
+    
+    // Filter to active members only
+    members = members.filter(m => m.status === 'active');
+    
+    // Filter by division if specified
     if (divisionId) {
       members = members.filter(m => m.divisionId === divisionId);
     }
+    
+    // Sort by currentRank ascending
+    members.sort((a, b) => (a.currentRank || 999) - (b.currentRank || 999));
+    
     callback(members);
+  }, (error) => {
+    console.error('Error subscribing to league members:', error);
+    callback([]);
   });
 };
 

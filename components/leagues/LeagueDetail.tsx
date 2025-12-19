@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   getLeague,
@@ -18,16 +19,12 @@ import {
   joinLeague,
   leaveLeague,
   getLeagueMemberByUserId,
-  createChallenge,
-  getPendingChallenges,
-  respondToChallenge,
-  subscribeToUserChallenges,
+  updateLeague,
 } from '../../services/firebase';
 import type { 
   League, 
   LeagueMember, 
   LeagueMatch, 
-  LeagueChallenge,
   LeagueDivision,
 } from '../../types';
 
@@ -40,7 +37,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'challenges' | 'info';
+type TabType = 'standings' | 'matches' | 'info';
 
 // ============================================
 // COMPONENT
@@ -48,6 +45,7 @@ type TabType = 'standings' | 'matches' | 'challenges' | 'info';
 
 export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) => {
   const { currentUser, userProfile } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   
   // Data state
   const [league, setLeague] = useState<League | null>(null);
@@ -55,15 +53,38 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [members, setMembers] = useState<LeagueMember[]>([]);
   const [matches, setMatches] = useState<LeagueMatch[]>([]);
   const [myMembership, setMyMembership] = useState<LeagueMember | null>(null);
-  const [pendingChallenges, setPendingChallenges] = useState<LeagueChallenge[]>([]);
-  const [myChallenges, setMyChallenges] = useState<LeagueChallenge[]>([]);
   
   // UI state
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('standings');
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
-  const [challengingMemberId, setChallengingMemberId] = useState<string | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [paymentCancelled, setPaymentCancelled] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    description: '',
+    location: '',
+    venue: '',
+    seasonStart: '',
+    seasonEnd: '',
+    registrationDeadline: '',
+    maxMembers: '',
+    visibility: 'public' as 'public' | 'private' | 'club_only',
+    // Match format
+    bestOf: 3 as 1 | 3 | 5,
+    gamesTo: 11 as 11 | 15 | 21,
+    winBy: 2 as 1 | 2,
+    // Scoring
+    pointsForWin: 3,
+    pointsForDraw: 1,
+    pointsForLoss: 0,
+    // Pricing
+    entryFee: 0,
+  });
+  const [saving, setSaving] = useState(false);
 
   // ============================================
   // DATA LOADING
@@ -73,9 +94,87 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   useEffect(() => {
     getLeague(leagueId).then((data) => {
       setLeague(data);
+      if (data) {
+        // Helper to format date for input
+        const formatDateForInput = (timestamp: number | null | undefined): string => {
+          if (!timestamp) return '';
+          return new Date(timestamp).toISOString().split('T')[0];
+        };
+        
+        setEditForm({
+          name: data.name || '',
+          description: data.description || '',
+          location: data.location || '',
+          venue: data.venue || '',
+          seasonStart: formatDateForInput(data.seasonStart),
+          seasonEnd: formatDateForInput(data.seasonEnd),
+          registrationDeadline: formatDateForInput(data.registrationDeadline),
+          maxMembers: data.settings?.maxMembers?.toString() || '',
+          visibility: data.visibility || 'public',
+          // Match format
+          bestOf: data.settings?.matchFormat?.bestOf || 3,
+          gamesTo: data.settings?.matchFormat?.gamesTo || 11,
+          winBy: data.settings?.matchFormat?.winBy || 2,
+          // Scoring
+          pointsForWin: data.settings?.pointsForWin ?? 3,
+          pointsForDraw: data.settings?.pointsForDraw ?? 1,
+          pointsForLoss: data.settings?.pointsForLoss ?? 0,
+          // Pricing
+          entryFee: data.pricing?.entryFee || 0,
+        });
+      }
       setLoading(false);
     });
   }, [leagueId]);
+  
+  // Handle payment success/cancel from Stripe redirect
+  const paymentParam = searchParams.get('payment');
+  useEffect(() => {
+    if (paymentParam === 'success' && currentUser && userProfile) {
+      console.log('Payment success detected, joining league...');
+      setPaymentSuccess(true);
+      
+      // Clear the query param from URL immediately
+      setSearchParams({});
+      
+      // Join the league - don't check myMembership as it may not be loaded yet
+      const doJoin = async () => {
+        try {
+          // First check if already a member (to avoid duplicates)
+          const existingMembership = await getLeagueMemberByUserId(leagueId, currentUser.uid);
+          
+          if (existingMembership) {
+            console.log('Already a member, skipping join');
+            setMyMembership(existingMembership);
+          } else {
+            console.log('Joining league...');
+            await joinLeague(
+              leagueId,
+              currentUser.uid,
+              userProfile.displayName || 'Player',
+              null // divisionId
+            );
+            console.log('Join successful, fetching membership...');
+            const newMembership = await getLeagueMemberByUserId(leagueId, currentUser.uid);
+            setMyMembership(newMembership);
+            console.log('Membership set:', newMembership);
+          }
+        } catch (error) {
+          console.error('Failed to join league after payment:', error);
+          alert('Payment successful but failed to join league. Please contact support.');
+        }
+      };
+      
+      doJoin();
+      
+      // Auto-hide success message after 5 seconds
+      setTimeout(() => setPaymentSuccess(false), 5000);
+    } else if (paymentParam === 'cancelled') {
+      setPaymentCancelled(true);
+      setSearchParams({});
+      setTimeout(() => setPaymentCancelled(false), 5000);
+    }
+  }, [paymentParam, currentUser, userProfile, leagueId, setSearchParams]);
 
   // Load divisions
   useEffect(() => {
@@ -102,21 +201,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       getLeagueMemberByUserId(leagueId, currentUser.uid).then(setMyMembership);
     }
   }, [leagueId, currentUser, members]);
-
-  // Subscribe to my challenges (for ladder)
-  useEffect(() => {
-    if (currentUser && myMembership && league?.format === 'ladder') {
-      const unsubscribe = subscribeToUserChallenges(leagueId, currentUser.uid, setMyChallenges);
-      return () => unsubscribe();
-    }
-  }, [leagueId, currentUser, myMembership, league?.format]);
-
-  // Get pending challenges
-  useEffect(() => {
-    if (currentUser && myMembership) {
-      getPendingChallenges(leagueId, currentUser.uid).then(setPendingChallenges);
-    }
-  }, [leagueId, currentUser, myMembership]);
 
   // ============================================
   // HELPERS
@@ -206,6 +290,22 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
   const handleJoin = async () => {
     if (!currentUser || !userProfile) return;
+    
+    // Debug: Log payment check
+    console.log('Join clicked - Payment check:', {
+      pricingEnabled: league?.pricing?.enabled,
+      entryFee: league?.pricing?.entryFee,
+      organizerStripeAccountId: league?.organizerStripeAccountId,
+    });
+    
+    // Check if league requires payment
+    if (league?.pricing?.enabled && league.pricing.entryFee > 0) {
+      // Show payment modal instead of direct join
+      setShowPaymentModal(true);
+      return;
+    }
+    
+    // Free league - join directly
     setJoining(true);
     try {
       // TODO: For doubles/mixed, show partner selection modal
@@ -223,6 +323,27 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       setJoining(false);
     }
   };
+  
+  // Handle free registration (after payment or for free leagues)
+  const handleFreeJoin = async () => {
+    if (!currentUser || !userProfile) return;
+    setJoining(true);
+    try {
+      await joinLeague(
+        leagueId, 
+        currentUser.uid, 
+        userProfile.displayName || 'Player',
+        selectedDivisionId
+      );
+      const membership = await getLeagueMemberByUserId(leagueId, currentUser.uid);
+      setMyMembership(membership);
+      setShowPaymentModal(false);
+    } catch (e: any) {
+      alert('Failed to join: ' + e.message);
+    } finally {
+      setJoining(false);
+    }
+  };
 
   const handleLeave = async () => {
     if (!myMembership) return;
@@ -232,68 +353,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       setMyMembership(null);
     } catch (e: any) {
       alert('Failed to leave: ' + e.message);
-    }
-  };
-
-  const canChallenge = (member: LeagueMember): boolean => {
-    if (!myMembership || !league) return false;
-    if (member.userId === currentUser?.uid) return false;
-    if (league.format !== 'ladder') return false;
-    
-    const challengeRange = league.settings?.challengeRules?.challengeRange || 3;
-    const rankDiff = myMembership.currentRank - member.currentRank;
-    
-    // Can only challenge players ranked above you (lower number)
-    if (rankDiff <= 0) return false;
-    if (rankDiff > challengeRange) return false;
-    
-    // Check if already has pending challenge with this member
-    const hasExisting = myChallenges.some(
-      c => (c.challengedId === member.id || c.challengerId === member.id) &&
-           (c.status === 'pending' || c.status === 'accepted')
-    );
-    if (hasExisting) return false;
-    
-    return true;
-  };
-
-  const handleChallenge = async (member: LeagueMember) => {
-    if (!currentUser || !myMembership) return;
-    setChallengingMemberId(member.id);
-    try {
-      await createChallenge(leagueId, {
-        challengerId: myMembership.id,
-        challengerUserId: currentUser.uid,
-        challengerName: myMembership.displayName,
-        challengerRank: myMembership.currentRank,
-        challengedId: member.id,
-        challengedUserId: member.userId,
-        challengedName: member.displayName,
-        challengedRank: member.currentRank,
-        status: 'pending',
-        divisionId: member.divisionId || null,
-        responseDeadline: Date.now() + (48 * 60 * 60 * 1000), // 48 hours
-      });
-      // Refresh challenges
-      const updated = await getPendingChallenges(leagueId, currentUser.uid);
-      setPendingChallenges(updated);
-    } catch (e: any) {
-      alert('Failed to send challenge: ' + e.message);
-    } finally {
-      setChallengingMemberId(null);
-    }
-  };
-
-  const handleRespondToChallenge = async (challengeId: string, response: 'accepted' | 'declined') => {
-    try {
-      await respondToChallenge(leagueId, challengeId, response);
-      // Refresh challenges
-      if (currentUser) {
-        const updated = await getPendingChallenges(leagueId, currentUser.uid);
-        setPendingChallenges(updated);
-      }
-    } catch (e: any) {
-      alert('Failed to respond: ' + e.message);
     }
   };
 
@@ -321,10 +380,53 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   }
 
   const isDoublesOrMixed = league.type === 'doubles' || league.type === 'mixed_doubles';
+  const isOrganizer = currentUser?.uid === league.createdByUserId;
   const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active');
 
   return (
     <div className="max-w-4xl mx-auto">
+      {/* Payment Success Banner */}
+      {paymentSuccess && (
+        <div className="bg-green-900/50 border border-green-500 rounded-xl p-4 mb-4 flex items-center gap-3">
+          <svg className="w-6 h-6 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div>
+            <p className="font-semibold text-green-400">Payment Successful! 🎉</p>
+            <p className="text-sm text-green-300">You have been registered for this league.</p>
+          </div>
+          <button 
+            onClick={() => setPaymentSuccess(false)}
+            className="ml-auto text-green-400 hover:text-green-300"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
+      
+      {/* Payment Cancelled Banner */}
+      {paymentCancelled && (
+        <div className="bg-yellow-900/50 border border-yellow-500 rounded-xl p-4 mb-4 flex items-center gap-3">
+          <svg className="w-6 h-6 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <div>
+            <p className="font-semibold text-yellow-400">Payment Cancelled</p>
+            <p className="text-sm text-yellow-300">Your payment was cancelled. You can try again when ready.</p>
+          </div>
+          <button 
+            onClick={() => setPaymentCancelled(false)}
+            className="ml-auto text-yellow-400 hover:text-yellow-300"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* Back Button */}
       <button
         onClick={onBack}
@@ -335,6 +437,130 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         </svg>
         Back to Leagues
       </button>
+
+      {/* Organizer Controls - Only visible to league creator */}
+      {isOrganizer && (
+        <div className="bg-purple-900/30 border border-purple-600 rounded-xl p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-purple-400 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              Organizer Controls
+            </h3>
+            <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-1 rounded">
+              Status: {league.status.toUpperCase()}
+            </span>
+          </div>
+          
+          <div className="flex flex-wrap gap-2">
+            {/* Draft -> Open Registration */}
+            {league.status === 'draft' && (
+              <button
+                onClick={async () => {
+                  if (confirm('Open registration? Players will be able to see and join this league.')) {
+                    const { openLeagueRegistration } = await import('../../services/firebase');
+                    await openLeagueRegistration(leagueId);
+                    const updated = await getLeague(leagueId);
+                    if (updated) setLeague(updated);
+                  }
+                }}
+                className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                🚀 Open Registration
+              </button>
+            )}
+            
+            {/* Registration -> Active (Start League) */}
+            {league.status === 'registration' && (
+              <button
+                onClick={async () => {
+                  if (confirm('Start the league? Registration will close and play will begin.')) {
+                    const { startLeague } = await import('../../services/firebase');
+                    await startLeague(leagueId);
+                    const updated = await getLeague(leagueId);
+                    if (updated) setLeague(updated);
+                  }
+                }}
+                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                ▶️ Start League
+              </button>
+            )}
+            
+            {/* Active -> Complete */}
+            {league.status === 'active' && (
+              <button
+                onClick={async () => {
+                  if (confirm('Complete the league? This will finalize standings.')) {
+                    const { completeLeague } = await import('../../services/firebase');
+                    await completeLeague(leagueId);
+                    const updated = await getLeague(leagueId);
+                    if (updated) setLeague(updated);
+                  }
+                }}
+                className="bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                🏆 Complete League
+              </button>
+            )}
+            
+            {/* Cancel (available for draft/registration) */}
+            {(league.status === 'draft' || league.status === 'registration') && (
+              <button
+                onClick={async () => {
+                  if (confirm('Cancel this league? This cannot be undone.')) {
+                    const { cancelLeague } = await import('../../services/firebase');
+                    await cancelLeague(leagueId);
+                    const updated = await getLeague(leagueId);
+                    if (updated) setLeague(updated);
+                  }
+                }}
+                className="bg-red-600/20 border border-red-600 text-red-400 hover:bg-red-600/30 px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                ❌ Cancel League
+              </button>
+            )}
+            
+            {/* Edit League - available until registration deadline */}
+            {(() => {
+              const now = Date.now();
+              const regDeadline = league.registrationDeadline;
+              const canEdit = league.status === 'draft' || 
+                              league.status === 'registration' || 
+                              (league.status === 'active' && regDeadline && now < regDeadline);
+              return canEdit ? (
+                <button
+                  onClick={() => setShowEditModal(true)}
+                  className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+                >
+                  ✏️ Edit League
+                </button>
+              ) : null;
+            })()}
+            
+            {/* Join as Organizer */}
+            {!myMembership && (league.status === 'draft' || league.status === 'registration' || league.status === 'active') && (
+              <button
+                onClick={handleJoin}
+                disabled={joining}
+                className="bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                {joining ? 'Joining...' : '👤 Join as Player'}
+              </button>
+            )}
+          </div>
+          
+          <p className="text-xs text-gray-400 mt-3">
+            {league.status === 'draft' && "This league is not visible to other players yet. Open registration to allow signups."}
+            {league.status === 'registration' && `${members.length} player${members.length !== 1 ? 's' : ''} registered. Start the league when ready.`}
+            {league.status === 'active' && "League is in progress. Complete when all matches are finished."}
+            {league.status === 'completed' && "This league has ended."}
+            {league.status === 'cancelled' && "This league was cancelled."}
+          </p>
+        </div>
+      )}
 
       {/* Header Card */}
       <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 mb-6">
@@ -352,8 +578,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </div>
           </div>
           
-          {/* Join/Leave/Manage */}
-          {currentUser && (
+          {/* Join/Leave - For non-organizers */}
+          {currentUser && !isOrganizer && (
             myMembership ? (
               <div className="text-right">
                 <div className="text-sm text-gray-400 mb-1">
@@ -379,6 +605,18 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </button>
             )
           )}
+          
+          {/* Member status for organizer who joined */}
+          {currentUser && isOrganizer && myMembership && (
+            <div className="text-right">
+              <div className="text-sm text-gray-400 mb-1">
+                Your Rank: <span className="text-white font-bold text-lg">#{myMembership.currentRank}</span>
+              </div>
+              <div className="text-xs text-gray-500">
+                {myMembership.stats.wins}W - {myMembership.stats.losses}L
+              </div>
+            </div>
+          )}
         </div>
 
         {league.description && (
@@ -396,37 +634,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           )}
         </div>
       </div>
-
-      {/* Pending Challenges Alert */}
-      {pendingChallenges.length > 0 && pendingChallenges.some(c => c.challengedUserId === currentUser?.uid && c.status === 'pending') && (
-        <div className="bg-yellow-900/30 border border-yellow-600 rounded-xl p-4 mb-6">
-          <h3 className="font-semibold text-yellow-400 mb-3">⚔️ You've Been Challenged!</h3>
-          {pendingChallenges
-            .filter(c => c.challengedUserId === currentUser?.uid && c.status === 'pending')
-            .map(challenge => (
-              <div key={challenge.id} className="flex items-center justify-between bg-gray-800/50 p-3 rounded-lg mb-2">
-                <div>
-                  <span className="font-semibold text-white">{challenge.challengerName}</span>
-                  <span className="text-gray-400 text-sm ml-2">(Rank #{challenge.challengerRank})</span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleRespondToChallenge(challenge.id, 'accepted')}
-                    className="bg-green-600 hover:bg-green-500 text-white px-4 py-1 rounded font-semibold text-sm"
-                  >
-                    Accept
-                  </button>
-                  <button
-                    onClick={() => handleRespondToChallenge(challenge.id, 'declined')}
-                    className="bg-red-600 hover:bg-red-500 text-white px-4 py-1 rounded font-semibold text-sm"
-                  >
-                    Decline
-                  </button>
-                </div>
-              </div>
-            ))}
-        </div>
-      )}
 
       {/* Division Selector (if applicable) */}
       {league.hasDivisions && divisions.length > 0 && (
@@ -461,7 +668,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 border-b border-gray-700 overflow-x-auto">
-        {(['standings', 'matches', ...(league.format === 'ladder' ? ['challenges'] : []), 'info'] as TabType[]).map(tab => (
+        {(['standings', 'matches', 'info'] as TabType[]).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -473,14 +680,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           >
             {tab === 'standings' && '🏆 '}
             {tab === 'matches' && '🎾 '}
-            {tab === 'challenges' && '⚔️ '}
             {tab === 'info' && 'ℹ️ '}
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            {tab === 'challenges' && myChallenges.filter(c => c.status === 'pending' || c.status === 'accepted').length > 0 && (
-              <span className="ml-1 bg-yellow-500 text-black text-xs px-1.5 rounded-full">
-                {myChallenges.filter(c => c.status === 'pending' || c.status === 'accepted').length}
-              </span>
-            )}
           </button>
         ))}
       </div>
@@ -499,7 +700,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 <th className="py-3 px-4 text-center hidden sm:table-cell">GD</th>
                 <th className="py-3 px-4 text-center hidden sm:table-cell">Pts</th>
                 <th className="py-3 px-4 text-center hidden md:table-cell">Form</th>
-                {league.format === 'ladder' && myMembership && <th className="py-3 px-4 w-28" />}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700">
@@ -557,19 +757,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                           {getFormBadges(member.stats.recentForm || [])}
                         </div>
                       </td>
-                      {league.format === 'ladder' && myMembership && (
-                        <td className="py-3 px-4 text-center">
-                          {canChallenge(member) && (
-                            <button
-                              onClick={() => handleChallenge(member)}
-                              disabled={challengingMemberId === member.id}
-                              className="text-xs bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white px-3 py-1 rounded font-semibold transition-colors"
-                            >
-                              {challengingMemberId === member.id ? '...' : '⚔️ Challenge'}
-                            </button>
-                          )}
-                        </td>
-                      )}
                     </tr>
                   );
                 })
@@ -656,57 +843,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         </div>
       )}
 
-      {/* CHALLENGES TAB (Ladder only) */}
-      {activeTab === 'challenges' && league.format === 'ladder' && (
-        <div className="space-y-4">
-          {/* My Active Challenges */}
-          <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-            <h3 className="font-semibold text-white mb-3">Your Active Challenges</h3>
-            {myChallenges.filter(c => c.status === 'pending' || c.status === 'accepted').length === 0 ? (
-              <p className="text-gray-400 text-sm">No active challenges. Challenge someone from the standings!</p>
-            ) : (
-              <div className="space-y-2">
-                {myChallenges
-                  .filter(c => c.status === 'pending' || c.status === 'accepted')
-                  .map(challenge => {
-                    const isChallenger = challenge.challengerUserId === currentUser?.uid;
-                    const opponent = isChallenger ? challenge.challengedName : challenge.challengerName;
-                    const opponentRank = isChallenger ? challenge.challengedRank : challenge.challengerRank;
-                    
-                    return (
-                      <div key={challenge.id} className="flex items-center justify-between bg-gray-900/50 p-3 rounded-lg">
-                        <div>
-                          <span className={isChallenger ? 'text-yellow-400' : 'text-blue-400'}>
-                            {isChallenger ? '→ You challenged' : '← Challenged by'}
-                          </span>
-                          <span className="font-semibold text-white ml-2">{opponent}</span>
-                          <span className="text-gray-400 text-sm ml-1">(#{opponentRank})</span>
-                        </div>
-                        <span className={`text-xs px-2 py-1 rounded ${
-                          challenge.status === 'accepted' ? 'bg-green-600/20 text-green-400' : 'bg-yellow-600/20 text-yellow-400'
-                        }`}>
-                          {challenge.status === 'accepted' ? 'Play Match!' : 'Pending Response'}
-                        </span>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
-
-          {/* Challenge Rules */}
-          <div className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-            <h3 className="font-semibold text-white mb-3">Challenge Rules</h3>
-            <ul className="text-sm text-gray-400 space-y-2">
-              <li>• You can challenge players up to <span className="text-white font-semibold">{league.settings?.challengeRules?.challengeRange || 3} positions</span> above you</li>
-              <li>• Challenged player has <span className="text-white font-semibold">{league.settings?.challengeRules?.responseDeadlineHours || 48} hours</span> to respond</li>
-              <li>• Match must be completed within <span className="text-white font-semibold">{league.settings?.challengeRules?.completionDeadlineDays || 7} days</span> of acceptance</li>
-              <li>• If you win against a higher-ranked player, you take their position</li>
-            </ul>
-          </div>
-        </div>
-      )}
-
       {/* INFO TAB */}
       {activeTab === 'info' && (
         <div className="space-y-4">
@@ -789,6 +925,487 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {league.clubName && (
               <p className="text-sm text-gray-400 mt-1">Hosted by {league.clubName}</p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Payment Modal for Paid Leagues */}
+      {showPaymentModal && league?.pricing?.enabled && (() => {
+        // Calculate fees
+        const baseAmount = league.pricing.entryFee;
+        const platformFeePercent = 1.5;
+        const stripeFeePercent = 2.9;
+        const stripeFeeFixed = 30; // 30 cents
+        
+        const platformFee = Math.round(baseAmount * (platformFeePercent / 100));
+        const stripeFee = Math.round(baseAmount * (stripeFeePercent / 100)) + stripeFeeFixed;
+        const totalFees = platformFee + stripeFee;
+        
+        const playerPays = league.pricing.feesPaidBy === 'player' 
+          ? baseAmount + totalFees 
+          : baseAmount;
+        
+        return (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-800 w-full max-w-md rounded-xl border border-gray-700 overflow-hidden">
+            <div className="bg-gray-900 px-6 py-4 border-b border-gray-700">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-white">💳 League Registration</h2>
+                <button 
+                  onClick={() => setShowPaymentModal(false)} 
+                  className="text-gray-400 hover:text-white"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              <div className="text-center mb-6">
+                <h3 className="text-xl font-bold text-white mb-2">{league.name}</h3>
+                <p className="text-gray-400 text-sm">{league.type === 'singles' ? 'Singles' : 'Doubles'} • {league.format.replace('_', ' ')}</p>
+              </div>
+              
+              {/* Pricing Summary with Fee Breakdown */}
+              <div className="bg-gray-900 rounded-lg p-4 mb-6">
+                {/* Entry Fee */}
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-400">Entry Fee</span>
+                  <span className="text-white font-semibold">
+                    ${(baseAmount / 100).toFixed(2)}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-500 mb-3">
+                  {league.pricing.entryFeeType === 'per_player' ? 'Per player' : 'Per team'}
+                </div>
+                
+                {/* Fee Breakdown - Only show if player pays fees */}
+                {league.pricing.feesPaidBy === 'player' && (
+                  <>
+                    <div className="border-t border-gray-700 pt-3 mt-3 space-y-2">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-gray-500">Platform Fee ({platformFeePercent}%)</span>
+                        <span className="text-gray-400">${(platformFee / 100).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-gray-500">Stripe Fee ({stripeFeePercent}% + 30¢)</span>
+                        <span className="text-gray-400">${(stripeFee / 100).toFixed(2)}</span>
+                      </div>
+                    </div>
+                    
+                    {/* Total */}
+                    <div className="border-t border-gray-700 pt-3 mt-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-white font-bold">Total</span>
+                        <span className="text-white font-bold text-lg">
+                          ${(playerPays / 100).toFixed(2)} NZD
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
+                
+                {/* If organizer pays fees, just show the entry fee as total */}
+                {league.pricing.feesPaidBy === 'organizer' && (
+                  <div className="border-t border-gray-700 pt-3 mt-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-white font-bold">Total</span>
+                      <span className="text-white font-bold text-lg">
+                        ${(baseAmount / 100).toFixed(2)} NZD
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Processing fees covered by organizer</p>
+                  </div>
+                )}
+                
+                {/* Early Bird */}
+                {league.pricing.earlyBirdEnabled && league.pricing.earlyBirdDeadline && 
+                 Date.now() < league.pricing.earlyBirdDeadline && (
+                  <div className="mt-3 pt-3 border-t border-gray-700">
+                    <div className="flex justify-between items-center text-green-400">
+                      <span>🎉 Early Bird Price</span>
+                      <span className="font-bold">${((league.pricing.earlyBirdFee || league.pricing.entryFee) / 100).toFixed(2)}</span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Until {new Date(league.pricing.earlyBirdDeadline).toLocaleDateString()}
+                    </p>
+                  </div>
+                )}
+              </div>
+              
+              {/* Refund Policy */}
+              <div className="text-xs text-gray-500 mb-6 text-center">
+                Refund Policy: {league.pricing.refundPolicy === 'full' ? 'Full refund before league starts' : 
+                               league.pricing.refundPolicy === 'partial' ? '50% refund before league starts' : 'No refunds'}
+              </div>
+              
+              {/* Action Buttons */}
+              <div className="space-y-3">
+                <button
+                  onClick={async () => {
+                    // TODO: Integrate with Stripe checkout
+                    // For now, check if organizer has Stripe connected
+                    if (!league.organizerStripeAccountId) {
+                      alert('Payment is not available yet. The organizer needs to set up Stripe. Joining as unpaid for now.');
+                      await handleFreeJoin();
+                      return;
+                    }
+                    
+                    // Create checkout session and redirect
+                    try {
+                      setJoining(true);
+                      const { createCheckoutSession } = await import('../../services/stripe');
+                      
+                      // Need to check pricing exists
+                      if (!league.pricing) {
+                        throw new Error('League pricing not configured');
+                      }
+                      
+                      const session = await createCheckoutSession({
+                        items: [{
+                          name: `${league.name} - League Entry`,
+                          description: `${league.type} ${league.format} league registration`,
+                          amount: playerPays, // Use calculated total with fees if player pays
+                          quantity: 1,
+                        }],
+                        // Use hash-based URLs for routing
+                        successUrl: `${window.location.origin}/#/leagues/${leagueId}?payment=success`,
+                        cancelUrl: `${window.location.origin}/#/leagues/${leagueId}?payment=cancelled`,
+                        metadata: {
+                          type: 'league_registration',
+                          leagueId: leagueId,
+                          userId: currentUser?.uid || '',
+                          userName: userProfile?.displayName || '',
+                        },
+                        organizerStripeAccountId: league.organizerStripeAccountId || undefined,
+                      });
+                      
+                      if (session?.url) {
+                        window.location.href = session.url;
+                      } else {
+                        throw new Error('Failed to create checkout session');
+                      }
+                    } catch (e: any) {
+                      console.error('Payment error:', e);
+                      alert('Payment setup failed: ' + e.message);
+                    } finally {
+                      setJoining(false);
+                    }
+                  }}
+                  disabled={joining}
+                  className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-bold transition-colors"
+                >
+                  {joining ? 'Processing...' : `Pay $${(playerPays / 100).toFixed(2)} & Join`}
+                </button>
+                
+                <button
+                  onClick={() => setShowPaymentModal(false)}
+                  className="w-full py-2 text-gray-400 hover:text-white transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* Edit League Modal - Expanded */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-gray-800 w-full max-w-2xl rounded-xl border border-gray-700 overflow-hidden my-4">
+            <div className="bg-gray-900 px-6 py-4 border-b border-gray-700 sticky top-0">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-white">✏️ Edit League</h2>
+                <button 
+                  onClick={() => setShowEditModal(false)} 
+                  className="text-gray-400 hover:text-white"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+              {/* Basic Info Section */}
+              <div>
+                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Basic Information</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">League Name *</label>
+                    <input
+                      type="text"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      placeholder="League name"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Description</label>
+                    <textarea
+                      value={editForm.description}
+                      onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500 min-h-[80px] resize-none"
+                      placeholder="Describe your league..."
+                    />
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Location</label>
+                      <input
+                        type="text"
+                        value={editForm.location}
+                        onChange={(e) => setEditForm({ ...editForm, location: e.target.value })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                        placeholder="City, Region"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Venue</label>
+                      <input
+                        type="text"
+                        value={editForm.venue}
+                        onChange={(e) => setEditForm({ ...editForm, venue: e.target.value })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                        placeholder="Venue name"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Visibility</label>
+                    <select
+                      value={editForm.visibility}
+                      onChange={(e) => setEditForm({ ...editForm, visibility: e.target.value as 'public' | 'private' | 'club_only' })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="public">Public - Anyone can find and view</option>
+                      <option value="private">Private - Invite only</option>
+                      <option value="club_only">Club Only - Club members only</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Schedule Section */}
+              <div>
+                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Schedule</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Season Start</label>
+                    <input
+                      type="date"
+                      value={editForm.seasonStart}
+                      onChange={(e) => setEditForm({ ...editForm, seasonStart: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Season End</label>
+                    <input
+                      type="date"
+                      value={editForm.seasonEnd}
+                      onChange={(e) => setEditForm({ ...editForm, seasonEnd: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Registration Deadline</label>
+                    <input
+                      type="date"
+                      value={editForm.registrationDeadline}
+                      onChange={(e) => setEditForm({ ...editForm, registrationDeadline: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Max Players/Teams</label>
+                    <input
+                      type="number"
+                      value={editForm.maxMembers}
+                      onChange={(e) => setEditForm({ ...editForm, maxMembers: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      placeholder="Unlimited"
+                      min="2"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              {/* Match Format Section */}
+              <div>
+                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Match Format</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Best Of</label>
+                    <select
+                      value={editForm.bestOf}
+                      onChange={(e) => setEditForm({ ...editForm, bestOf: parseInt(e.target.value) as 1 | 3 | 5 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    >
+                      <option value={1}>1 Game</option>
+                      <option value={3}>Best of 3</option>
+                      <option value={5}>Best of 5</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Points/Game</label>
+                    <select
+                      value={editForm.gamesTo}
+                      onChange={(e) => setEditForm({ ...editForm, gamesTo: parseInt(e.target.value) as 11 | 15 | 21 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    >
+                      <option value={11}>11 Points</option>
+                      <option value={15}>15 Points</option>
+                      <option value={21}>21 Points</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Win By</label>
+                    <select
+                      value={editForm.winBy}
+                      onChange={(e) => setEditForm({ ...editForm, winBy: parseInt(e.target.value) as 1 | 2 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                    >
+                      <option value={1}>1 Point</option>
+                      <option value={2}>2 Points</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Scoring Points Section */}
+              <div>
+                <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Standings Points</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Win Points</label>
+                    <input
+                      type="number"
+                      value={editForm.pointsForWin}
+                      onChange={(e) => setEditForm({ ...editForm, pointsForWin: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Draw Points</label>
+                    <input
+                      type="number"
+                      value={editForm.pointsForDraw}
+                      onChange={(e) => setEditForm({ ...editForm, pointsForDraw: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Loss Points</label>
+                    <input
+                      type="number"
+                      value={editForm.pointsForLoss}
+                      onChange={(e) => setEditForm({ ...editForm, pointsForLoss: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      min="0"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              {/* Pricing Section - Only show if pricing was enabled */}
+              {league?.pricing?.enabled && (
+                <div>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase mb-3">Entry Fee</h3>
+                  <div className="flex items-center gap-3">
+                    <span className="text-gray-400">$</span>
+                    <input
+                      type="number"
+                      value={(editForm.entryFee / 100).toFixed(2)}
+                      onChange={(e) => setEditForm({ ...editForm, entryFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
+                      className="w-32 bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      min="0"
+                      step="0.01"
+                    />
+                    <span className="text-gray-400">NZD per {league.pricing.entryFeeType === 'per_team' ? 'team' : 'player'}</span>
+                  </div>
+                </div>
+              )}
+              
+              <p className="text-xs text-gray-500 bg-gray-900 p-3 rounded-lg">
+                💡 <strong>Tip:</strong> League type ({league?.type}) and format ({league?.format}) cannot be changed after creation. 
+                Create a new league if you need different settings.
+              </p>
+            </div>
+            
+            <div className="bg-gray-900 px-6 py-4 border-t border-gray-700 flex gap-3 sticky bottom-0">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!editForm.name.trim()) {
+                    alert('League name is required');
+                    return;
+                  }
+                  setSaving(true);
+                  try {
+                    // Build settings update
+                    const settingsUpdate = {
+                      ...league?.settings,
+                      maxMembers: editForm.maxMembers ? parseInt(editForm.maxMembers) : null,
+                      pointsForWin: editForm.pointsForWin,
+                      pointsForDraw: editForm.pointsForDraw,
+                      pointsForLoss: editForm.pointsForLoss,
+                      matchFormat: {
+                        bestOf: editForm.bestOf,
+                        gamesTo: editForm.gamesTo,
+                        winBy: editForm.winBy,
+                      },
+                    };
+                    
+                    // Build pricing update if enabled
+                    const pricingUpdate = league?.pricing?.enabled ? {
+                      ...league.pricing,
+                      entryFee: editForm.entryFee,
+                    } : undefined;
+                    
+                    await updateLeague(leagueId, {
+                      name: editForm.name.trim(),
+                      description: editForm.description.trim() || undefined,
+                      location: editForm.location.trim() || undefined,
+                      venue: editForm.venue.trim() || undefined,
+                      visibility: editForm.visibility,
+                      seasonStart: editForm.seasonStart ? new Date(editForm.seasonStart).getTime() : undefined,
+                      seasonEnd: editForm.seasonEnd ? new Date(editForm.seasonEnd).getTime() : undefined,
+                      registrationDeadline: editForm.registrationDeadline ? new Date(editForm.registrationDeadline).getTime() : undefined,
+                      settings: settingsUpdate,
+                      ...(pricingUpdate && { pricing: pricingUpdate }),
+                    });
+                    const updated = await getLeague(leagueId);
+                    if (updated) setLeague(updated);
+                    setShowEditModal(false);
+                  } catch (e: any) {
+                    alert('Failed to save: ' + e.message);
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+                disabled={saving}
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
+              >
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
           </div>
         </div>
       )}
