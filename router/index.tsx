@@ -34,6 +34,10 @@ import LeaguesPage from '../pages/LeaguesPage';
 import PaymentDemoPage from '../pages/PaymentDemoPage';
 import AdminTestPaymentsPage from '../pages/AdminTestPaymentsPage';
 
+// NEW: Admin Dashboard and Debug pages
+import AdminDashboard from '../pages/AdminDashboard';
+import StripeDebugPage from '../pages/StripeDebugPage';
+
 // ============================================
 // Router Configuration - Using HashRouter
 // URLs will be like: /#/tournaments, /#/clubs/123
@@ -163,6 +167,16 @@ export const router = createHashRouter([
       // ==========================================
       // ADMIN
       // ==========================================
+      
+      // Admin Dashboard (NEW)
+      {
+        path: 'admin',
+        element: (
+          <ProtectedRoute requireAdmin>
+            <AdminDashboard />
+          </ProtectedRoute>
+        ),
+      },
       {
         path: 'admin/users',
         element: (
@@ -189,6 +203,20 @@ export const router = createHashRouter([
       },
       
       // ==========================================
+      // DEBUG TOOLS (Admin Only)
+      // ==========================================
+      
+      // Stripe Debug Page (NEW)
+      {
+        path: 'debug/stripe',
+        element: (
+          <ProtectedRoute requireAdmin>
+            <StripeDebugPage />
+          </ProtectedRoute>
+        ),
+      },
+      
+      // ==========================================
       // PAYMENT DEMO (Testing)
       // ==========================================
       {
@@ -197,7 +225,7 @@ export const router = createHashRouter([
       },
       
       // ==========================================
-      // PLACEHOLDERS (Coming Soon)
+      // RESULTS
       // ==========================================
       {
         path: 'results',
@@ -211,6 +239,10 @@ export const router = createHashRouter([
           </ProtectedRoute>
         ),
       },
+      
+      // ==========================================
+      // LEAGUES
+      // ==========================================
       {
         path: 'leagues',
         element: <LeaguesPage />,
