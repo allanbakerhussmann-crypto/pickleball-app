@@ -4,11 +4,12 @@
  * Main navigation header with:
  * - Logo and branding
  * - Desktop navigation links
- * - User profile menu
+ * - User profile menu (role-based visibility)
  * - Partner invites notifications
- * - Admin menu (for admins) - includes Dashboard & Debug tools
+ * - Admin menu (ONLY visible to app_admin role)
  * 
  * FILE LOCATION: components/Header.tsx
+ * VERSION: V05.17 - Fixed role-based menu visibility
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -16,6 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import { PickleballDirectorLogo } from './icons/PickleballDirectorLogo';
 import type { UserProfile } from '../types';
 import { usePartnerInvites } from '../hooks/usePartnerInvites';
+import { useAuth } from '../contexts/AuthContext';
 import { respondToPartnerInvite, getTournament, getUserProfile, ensureRegistrationForUser } from '../services/firebase';
 import { HelpModal } from './HelpModal';
 
@@ -42,6 +44,9 @@ export const Header: React.FC<HeaderProps> = ({
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  
+  // Get role info from AuthContext (most reliable source)
+  const { isAppAdmin } = useAuth();
   
   const { invites } = usePartnerInvites(currentUser?.uid);
   const [inviteMeta, setInviteMeta] = useState<Record<string, { tName: string, uName: string }>>({});
@@ -101,12 +106,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   // Determine profile image to show
-  const profileImageSrc = userProfile?.photoData || userProfile?.photoURL || currentUser?.photoURL;
-  
-  // Check if user is app admin - use 'admin' role (the correct UserRole type)
-  const isAppAdmin = userProfile?.roles?.includes('admin') || 
-                     (userProfile as any)?.isAppAdmin || 
-                     (userProfile as any)?.isRootAdmin;
+  const profileImageSrc = userProfile?.photoURL || currentUser?.photoURL;
 
   return (
     <>
@@ -200,21 +200,19 @@ export const Header: React.FC<HeaderProps> = ({
                                                         <div key={inv.id} className="bg-gray-900/50 rounded p-2">
                                                             <p className="text-sm text-white truncate">{inviteMeta[inv.id]?.tName || 'Loading...'}</p>
                                                             <p className="text-xs text-gray-400">From: {inviteMeta[inv.id]?.uName || '...'}</p>
-                                                            <button 
-                                                                onClick={() => handleAcceptInvite(inv)}
-                                                                className="mt-1 text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded"
-                                                            >
-                                                                Accept & Register
-                                                            </button>
+                                                            <div className="flex gap-2 mt-2">
+                                                                <button onClick={() => handleAcceptInvite(inv)} className="text-xs bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded">Accept</button>
+                                                                <button onClick={async () => { await respondToPartnerInvite(inv, 'declined'); }} className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded">Decline</button>
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>
                                             </div>
                                         )}
 
-                                        {/* Navigation Items */}
+                                        {/* Standard Menu Items - Available to ALL logged in users */}
                                         <button 
-                                            onClick={() => { onNavigate('dashboard'); setIsProfileMenuOpen(false); }}
+                                            onClick={() => { navigate('/dashboard'); setIsProfileMenuOpen(false); }}
                                             className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white flex items-center gap-2"
                                         >
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
@@ -228,7 +226,9 @@ export const Header: React.FC<HeaderProps> = ({
                                             Edit Profile
                                         </button>
                                         
-                                        {/* Admin Section - Only visible to App Admins */}
+                                        {/* ============================================ */}
+                                        {/* ADMIN SECTION - ONLY visible to app admins */}
+                                        {/* ============================================ */}
                                         {isAppAdmin && (
                                             <>
                                                 <div className="h-px bg-gray-700 my-1 mx-2"></div>
@@ -283,13 +283,13 @@ export const Header: React.FC<HeaderProps> = ({
                                                     onClick={() => { navigate('/admin/test-payments'); setIsProfileMenuOpen(false); }}
                                                     className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-700 hover:text-red-300 flex items-center gap-2"
                                                 >
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
                                                     Test Payments
                                                 </button>
                                             </>
                                         )}
                                         
-                                        {/* Logout */}
+                                        {/* Sign Out - Always at bottom */}
                                         <div className="h-px bg-gray-700 my-1 mx-2"></div>
                                         <button 
                                             onClick={() => { onLogout(); setIsProfileMenuOpen(false); }}
@@ -305,7 +305,7 @@ export const Header: React.FC<HeaderProps> = ({
                     ) : (
                         <button
                             onClick={onLoginClick}
-                            className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold transition-colors text-sm"
                         >
                             Sign In
                         </button>
@@ -315,7 +315,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
         </header>
 
-        {/* Help Modal - rendered conditionally, only takes onClose prop */}
+        {/* Help Modal - rendered conditionally */}
         {isHelpModalOpen && <HelpModal onClose={() => setIsHelpModalOpen(false)} />}
     </>
   );
