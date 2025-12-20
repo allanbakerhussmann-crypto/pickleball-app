@@ -1,5 +1,5 @@
 /**
- * CreateMeetup Component (Extended with Payments, Competition & Club Hosting)
+ * CreateMeetup Component (Enhanced with Game Format Settings)
  * 
  * Form for creating a new meetup with:
  * - Host selection (Individual Organizer OR Club)
@@ -7,9 +7,11 @@
  * - Pricing options (entry fee, prize pool)
  * - Fee handling (organizer or player pays)
  * - Competition type selection
+ * - Game format settings (points, games, scoring system)
  * - Stripe Connect requirement for paid meetups
  * 
  * FILE LOCATION: components/meetups/CreateMeetup.tsx
+ * VERSION: V05.17 - Enhanced with Game Format
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -42,25 +44,38 @@ type MeetupCompetitionType =
 
 type FeePaidBy = 'organizer' | 'player';
 type HostType = 'organizer' | 'club';
+type ScoringSystem = 'rally' | 'traditional';
 
 interface CreateMeetupProps {
   onBack: () => void;
   onCreated: () => void;
 }
 
+interface GameFormatSettings {
+  pointsToWin: 11 | 15 | 21;
+  winBy: 1 | 2;
+  gamesPerMatch: 1 | 3 | 5;
+  scoringSystem: ScoringSystem;
+  timeLimit: number | null; // minutes, null = no limit
+  // Standings points (for round robin, swiss, pool play)
+  pointsPerWin: number;
+  pointsPerDraw: number;
+  pointsPerLoss: number;
+}
+
 // ============================================
 // CONSTANTS
 // ============================================
 
-const COMPETITION_TYPES: { value: MeetupCompetitionType; label: string; description: string }[] = [
-  { value: 'casual', label: 'Casual Play', description: 'No formal competition, just social games' },
-  { value: 'round_robin', label: 'Round Robin', description: 'Everyone plays everyone, points determine winner' },
-  { value: 'single_elimination', label: 'Single Elimination', description: 'Lose once and you\'re out' },
-  { value: 'double_elimination', label: 'Double Elimination', description: 'Must lose twice to be eliminated' },
-  { value: 'king_of_court', label: 'King of the Court', description: 'Winners stay on, losers rotate out' },
-  { value: 'ladder', label: 'Ladder', description: 'Challenge players above you to move up' },
-  { value: 'swiss', label: 'Swiss System', description: 'Players paired by similar records each round' },
-  { value: 'pool_play_knockout', label: 'Pool Play + Knockout', description: 'Group stage then elimination bracket' },
+const COMPETITION_TYPES: { value: MeetupCompetitionType; label: string; description: string; icon: string }[] = [
+  { value: 'casual', label: 'Casual Play', description: 'No formal competition, just social games', icon: '🎾' },
+  { value: 'round_robin', label: 'Round Robin', description: 'Everyone plays everyone, points determine winner', icon: '🔄' },
+  { value: 'single_elimination', label: 'Single Elimination', description: 'Lose once and you\'re out', icon: '🏆' },
+  { value: 'double_elimination', label: 'Double Elimination', description: 'Must lose twice to be eliminated', icon: '🥇' },
+  { value: 'king_of_court', label: 'King of the Court', description: 'Winners stay on, losers rotate out', icon: '👑' },
+  { value: 'ladder', label: 'Ladder', description: 'Challenge players above you to move up', icon: '🪜' },
+  { value: 'swiss', label: 'Swiss System', description: 'Players paired by similar records each round', icon: '🎯' },
+  { value: 'pool_play_knockout', label: 'Pool Play + Knockout', description: 'Group stage then elimination bracket', icon: '📊' },
 ];
 
 const PRIZE_DISTRIBUTIONS = [
@@ -69,6 +84,38 @@ const PRIZE_DISTRIBUTIONS = [
   { label: 'Top 3 (50/30/20)', value: { first: 50, second: 30, third: 20 } },
   { label: 'Top 4 (40/30/20/10)', value: { first: 40, second: 30, third: 20, fourth: 10 } },
 ];
+
+const POINTS_OPTIONS = [
+  { value: 11, label: '11 Points', description: 'Standard recreational' },
+  { value: 15, label: '15 Points', description: 'Extended games' },
+  { value: 21, label: '21 Points', description: 'Tournament standard' },
+];
+
+const GAMES_PER_MATCH_OPTIONS = [
+  { value: 1, label: 'Single Game', description: 'Quick matches' },
+  { value: 3, label: 'Best of 3', description: 'Standard format' },
+  { value: 5, label: 'Best of 5', description: 'Extended matches' },
+];
+
+const TIME_LIMIT_OPTIONS = [
+  { value: null, label: 'No Limit', description: 'Play to completion' },
+  { value: 10, label: '10 Minutes', description: 'Quick games' },
+  { value: 15, label: '15 Minutes', description: 'Standard time cap' },
+  { value: 20, label: '20 Minutes', description: 'Extended time cap' },
+  { value: 30, label: '30 Minutes', description: 'Long matches' },
+];
+
+// Default game format settings
+const DEFAULT_GAME_FORMAT: GameFormatSettings = {
+  pointsToWin: 11,
+  winBy: 2,
+  gamesPerMatch: 1,
+  scoringSystem: 'rally',
+  timeLimit: null,
+  pointsPerWin: 2,
+  pointsPerDraw: 1,
+  pointsPerLoss: 0,
+};
 
 // ============================================
 // COMPONENT
@@ -110,6 +157,17 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   const [competitionType, setCompetitionType] = useState<MeetupCompetitionType>('casual');
   const [managedInApp, setManagedInApp] = useState(true);
   
+  // Game Format Settings (NEW)
+  const [gameFormat, setGameFormat] = useState<GameFormatSettings>(DEFAULT_GAME_FORMAT);
+  
+  // Format-specific settings
+  const [numberOfRounds, setNumberOfRounds] = useState(3); // Swiss
+  const [poolSize, setPoolSize] = useState(4); // Pool play
+  const [teamsAdvancing, setTeamsAdvancing] = useState(2); // Pool play
+  const [winStreak, setWinStreak] = useState(2); // King of court
+  const [consolationBracket, setConsolationBracket] = useState(false); // Elimination
+  const [thirdPlaceMatch, setThirdPlaceMatch] = useState(true); // Elimination
+  
   // Stripe status - organizer
   const [organizerStripeAccountId, setOrganizerStripeAccountId] = useState<string | null>(null);
   const [organizerStripeReady, setOrganizerStripeReady] = useState(false);
@@ -123,6 +181,40 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   // Form state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ============================================
+  // COMPUTED VALUES
+  // ============================================
+
+  const selectedClub = useMemo(() => {
+    return userClubs.find(c => c.id === selectedClubId) || null;
+  }, [userClubs, selectedClubId]);
+
+  const entryFeeCents = useMemo(() => Math.round((parseFloat(entryFee) || 0) * 100), [entryFee]);
+  const prizePoolCents = useMemo(() => Math.round((parseFloat(prizePoolContribution) || 0) * 100), [prizePoolContribution]);
+  const totalPerPersonCents = useMemo(() => entryFeeCents + prizePoolCents, [entryFeeCents, prizePoolCents]);
+
+  const feeCalculation = useMemo(() => {
+    if (!pricingEnabled || totalPerPersonCents <= 0) return null;
+    return calculateFees(totalPerPersonCents, feesPaidBy);
+  }, [pricingEnabled, totalPerPersonCents, feesPaidBy]);
+
+  const canAcceptPayments = useMemo(() => {
+    if (hostType === 'club') {
+      return clubStripeReady;
+    }
+    return organizerStripeReady;
+  }, [hostType, clubStripeReady, organizerStripeReady]);
+
+  // Check if format needs standings points
+  const needsStandingsPoints = useMemo(() => {
+    return ['round_robin', 'swiss', 'pool_play_knockout', 'ladder'].includes(competitionType);
+  }, [competitionType]);
+
+  // Check if format has specific settings
+  const hasFormatSpecificSettings = useMemo(() => {
+    return ['swiss', 'pool_play_knockout', 'king_of_court', 'single_elimination', 'double_elimination'].includes(competitionType);
+  }, [competitionType]);
 
   // ============================================
   // LOAD USER'S CLUBS
@@ -155,7 +247,7 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   // ============================================
 
   useEffect(() => {
-    const loadOrganizerStripeStatus = async () => {
+    const checkOrganizerStripe = async () => {
       if (!currentUser) {
         setLoadingStripe(false);
         return;
@@ -164,113 +256,50 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
         if (userDoc.exists()) {
           const data = userDoc.data();
-          if (data.stripeConnectedAccountId && data.stripeChargesEnabled) {
-            setOrganizerStripeAccountId(data.stripeConnectedAccountId);
-            setOrganizerStripeReady(true);
-          }
+          setOrganizerStripeAccountId(data.stripeConnectedAccountId || null);
+          setOrganizerStripeReady(data.stripeChargesEnabled === true && data.stripePayoutsEnabled === true);
         }
       } catch (err) {
-        console.error('Failed to load organizer Stripe status:', err);
+        console.error('Failed to check organizer Stripe status:', err);
       } finally {
         setLoadingStripe(false);
       }
     };
-    loadOrganizerStripeStatus();
+    checkOrganizerStripe();
   }, [currentUser]);
 
   // ============================================
-  // LOAD CLUB STRIPE STATUS WHEN CLUB SELECTED
+  // LOAD CLUB STRIPE STATUS
   // ============================================
 
   useEffect(() => {
-    const loadClubStripeStatus = async () => {
-      if (!selectedClubId) {
+    const checkClubStripe = async () => {
+      if (!selectedClub) {
         setClubStripeAccountId(null);
         setClubStripeReady(false);
         return;
       }
-      try {
-        const clubDoc = await getDoc(doc(db, 'clubs', selectedClubId));
-        if (clubDoc.exists()) {
-          const data = clubDoc.data();
-          if (data.stripeConnectedAccountId && data.stripeChargesEnabled) {
-            setClubStripeAccountId(data.stripeConnectedAccountId);
-            setClubStripeReady(true);
-          } else {
-            setClubStripeAccountId(null);
-            setClubStripeReady(false);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load club Stripe status:', err);
-        setClubStripeAccountId(null);
-        setClubStripeReady(false);
-      }
+      setClubStripeAccountId(selectedClub.stripeConnectedAccountId || null);
+      setClubStripeReady(selectedClub.stripeChargesEnabled === true);
     };
-    loadClubStripeStatus();
-  }, [selectedClubId]);
+    checkClubStripe();
+  }, [selectedClub]);
 
   // ============================================
-  // COMPUTED VALUES
+  // VALIDATION
   // ============================================
-
-  const stripeReady = hostType === 'club' ? clubStripeReady : organizerStripeReady;
-  const selectedClub = userClubs.find(c => c.id === selectedClubId);
-
-  const entryFeeCents = useMemo(() => {
-    const fee = parseFloat(entryFee) || 0;
-    return Math.round(fee * 100);
-  }, [entryFee]);
-
-  const prizePoolCents = useMemo(() => {
-    const pool = parseFloat(prizePoolContribution) || 0;
-    return Math.round(pool * 100);
-  }, [prizePoolContribution]);
-
-  const totalPerPersonCents = useMemo(() => {
-    return entryFeeCents + (prizePoolEnabled ? prizePoolCents : 0);
-  }, [entryFeeCents, prizePoolCents, prizePoolEnabled]);
-
-  const feeCalculation = useMemo(() => {
-    if (totalPerPersonCents === 0) return null;
-    return calculateFees(totalPerPersonCents, feesPaidBy);
-  }, [totalPerPersonCents, feesPaidBy]);
-
-  const estimatedPrizePool = useMemo(() => {
-    if (!prizePoolEnabled || !prizePoolCents) return 0;
-    const players = parseInt(maxPlayers) || 0;
-    return prizePoolCents * players;
-  }, [prizePoolEnabled, prizePoolCents, maxPlayers]);
-
-  // ============================================
-  // HANDLERS
-  // ============================================
-
-  const handleLocationChange = (address: string, newLat: number, newLng: number) => {
-    setLocationName(address);
-    setLat(newLat);
-    setLng(newLng);
-  };
 
   const validateStep1 = (): boolean => {
-    if (hostType === 'club' && !selectedClubId) {
-      setError('Please select a club to host this meetup');
-      return false;
-    }
     if (!title.trim()) {
       setError('Please enter a title');
       return false;
     }
-    if (!date) {
-      setError('Please select a date');
+    if (!date || !time) {
+      setError('Please select date and time');
       return false;
     }
-    if (!time) {
-      setError('Please select a start time');
-      return false;
-    }
-    if (!locationName) {
-      setError('Please select a location');
+    if (!locationName.trim()) {
+      setError('Please enter a location');
       return false;
     }
     setError(null);
@@ -278,36 +307,28 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   };
 
   const validateStep2 = (): boolean => {
-    if (pricingEnabled && !stripeReady) {
-      const hostName = hostType === 'club' ? 'This club' : 'You';
-      setError(`${hostName} must connect Stripe to accept payments`);
-      return false;
-    }
-    if (pricingEnabled && entryFeeCents === 0 && !prizePoolEnabled) {
-      setError('Please set an entry fee or enable prize pool');
-      return false;
-    }
-    if (prizePoolEnabled && prizePoolCents === 0) {
-      setError('Please set a prize pool contribution amount');
+    if (pricingEnabled && totalPerPersonCents > 0 && !canAcceptPayments) {
+      setError('Stripe account required for paid meetups');
       return false;
     }
     setError(null);
     return true;
   };
 
+  // ============================================
+  // SUBMIT
+  // ============================================
+
   const handleSubmit = async () => {
     if (!currentUser) return;
-    setError(null);
     setIsSubmitting(true);
+    setError(null);
 
     try {
-      const when = new Date(date + 'T' + time).getTime();
-      if (isNaN(when)) throw new Error('Invalid date/time');
-
       const meetupData: any = {
         title: title.trim(),
         description: description.trim(),
-        when,
+        when: new Date(date + 'T' + time).getTime(),
         endTime: endTime ? new Date(date + 'T' + endTime).getTime() : null,
         visibility,
         maxPlayers: parseInt(maxPlayers, 10) || 0,
@@ -316,6 +337,7 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         status: 'active',
       };
 
+      // Host info
       if (hostType === 'club' && selectedClub) {
         meetupData.clubId = selectedClub.id;
         meetupData.clubName = selectedClub.name;
@@ -326,10 +348,12 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         meetupData.hostedBy = 'organizer';
       }
 
+      // Location coordinates
       if (lat && lng) {
         meetupData.location = { lat, lng };
       }
 
+      // Pricing
       if (pricingEnabled && totalPerPersonCents > 0) {
         meetupData.pricing = {
           enabled: true,
@@ -349,11 +373,31 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         }
       }
 
+      // Competition settings
       if (competitionType !== 'casual') {
         meetupData.competition = {
           managedInApp,
           type: competitionType,
-          settings: { gamesPerMatch: 1, pointsPerWin: 1, pointsPerDraw: 0 },
+          settings: {
+            // Game format
+            pointsToWin: gameFormat.pointsToWin,
+            winBy: gameFormat.winBy,
+            gamesPerMatch: gameFormat.gamesPerMatch,
+            scoringSystem: gameFormat.scoringSystem,
+            timeLimit: gameFormat.timeLimit,
+            // Standings points
+            pointsPerWin: gameFormat.pointsPerWin,
+            pointsPerDraw: gameFormat.pointsPerDraw,
+            pointsPerLoss: gameFormat.pointsPerLoss,
+            // Format-specific
+            ...(competitionType === 'swiss' && { numberOfRounds }),
+            ...(competitionType === 'pool_play_knockout' && { poolSize, teamsAdvancing }),
+            ...(competitionType === 'king_of_court' && { winStreak }),
+            ...((competitionType === 'single_elimination' || competitionType === 'double_elimination') && { 
+              consolationBracket, 
+              thirdPlaceMatch 
+            }),
+          },
         };
       }
 
@@ -367,7 +411,15 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
     }
   };
 
-  const formatCurrency = (cents: number): string => `\$${(cents / 100).toFixed(2)}`;
+  // ============================================
+  // HELPERS
+  // ============================================
+
+  const formatCurrency = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
+
+  const updateGameFormat = (key: keyof GameFormatSettings, value: any) => {
+    setGameFormat(prev => ({ ...prev, [key]: value }));
+  };
 
   // ============================================
   // RENDER
@@ -389,336 +441,699 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
             <button
               onClick={() => s < step && setStep(s)}
               className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-colors ${
-                s === step ? 'bg-green-600 text-white' : s < step ? 'bg-green-900 text-green-400 hover:bg-green-800' : 'bg-gray-700 text-gray-500'
+                s === step ? 'bg-green-600 text-white' : s < step ? 'bg-green-600/50 text-green-200 cursor-pointer' : 'bg-gray-700 text-gray-400'
               }`}
             >
               {s}
             </button>
-            {s < 3 && <div className={`flex-1 h-1 rounded ${s < step ? 'bg-green-600' : 'bg-gray-700'}`}></div>}
+            {s < 3 && <div className={`flex-1 h-1 rounded ${s < step ? 'bg-green-600' : 'bg-gray-700'}`} />}
           </React.Fragment>
         ))}
       </div>
 
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <h2 className="text-2xl font-bold text-white mb-6">
-          {step === 1 ? 'Create Meetup' : step === 2 ? 'Pricing' : 'Competition Format'}
-        </h2>
+      {/* Step Labels */}
+      <div className="flex justify-between mb-6 text-xs text-gray-500">
+        <span className={step === 1 ? 'text-green-400' : ''}>Basic Info</span>
+        <span className={step === 2 ? 'text-green-400' : ''}>Pricing</span>
+        <span className={step === 3 ? 'text-green-400' : ''}>Competition</span>
+      </div>
 
-        {error && (
-          <div className="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-4">{error}</div>
-        )}
+      {/* Error Message */}
+      {error && (
+        <div className="mb-4 p-3 bg-red-900/50 border border-red-500 rounded-lg text-red-200 text-sm">
+          {error}
+        </div>
+      )}
 
-        {/* Step 1: Basic Info */}
+      <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+        
+        {/* ============================================ */}
+        {/* STEP 1: Basic Info */}
+        {/* ============================================ */}
         {step === 1 && (
-          <div className="space-y-4">
-            {/* HOST SELECTION */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-400 mb-2">Who is hosting this meetup?</label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => { setHostType('organizer'); setSelectedClubId(''); }}
-                  className={`p-4 rounded-lg border text-left transition-colors ${
-                    hostType === 'organizer' ? 'border-green-500 bg-green-900/30' : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${hostType === 'organizer' ? 'bg-green-600' : 'bg-gray-700'}`}>
-                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className={`font-medium ${hostType === 'organizer' ? 'text-green-400' : 'text-white'}`}>Me (Individual)</p>
-                      <p className="text-xs text-gray-500">Host as yourself</p>
-                    </div>
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => setHostType('club')}
-                  disabled={userClubs.length === 0 && !loadingClubs}
-                  className={`p-4 rounded-lg border text-left transition-colors ${
-                    hostType === 'club' ? 'border-green-500 bg-green-900/30'
-                      : userClubs.length === 0 && !loadingClubs ? 'border-gray-700 bg-gray-900/30 cursor-not-allowed opacity-50'
-                      : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${hostType === 'club' ? 'bg-green-600' : 'bg-gray-700'}`}>
-                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className={`font-medium ${hostType === 'club' ? 'text-green-400' : 'text-white'}`}>My Club</p>
-                      <p className="text-xs text-gray-500">{loadingClubs ? 'Loading...' : userClubs.length === 0 ? 'No clubs available' : 'Host as a club'}</p>
-                    </div>
-                  </div>
-                </button>
-              </div>
-
-              {hostType === 'club' && userClubs.length > 0 && (
-                <div className="mt-3">
+          <div className="space-y-6">
+            {/* Host Selection */}
+            {userClubs.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-2">Host As</label>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { setHostType('organizer'); setSelectedClubId(''); }}
+                    className={`flex-1 p-3 rounded-lg border text-center transition-colors ${
+                      hostType === 'organizer' ? 'border-green-500 bg-green-900/30 text-green-400' : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                    }`}
+                  >
+                    👤 Myself
+                  </button>
+                  <button
+                    onClick={() => setHostType('club')}
+                    className={`flex-1 p-3 rounded-lg border text-center transition-colors ${
+                      hostType === 'club' ? 'border-green-500 bg-green-900/30 text-green-400' : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                    }`}
+                  >
+                    🏢 My Club
+                  </button>
+                </div>
+                {hostType === 'club' && (
                   <select
                     value={selectedClubId}
                     onChange={(e) => setSelectedClubId(e.target.value)}
-                    className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                    className="w-full mt-3 bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
                   >
                     <option value="">Select a club...</option>
                     {userClubs.map((club) => (
                       <option key={club.id} value={club.id}>{club.name}</option>
                     ))}
                   </select>
-                  
-                  {selectedClub && (
-                    <div className="mt-2 p-3 bg-gray-900/50 rounded-lg border border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-blue-900/50 flex items-center justify-center">
-                          <span className="text-blue-400 font-bold">{selectedClub.name[0]}</span>
-                        </div>
-                        <div>
-                          <p className="text-white font-medium">{selectedClub.name}</p>
-                          <p className="text-xs text-gray-500">
-                            {clubStripeReady ? <span className="text-green-400">✓ Payments enabled</span> : <span className="text-yellow-400">⚠ Stripe not connected</span>}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                )}
+              </div>
+            )}
 
-              {hostType === 'club' && userClubs.length === 0 && !loadingClubs && (
-                <div className="mt-3 p-3 bg-yellow-900/20 border border-yellow-700/50 rounded-lg">
-                  <p className="text-yellow-400 text-sm">You're not an admin of any clubs. Create a club first or host as an individual organizer.</p>
-                </div>
-              )}
-            </div>
-
-            <hr className="border-gray-700 my-4" />
-
+            {/* Title */}
             <div>
-              <label className="block text-sm font-medium text-gray-400 mb-1">Meetup Title *</label>
-              <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g., Friday Night Pickleball" className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none" />
+              <label className="block text-sm font-medium text-gray-400 mb-1">Title *</label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                placeholder="e.g., Saturday Morning Pickleball"
+              />
             </div>
 
+            {/* Description */}
             <div>
               <label className="block text-sm font-medium text-gray-400 mb-1">Description</label>
-              <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="What should players know about this meetup?" rows={3} className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none resize-none" />
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500 min-h-[80px] resize-none"
+                placeholder="Tell people what to expect..."
+              />
             </div>
 
+            {/* Date & Time */}
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Date *</label>
-                <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none" />
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">Start Time *</label>
-                <input type="time" value={time} onChange={e => setTime(e.target.value)} className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none" />
+                <label className="block text-sm font-medium text-gray-400 mb-1">Start *</label>
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">End Time</label>
-                <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none" />
+                <label className="block text-sm font-medium text-gray-400 mb-1">End</label>
+                <input
+                  type="time"
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                />
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-400 mb-1">Max Players</label>
-              <input type="number" value={maxPlayers} onChange={e => setMaxPlayers(e.target.value)} min="2" max="100" className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none" />
-            </div>
-
+            {/* Location */}
             <div>
               <label className="block text-sm font-medium text-gray-400 mb-1">Location *</label>
-              <LocationPicker address={locationName} lat={lat} lng={lng} onLocationChange={handleLocationChange} />
+              <LocationPicker
+                value={locationName}
+                onChange={setLocationName}
+                onCoordinates={(lat, lng) => { setLat(lat); setLng(lng); }}
+              />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-400 mb-1">Visibility</label>
-              <select value={visibility} onChange={e => setVisibility(e.target.value as any)} className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none">
-                <option value="public">Public - Anyone can see and join</option>
-                <option value="linkOnly">Link Only - Only people with the link</option>
-                <option value="private">Private - Invite only</option>
-              </select>
+            {/* Max Players & Visibility */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Max Players</label>
+                <input
+                  type="number"
+                  value={maxPlayers}
+                  onChange={(e) => setMaxPlayers(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                  min="2"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Visibility</label>
+                <select
+                  value={visibility}
+                  onChange={(e) => setVisibility(e.target.value as any)}
+                  className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                >
+                  <option value="public">Public</option>
+                  <option value="linkOnly">Link Only</option>
+                  <option value="private">Private</option>
+                </select>
+              </div>
             </div>
 
+            {/* Next Button */}
             <div className="flex justify-end pt-4">
-              <button onClick={() => validateStep1() && setStep(2)} className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold">Next: Pricing</button>
+              <button
+                onClick={() => validateStep1() && setStep(2)}
+                className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold"
+              >
+                Next: Pricing
+              </button>
             </div>
           </div>
         )}
 
-        {/* Step 2: Pricing */}
+        {/* ============================================ */}
+        {/* STEP 2: Pricing */}
+        {/* ============================================ */}
         {step === 2 && (
           <div className="space-y-6">
+            {/* Enable Pricing Toggle */}
             <div className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg">
               <div>
-                <h3 className="text-white font-medium">Charge for this meetup?</h3>
-                <p className="text-sm text-gray-400">Collect entry fees and/or prize pool contributions</p>
+                <h3 className="text-white font-medium">Charge Entry Fee</h3>
+                <p className="text-sm text-gray-400">Collect payment from players</p>
               </div>
-              <button onClick={() => setPricingEnabled(!pricingEnabled)} className={`relative w-14 h-8 rounded-full transition-colors ${pricingEnabled ? 'bg-green-600' : 'bg-gray-600'}`}>
+              <button
+                onClick={() => setPricingEnabled(!pricingEnabled)}
+                className={`relative w-14 h-8 rounded-full transition-colors ${pricingEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+              >
                 <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${pricingEnabled ? 'translate-x-7' : 'translate-x-1'}`}></span>
               </button>
             </div>
 
             {pricingEnabled && (
               <>
-                {loadingStripe ? (
-                  <div className="bg-gray-900/50 rounded-lg p-4 text-center">
-                    <div className="animate-spin w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                    <p className="text-gray-400 text-sm">Checking payment setup...</p>
-                  </div>
-                ) : !stripeReady ? (
-                  <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg p-4">
-                    <div className="flex items-start gap-3">
-                      <svg className="w-6 h-6 text-yellow-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
-                      <div>
-                        <p className="text-yellow-300 font-medium">{hostType === 'club' ? 'Club needs to connect Stripe' : 'Connect Stripe to accept payments'}</p>
-                        <p className="text-yellow-400/70 text-sm mt-1">{hostType === 'club' ? 'The selected club must have Stripe connected.' : 'You need to connect your Stripe account.'}</p>
-                        <a href={hostType === 'club' ? `/#/clubs/${selectedClubId}` : '/#/profile'} className="inline-flex items-center gap-2 bg-yellow-600 hover:bg-yellow-500 text-white px-4 py-2 rounded-lg text-sm font-medium mt-3">
-                          {hostType === 'club' ? 'Go to Club Settings' : 'Connect Stripe'}
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-green-900/30 border border-green-700/50 rounded-lg p-3 flex items-center gap-2">
-                    <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    <span className="text-green-300 text-sm">{hostType === 'club' ? `${selectedClub?.name} - Stripe connected` : 'Stripe connected - ready to accept payments'}</span>
+                {/* Stripe Warning */}
+                {!canAcceptPayments && (
+                  <div className="p-4 bg-yellow-900/30 border border-yellow-600 rounded-lg">
+                    <p className="text-yellow-400 text-sm">
+                      ⚠️ {hostType === 'club' ? 'This club' : 'You'} need to connect Stripe to accept payments.
+                      Go to {hostType === 'club' ? 'Club Settings' : 'Profile'} → Payments to set up.
+                    </p>
                   </div>
                 )}
 
+                {/* Entry Fee */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-1">Entry Fee (goes to {hostType === 'club' ? 'club' : 'you'})</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
-                    <input type="number" value={entryFee} onChange={e => setEntryFee(e.target.value)} min="0" step="0.50" placeholder="0.00" className="w-full bg-gray-900 text-white p-3 pl-8 rounded border border-gray-600 focus:border-green-500 outline-none" />
-                  </div>
+                  <label className="block text-sm font-medium text-gray-400 mb-1">Entry Fee (NZD)</label>
+                  <input
+                    type="number"
+                    value={entryFee}
+                    onChange={(e) => setEntryFee(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                    placeholder="0.00"
+                    step="0.50"
+                    min="0"
+                  />
                 </div>
 
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
+                {/* Prize Pool Toggle */}
+                <div className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg">
+                  <div>
+                    <h3 className="text-white font-medium">Prize Pool</h3>
+                    <p className="text-sm text-gray-400">Collect additional for prizes</p>
+                  </div>
+                  <button
+                    onClick={() => setPrizePoolEnabled(!prizePoolEnabled)}
+                    className={`relative w-14 h-8 rounded-full transition-colors ${prizePoolEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                  >
+                    <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${prizePoolEnabled ? 'translate-x-7' : 'translate-x-1'}`}></span>
+                  </button>
+                </div>
+
+                {prizePoolEnabled && (
+                  <>
                     <div>
-                      <h4 className="text-white font-medium">Prize Pool</h4>
-                      <p className="text-sm text-gray-400">Players contribute to a prize pool for winners</p>
+                      <label className="block text-sm font-medium text-gray-400 mb-1">Prize Contribution per Person (NZD)</label>
+                      <input
+                        type="number"
+                        value={prizePoolContribution}
+                        onChange={(e) => setPrizePoolContribution(e.target.value)}
+                        className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                        placeholder="0.00"
+                        step="0.50"
+                        min="0"
+                      />
                     </div>
-                    <button onClick={() => setPrizePoolEnabled(!prizePoolEnabled)} className={`relative w-14 h-8 rounded-full transition-colors ${prizePoolEnabled ? 'bg-green-600' : 'bg-gray-600'}`}>
-                      <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${prizePoolEnabled ? 'translate-x-7' : 'translate-x-1'}`}></span>
-                    </button>
-                  </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-400 mb-1">Prize Distribution</label>
+                      <select
+                        value={prizeDistributionIndex}
+                        onChange={(e) => setPrizeDistributionIndex(parseInt(e.target.value))}
+                        className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                      >
+                        {PRIZE_DISTRIBUTIONS.map((dist, i) => (
+                          <option key={i} value={i}>{dist.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
 
-                  {prizePoolEnabled && (
-                    <>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-1">Prize Pool Contribution (per person)</label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
-                          <input type="number" value={prizePoolContribution} onChange={e => setPrizePoolContribution(e.target.value)} min="0" step="1" placeholder="0.00" className="w-full bg-gray-900 text-white p-3 pl-8 rounded border border-gray-600 focus:border-green-500 outline-none" />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-1">Prize Distribution</label>
-                        <select value={prizeDistributionIndex} onChange={e => setPrizeDistributionIndex(parseInt(e.target.value))} className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none">
-                          {PRIZE_DISTRIBUTIONS.map((dist, idx) => (
-                            <option key={idx} value={idx}>{dist.label}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {estimatedPrizePool > 0 && (
-                        <div className="bg-gray-900/50 rounded-lg p-3 text-sm">
-                          <p className="text-gray-400">Estimated prize pool ({maxPlayers} players): <span className="text-green-400 font-bold ml-1">{formatCurrency(estimatedPrizePool)}</span></p>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-
+                {/* Who Pays Fees */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-2">Who pays platform & Stripe fees?</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button onClick={() => setFeesPaidBy('organizer')} className={`p-3 rounded-lg border text-left transition-colors ${feesPaidBy === 'organizer' ? 'border-green-500 bg-green-900/30' : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'}`}>
-                      <p className={`font-medium ${feesPaidBy === 'organizer' ? 'text-green-400' : 'text-white'}`}>{hostType === 'club' ? 'Club absorbs fees' : "I'll absorb fees"}</p>
-                      <p className="text-xs text-gray-400 mt-1">Players pay {formatCurrency(totalPerPersonCents)}</p>
+                  <label className="block text-sm font-medium text-gray-400 mb-2">Processing Fees Paid By</label>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setFeesPaidBy('organizer')}
+                      className={`flex-1 p-3 rounded-lg border text-center transition-colors ${
+                        feesPaidBy === 'organizer' ? 'border-green-500 bg-green-900/30 text-green-400' : 'border-gray-600 text-gray-300'
+                      }`}
+                    >
+                      {hostType === 'club' ? 'Club' : 'Organizer'}
                     </button>
-                    <button onClick={() => setFeesPaidBy('player')} className={`p-3 rounded-lg border text-left transition-colors ${feesPaidBy === 'player' ? 'border-green-500 bg-green-900/30' : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'}`}>
-                      <p className={`font-medium ${feesPaidBy === 'player' ? 'text-green-400' : 'text-white'}`}>Players pay fees</p>
-                      <p className="text-xs text-gray-400 mt-1">Players pay {feeCalculation ? formatCurrency(feeCalculation.playerPays) : formatCurrency(totalPerPersonCents)}</p>
+                    <button
+                      onClick={() => setFeesPaidBy('player')}
+                      className={`flex-1 p-3 rounded-lg border text-center transition-colors ${
+                        feesPaidBy === 'player' ? 'border-green-500 bg-green-900/30 text-green-400' : 'border-gray-600 text-gray-300'
+                      }`}
+                    >
+                      Player
                     </button>
                   </div>
                 </div>
 
-                {feeCalculation && totalPerPersonCents > 0 && (
-                  <div className="bg-gray-900/50 rounded-lg p-4">
-                    <h4 className="text-white font-medium mb-3">Payment Summary</h4>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between"><span className="text-gray-400">Entry fee</span><span className="text-white">{formatCurrency(entryFeeCents)}</span></div>
-                      {prizePoolEnabled && <div className="flex justify-between"><span className="text-gray-400">Prize pool contribution</span><span className="text-white">{formatCurrency(prizePoolCents)}</span></div>}
-                      <div className="flex justify-between text-gray-500"><span>Platform fee ({PLATFORM_FEE_PERCENT}%)</span><span>{formatCurrency(feeCalculation.platformFee)}</span></div>
-                      <div className="flex justify-between text-gray-500"><span>Stripe fee (~{STRIPE_FEE_PERCENT}% + {STRIPE_FEE_FIXED}¢)</span><span>{formatCurrency(feeCalculation.stripeFee)}</span></div>
-                      <hr className="border-gray-700" />
-                      <div className="flex justify-between font-bold"><span className="text-gray-300">Player pays</span><span className="text-green-400">{formatCurrency(feeCalculation.playerPays)}</span></div>
-                      <div className="flex justify-between font-bold"><span className="text-gray-300">{hostType === 'club' ? 'Club receives' : 'You receive'}</span><span className="text-white">{formatCurrency(feeCalculation.organizerReceives)}</span></div>
+                {/* Fee Summary */}
+                {feeCalculation && (
+                  <div className="bg-gray-900 rounded-lg p-4 space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Base Price</span>
+                      <span className="text-white">{formatCurrency(totalPerPersonCents)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Platform Fee ({PLATFORM_FEE_PERCENT}%)</span>
+                      <span className="text-white">{formatCurrency(feeCalculation.platformFee)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Stripe Fee ({STRIPE_FEE_PERCENT}% + {STRIPE_FEE_FIXED}¢)</span>
+                      <span className="text-white">{formatCurrency(feeCalculation.stripeFee)}</span>
+                    </div>
+                    <div className="border-t border-gray-700 pt-2 flex justify-between font-semibold">
+                      <span className="text-gray-300">Player Pays</span>
+                      <span className="text-green-400">{formatCurrency(feeCalculation.playerPays)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">{hostType === 'club' ? 'Club receives' : 'You receive'}</span>
+                      <span className="text-white">{formatCurrency(feeCalculation.organizerReceives)}</span>
                     </div>
                   </div>
                 )}
               </>
             )}
 
+            {/* Navigation */}
             <div className="flex justify-between pt-4">
               <button onClick={() => setStep(1)} className="text-gray-400 hover:text-white px-4 py-2">Back</button>
-              <button onClick={() => validateStep2() && setStep(3)} className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold">Next: Competition</button>
+              <button
+                onClick={() => validateStep2() && setStep(3)}
+                className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold"
+              >
+                Next: Competition
+              </button>
             </div>
           </div>
         )}
 
-        {/* Step 3: Competition */}
+        {/* ============================================ */}
+        {/* STEP 3: Competition & Game Format */}
+        {/* ============================================ */}
         {step === 3 && (
           <div className="space-y-6">
+            
+            {/* Competition Format Selection */}
             <div>
               <label className="block text-sm font-medium text-gray-400 mb-3">Competition Format</label>
-              <div className="grid gap-3">
+              <div className="grid gap-2">
                 {COMPETITION_TYPES.map((type) => (
-                  <button key={type.value} onClick={() => setCompetitionType(type.value)} className={`p-4 rounded-lg border text-left transition-colors ${competitionType === type.value ? 'border-green-500 bg-green-900/30' : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'}`}>
-                    <p className={`font-medium ${competitionType === type.value ? 'text-green-400' : 'text-white'}`}>{type.label}</p>
-                    <p className="text-sm text-gray-500">{type.description}</p>
+                  <button
+                    key={type.value}
+                    onClick={() => setCompetitionType(type.value)}
+                    className={`p-3 rounded-lg border text-left transition-colors flex items-center gap-3 ${
+                      competitionType === type.value
+                        ? 'border-green-500 bg-green-900/30'
+                        : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'
+                    }`}
+                  >
+                    <span className="text-2xl">{type.icon}</span>
+                    <div>
+                      <p className={`font-medium ${competitionType === type.value ? 'text-green-400' : 'text-white'}`}>
+                        {type.label}
+                      </p>
+                      <p className="text-sm text-gray-500">{type.description}</p>
+                    </div>
                   </button>
                 ))}
               </div>
             </div>
 
+            {/* Game Format Settings - Only show for competitive formats */}
             {competitionType !== 'casual' && (
-              <div className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg">
-                <div>
-                  <h3 className="text-white font-medium">Manage brackets in app?</h3>
-                  <p className="text-sm text-gray-400">Track matches and standings automatically</p>
+              <>
+                {/* Manage in App Toggle */}
+                <div className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg">
+                  <div>
+                    <h3 className="text-white font-medium">Manage in App</h3>
+                    <p className="text-sm text-gray-400">Track matches, scores & standings automatically</p>
+                  </div>
+                  <button
+                    onClick={() => setManagedInApp(!managedInApp)}
+                    className={`relative w-14 h-8 rounded-full transition-colors ${managedInApp ? 'bg-green-600' : 'bg-gray-600'}`}
+                  >
+                    <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${managedInApp ? 'translate-x-7' : 'translate-x-1'}`}></span>
+                  </button>
                 </div>
-                <button onClick={() => setManagedInApp(!managedInApp)} className={`relative w-14 h-8 rounded-full transition-colors ${managedInApp ? 'bg-green-600' : 'bg-gray-600'}`}>
-                  <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${managedInApp ? 'translate-x-7' : 'translate-x-1'}`}></span>
-                </button>
-              </div>
+
+                {/* Game Format Section */}
+                <div className="bg-gray-900/50 rounded-lg p-4">
+                  <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                    🎾 Game Format
+                  </h3>
+                  
+                  <div className="space-y-4">
+                    {/* Points to Win */}
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Points per Game</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {POINTS_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => updateGameFormat('pointsToWin', opt.value)}
+                            className={`p-3 rounded-lg border text-center transition-colors ${
+                              gameFormat.pointsToWin === opt.value
+                                ? 'border-blue-500 bg-blue-900/30 text-blue-400'
+                                : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                            }`}
+                          >
+                            <div className="font-semibold">{opt.value}</div>
+                            <div className="text-xs text-gray-500">{opt.description}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Win By */}
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Win By</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => updateGameFormat('winBy', 1)}
+                          className={`p-3 rounded-lg border text-center transition-colors ${
+                            gameFormat.winBy === 1
+                              ? 'border-blue-500 bg-blue-900/30 text-blue-400'
+                              : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                          }`}
+                        >
+                          <div className="font-semibold">Win by 1</div>
+                          <div className="text-xs text-gray-500">First to points wins</div>
+                        </button>
+                        <button
+                          onClick={() => updateGameFormat('winBy', 2)}
+                          className={`p-3 rounded-lg border text-center transition-colors ${
+                            gameFormat.winBy === 2
+                              ? 'border-blue-500 bg-blue-900/30 text-blue-400'
+                              : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                          }`}
+                        >
+                          <div className="font-semibold">Win by 2</div>
+                          <div className="text-xs text-gray-500">Must win by 2 points</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Games per Match */}
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Match Format</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {GAMES_PER_MATCH_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => updateGameFormat('gamesPerMatch', opt.value)}
+                            className={`p-3 rounded-lg border text-center transition-colors ${
+                              gameFormat.gamesPerMatch === opt.value
+                                ? 'border-blue-500 bg-blue-900/30 text-blue-400'
+                                : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                            }`}
+                          >
+                            <div className="font-semibold">{opt.label}</div>
+                            <div className="text-xs text-gray-500">{opt.description}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Scoring System */}
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Scoring System</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => updateGameFormat('scoringSystem', 'rally')}
+                          className={`p-3 rounded-lg border text-center transition-colors ${
+                            gameFormat.scoringSystem === 'rally'
+                              ? 'border-blue-500 bg-blue-900/30 text-blue-400'
+                              : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                          }`}
+                        >
+                          <div className="font-semibold">Rally Scoring</div>
+                          <div className="text-xs text-gray-500">Point every rally (standard)</div>
+                        </button>
+                        <button
+                          onClick={() => updateGameFormat('scoringSystem', 'traditional')}
+                          className={`p-3 rounded-lg border text-center transition-colors ${
+                            gameFormat.scoringSystem === 'traditional'
+                              ? 'border-blue-500 bg-blue-900/30 text-blue-400'
+                              : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                          }`}
+                        >
+                          <div className="font-semibold">Traditional</div>
+                          <div className="text-xs text-gray-500">Side-out scoring</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Time Limit */}
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Time Limit per Game</label>
+                      <select
+                        value={gameFormat.timeLimit ?? 'null'}
+                        onChange={(e) => updateGameFormat('timeLimit', e.target.value === 'null' ? null : parseInt(e.target.value))}
+                        className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                      >
+                        {TIME_LIMIT_OPTIONS.map((opt) => (
+                          <option key={String(opt.value)} value={opt.value ?? 'null'}>
+                            {opt.label} - {opt.description}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Standings Points - Only for formats that need them */}
+                {needsStandingsPoints && (
+                  <div className="bg-gray-900/50 rounded-lg p-4">
+                    <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                      🏆 Standings Points
+                    </h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Win</label>
+                        <input
+                          type="number"
+                          value={gameFormat.pointsPerWin}
+                          onChange={(e) => updateGameFormat('pointsPerWin', parseInt(e.target.value) || 0)}
+                          className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          min="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Draw</label>
+                        <input
+                          type="number"
+                          value={gameFormat.pointsPerDraw}
+                          onChange={(e) => updateGameFormat('pointsPerDraw', parseInt(e.target.value) || 0)}
+                          className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          min="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Loss</label>
+                        <input
+                          type="number"
+                          value={gameFormat.pointsPerLoss}
+                          onChange={(e) => updateGameFormat('pointsPerLoss', parseInt(e.target.value) || 0)}
+                          className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          min="0"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Format-Specific Settings */}
+                {hasFormatSpecificSettings && (
+                  <div className="bg-gray-900/50 rounded-lg p-4">
+                    <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                      ⚙️ {COMPETITION_TYPES.find(t => t.value === competitionType)?.label} Settings
+                    </h3>
+                    
+                    {/* Swiss Settings */}
+                    {competitionType === 'swiss' && (
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Number of Rounds</label>
+                        <input
+                          type="number"
+                          value={numberOfRounds}
+                          onChange={(e) => setNumberOfRounds(parseInt(e.target.value) || 3)}
+                          className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          min="1"
+                          max="10"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Typically log₂(players) rounds</p>
+                      </div>
+                    )}
+
+                    {/* Pool Play Settings */}
+                    {competitionType === 'pool_play_knockout' && (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Players per Pool</label>
+                          <select
+                            value={poolSize}
+                            onChange={(e) => setPoolSize(parseInt(e.target.value))}
+                            className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          >
+                            {[3, 4, 5, 6].map(n => (
+                              <option key={n} value={n}>{n} players</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-1">Teams Advancing per Pool</label>
+                          <select
+                            value={teamsAdvancing}
+                            onChange={(e) => setTeamsAdvancing(parseInt(e.target.value))}
+                            className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                          >
+                            {[1, 2, 3, 4].map(n => (
+                              <option key={n} value={n}>Top {n}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* King of Court Settings */}
+                    {competitionType === 'king_of_court' && (
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-1">Wins to Stay On</label>
+                        <select
+                          value={winStreak}
+                          onChange={(e) => setWinStreak(parseInt(e.target.value))}
+                          className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
+                        >
+                          {[1, 2, 3, 4, 5].map(n => (
+                            <option key={n} value={n}>{n} win{n > 1 ? 's' : ''}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Elimination Settings */}
+                    {(competitionType === 'single_elimination' || competitionType === 'double_elimination') && (
+                      <div className="space-y-3">
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={thirdPlaceMatch}
+                            onChange={(e) => setThirdPlaceMatch(e.target.checked)}
+                            className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
+                          />
+                          <span className="text-gray-300">3rd Place Match</span>
+                        </label>
+                        {competitionType === 'single_elimination' && (
+                          <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={consolationBracket}
+                              onChange={(e) => setConsolationBracket(e.target.checked)}
+                              className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
+                            />
+                            <span className="text-gray-300">Consolation Bracket</span>
+                          </label>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
+            {/* Summary */}
             <div className="bg-gray-900/50 rounded-lg p-4">
-              <h4 className="text-white font-medium mb-3">Meetup Summary</h4>
+              <h4 className="text-white font-medium mb-3">📋 Meetup Summary</h4>
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-gray-400">Host</span><span className="text-white">{hostType === 'club' ? selectedClub?.name : userProfile?.displayName || 'You'}</span></div>
-                <div className="flex justify-between"><span className="text-gray-400">Title</span><span className="text-white truncate ml-4">{title}</span></div>
-                <div className="flex justify-between"><span className="text-gray-400">Date</span><span className="text-white">{date} at {time}</span></div>
-                <div className="flex justify-between"><span className="text-gray-400">Max Players</span><span className="text-white">{maxPlayers}</span></div>
-                <div className="flex justify-between"><span className="text-gray-400">Entry</span><span className="text-white">{pricingEnabled && totalPerPersonCents > 0 ? formatCurrency(feeCalculation?.playerPays || totalPerPersonCents) : 'Free'}</span></div>
-                <div className="flex justify-between"><span className="text-gray-400">Format</span><span className="text-white">{COMPETITION_TYPES.find(t => t.value === competitionType)?.label}</span></div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Host</span>
+                  <span className="text-white">{hostType === 'club' ? selectedClub?.name : userProfile?.displayName || 'You'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Title</span>
+                  <span className="text-white truncate ml-4">{title}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Date</span>
+                  <span className="text-white">{date} at {time}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Max Players</span>
+                  <span className="text-white">{maxPlayers}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Entry</span>
+                  <span className="text-white">
+                    {pricingEnabled && totalPerPersonCents > 0 ? formatCurrency(feeCalculation?.playerPays || totalPerPersonCents) : 'Free'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Format</span>
+                  <span className="text-white">{COMPETITION_TYPES.find(t => t.value === competitionType)?.label}</span>
+                </div>
+                {competitionType !== 'casual' && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Game Format</span>
+                    <span className="text-white">
+                      {gameFormat.gamesPerMatch === 1 ? '1 game' : `Best of ${gameFormat.gamesPerMatch}`} to {gameFormat.pointsToWin}, win by {gameFormat.winBy}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
+            {/* Navigation */}
             <div className="flex justify-between pt-4">
               <button onClick={() => setStep(2)} className="text-gray-400 hover:text-white px-4 py-2">Back</button>
-              <button onClick={handleSubmit} disabled={isSubmitting} className="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold flex items-center gap-2">
-                {isSubmitting ? (<><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>Creating...</>) : 'Create Meetup'}
+              <button
+                onClick={handleSubmit}
+                disabled={isSubmitting}
+                className="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold flex items-center gap-2"
+              >
+                {isSubmitting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Creating...
+                  </>
+                ) : (
+                  'Create Meetup'
+                )}
               </button>
             </div>
           </div>
