@@ -3,20 +3,23 @@
  * 
  * User profile management with:
  * - Personal info (name, email, DOB, etc.)
- * - DUPR ratings sync
+ * - DUPR SSO integration (Login with DUPR) - NO MANUAL ENTRY
  * - Profile photo upload
- * - Stripe Connect for organizers (NEW)
+ * - Stripe Connect for organizers
  * 
  * FILE LOCATION: components/Profile.tsx
+ * VERSION: V05.17 - Updated DUPR to use SSO only
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { FirebaseError } from '@firebase/app';
-import { fetchDuprRatings } from '../services/duprService';
 import { COUNTRIES, COUNTRY_REGIONS } from '../constants/locations';
 import { UserStripeConnect } from './profile/UserStripeConnect';
-import type { UserGender } from '../types';
+import { DuprConnect } from './profile/DuprConnect';
+
+// Gender type defined locally since not exported from types
+type UserGender = 'male' | 'female' | 'other';
 
 const getFriendlyErrorMessage = (error: FirebaseError): string => {
     switch (error.code) {
@@ -48,6 +51,9 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const { currentUser, userProfile, updateUserProfile, updateUserEmail, updateUserExtendedProfile } = useAuth();
     const fileInputRef = useRef<HTMLInputElement>(null);
     
+    // Cast userProfile to any to access extended fields stored via updateUserExtendedProfile
+    const extendedProfile = userProfile as any;
+    
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
     const [email, setEmail] = useState('');
@@ -56,10 +62,6 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [country, setCountry] = useState('NZL');
     const [region, setRegion] = useState('');
     const [phone, setPhone] = useState('');
-    const [duprId, setDuprId] = useState('');
-    const [duprProfileUrl, setDuprProfileUrl] = useState('');
-    const [duprSinglesRating, setDuprSinglesRating] = useState('');
-    const [duprDoublesRating, setDuprDoublesRating] = useState('');
     const [playsHand, setPlaysHand] = useState<'right'|'left'|''>('');
     const [height, setHeight] = useState('');
     
@@ -69,7 +71,6 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
 
     const [isEditingEmail, setIsEditingEmail] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
-    const [isSyncing, setIsSyncing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -81,19 +82,15 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             setLastName(last);
             setEmail(userProfile.email || currentUser?.email || '');
             setDob(userProfile.birthDate || '');
-            setGender(userProfile.gender || '');
-            setCountry(userProfile.country || 'NZL');
+            setGender((userProfile.gender as UserGender) || '');
+            setCountry(extendedProfile?.country || 'NZL');
             setRegion(userProfile.region || '');
             setPhone(userProfile.phone || '');
-            setDuprId(userProfile.duprId || '');
-            setDuprProfileUrl(userProfile.duprProfileUrl || '');
-            setDuprSinglesRating(userProfile.duprSinglesRating?.toString() || '');
-            setDuprDoublesRating(userProfile.duprDoublesRating?.toString() || '');
-            setPlaysHand(userProfile.playsHand || '');
-            setHeight(userProfile.height || '');
+            setPlaysHand(extendedProfile?.playsHand || '');
+            setHeight(extendedProfile?.height || '');
             
-            setPhotoData(userProfile.photoData || '');
-            setPhotoMimeType(userProfile.photoMimeType || '');
+            setPhotoData(extendedProfile?.photoData || '');
+            setPhotoMimeType(extendedProfile?.photoMimeType || '');
         } else if (currentUser) {
             // Fallback to Auth data
             const [first = '', last = ''] = (currentUser.displayName || '').split(' ');
@@ -101,7 +98,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             setLastName(last);
             setEmail(currentUser.email || '');
         }
-    }, [currentUser, userProfile]);
+    }, [currentUser, userProfile, extendedProfile]);
 
     // Construct the display source: Data URI -> Storage URL -> Initials Placeholder
     const displayPhotoSrc = useMemo(() => {
@@ -155,44 +152,6 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
         }
     };
 
-    const handleSyncDupr = async () => {
-        if (!duprProfileUrl && !duprId) return;
-        
-        setIsSyncing(true);
-        setError(null);
-        setSuccessMessage(null);
-
-        try {
-            let idToUse = duprId;
-            
-            if (!idToUse && duprProfileUrl) {
-                const cleanUrl = duprProfileUrl.replace(/\/$/, "");
-                const parts = cleanUrl.split('/');
-                const lastPart = parts[parts.length - 1];
-                
-                if (lastPart && lastPart.length > 4) {
-                    idToUse = lastPart;
-                    setDuprId(lastPart);
-                }
-            }
-
-            if (!idToUse) idToUse = "test-id";
-
-            const ratings = await fetchDuprRatings(idToUse);
-            
-            setDuprSinglesRating(ratings.singles.toString());
-            setDuprDoublesRating(ratings.doubles.toString());
-            
-            setSuccessMessage("Ratings synced successfully! Click 'Save Changes' to apply.");
-            setTimeout(() => setSuccessMessage(null), 5000);
-        } catch (err) {
-            console.error(err);
-            setError("Failed to sync DUPR ratings. Please check your ID/URL.");
-        } finally {
-            setIsSyncing(false);
-        }
-    };
-
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -221,17 +180,13 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
         }
 
         // Update Extended Details (DB Only)
+        // NOTE: DUPR fields are now managed by DuprConnect component via SSO
         const extendedData: Record<string, any> = {
             birthDate: dob,
             gender: gender || null,
             country,
             region,
             phone,
-            duprId,
-            duprProfileUrl,
-            duprSinglesRating: duprSinglesRating ? parseFloat(duprSinglesRating) : null,
-            duprDoublesRating: duprDoublesRating ? parseFloat(duprDoublesRating) : null,
-            duprLastUpdatedManually: Date.now(),
             playsHand: playsHand as 'right' | 'left',
             height,
             photoData: photoData || null,
@@ -400,62 +355,6 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                             {HEIGHT_OPTIONS.map(h => <option key={h} value={h}>{h}</option>)}
                         </select>
                     </div>
-
-                    {/* DUPR Section */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label htmlFor="duprId" className="block text-sm font-medium text-gray-300 mb-2">DUPR ID <span className="text-gray-500">(Optional)</span></label>
-                            <input type="text" id="duprId" value={duprId} onChange={e => setDuprId(e.target.value)} placeholder="e.g., 123456" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                        </div>
-                    </div>
-                    
-                    {/* DUPR Profile URL */}
-                    <div>
-                        <label htmlFor="duprProfileUrl" className="block text-sm font-medium text-gray-300 mb-2">DUPR Profile Link <span className="text-gray-500">(Optional)</span></label>
-                        <div className="relative">
-                            <input 
-                                type="url" 
-                                id="duprProfileUrl" 
-                                value={duprProfileUrl} 
-                                onChange={e => setDuprProfileUrl(e.target.value)} 
-                                placeholder="https://mydupr.com/dashboard/player/..." 
-                                className="w-full bg-gray-700 text-white rounded-md pl-4 pr-24 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" 
-                            />
-                            <button
-                                type="button"
-                                onClick={handleSyncDupr}
-                                disabled={(!duprProfileUrl && !duprId) || isSyncing}
-                                className="absolute right-1.5 top-1.5 bottom-1.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white text-xs font-bold px-3 rounded transition-colors flex items-center gap-1 shadow-sm"
-                            >
-                                {isSyncing ? (
-                                    <>
-                                        <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                                        Syncing
-                                    </>
-                                ) : (
-                                    <>
-                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                        </svg>
-                                        Sync
-                                    </>
-                                )}
-                            </button>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">Enter your DUPR ID or URL and click Sync to auto-update ratings.</p>
-                    </div>
-
-                    {/* Ratings Display */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label htmlFor="duprDoublesRating" className="block text-sm font-medium text-gray-300 mb-2">DUPR Doubles Rating</label>
-                            <input type="number" step="0.001" id="duprDoublesRating" value={duprDoublesRating} onChange={e => setDuprDoublesRating(e.target.value)} placeholder="e.g., 4.250" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                        </div>
-                        <div>
-                            <label htmlFor="duprSinglesRating" className="block text-sm font-medium text-gray-300 mb-2">DUPR Singles Rating</label>
-                            <input type="number" step="0.001" id="duprSinglesRating" value={duprSinglesRating} onChange={e => setDuprSinglesRating(e.target.value)} placeholder="e.g., 4.250" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                        </div>
-                    </div>
                     
                     {error && <p className="text-red-400 text-sm text-center bg-red-900/50 p-3 rounded-md">{error}</p>}
                     {successMessage && <p className="text-green-300 text-sm text-center bg-green-900/50 p-3 rounded-md">{successMessage}</p>}
@@ -472,7 +371,14 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                 </form>
                 
                 {/* ============================================ */}
-                {/* STRIPE CONNECT SECTION - NEW */}
+                {/* DUPR CONNECT SECTION - SSO ONLY */}
+                {/* ============================================ */}
+                <div className="mt-8 pt-8 border-t border-gray-700">
+                    <DuprConnect />
+                </div>
+                
+                {/* ============================================ */}
+                {/* STRIPE CONNECT SECTION */}
                 {/* ============================================ */}
                 <div className="mt-8 pt-8 border-t border-gray-700">
                     <UserStripeConnect />

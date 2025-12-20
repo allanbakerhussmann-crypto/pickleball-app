@@ -2,14 +2,14 @@
  * DUPR Integration Service
  * 
  * Handles all DUPR API interactions:
- * - SSO Login (Login with DUPR)
+ * - SSO Login via iframe (Login with DUPR)
  * - Match submission
  * - Player lookup
  * - Club verification
  * - Premium/Verified entitlement checks
  * 
  * FILE LOCATION: services/dupr/index.ts
- * VERSION: V05.17
+ * VERSION: V05.17.1 - Fixed to use iframe-based OAuth per DUPR docs
  * 
  * IMPORTANT: Users MUST use SSO to link DUPR accounts.
  * Manual DUPR ID entry is NOT allowed per DUPR requirements.
@@ -29,7 +29,8 @@ const DUPR_CONFIG = {
   
   uat: {
     baseUrl: 'https://api.uat.dupr.gg',
-    authUrl: 'https://uat.dupr.gg',
+    // DUPR uses iframe login, NOT OAuth redirect
+    loginUrl: 'https://uat.dupr.gg/login-external-app',
     clientId: '4970118010',
     clientKey: 'test-ck-6181132e-cedf-45a6-fcb0-f88dda516175',
     clientSecret: 'test-cs-a27a555efe6348cff86532526db5cc5d',
@@ -37,7 +38,7 @@ const DUPR_CONFIG = {
   
   production: {
     baseUrl: 'https://api.dupr.gg',
-    authUrl: 'https://dupr.gg',
+    loginUrl: 'https://dashboard.dupr.com/login-external-app',
     clientId: '', // Will be provided after UAT approval
     clientKey: '', // Will be provided after UAT approval
     clientSecret: '', // Will be provided after UAT approval
@@ -45,7 +46,7 @@ const DUPR_CONFIG = {
 };
 
 // Get current environment config
-const getConfig = () => {
+export const getConfig = () => {
   return DUPR_CONFIG[DUPR_CONFIG.environment];
 };
 
@@ -55,8 +56,9 @@ const getConfig = () => {
 
 export interface DuprUser {
   duprId: string;
-  firstName: string;
-  lastName: string;
+  odUserId?: string; // Internal ID from DUPR
+  firstName?: string;
+  lastName?: string;
   fullName: string;
   email?: string;
   imageUrl?: string;
@@ -83,13 +85,12 @@ export type DuprMatchType = 'SINGLES' | 'DOUBLES';
 
 export interface DuprMatchPlayer {
   duprId: string;
-  // For doubles, each team has 2 players
 }
 
 export interface DuprMatchTeam {
   player1: DuprMatchPlayer;
   player2?: DuprMatchPlayer; // Only for doubles
-  score: number[]; // Array of scores per game, e.g., [11, 8, 11]
+  score: number[]; // Array of scores per game
 }
 
 export interface DuprMatchSubmission {
@@ -112,131 +113,75 @@ export interface DuprMatchResult {
   createdAt: string;
 }
 
-export interface DuprSSOState {
-  returnUrl: string;
-  nonce: string;
-  timestamp: number;
+// Event data received from DUPR iframe
+export interface DuprLoginEvent {
+  userToken: string;      // Access token
+  refreshToken: string;   // Refresh token
+  id: string;             // Internal user ID
+  duprId: string;         // Public DUPR ID
+  stats?: {
+    doublesRating?: number;
+    singlesRating?: number;
+  };
 }
 
 // ============================================
-// SSO / LOGIN WITH DUPR
+// SSO / LOGIN WITH DUPR (IFRAME METHOD)
 // ============================================
 
 /**
- * Generate SSO URL for "Login with DUPR"
+ * Get the DUPR login iframe URL
  * 
- * IMPORTANT: This is the ONLY way users can link their DUPR account.
- * Manual DUPR ID entry is NOT allowed per DUPR requirements.
+ * DUPR uses an iframe-based implicit OAuth flow.
+ * The clientKey must be base64 encoded in the URL.
  */
-export function generateDuprSSOUrl(returnUrl: string): { url: string; state: DuprSSOState } {
+export function getDuprLoginIframeUrl(): string {
   const config = getConfig();
-  const nonce = generateNonce();
   
-  const state: DuprSSOState = {
-    returnUrl,
-    nonce,
-    timestamp: Date.now(),
-  };
+  // Base64 encode the clientKey as required by DUPR
+  const encodedClientKey = btoa(config.clientKey);
   
-  // Encode state for URL
-  const encodedState = btoa(JSON.stringify(state));
-  
-  // Build SSO URL
-  const params = new URLSearchParams({
-    client_id: config.clientId,
-    redirect_uri: `${window.location.origin}/auth/dupr/callback`,
-    response_type: 'code',
-    scope: 'openid profile rating clubs',
-    state: encodedState,
-  });
-  
-  const url = `${config.authUrl}/oauth/authorize?${params.toString()}`;
-  
-  return { url, state };
+  return `${config.loginUrl}/${encodedClientKey}`;
 }
 
 /**
- * Generate Premium Login URL for DUPR+ or Verified gating
+ * Parse DUPR login event from iframe message
  * 
- * Required when user needs DUPR+ subscription or Verified status
- * to access premium features/events.
+ * When user logs in via iframe, DUPR sends a message event
+ * with user info and tokens.
  */
-export function generatePremiumLoginUrl(
-  returnUrl: string, 
-  requiredEntitlement: 'PREMIUM_L1' | 'VERIFIED_L1'
-): string {
-  const config = getConfig();
-  const nonce = generateNonce();
-  
-  const state: DuprSSOState = {
-    returnUrl,
-    nonce,
-    timestamp: Date.now(),
-  };
-  
-  const encodedState = btoa(JSON.stringify(state));
-  
-  const params = new URLSearchParams({
-    client_id: config.clientId,
-    redirect_uri: `${window.location.origin}/auth/dupr/callback`,
-    response_type: 'code',
-    scope: 'openid profile rating clubs',
-    state: encodedState,
-    required_entitlement: requiredEntitlement,
-    prompt: 'premium', // This shows the premium modal
-  });
-  
-  return `${config.authUrl}/oauth/authorize?${params.toString()}`;
-}
-
-/**
- * Handle OAuth callback and exchange code for tokens
- */
-export async function handleDuprCallback(
-  code: string, 
-  state: string
-): Promise<{ user: DuprUser; accessToken: string; refreshToken: string }> {
-  const config = getConfig();
-  
-  // Decode and validate state
-  const decodedState: DuprSSOState = JSON.parse(atob(state));
-  
-  // Check state is not expired (5 minute window)
-  if (Date.now() - decodedState.timestamp > 5 * 60 * 1000) {
-    throw new Error('SSO state expired');
+export function parseDuprLoginEvent(event: MessageEvent): DuprLoginEvent | null {
+  try {
+    // Validate the event origin
+    const validOrigins = [
+      'https://uat.dupr.gg',
+      'https://dashboard.dupr.com',
+      'https://dupr.gg',
+    ];
+    
+    if (!validOrigins.some(origin => event.origin.includes(origin.replace('https://', '')))) {
+      console.warn('DUPR login event from unexpected origin:', event.origin);
+      // Still try to parse in case it's valid
+    }
+    
+    const data = event.data;
+    
+    // Check if this is a DUPR login event
+    if (data && data.duprId && data.userToken) {
+      return {
+        userToken: data.userToken,
+        refreshToken: data.refreshToken,
+        id: data.id,
+        duprId: data.duprId,
+        stats: data.stats,
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error parsing DUPR login event:', error);
+    return null;
   }
-  
-  // Exchange code for tokens
-  const tokenResponse = await fetch(`${config.baseUrl}/oauth/token`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-client-id': config.clientId,
-      'x-client-key': config.clientKey,
-    },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: `${window.location.origin}/auth/dupr/callback`,
-      client_secret: config.clientSecret,
-    }),
-  });
-  
-  if (!tokenResponse.ok) {
-    const error = await tokenResponse.json();
-    throw new Error(error.message || 'Failed to exchange code for tokens');
-  }
-  
-  const tokens = await tokenResponse.json();
-  
-  // Get user profile
-  const user = await getDuprUserProfile(tokens.access_token);
-  
-  return {
-    user,
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
-  };
 }
 
 // ============================================
@@ -244,7 +189,10 @@ export async function handleDuprCallback(
 // ============================================
 
 /**
- * Get DUPR user profile from access token
+ * Get DUPR user profile using access token
+ * 
+ * Uses the token received from iframe login.
+ * Note: This token has read-only permissions.
  */
 export async function getDuprUserProfile(accessToken: string): Promise<DuprUser> {
   const config = getConfig();
@@ -252,36 +200,59 @@ export async function getDuprUserProfile(accessToken: string): Promise<DuprUser>
   const response = await fetch(`${config.baseUrl}/player/v1.0/me`, {
     headers: {
       'Authorization': `Bearer ${accessToken}`,
-      'x-client-id': config.clientId,
-      'x-client-key': config.clientKey,
     },
   });
   
   if (!response.ok) {
+    const errorText = await response.text();
+    console.error('DUPR profile fetch failed:', errorText);
     throw new Error('Failed to fetch DUPR profile');
   }
   
   const data = await response.json();
   
+  // Handle response structure - DUPR API returns result object
+  const result = data.result || data;
+  
   return {
-    duprId: data.id,
-    firstName: data.firstName,
-    lastName: data.lastName,
-    fullName: `${data.firstName} ${data.lastName}`,
-    email: data.email,
-    imageUrl: data.imageUrl,
-    doublesRating: data.ratings?.doubles,
-    doublesReliability: data.ratings?.doublesReliability,
-    singlesRating: data.ratings?.singles,
-    singlesReliability: data.ratings?.singlesReliability,
-    isVerified: data.entitlements?.includes('VERIFIED_L1') || false,
-    isPremium: data.entitlements?.includes('PREMIUM_L1') || false,
-    entitlements: data.entitlements || [],
+    duprId: result.duprId || result.id,
+    odUserId: result.id,
+    firstName: result.firstName,
+    lastName: result.lastName,
+    fullName: result.fullName || `${result.firstName || ''} ${result.lastName || ''}`.trim(),
+    email: result.email,
+    imageUrl: result.imageUrl,
+    doublesRating: result.ratings?.doubles || result.doublesRating,
+    doublesReliability: result.ratings?.doublesReliability,
+    singlesRating: result.ratings?.singles || result.singlesRating,
+    singlesReliability: result.ratings?.singlesReliability,
+    isVerified: result.entitlements?.includes('VERIFIED_L1') || false,
+    isPremium: result.entitlements?.includes('PREMIUM_L1') || false,
+    entitlements: result.entitlements || [],
   };
 }
 
 /**
- * Look up a player by DUPR ID
+ * Get basic user info (public endpoint)
+ */
+export async function getDuprBasicInfo(accessToken: string): Promise<any> {
+  const cfg = getConfig();
+  
+  const response = await fetch(`${cfg.baseUrl}/player/v1.0/me/basic`, {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+  
+  if (!response.ok) {
+    throw new Error('Failed to fetch DUPR basic info');
+  }
+  
+  return response.json();
+}
+
+/**
+ * Look up a player by DUPR ID (requires partner token)
  */
 export async function lookupDuprPlayer(duprId: string): Promise<DuprUser | null> {
   const config = getConfig();
@@ -299,20 +270,21 @@ export async function lookupDuprPlayer(duprId: string): Promise<DuprUser | null>
   }
   
   const data = await response.json();
+  const result = data.result || data;
   
   return {
-    duprId: data.id,
-    firstName: data.firstName,
-    lastName: data.lastName,
-    fullName: `${data.firstName} ${data.lastName}`,
-    imageUrl: data.imageUrl,
-    doublesRating: data.ratings?.doubles,
-    doublesReliability: data.ratings?.doublesReliability,
-    singlesRating: data.ratings?.singles,
-    singlesReliability: data.ratings?.singlesReliability,
-    isVerified: data.entitlements?.includes('VERIFIED_L1') || false,
-    isPremium: data.entitlements?.includes('PREMIUM_L1') || false,
-    entitlements: data.entitlements || [],
+    duprId: result.duprId || result.id,
+    fullName: result.fullName || `${result.firstName || ''} ${result.lastName || ''}`.trim(),
+    firstName: result.firstName,
+    lastName: result.lastName,
+    imageUrl: result.imageUrl,
+    doublesRating: result.ratings?.doubles,
+    doublesReliability: result.ratings?.doublesReliability,
+    singlesRating: result.ratings?.singles,
+    singlesReliability: result.ratings?.singlesReliability,
+    isVerified: result.entitlements?.includes('VERIFIED_L1') || false,
+    isPremium: result.entitlements?.includes('PREMIUM_L1') || false,
+    entitlements: result.entitlements || [],
   };
 }
 
@@ -322,8 +294,6 @@ export async function lookupDuprPlayer(duprId: string): Promise<DuprUser | null>
 
 /**
  * Check if user has required entitlement
- * 
- * Used for gating events that require DUPR+ or Verified status
  */
 export function hasEntitlement(
   user: DuprUser, 
@@ -380,8 +350,6 @@ export function canJoinDuprEvent(
 
 /**
  * Get user's club permissions
- * 
- * Required for validating that organizers can manage clubs
  */
 export async function getUserClubPermissions(
   accessToken: string
@@ -391,8 +359,6 @@ export async function getUserClubPermissions(
   const response = await fetch(`${config.baseUrl}/club/v1.0/me/memberships`, {
     headers: {
       'Authorization': `Bearer ${accessToken}`,
-      'x-client-id': config.clientId,
-      'x-client-key': config.clientKey,
     },
   });
   
@@ -401,8 +367,9 @@ export async function getUserClubPermissions(
   }
   
   const data = await response.json();
+  const result = data.result || data;
   
-  return data.clubs?.map((club: any) => ({
+  return result.clubs?.map((club: any) => ({
     clubId: club.id,
     clubName: club.name,
     permission: club.permission,
@@ -423,7 +390,6 @@ export async function verifyClubPermission(
   
   if (!clubPermission) return false;
   
-  // DIRECTOR has higher permission than ORGANIZER
   if (requiredPermission === 'ORGANIZER') {
     return clubPermission.permission === 'DIRECTOR' || clubPermission.permission === 'ORGANIZER';
   }
@@ -441,7 +407,6 @@ export async function verifyClubPermission(
  * Requirements:
  * - All players must have DUPR IDs
  * - At least one team must score 6+ points
- * - Match type must be specified (SINGLES or DOUBLES)
  */
 export async function submitMatchToDupr(
   accessToken: string,
@@ -458,7 +423,6 @@ export async function submitMatchToDupr(
     throw new Error('At least one team must score 6 or more points');
   }
   
-  // Build request body
   const body = {
     matchType: match.matchType,
     matchDate: match.matchDate,
@@ -488,43 +452,18 @@ export async function submitMatchToDupr(
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await response.json().catch(() => ({}));
     throw new Error(error.message || 'Failed to submit match to DUPR');
   }
   
   const data = await response.json();
+  const result = data.result || data;
   
   return {
-    matchId: data.id,
-    status: data.status,
-    createdAt: data.createdAt,
+    matchId: result.id,
+    status: result.status,
+    createdAt: result.createdAt,
   };
-}
-
-/**
- * Submit multiple matches to DUPR (batch)
- */
-export async function submitMatchesToDupr(
-  accessToken: string,
-  matches: DuprMatchSubmission[]
-): Promise<DuprMatchResult[]> {
-  const results: DuprMatchResult[] = [];
-  
-  for (const match of matches) {
-    try {
-      const result = await submitMatchToDupr(accessToken, match);
-      results.push(result);
-    } catch (error: any) {
-      console.error(`Failed to submit match: ${error.message}`);
-      results.push({
-        matchId: '',
-        status: 'REJECTED',
-        createdAt: new Date().toISOString(),
-      });
-    }
-  }
-  
-  return results;
 }
 
 /**
@@ -546,7 +485,7 @@ export async function deleteMatchFromDupr(
   });
   
   if (!response.ok) {
-    const error = await response.json();
+    const error = await response.json().catch(() => ({}));
     throw new Error(error.message || 'Failed to delete match from DUPR');
   }
 }
@@ -554,12 +493,6 @@ export async function deleteMatchFromDupr(
 // ============================================
 // HELPERS
 // ============================================
-
-function generateNonce(): string {
-  const array = new Uint8Array(16);
-  crypto.getRandomValues(array);
-  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-}
 
 /**
  * Format rating for display (e.g., "4.25")
@@ -586,13 +519,16 @@ export function getDuprRatingColor(rating: number | undefined): string {
 // ============================================
 
 export const duprService = {
-  // SSO
-  generateDuprSSOUrl,
-  generatePremiumLoginUrl,
-  handleDuprCallback,
+  // Config
+  getConfig,
+  
+  // SSO (iframe method)
+  getDuprLoginIframeUrl,
+  parseDuprLoginEvent,
   
   // User
   getDuprUserProfile,
+  getDuprBasicInfo,
   lookupDuprPlayer,
   
   // Entitlements
@@ -605,7 +541,6 @@ export const duprService = {
   
   // Matches
   submitMatchToDupr,
-  submitMatchesToDupr,
   deleteMatchFromDupr,
   
   // Helpers

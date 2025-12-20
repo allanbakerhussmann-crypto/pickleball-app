@@ -2,24 +2,25 @@
  * DuprConnect Component
  * 
  * DUPR account linking for user profiles.
- * Uses SSO ONLY - no manual DUPR ID entry (per DUPR requirements).
+ * Uses IFRAME-based SSO as required by DUPR (NOT redirect OAuth).
  * 
  * Features:
- * - Login with DUPR (SSO)
+ * - Login with DUPR (via iframe modal)
  * - Display linked DUPR info & ratings
  * - Refresh ratings
- * - Disconnect DUPR (re-auth required to reconnect)
+ * - Disconnect DUPR
  * 
  * FILE LOCATION: components/profile/DuprConnect.tsx
- * VERSION: V05.17
+ * VERSION: V05.17.1 - Fixed to use iframe-based OAuth per DUPR docs
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { doc, updateDoc, onSnapshot } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { 
-  generateDuprSSOUrl, 
+  getDuprLoginIframeUrl,
+  parseDuprLoginEvent,
   getDuprUserProfile,
   formatDuprRating,
 } from '../../services/dupr';
@@ -59,6 +60,10 @@ export const DuprConnect: React.FC = () => {
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  
+  // Login modal state
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginLoading, setLoginLoading] = useState(false);
 
   // ============================================
   // LOAD DUPR DATA
@@ -70,7 +75,6 @@ export const DuprConnect: React.FC = () => {
       return;
     }
 
-    // Subscribe to user document for real-time DUPR updates
     const userRef = doc(db, 'users', currentUser.uid);
     const unsubscribe = onSnapshot(userRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -97,19 +101,79 @@ export const DuprConnect: React.FC = () => {
   }, [currentUser?.uid]);
 
   // ============================================
-  // HANDLERS
+  // HANDLE DUPR IFRAME MESSAGE
   // ============================================
 
-  const handleConnectDupr = () => {
-    const returnUrl = `${window.location.origin}/#/profile`;
-    const { url, state } = generateDuprSSOUrl(returnUrl);
+  const handleDuprMessage = useCallback(async (event: MessageEvent) => {
+    // Parse the DUPR login event
+    const loginData = parseDuprLoginEvent(event);
     
-    // Store state for callback validation
-    sessionStorage.setItem('dupr_sso_state', JSON.stringify(state));
+    if (!loginData || !currentUser?.uid) return;
     
-    // Redirect to DUPR SSO
-    window.location.href = url;
-  };
+    console.log('DUPR login successful:', loginData.duprId);
+    setLoginLoading(true);
+    setError(null);
+    
+    try {
+      // Try to get full profile using the token
+      let fullName = '';
+      let doublesRating: number | undefined;
+      let singlesRating: number | undefined;
+      let isVerified = false;
+      let isPremium = false;
+      
+      try {
+        const profile = await getDuprUserProfile(loginData.userToken);
+        fullName = profile.fullName;
+        doublesRating = profile.doublesRating;
+        singlesRating = profile.singlesRating;
+        isVerified = profile.isVerified;
+        isPremium = profile.isPremium;
+      } catch (profileError) {
+        console.warn('Could not fetch full profile, using event data:', profileError);
+        // Use data from the event
+        doublesRating = loginData.stats?.doublesRating;
+        singlesRating = loginData.stats?.singlesRating;
+      }
+      
+      // Update Firestore with DUPR data
+      const userRef = doc(db, 'users', currentUser.uid);
+      await updateDoc(userRef, {
+        duprId: loginData.duprId,
+        duprConnected: true,
+        duprConnectedAt: Date.now(),
+        duprDoublesRating: doublesRating || null,
+        duprSinglesRating: singlesRating || null,
+        duprIsVerified: isVerified,
+        duprIsPremium: isPremium,
+        duprFullName: fullName || null,
+        duprAccessToken: loginData.userToken,
+        duprRefreshToken: loginData.refreshToken,
+        duprTokenUpdatedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      
+      // Close modal
+      setShowLoginModal(false);
+    } catch (err: any) {
+      console.error('Failed to save DUPR data:', err);
+      setError(err.message || 'Failed to link DUPR account');
+    } finally {
+      setLoginLoading(false);
+    }
+  }, [currentUser?.uid]);
+
+  // Listen for messages from DUPR iframe
+  useEffect(() => {
+    if (showLoginModal) {
+      window.addEventListener('message', handleDuprMessage);
+      return () => window.removeEventListener('message', handleDuprMessage);
+    }
+  }, [showLoginModal, handleDuprMessage]);
+
+  // ============================================
+  // HANDLERS
+  // ============================================
 
   const handleRefreshRatings = async () => {
     if (!duprData?.duprAccessToken) {
@@ -121,25 +185,22 @@ export const DuprConnect: React.FC = () => {
     setError(null);
 
     try {
-      // Fetch latest profile from DUPR
-      const duprUser = await getDuprUserProfile(duprData.duprAccessToken);
+      const profile = await getDuprUserProfile(duprData.duprAccessToken);
       
-      // Update Firestore
       if (currentUser?.uid) {
         const userRef = doc(db, 'users', currentUser.uid);
         await updateDoc(userRef, {
-          duprDoublesRating: duprUser.doublesRating || null,
-          duprDoublesReliability: duprUser.doublesReliability || null,
-          duprSinglesRating: duprUser.singlesRating || null,
-          duprSinglesReliability: duprUser.singlesReliability || null,
-          duprIsVerified: duprUser.isVerified,
-          duprIsPremium: duprUser.isPremium,
+          duprDoublesRating: profile.doublesRating || null,
+          duprDoublesReliability: profile.doublesReliability || null,
+          duprSinglesRating: profile.singlesRating || null,
+          duprSinglesReliability: profile.singlesReliability || null,
+          duprIsVerified: profile.isVerified,
+          duprIsPremium: profile.isPremium,
           updatedAt: Date.now(),
         });
       }
     } catch (err: any) {
       console.error('Failed to refresh DUPR ratings:', err);
-      // Token might be expired - prompt re-auth
       if (err.message?.includes('401') || err.message?.includes('unauthorized')) {
         setError('Session expired. Please reconnect your DUPR account.');
       } else {
@@ -205,46 +266,62 @@ export const DuprConnect: React.FC = () => {
 
   if (!duprData?.duprConnected) {
     return (
-      <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-        {/* Header */}
-        <div className="p-4 border-b border-gray-700 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-[#00B4D8]/20 flex items-center justify-center">
-            <DuprLogo className="w-6 h-6 text-[#00B4D8]" />
+      <>
+        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+          {/* Header */}
+          <div className="p-4 border-b border-gray-700 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-[#00B4D8]/20 flex items-center justify-center">
+              <DuprLogo className="w-6 h-6 text-[#00B4D8]" />
+            </div>
+            <div>
+              <h3 className="font-bold text-white">DUPR Rating</h3>
+              <p className="text-xs text-gray-400">Link your DUPR account</p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-bold text-white">DUPR Rating</h3>
-            <p className="text-xs text-gray-400">Link your DUPR account</p>
-          </div>
-        </div>
 
-        {/* Content */}
-        <div className="p-4">
-          <p className="text-gray-400 text-sm mb-4">
-            Connect your DUPR account to display your official rating and submit match results 
-            to DUPR automatically.
-          </p>
+          {/* Content */}
+          <div className="p-4">
+            <p className="text-gray-400 text-sm mb-4">
+              Connect your DUPR account to display your official rating and submit match results 
+              to DUPR automatically.
+            </p>
 
-          <button
-            onClick={handleConnectDupr}
-            className="w-full py-3 bg-[#00B4D8] hover:bg-[#0096B4] text-white rounded-lg font-semibold flex items-center justify-center gap-2"
-          >
-            <DuprLogo className="w-5 h-5" />
-            Login with DUPR
-          </button>
+            {error && (
+              <div className="mb-4 p-3 bg-red-900/30 border border-red-500/50 rounded-lg text-red-300 text-sm">
+                {error}
+              </div>
+            )}
 
-          <p className="text-xs text-gray-500 mt-3 text-center">
-            Don't have a DUPR account?{' '}
-            <a 
-              href="https://mydupr.com/signup" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-[#00B4D8] hover:underline"
+            <button
+              onClick={() => setShowLoginModal(true)}
+              className="w-full py-3 bg-[#00B4D8] hover:bg-[#0096B4] text-white rounded-lg font-semibold flex items-center justify-center gap-2"
             >
-              Create one for free
-            </a>
-          </p>
+              <DuprLogo className="w-5 h-5" />
+              Login with DUPR
+            </button>
+
+            <p className="text-xs text-gray-500 mt-3 text-center">
+              Don't have a DUPR account?{' '}
+              <a 
+                href="https://mydupr.com/signup" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-[#00B4D8] hover:underline"
+              >
+                Create one for free
+              </a>
+            </p>
+          </div>
         </div>
-      </div>
+
+        {/* DUPR Login Modal with iframe */}
+        {showLoginModal && (
+          <DuprLoginModal
+            onClose={() => setShowLoginModal(false)}
+            loading={loginLoading}
+          />
+        )}
+      </>
     );
   }
 
@@ -401,6 +478,61 @@ export const DuprConnect: React.FC = () => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// ============================================
+// DUPR LOGIN MODAL (with iframe)
+// ============================================
+
+interface DuprLoginModalProps {
+  onClose: () => void;
+  loading: boolean;
+}
+
+const DuprLoginModal: React.FC<DuprLoginModalProps> = ({ onClose, loading }) => {
+  const iframeUrl = getDuprLoginIframeUrl();
+  
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl max-w-md w-full overflow-hidden relative">
+        {/* Close Button */}
+        <button
+          onClick={onClose}
+          disabled={loading}
+          className="absolute top-2 right-2 z-10 p-2 bg-gray-100 hover:bg-gray-200 rounded-full text-gray-600"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        
+        {/* Loading Overlay */}
+        {loading && (
+          <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-20">
+            <div className="text-center">
+              <div className="w-10 h-10 border-4 border-[#00B4D8] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+              <p className="text-gray-600">Linking your DUPR account...</p>
+            </div>
+          </div>
+        )}
+        
+        {/* DUPR Login iframe */}
+        <iframe
+          src={iframeUrl}
+          title="Login with DUPR"
+          className="w-full h-[500px] border-0"
+          allow="clipboard-read; clipboard-write"
+        />
+        
+        {/* Footer */}
+        <div className="bg-gray-100 px-4 py-3 text-center">
+          <p className="text-xs text-gray-500">
+            Secure login powered by DUPR
+          </p>
+        </div>
+      </div>
     </div>
   );
 };
