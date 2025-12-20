@@ -1,16 +1,16 @@
 /**
- * MeetupDetail Component (Extended with Payment Support)
+ * MeetupDetail Component (Extended with Scoring & Tabs)
  * 
- * Shows meetup details and allows users to:
- * - View meetup info, pricing, competition format
- * - RSVP (free meetups) or Pay to Join (paid meetups)
- * - See who's attending and their payment status
- * - Organizer can manage attendees
+ * Shows meetup details with tabbed interface:
+ * - Details: Event info, pricing, competition format
+ * - Attendees: Who's attending and their payment status
+ * - Scoring: Match entry and standings (for competitive meetups)
  * 
  * FILE LOCATION: components/meetups/MeetupDetail.tsx
+ * VERSION: V05.17 - Added Scoring Tab
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { 
   getMeetupById, 
@@ -24,7 +24,8 @@ import {
   createCheckoutSession, 
   redirectToCheckout,
 } from '../../services/stripe';
-import type { Meetup, MeetupRSVP } from '../../types';
+import { MeetupScoring } from './MeetupScoring';
+import type { MeetupRSVP } from '../../types';
 
 // ============================================
 // TYPES
@@ -36,7 +37,30 @@ interface MeetupDetailProps {
   onEdit?: (meetupId: string) => void;
 }
 
-interface ExtendedMeetup extends Meetup {
+// Define locally to avoid type conflicts
+interface ExtendedMeetup {
+  id: string;
+  title: string;
+  description: string;
+  when: number;
+  endTime?: number;
+  visibility: 'public' | 'linkOnly' | 'private';
+  maxPlayers: number;
+  locationName: string;
+  location?: { lat: number; lng: number };
+  createdByUserId: string;
+  organizerName?: string;
+  clubId?: string;
+  clubName?: string;
+  hostedBy?: string;
+  status: 'draft' | 'active' | 'cancelled' | 'completed';
+  cancelledAt?: number;
+  cancelReason?: string;
+  currentPlayers?: number;
+  paidPlayers?: number;
+  totalCollected?: number;
+  createdAt: number;
+  updatedAt: number;
   pricing?: {
     enabled: boolean;
     entryFee: number;
@@ -48,21 +72,39 @@ interface ExtendedMeetup extends Meetup {
     currency: string;
   };
   organizerStripeAccountId?: string;
-  organizerName?: string;
   competition?: {
     managedInApp: boolean;
     type: string;
-    settings?: any;
+    settings?: {
+      pointsToWin?: number;
+      winBy?: number;
+      gamesPerMatch?: number;
+      scoringSystem?: string;
+      pointsPerWin?: number;
+      pointsPerDraw?: number;
+      pointsPerLoss?: number;
+      timeLimit?: number;
+      numberOfRounds?: number;
+      poolSize?: number;
+      teamsAdvancing?: number;
+      winStreak?: number;
+      consolationBracket?: boolean;
+      thirdPlaceMatch?: boolean;
+    };
   };
-  endTime?: number;
 }
 
 interface ExtendedMeetupRSVP extends MeetupRSVP {
+  odUserId: string;
+  odUserName: string;
+  userId?: string;  // Legacy field
   userName?: string;
   paymentStatus?: 'not_required' | 'pending' | 'paid' | 'refunded' | 'waived';
   amountPaid?: number;
   paidAt?: number;
 }
+
+type MeetupTab = 'details' | 'attendees' | 'scoring';
 
 // ============================================
 // CONSTANTS
@@ -98,6 +140,9 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
   const [showWithdrawConfirm, setShowWithdrawConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState<MeetupTab>('details');
+
   // ============================================
   // DATA LOADING
   // ============================================
@@ -126,9 +171,7 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('payment') === 'success') {
-      // Reload data to show updated payment status
       loadData();
-      // Clean URL
       window.history.replaceState({}, '', window.location.pathname + window.location.hash.split('?')[0]);
     }
   }, []);
@@ -139,151 +182,32 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
 
   const isCreator = currentUser?.uid === meetup?.createdByUserId;
   const isCancelled = meetup?.status === 'cancelled';
-  const isPast = meetup?.when ? meetup.when < Date.now() : false;
-  const isPaid = meetup?.pricing?.enabled && meetup.pricing.totalPerPerson > 0;
+  const isPaid = meetup?.pricing?.enabled && (meetup?.pricing?.totalPerPerson || 0) > 0;
   
-  const goingList = rsvps.filter(r => r.status === 'going');
-  const maybeList = rsvps.filter(r => r.status === 'maybe');
-  const paidList = rsvps.filter(r => r.paymentStatus === 'paid');
-  const goingCount = goingList.length;
+  const myRsvp = useMemo(() => 
+    rsvps.find(r => r.odUserId === currentUser?.uid || (r as any).userId === currentUser?.uid),
+    [rsvps, currentUser?.uid]
+  );
   
-  const myRsvp = rsvps.find(r => r.userId === currentUser?.uid);
-  const isFull = meetup?.maxPlayers ? goingCount >= meetup.maxPlayers : false;
-  const spotsLeft = meetup?.maxPlayers ? meetup.maxPlayers - goingCount : null;
+  const isGoing = myRsvp?.status === 'going';
+  const hasPaid = myRsvp?.paymentStatus === 'paid';
 
-  // Prize pool calculation
-  const currentPrizePool = isPaid && meetup?.pricing?.prizePoolEnabled
-    ? paidList.length * (meetup.pricing.prizePoolContribution || 0)
-    : 0;
+  const goingList = useMemo(() => 
+    rsvps.filter(r => r.status === 'going'),
+    [rsvps]
+  );
+  
+  const maybeList = useMemo(() => 
+    rsvps.filter(r => r.status === 'maybe'),
+    [rsvps]
+  );
 
-  // ============================================
-  // HANDLERS
-  // ============================================
-
-  const handleRSVP = async (status: 'going' | 'maybe') => {
-    if (!currentUser) {
-      alert('Please log in to RSVP');
-      return;
-    }
-    
-    // If this is a paid meetup and they're going, redirect to payment
-    if (isPaid && status === 'going' && myRsvp?.paymentStatus !== 'paid') {
-      await handlePayToJoin();
-      return;
-    }
-    
-    setRsvpLoading(true);
-    try {
-      await setMeetupRSVP(meetupId, currentUser.uid, status);
-      await loadData();
-    } catch (e) {
-      console.error('RSVP error:', e);
-      alert('Failed to update RSVP: ' + (e as Error).message);
-    } finally {
-      setRsvpLoading(false);
-    }
-  };
-
-  const handlePayToJoin = async () => {
-    if (!currentUser || !meetup || !meetup.pricing || !meetup.organizerStripeAccountId) {
-      setError('Payment not available for this meetup');
-      return;
-    }
-
-    setPaymentLoading(true);
-    setError(null);
-
-    try {
-      const baseUrl = window.location.origin;
-      const successUrl = `${baseUrl}/#/meetups/${meetupId}?payment=success`;
-      const cancelUrl = `${baseUrl}/#/meetups/${meetupId}?payment=cancelled`;
-
-      const session = await createCheckoutSession({
-        items: [{
-          name: meetup.title,
-          description: `Entry fee for ${meetup.title}`,
-          amount: meetup.pricing.totalPerPerson,
-          quantity: 1,
-        }],
-        customerEmail: currentUser.email || undefined,
-        organizerStripeAccountId: meetup.organizerStripeAccountId,
-        successUrl,
-        cancelUrl,
-        metadata: {
-          type: 'meetup',
-          meetupId: meetupId,
-          odUserId: currentUser.uid,
-          odUserName: userProfile?.displayName || 'Player',
-        },
-      });
-
-      // Redirect to Stripe Checkout
-      await redirectToCheckout(session.url);
-    } catch (err: any) {
-      console.error('Payment error:', err);
-      setError(err.message || 'Failed to start payment');
-      setPaymentLoading(false);
-    }
-  };
-
-  const handleWithdrawRSVP = () => {
-    if (!currentUser) return;
-    setShowWithdrawConfirm(true);
-  };
-
-  const confirmWithdrawRSVP = async () => {
-    if (!currentUser) return;
-    
-    setShowWithdrawConfirm(false);
-    setRsvpLoading(true);
-    
-    try {
-      await removeMeetupRSVP(meetupId, currentUser.uid);
-      await loadData();
-    } catch (e) {
-      console.error('Withdraw error:', e);
-      alert('Failed to withdraw: ' + (e as Error).message);
-    } finally {
-      setRsvpLoading(false);
-    }
-  };
-
-  const handleCancelMeetup = async () => {
-    if (!meetup) return;
-    
-    setCancelling(true);
-    try {
-      await cancelMeetup(meetupId, cancelReason || undefined);
-      await loadData();
-      setShowCancelModal(false);
-    } catch (e) {
-      console.error('Cancel error:', e);
-      alert('Failed to cancel meetup');
-    } finally {
-      setCancelling(false);
-    }
-  };
-
-  const handleDeleteMeetup = async () => {
-    try {
-      await deleteMeetup(meetupId);
-      onBack();
-    } catch (e) {
-      console.error('Delete error:', e);
-      alert('Failed to delete meetup');
-    }
-  };
-
-  const handleShare = async () => {
-    const url = window.location.href;
-    try {
-      await navigator.clipboard.writeText(url);
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 2000);
-    } catch {
-      alert('Copy this link: ' + url);
-    }
-  };
+  // Check if scoring tab should be shown
+  const showScoringTab = useMemo(() => {
+    if (!meetup?.competition) return false;
+    if (meetup.competition.type === 'casual') return false;
+    return meetup.competition.managedInApp === true;
+  }, [meetup?.competition]);
 
   // ============================================
   // FORMAT HELPERS
@@ -310,9 +234,105 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
     return `$${(cents / 100).toFixed(2)}`;
   };
 
-  // Helper to get display name from RSVP
   const getRsvpDisplayName = (rsvp: ExtendedMeetupRSVP): string => {
-    return rsvp.userName || (rsvp as any).userProfile?.displayName || 'User';
+    return rsvp.odUserName || rsvp.userName || (rsvp as any).userProfile?.displayName || 'User';
+  };
+
+  // ============================================
+  // HANDLERS
+  // ============================================
+
+  const handleRSVP = async (status: 'going' | 'maybe') => {
+    if (!currentUser || !userProfile) return;
+    setRsvpLoading(true);
+    try {
+      await setMeetupRSVP(meetupId, currentUser.uid, status);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setRsvpLoading(false);
+    }
+  };
+
+  const handlePayToJoin = async () => {
+    if (!currentUser || !userProfile || !meetup) return;
+    if (!meetup.organizerStripeAccountId) {
+      setError('Payment not available - organizer has not set up payments');
+      return;
+    }
+    
+    setPaymentLoading(true);
+    try {
+      const session = await createCheckoutSession({
+        items: [{
+          name: meetup.title,
+          description: `Entry fee for ${meetup.title}`,
+          amount: meetup.pricing?.totalPerPerson || 0,
+          quantity: 1,
+        }],
+        customerEmail: currentUser.email || undefined,
+        organizerStripeAccountId: meetup.organizerStripeAccountId,
+        successUrl: `${window.location.origin}/#/meetups/${meetupId}?payment=success`,
+        cancelUrl: `${window.location.origin}/#/meetups/${meetupId}?payment=cancel`,
+        metadata: {
+          type: 'meetup',
+          meetupId,
+          odUserId: currentUser.uid,
+          userName: userProfile.displayName || 'Guest',
+        },
+      });
+      // Redirect to Stripe Checkout URL
+      await redirectToCheckout(session.url);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    if (!currentUser) return;
+    setRsvpLoading(true);
+    try {
+      await removeMeetupRSVP(meetupId, currentUser.uid);
+      await loadData();
+      setShowWithdrawConfirm(false);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setRsvpLoading(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!meetup) return;
+    setCancelling(true);
+    try {
+      await cancelMeetup(meetupId, cancelReason);
+      await loadData();
+      setShowCancelModal(false);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    try {
+      await deleteMeetup(meetupId);
+      onBack();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleShare = () => {
+    const url = `${window.location.origin}/#/meetups/${meetupId}`;
+    navigator.clipboard.writeText(url);
+    setShowShareToast(true);
+    setTimeout(() => setShowShareToast(false), 2000);
   };
 
   // ============================================
@@ -350,26 +370,25 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <button onClick={onBack} className="text-gray-400 hover:text-white flex items-center gap-1">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
           Back
         </button>
-        
         <div className="flex items-center gap-2">
           <button
             onClick={handleShare}
-            className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+            className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-700"
             title="Share"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
             </svg>
           </button>
-          {isCreator && onEdit && (
+          {isCreator && !isCancelled && onEdit && (
             <button
               onClick={() => onEdit(meetupId)}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+              className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-700"
               title="Edit"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -382,387 +401,319 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
 
       {/* Share Toast */}
       {showShareToast && (
-        <div className="fixed top-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-fade-in">
-          Link copied!
+        <div className="fixed top-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg z-50">
+          Link copied to clipboard!
+        </div>
+      )}
+
+      {/* Error Message */}
+      {error && (
+        <div className="mb-4 p-3 bg-red-900/50 border border-red-500 rounded-lg text-red-200 text-sm">
+          {error}
+          <button onClick={() => setError(null)} className="ml-2 underline">Dismiss</button>
         </div>
       )}
 
       {/* Main Card */}
       <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-        {/* Title & Organizer */}
-        <div className="p-6 border-b border-gray-700">
-          <h1 className="text-2xl font-bold text-white mb-1">{meetup.title}</h1>
-          <p className="text-gray-400 text-sm">Organized by {meetup.organizerName || 'Unknown'}</p>
-          
-          {/* Status Badges */}
-          {isCancelled && (
-            <div className="mt-3 inline-block bg-red-900/50 text-red-400 px-3 py-1 rounded-full text-sm font-medium">
-              Cancelled
-            </div>
-          )}
-          {isPast && !isCancelled && (
-            <div className="mt-3 inline-block bg-gray-700 text-gray-400 px-3 py-1 rounded-full text-sm font-medium">
-              Past Event
-            </div>
-          )}
-        </div>
-
-        {/* Event Details */}
-        <div className="p-6 border-b border-gray-700 space-y-4">
-          {/* Date & Time */}
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-lg bg-green-900/50 flex items-center justify-center flex-shrink-0">
-              <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            </div>
+        {/* Title Section */}
+        <div className="p-4 border-b border-gray-700">
+          <div className="flex items-start justify-between">
             <div>
-              <p className="text-white font-medium">{formatDate(meetup.when)}</p>
-              <p className="text-gray-400 text-sm">{formatTime(meetup.when)}</p>
-            </div>
-          </div>
-
-          {/* Location */}
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-lg bg-blue-900/50 flex items-center justify-center flex-shrink-0">
-              <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-white font-medium">{meetup.locationName}</p>
-              {meetup.location && (
-                <a 
-                  href={`https://maps.google.com/?q=${meetup.location.lat},${meetup.location.lng}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-400 hover:text-blue-300 text-sm"
-                >
-                  Open in Maps →
-                </a>
-              )}
-            </div>
-          </div>
-
-          {/* Competition Type */}
-          {meetup.competition && meetup.competition.type !== 'casual' && (
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg bg-purple-900/50 flex items-center justify-center flex-shrink-0">
-                <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-white font-medium">{COMPETITION_LABELS[meetup.competition.type] || meetup.competition.type}</p>
-                <p className="text-gray-400 text-sm">
-                  {meetup.competition.managedInApp ? 'Brackets managed in app' : 'External management'}
+              <h1 className="text-xl font-bold text-white">{meetup.title}</h1>
+              {meetup.organizerName && (
+                <p className="text-sm text-gray-400 mt-1">
+                  Hosted by {meetup.organizerName}
                 </p>
-              </div>
+              )}
             </div>
-          )}
+            {isCancelled && (
+              <span className="px-3 py-1 bg-red-900/50 text-red-400 rounded-full text-sm font-medium">
+                Cancelled
+              </span>
+            )}
+          </div>
+        </div>
 
-          {/* Description */}
-          {meetup.description && (
-            <div className="mt-2">
-              <p className="text-gray-300 whitespace-pre-wrap">{meetup.description}</p>
-            </div>
+        {/* Tabs */}
+        <div className="flex border-b border-gray-700">
+          <button
+            onClick={() => setActiveTab('details')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'details'
+                ? 'text-green-400 border-b-2 border-green-400 bg-gray-900/30'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            📋 Details
+          </button>
+          <button
+            onClick={() => setActiveTab('attendees')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'attendees'
+                ? 'text-green-400 border-b-2 border-green-400 bg-gray-900/30'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            👥 Attendees ({goingList.length})
+          </button>
+          {showScoringTab && (
+            <button
+              onClick={() => setActiveTab('scoring')}
+              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'scoring'
+                  ? 'text-green-400 border-b-2 border-green-400 bg-gray-900/30'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              🏆 Scoring
+            </button>
           )}
         </div>
 
-        {/* Pricing Section */}
-        {isPaid && meetup.pricing && (
-          <div className="p-6 border-b border-gray-700 bg-gray-900/30">
-            <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">Entry Fee</h3>
-            
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-2xl font-bold text-green-400">{formatCurrency(meetup.pricing.totalPerPerson)}</p>
-                <p className="text-gray-400 text-sm">per person</p>
-              </div>
-              
-              {meetup.pricing.prizePoolEnabled && (
-                <div className="text-right">
-                  <p className="text-yellow-400 font-bold">🏆 Prize Pool</p>
-                  <p className="text-white font-medium">{formatCurrency(currentPrizePool)}</p>
-                  <p className="text-gray-500 text-xs">from {paidList.length} paid players</p>
+        {/* Tab Content */}
+        <div className="p-4">
+          {/* ========== DETAILS TAB ========== */}
+          {activeTab === 'details' && (
+            <div className="space-y-4">
+              {/* Date & Time */}
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg bg-green-900/50 flex items-center justify-center">
+                  <span className="text-green-400">📅</span>
                 </div>
-              )}
-            </div>
-
-            {/* Prize Distribution */}
-            {meetup.pricing.prizePoolEnabled && meetup.pricing.prizeDistribution && (
-              <div className="bg-gray-800 rounded-lg p-3 grid grid-cols-3 gap-2 text-center text-sm">
                 <div>
-                  <p className="text-yellow-400 font-bold">🥇 {meetup.pricing.prizeDistribution.first}%</p>
-                  <p className="text-gray-500 text-xs">1st Place</p>
-                </div>
-                {meetup.pricing.prizeDistribution.second > 0 && (
-                  <div>
-                    <p className="text-gray-300 font-bold">🥈 {meetup.pricing.prizeDistribution.second}%</p>
-                    <p className="text-gray-500 text-xs">2nd Place</p>
-                  </div>
-                )}
-                {meetup.pricing.prizeDistribution.third && meetup.pricing.prizeDistribution.third > 0 && (
-                  <div>
-                    <p className="text-orange-400 font-bold">🥉 {meetup.pricing.prizeDistribution.third}%</p>
-                    <p className="text-gray-500 text-xs">3rd Place</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Fee Breakdown - IMPROVED VERSION */}
-            <div className="mt-4 bg-gray-800/50 rounded-lg p-3">
-              <p className="text-xs text-gray-400 uppercase tracking-wider mb-2 font-semibold">
-                What You're Paying For
-              </p>
-              <div className="space-y-1.5 text-sm">
-                {/* Entry Fee */}
-                {meetup.pricing.entryFee > 0 && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-400">Entry fee (goes to organizer)</span>
-                    <span className="text-white">{formatCurrency(meetup.pricing.entryFee)}</span>
-                  </div>
-                )}
-                
-                {/* Prize Pool Contribution */}
-                {meetup.pricing.prizePoolEnabled && meetup.pricing.prizePoolContribution > 0 && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-400">Prize pool contribution</span>
-                    <span className="text-yellow-400">{formatCurrency(meetup.pricing.prizePoolContribution)}</span>
-                  </div>
-                )}
-                
-                {/* Processing Fees */}
-                {meetup.pricing.feesPaidBy === 'player' && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-gray-500">Processing fees</span>
-                    <span className="text-gray-500">
-                      {formatCurrency(
-                        meetup.pricing.totalPerPerson - 
-                        meetup.pricing.entryFee - 
-                        (meetup.pricing.prizePoolContribution || 0)
-                      )}
-                    </span>
-                  </div>
-                )}
-                
-                {/* Total */}
-                <div className="border-t border-gray-700 pt-1.5 mt-1.5">
-                  <div className="flex justify-between items-center font-semibold">
-                    <span className="text-gray-300">Total you pay</span>
-                    <span className="text-green-400">{formatCurrency(meetup.pricing.totalPerPerson)}</span>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Helpful note */}
-              <p className="text-xs text-gray-500 mt-2 italic">
-                {meetup.pricing.prizePoolEnabled 
-                  ? "Your prize pool contribution goes directly into the winner's pot!"
-                  : meetup.pricing.feesPaidBy === 'player'
-                    ? "Includes payment processing fees."
-                    : "Entry fee goes directly to the organizer."
-                }
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* RSVP Section */}
-        {!isCancelled && !isPast && (
-          <div className="p-6 border-b border-gray-700">
-            {/* Spots Info */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <span className="text-green-400 font-bold text-lg">{goingCount}</span>
-                <span className="text-gray-400">/ {meetup.maxPlayers || '∞'} Going</span>
-                {isPaid && (
-                  <span className="text-gray-500 text-sm">({paidList.length} paid)</span>
-                )}
-              </div>
-              {spotsLeft !== null && spotsLeft <= 5 && spotsLeft > 0 && (
-                <span className="text-orange-400 font-bold text-sm">{spotsLeft} spots left!</span>
-              )}
-            </div>
-
-            {/* Error */}
-            {error && (
-              <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded-lg mb-4 text-sm">
-                {error}
-                <button onClick={() => setError(null)} className="float-right text-red-300">✕</button>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            {currentUser ? (
-              <div className="space-y-3">
-                {/* Paid Meetup - Pay Button */}
-                {isPaid && myRsvp?.paymentStatus !== 'paid' && (
-                  <button
-                    onClick={handlePayToJoin}
-                    disabled={paymentLoading || isFull}
-                    className={`w-full py-3 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${
-                      isFull
-                        ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                        : 'bg-green-600 hover:bg-green-500 text-white'
-                    }`}
-                  >
-                    {paymentLoading ? (
-                      <>
-                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        Processing...
-                      </>
-                    ) : isFull ? (
-                      'Full'
-                    ) : (
-                      <>
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                        </svg>
-                        Pay {formatCurrency(meetup.pricing!.totalPerPerson)} to Join
-                      </>
-                    )}
-                  </button>
-                )}
-
-                {/* Paid Meetup - Already Paid */}
-                {isPaid && myRsvp?.paymentStatus === 'paid' && (
-                  <div className="bg-green-900/30 border border-green-700 rounded-lg p-4 text-center">
-                    <p className="text-green-400 font-bold flex items-center justify-center gap-2">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      You're In! Payment Confirmed
-                    </p>
-                    <p className="text-gray-400 text-sm mt-1">
-                      Paid {myRsvp.amountPaid ? formatCurrency(myRsvp.amountPaid) : ''}
-                    </p>
-                  </div>
-                )}
-
-                {/* Free Meetup - Going/Maybe Buttons */}
-                {!isPaid && (
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => handleRSVP('going')}
-                      disabled={rsvpLoading || (isFull && myRsvp?.status !== 'going')}
-                      className={`flex-1 py-3 rounded-lg font-bold transition-all ${
-                        myRsvp?.status === 'going'
-                          ? 'bg-green-600 text-white shadow-lg'
-                          : isFull
-                            ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                      }`}
-                    >
-                      {rsvpLoading ? 'Saving...' : myRsvp?.status === 'going' ? '✓ Going' : isFull ? 'Full' : 'Going'}
-                    </button>
-                    <button
-                      onClick={() => handleRSVP('maybe')}
-                      disabled={rsvpLoading}
-                      className={`flex-1 py-3 rounded-lg font-bold transition-all ${
-                        myRsvp?.status === 'maybe'
-                          ? 'bg-yellow-600 text-white shadow-lg'
-                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                      }`}
-                    >
-                      {rsvpLoading ? 'Saving...' : myRsvp?.status === 'maybe' ? '✓ Maybe' : 'Maybe'}
-                    </button>
-                  </div>
-                )}
-
-                {/* Withdraw Button */}
-                {myRsvp && (!isPaid || myRsvp.paymentStatus !== 'paid') && (
-                  <button
-                    onClick={handleWithdrawRSVP}
-                    disabled={rsvpLoading}
-                    className="w-full py-2 text-sm text-gray-500 hover:text-red-400 transition-colors"
-                  >
-                    Withdraw RSVP
-                  </button>
-                )}
-
-                {/* Refund note for paid attendees */}
-                {isPaid && myRsvp?.paymentStatus === 'paid' && (
-                  <p className="text-center text-xs text-gray-500">
-                    Contact the organizer to request a refund
+                  <p className="text-white font-medium">{formatDate(meetup.when)}</p>
+                  <p className="text-gray-400 text-sm">
+                    {formatTime(meetup.when)}
+                    {meetup.endTime && ` - ${formatTime(meetup.endTime)}`}
                   </p>
-                )}
+                </div>
               </div>
-            ) : (
-              <div className="p-4 bg-gray-900 rounded text-center text-gray-400">
-                Please log in to {isPaid ? 'pay and join' : 'RSVP'}.
+
+              {/* Location */}
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-900/50 flex items-center justify-center">
+                  <span className="text-blue-400">📍</span>
+                </div>
+                <div>
+                  <p className="text-white font-medium">{meetup.locationName}</p>
+                </div>
               </div>
-            )}
 
-            {/* Organizer Cancel Button */}
-            {isCreator && (
-              <button
-                onClick={() => setShowCancelModal(true)}
-                className="w-full mt-4 py-2 text-sm text-red-400 hover:text-red-300 border border-red-900 rounded-lg hover:bg-red-900/20 transition-colors"
-              >
-                Cancel Meetup
-              </button>
-            )}
-          </div>
-        )}
+              {/* Capacity */}
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg bg-purple-900/50 flex items-center justify-center">
+                  <span className="text-purple-400">👥</span>
+                </div>
+                <div>
+                  <p className="text-white font-medium">
+                    {goingList.length} / {meetup.maxPlayers} spots filled
+                  </p>
+                  {goingList.length >= meetup.maxPlayers && (
+                    <p className="text-yellow-400 text-sm">Meetup is full</p>
+                  )}
+                </div>
+              </div>
 
-        {/* Attendees List */}
-        <div className="p-6">
-          <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">
-            Who's Going ({goingCount})
-          </h4>
-          
-          {goingList.length === 0 ? (
-            <p className="text-gray-500 text-sm">No one has joined yet. Be the first!</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {goingList.map((rsvp) => (
-                <div
-                  key={rsvp.userId}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg ${
-                    rsvp.paymentStatus === 'paid'
-                      ? 'bg-green-900/30 border border-green-800'
-                      : 'bg-gray-700'
-                  }`}
-                >
-                  <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-sm font-bold text-white">
-                    {getRsvpDisplayName(rsvp)[0].toUpperCase()}
+              {/* Pricing */}
+              {isPaid && (
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-yellow-900/50 flex items-center justify-center">
+                    <span className="text-yellow-400">💰</span>
                   </div>
                   <div>
-                    <p className="text-white text-sm font-medium">{getRsvpDisplayName(rsvp)}</p>
-                    {rsvp.paymentStatus === 'paid' && (
-                      <p className="text-green-400 text-xs">✓ Paid</p>
+                    <p className="text-white font-medium">
+                      {formatCurrency(meetup.pricing!.totalPerPerson)} per person
+                    </p>
+                    {meetup.pricing!.prizePoolEnabled && (
+                      <p className="text-gray-400 text-sm">
+                        Includes {formatCurrency(meetup.pricing!.prizePoolContribution)} prize pool
+                      </p>
                     )}
                   </div>
                 </div>
-              ))}
+              )}
+
+              {/* Competition Format */}
+              {meetup.competition && meetup.competition.type !== 'casual' && (
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-orange-900/50 flex items-center justify-center">
+                    <span className="text-orange-400">🏆</span>
+                  </div>
+                  <div>
+                    <p className="text-white font-medium">
+                      {COMPETITION_LABELS[meetup.competition.type] || meetup.competition.type}
+                    </p>
+                    {meetup.competition.settings && (
+                      <p className="text-gray-400 text-sm">
+                        {meetup.competition.settings.gamesPerMatch === 1 
+                          ? 'Single game' 
+                          : `Best of ${meetup.competition.settings.gamesPerMatch}`} to {meetup.competition.settings.pointsToWin || 11}
+                        {meetup.competition.settings.winBy === 2 && ', win by 2'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Description */}
+              {meetup.description && (
+                <div className="pt-4 border-t border-gray-700">
+                  <p className="text-gray-300 whitespace-pre-wrap">{meetup.description}</p>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              {!isCancelled && (
+                <div className="pt-4 border-t border-gray-700 space-y-3">
+                  {!currentUser ? (
+                    <p className="text-center text-gray-400">Sign in to RSVP</p>
+                  ) : isGoing ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-center gap-2 py-2 bg-green-900/30 rounded-lg">
+                        <span className="text-green-400">✓</span>
+                        <span className="text-green-400 font-medium">
+                          {hasPaid ? "You're going (Paid)" : "You're going"}
+                        </span>
+                      </div>
+                      {isPaid && !hasPaid && (
+                        <button
+                          onClick={handlePayToJoin}
+                          disabled={paymentLoading}
+                          className="w-full py-3 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+                        >
+                          {paymentLoading ? 'Processing...' : `Pay ${formatCurrency(meetup.pricing!.totalPerPerson)}`}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setShowWithdrawConfirm(true)}
+                        className="w-full py-2 text-gray-400 hover:text-red-400 text-sm"
+                      >
+                        Withdraw
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-3">
+                      {isPaid ? (
+                        <button
+                          onClick={handlePayToJoin}
+                          disabled={paymentLoading || goingList.length >= meetup.maxPlayers}
+                          className="flex-1 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+                        >
+                          {paymentLoading ? 'Processing...' : `Pay ${formatCurrency(meetup.pricing!.totalPerPerson)} & Join`}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => handleRSVP('going')}
+                            disabled={rsvpLoading || goingList.length >= meetup.maxPlayers}
+                            className="flex-1 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+                          >
+                            {rsvpLoading ? 'Saving...' : "I'm Going"}
+                          </button>
+                          <button
+                            onClick={() => handleRSVP('maybe')}
+                            disabled={rsvpLoading}
+                            className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-semibold"
+                          >
+                            Maybe
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Organizer Actions */}
+                  {isCreator && (
+                    <button
+                      onClick={() => setShowCancelModal(true)}
+                      className="w-full py-2 text-red-400 hover:text-red-300 text-sm"
+                    >
+                      Cancel Meetup
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Maybe List */}
-          {maybeList.length > 0 && (
-            <div className="mt-6">
-              <h4 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">
-                Maybe ({maybeList.length})
-              </h4>
-              <div className="flex flex-wrap gap-2">
-                {maybeList.map((rsvp) => (
-                  <div
-                    key={rsvp.userId}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700/50"
-                  >
-                    <div className="w-6 h-6 rounded-full bg-gray-600 flex items-center justify-center text-xs font-bold text-white">
-                      {getRsvpDisplayName(rsvp)[0].toUpperCase()}
-                    </div>
-                    <span className="text-sm text-gray-400 truncate">
-                      {getRsvpDisplayName(rsvp)}
-                    </span>
+          {/* ========== ATTENDEES TAB ========== */}
+          {activeTab === 'attendees' && (
+            <div className="space-y-4">
+              {/* Going List */}
+              <div>
+                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">
+                  Going ({goingList.length})
+                </h3>
+                {goingList.length === 0 ? (
+                  <p className="text-gray-500 text-sm">No one has joined yet. Be the first!</p>
+                ) : (
+                  <div className="space-y-2">
+                    {goingList.map((rsvp) => (
+                      <div
+                        key={rsvp.odUserId || (rsvp as any).userId}
+                        className={`flex items-center justify-between p-3 rounded-lg ${
+                          rsvp.paymentStatus === 'paid'
+                            ? 'bg-green-900/20 border border-green-800'
+                            : 'bg-gray-700/50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-lg font-bold text-white">
+                            {getRsvpDisplayName(rsvp)[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="text-white font-medium">{getRsvpDisplayName(rsvp)}</p>
+                            {rsvp.paymentStatus === 'paid' && (
+                              <p className="text-green-400 text-xs">✓ Paid</p>
+                            )}
+                            {rsvp.paymentStatus === 'pending' && isPaid && (
+                              <p className="text-yellow-400 text-xs">⏳ Payment pending</p>
+                            )}
+                          </div>
+                        </div>
+                        {(currentUser?.uid === rsvp.odUserId || currentUser?.uid === (rsvp as any).userId) && (
+                          <span className="text-xs text-gray-500">You</span>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
+
+              {/* Maybe List */}
+              {maybeList.length > 0 && (
+                <div className="pt-4 border-t border-gray-700">
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">
+                    Maybe ({maybeList.length})
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
+                    {maybeList.map((rsvp) => (
+                      <div
+                        key={rsvp.odUserId || (rsvp as any).userId}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700/50"
+                      >
+                        <div className="w-6 h-6 rounded-full bg-gray-600 flex items-center justify-center text-xs font-bold text-white">
+                          {getRsvpDisplayName(rsvp)[0].toUpperCase()}
+                        </div>
+                        <span className="text-sm text-gray-400">{getRsvpDisplayName(rsvp)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
+          )}
+
+          {/* ========== SCORING TAB ========== */}
+          {activeTab === 'scoring' && showScoringTab && meetup.competition && (
+            <MeetupScoring
+              meetupId={meetupId}
+              competitionType={meetup.competition.type}
+              competitionSettings={meetup.competition.settings || {}}
+              attendees={rsvps.filter(r => r.status === 'going')}
+              isOrganizer={isCreator}
+            />
           )}
         </div>
 
@@ -779,6 +730,8 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
         )}
       </div>
 
+      {/* ========== MODALS ========== */}
+
       {/* Cancel Modal */}
       {showCancelModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -786,33 +739,24 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
             <h3 className="text-xl font-bold text-white mb-4">Cancel Meetup</h3>
             <p className="text-gray-400 mb-4">
               Are you sure? All attendees will be notified.
-              {isPaid && paidList.length > 0 && (
-                <span className="block mt-2 text-yellow-400">
-                  ⚠️ {paidList.length} people have paid. You'll need to process refunds manually.
-                </span>
-              )}
             </p>
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-400 mb-1">Reason (optional)</label>
-              <input
-                type="text"
-                value={cancelReason}
-                onChange={e => setCancelReason(e.target.value)}
-                placeholder="e.g., Weather conditions"
-                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-red-500 outline-none"
-              />
-            </div>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="Reason for cancellation (optional)"
+              className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg mb-4 min-h-[80px] resize-none"
+            />
             <div className="flex gap-3">
               <button
                 onClick={() => setShowCancelModal(false)}
-                className="flex-1 py-2 px-4 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600"
+                className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
               >
                 Keep Meetup
               </button>
               <button
-                onClick={handleCancelMeetup}
+                onClick={handleCancel}
                 disabled={cancelling}
-                className="flex-1 py-2 px-4 bg-red-600 text-white rounded-lg hover:bg-red-500 disabled:opacity-50"
+                className="flex-1 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
               >
                 {cancelling ? 'Cancelling...' : 'Cancel Meetup'}
               </button>
@@ -827,20 +771,20 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
           <div className="bg-gray-800 rounded-xl border border-gray-700 max-w-md w-full p-6">
             <h3 className="text-xl font-bold text-white mb-4">Delete Meetup</h3>
             <p className="text-gray-400 mb-4">
-              This will permanently delete the meetup and all data. This cannot be undone.
+              This will permanently delete the meetup. This action cannot be undone.
             </p>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowDeleteConfirm(false)}
-                className="flex-1 py-2 px-4 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600"
+                className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
               >
                 Cancel
               </button>
               <button
-                onClick={handleDeleteMeetup}
-                className="flex-1 py-2 px-4 bg-red-600 text-white rounded-lg hover:bg-red-500"
+                onClick={handleDelete}
+                className="flex-1 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold"
               >
-                Delete Forever
+                Delete
               </button>
             </div>
           </div>
@@ -851,22 +795,24 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
       {showWithdrawConfirm && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-xl border border-gray-700 max-w-md w-full p-6">
-            <h3 className="text-xl font-bold text-white mb-4">Withdraw RSVP</h3>
-            <p className="text-gray-400 mb-6">
-              Are you sure you want to remove your RSVP from this meetup?
+            <h3 className="text-xl font-bold text-white mb-4">Withdraw from Meetup</h3>
+            <p className="text-gray-400 mb-4">
+              Are you sure you want to withdraw? 
+              {hasPaid && ' Note: Refund policy applies to paid meetups.'}
             </p>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowWithdrawConfirm(false)}
-                className="flex-1 py-2 px-4 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600"
+                className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
               >
-                Keep RSVP
+                Stay
               </button>
               <button
-                onClick={confirmWithdrawRSVP}
-                className="flex-1 py-2 px-4 bg-red-600 text-white rounded-lg hover:bg-red-500"
+                onClick={handleWithdraw}
+                disabled={rsvpLoading}
+                className="flex-1 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
               >
-                Withdraw
+                {rsvpLoading ? 'Processing...' : 'Withdraw'}
               </button>
             </div>
           </div>
