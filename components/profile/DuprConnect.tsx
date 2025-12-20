@@ -56,7 +56,6 @@ export const DuprConnect: React.FC = () => {
   // State
   const [duprData, setDuprData] = useState<DuprProfileData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
@@ -110,30 +109,26 @@ export const DuprConnect: React.FC = () => {
     
     if (!loginData || !currentUser?.uid) return;
     
-    console.log('DUPR login successful:', loginData.duprId);
+    console.log('DUPR login successful:', loginData);
     setLoginLoading(true);
     setError(null);
     
     try {
-      // Try to get full profile using the token
-      let fullName = '';
-      let doublesRating: number | undefined;
-      let singlesRating: number | undefined;
-      let isVerified = false;
-      let isPremium = false;
+      // The iframe login returns basic stats directly
+      // The userToken has read-only permissions, so profile fetch may fail
+      // We'll use the data from the login event primarily
       
+      let doublesRating: number | undefined = loginData.stats?.doublesRating;
+      let singlesRating: number | undefined = loginData.stats?.singlesRating;
+      
+      // Try to get additional profile info, but don't fail if it doesn't work
       try {
         const profile = await getDuprUserProfile(loginData.userToken);
-        fullName = profile.fullName;
-        doublesRating = profile.doublesRating;
-        singlesRating = profile.singlesRating;
-        isVerified = profile.isVerified;
-        isPremium = profile.isPremium;
+        if (profile.doublesRating) doublesRating = profile.doublesRating;
+        if (profile.singlesRating) singlesRating = profile.singlesRating;
       } catch (profileError) {
-        console.warn('Could not fetch full profile, using event data:', profileError);
-        // Use data from the event
-        doublesRating = loginData.stats?.doublesRating;
-        singlesRating = loginData.stats?.singlesRating;
+        console.warn('Could not fetch full profile (this is normal with read-only token):', profileError);
+        // Continue with the data we got from the login event
       }
       
       // Update Firestore with DUPR data
@@ -144,9 +139,8 @@ export const DuprConnect: React.FC = () => {
         duprConnectedAt: Date.now(),
         duprDoublesRating: doublesRating || null,
         duprSinglesRating: singlesRating || null,
-        duprIsVerified: isVerified,
-        duprIsPremium: isPremium,
-        duprFullName: fullName || null,
+        duprIsVerified: false, // Would need profile call to get this
+        duprIsPremium: false,  // Would need profile call to get this
         duprAccessToken: loginData.userToken,
         duprRefreshToken: loginData.refreshToken,
         duprTokenUpdatedAt: Date.now(),
@@ -174,42 +168,6 @@ export const DuprConnect: React.FC = () => {
   // ============================================
   // HANDLERS
   // ============================================
-
-  const handleRefreshRatings = async () => {
-    if (!duprData?.duprAccessToken) {
-      setError('Please reconnect your DUPR account to refresh ratings');
-      return;
-    }
-
-    setRefreshing(true);
-    setError(null);
-
-    try {
-      const profile = await getDuprUserProfile(duprData.duprAccessToken);
-      
-      if (currentUser?.uid) {
-        const userRef = doc(db, 'users', currentUser.uid);
-        await updateDoc(userRef, {
-          duprDoublesRating: profile.doublesRating || null,
-          duprDoublesReliability: profile.doublesReliability || null,
-          duprSinglesRating: profile.singlesRating || null,
-          duprSinglesReliability: profile.singlesReliability || null,
-          duprIsVerified: profile.isVerified,
-          duprIsPremium: profile.isPremium,
-          updatedAt: Date.now(),
-        });
-      }
-    } catch (err: any) {
-      console.error('Failed to refresh DUPR ratings:', err);
-      if (err.message?.includes('401') || err.message?.includes('unauthorized')) {
-        setError('Session expired. Please reconnect your DUPR account.');
-      } else {
-        setError(err.message || 'Failed to refresh ratings');
-      }
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
   const handleDisconnect = async () => {
     if (!currentUser?.uid) return;
@@ -400,65 +358,57 @@ export const DuprConnect: React.FC = () => {
 
         {/* Error Message */}
         {error && (
-          <div className="mb-4 p-3 bg-red-900/30 border border-red-500/50 rounded-lg text-red-300 text-sm">
+          <div className="mb-4 p-3 bg-yellow-900/30 border border-yellow-500/50 rounded-lg text-yellow-300 text-sm">
             {error}
           </div>
         )}
 
+        {/* Info about ratings */}
+        <div className="mb-4 p-3 bg-gray-900 rounded-lg">
+          <p className="text-xs text-gray-400">
+            💡 Your ratings will update automatically when you play DUPR matches. 
+            To see updated ratings, disconnect and reconnect your account.
+          </p>
+        </div>
+
         {/* Action Buttons */}
         <div className="flex gap-2">
-          <button
-            onClick={handleRefreshRatings}
-            disabled={refreshing}
-            className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-2"
-          >
-            {refreshing ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Refreshing...
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                Refresh Ratings
-              </>
-            )}
-          </button>
-          
           <a
             href={`https://mydupr.com/profile/${duprData.duprId}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium flex items-center gap-2"
+            className="flex-1 py-2 bg-[#00B4D8] hover:bg-[#0096B4] text-white rounded-lg text-sm font-medium flex items-center justify-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
             View on DUPR
           </a>
-        </div>
-
-        {/* Disconnect Link */}
-        <div className="mt-4 pt-4 border-t border-gray-700">
+          
           <button
-            onClick={() => setShowDisconnectConfirm(true)}
-            className="text-sm text-gray-500 hover:text-red-400"
+            onClick={() => {
+              setShowDisconnectConfirm(true);
+              setError(null);
+            }}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium"
           >
-            Disconnect DUPR Account
+            🔄 Update
           </button>
         </div>
+
       </div>
 
-      {/* Disconnect Confirmation Modal */}
+      {/* Disconnect/Update Confirmation Modal */}
       {showDisconnectConfirm && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-xl border border-gray-700 max-w-md w-full p-6">
-            <h3 className="text-xl font-bold text-white mb-4">Disconnect DUPR?</h3>
+            <h3 className="text-xl font-bold text-white mb-4">Update DUPR Connection</h3>
             <p className="text-gray-400 mb-4">
-              Your DUPR ratings will be removed from your profile. You can reconnect 
-              anytime using "Login with DUPR".
+              To get your latest DUPR ratings, disconnect and then reconnect your account 
+              using "Login with DUPR".
+            </p>
+            <p className="text-sm text-gray-500 mb-4">
+              Current DUPR ID: <span className="text-[#00B4D8]">{duprData.duprId}</span>
             </p>
             <div className="flex gap-3">
               <button
@@ -470,9 +420,9 @@ export const DuprConnect: React.FC = () => {
               <button
                 onClick={handleDisconnect}
                 disabled={disconnecting}
-                className="flex-1 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+                className="flex-1 py-2 bg-[#00B4D8] hover:bg-[#0096B4] disabled:bg-gray-600 text-white rounded-lg font-semibold"
               >
-                {disconnecting ? 'Disconnecting...' : 'Disconnect'}
+                {disconnecting ? 'Disconnecting...' : 'Disconnect to Update'}
               </button>
             </div>
           </div>
