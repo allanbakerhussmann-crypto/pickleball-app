@@ -256,3 +256,6 @@ export {
 
 // Audit
 export { logAudit } from './audit';
+
+// Meetup Matches
+export * from './meetupMatches';

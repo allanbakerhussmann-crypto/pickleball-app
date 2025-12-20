@@ -42,11 +42,24 @@ export interface MeetupMatch {
   id: string;
   meetupId: string;
   
-  // Players
+  // Players (for singles - player1 vs player2)
   player1Id: string;
   player1Name: string;
+  player1DuprId?: string;  // DUPR ID for submission
   player2Id: string;
   player2Name: string;
+  player2DuprId?: string;  // DUPR ID for submission
+  
+  // For doubles matches (optional partner info)
+  player1PartnerId?: string;
+  player1PartnerName?: string;
+  player1PartnerDuprId?: string;
+  player2PartnerId?: string;
+  player2PartnerName?: string;
+  player2PartnerDuprId?: string;
+  
+  // Match type (required for DUPR)
+  matchType: 'SINGLES' | 'DOUBLES';
   
   // Scores - array of games (for best of 1/3/5)
   games: GameScore[];
@@ -72,6 +85,13 @@ export interface MeetupMatch {
   resolvedBy: string | null;
   resolvedAt: number | null;
   
+  // DUPR submission tracking
+  duprSubmitted: boolean;
+  duprMatchId?: string;
+  duprSubmittedAt?: number;
+  duprSubmittedBy?: string;
+  duprError?: string;
+  
   // Optional scheduling
   round?: number;
   court?: string;
@@ -85,10 +105,25 @@ export interface MeetupMatch {
 
 export interface CreateMatchInput {
   meetupId: string;
+  matchType: 'SINGLES' | 'DOUBLES';
+  
+  // Player 1 / Team 1
   player1Id: string;
   player1Name: string;
+  player1DuprId?: string;
+  player1PartnerId?: string;      // For doubles
+  player1PartnerName?: string;    // For doubles
+  player1PartnerDuprId?: string;  // For doubles
+  
+  // Player 2 / Team 2
   player2Id: string;
   player2Name: string;
+  player2DuprId?: string;
+  player2PartnerId?: string;      // For doubles
+  player2PartnerName?: string;    // For doubles
+  player2PartnerDuprId?: string;  // For doubles
+  
+  // Optional scheduling
   round?: number;
   court?: string;
   scheduledTime?: number;
@@ -151,10 +186,24 @@ export async function createMeetupMatch(input: CreateMatchInput): Promise<string
 
   const matchData = {
     meetupId: input.meetupId,
+    matchType: input.matchType || 'SINGLES',
+    
+    // Player 1 / Team 1
     player1Id: input.player1Id,
     player1Name: input.player1Name,
+    player1DuprId: input.player1DuprId || null,
+    player1PartnerId: input.player1PartnerId || null,
+    player1PartnerName: input.player1PartnerName || null,
+    player1PartnerDuprId: input.player1PartnerDuprId || null,
+    
+    // Player 2 / Team 2
     player2Id: input.player2Id,
     player2Name: input.player2Name,
+    player2DuprId: input.player2DuprId || null,
+    player2PartnerId: input.player2PartnerId || null,
+    player2PartnerName: input.player2PartnerName || null,
+    player2PartnerDuprId: input.player2PartnerDuprId || null,
+    
     games: [],
     winnerId: null,
     winnerName: null,
@@ -169,6 +218,14 @@ export async function createMeetupMatch(input: CreateMatchInput): Promise<string
     disputeReason: null,
     resolvedBy: null,
     resolvedAt: null,
+    
+    // DUPR tracking
+    duprSubmitted: false,
+    duprMatchId: null,
+    duprSubmittedAt: null,
+    duprSubmittedBy: null,
+    duprError: null,
+    
     round: input.round || null,
     court: input.court || null,
     scheduledTime: input.scheduledTime || null,
@@ -465,13 +522,13 @@ export async function cancelMeetupMatch(
  */
 export async function generateRoundRobinMatches(
   meetupId: string,
-  attendees: { odUserId: string; odUserName: string }[]
+  attendees: { odUserId: string; odUserName: string; duprId?: string }[]
 ): Promise<string[]> {
   const players = [...attendees];
   
   // Add bye player if odd number
   if (players.length % 2 !== 0) {
-    players.push({ odUserId: 'BYE', odUserName: 'BYE' });
+    players.push({ odUserId: 'BYE', odUserName: 'BYE', duprId: undefined });
   }
 
   const n = players.length;
@@ -495,10 +552,13 @@ export async function generateRoundRobinMatches(
 
       const matchId = await createMeetupMatch({
         meetupId,
+        matchType: 'SINGLES', // Default to singles for round robin
         player1Id: player1.odUserId,
         player1Name: player1.odUserName,
+        player1DuprId: player1.duprId,
         player2Id: player2.odUserId,
         player2Name: player2.odUserName,
+        player2DuprId: player2.duprId,
         round: round + 1,
       });
 
@@ -520,4 +580,124 @@ export async function clearMeetupMatches(meetupId: string): Promise<void> {
   );
 
   await Promise.all(deletePromises);
+}
+
+// ============================================
+// DUPR SUBMISSION HELPERS
+// ============================================
+
+/**
+ * Check if a match is eligible for DUPR submission
+ * Requirements:
+ * - Match must be completed
+ * - All players must have DUPR IDs
+ * - At least one side scored 6+ points in a game
+ * - Match not already submitted
+ */
+export function isDuprEligible(match: MeetupMatch): { 
+  eligible: boolean; 
+  reason?: string 
+} {
+  // Must be completed
+  if (match.status !== 'completed') {
+    return { eligible: false, reason: 'Match not completed' };
+  }
+  
+  // Already submitted
+  if (match.duprSubmitted) {
+    return { eligible: false, reason: 'Already submitted to DUPR' };
+  }
+  
+  // Check DUPR IDs based on match type
+  if (match.matchType === 'SINGLES') {
+    if (!match.player1DuprId || !match.player2DuprId) {
+      return { eligible: false, reason: 'All players must have linked DUPR accounts' };
+    }
+  } else {
+    // Doubles - all 4 players need DUPR IDs
+    if (!match.player1DuprId || !match.player2DuprId || 
+        !match.player1PartnerDuprId || !match.player2PartnerDuprId) {
+      return { eligible: false, reason: 'All players must have linked DUPR accounts' };
+    }
+  }
+  
+  // Check minimum score (at least one side scored 6+)
+  const hasMinScore = match.games.some(
+    game => game.player1 >= 6 || game.player2 >= 6
+  );
+  
+  if (!hasMinScore) {
+    return { eligible: false, reason: 'At least one side must score 6+ points' };
+  }
+  
+  return { eligible: true };
+}
+
+/**
+ * Mark a match as submitted to DUPR
+ */
+export async function markMatchDuprSubmitted(
+  meetupId: string,
+  matchId: string,
+  duprMatchId: string,
+  submittedBy: string
+): Promise<void> {
+  const matchRef = doc(db, 'meetups', meetupId, 'matches', matchId);
+  
+  await updateDoc(matchRef, {
+    duprSubmitted: true,
+    duprMatchId,
+    duprSubmittedAt: Date.now(),
+    duprSubmittedBy: submittedBy,
+    duprError: null,
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Mark a match DUPR submission as failed
+ */
+export async function markMatchDuprFailed(
+  meetupId: string,
+  matchId: string,
+  error: string
+): Promise<void> {
+  const matchRef = doc(db, 'meetups', meetupId, 'matches', matchId);
+  
+  await updateDoc(matchRef, {
+    duprSubmitted: false,
+    duprError: error,
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Get all DUPR-eligible matches for a meetup
+ */
+export async function getDuprEligibleMatches(meetupId: string): Promise<MeetupMatch[]> {
+  const matches = await getMeetupMatches(meetupId);
+  return matches.filter(m => isDuprEligible(m).eligible);
+}
+
+/**
+ * Get count of matches by DUPR status
+ */
+export function getDuprMatchStats(matches: MeetupMatch[]): {
+  total: number;
+  completed: number;
+  eligible: number;
+  submitted: number;
+  pending: number;
+} {
+  const completed = matches.filter(m => m.status === 'completed');
+  const eligible = completed.filter(m => isDuprEligible(m).eligible);
+  const submitted = matches.filter(m => m.duprSubmitted);
+  
+  return {
+    total: matches.length,
+    completed: completed.length,
+    eligible: eligible.length,
+    submitted: submitted.length,
+    pending: eligible.length - submitted.length,
+  };
 }

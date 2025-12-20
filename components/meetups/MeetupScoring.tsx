@@ -1,11 +1,12 @@
 /**
- * MeetupScoring Component
+ * MeetupScoring Component (with DUPR Integration)
  * 
  * Main scoring interface for competitive meetups.
  * Shows matches list, standings table, and allows score entry.
+ * Includes DUPR match submission for eligible matches.
  * 
  * FILE LOCATION: components/meetups/MeetupScoring.tsx
- * VERSION: V05.17
+ * VERSION: V05.17 - Added DUPR Integration
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -20,9 +21,17 @@ import {
   deleteMeetupMatch,
   generateRoundRobinMatches,
   clearMeetupMatches,
+  isDuprEligible,
+  markMatchDuprSubmitted,
+  markMatchDuprFailed,
+  getDuprMatchStats,
   type MeetupMatch,
   type GameScore,
 } from '../../services/firebase/meetupMatches';
+import {
+  submitMatchToDupr,
+  type DuprMatchSubmission,
+} from '../../services/dupr';
 
 // ============================================
 // TYPES
@@ -34,12 +43,17 @@ interface AttendeeInfo {
   userId?: string;
   odUserName?: string;
   userName?: string;
+  duprId?: string;
   status: string;
   [key: string]: any;
 }
 
 interface MeetupScoringProps {
   meetupId: string;
+  meetupTitle?: string;
+  meetupLocation?: string;
+  meetupDate?: number;
+  duprClubId?: string; // DUPR Club ID if linked
   competitionType: string;
   competitionSettings: {
     pointsToWin?: number;
@@ -57,6 +71,7 @@ interface MeetupScoringProps {
 interface PlayerStanding {
   odUserId: string;
   name: string;
+  duprId?: string;
   played: number;
   wins: number;
   losses: number;
@@ -70,7 +85,7 @@ interface PlayerStanding {
   pointDiff: number;
 }
 
-type ScoringTab = 'matches' | 'standings';
+type ScoringTab = 'matches' | 'standings' | 'dupr';
 
 // ============================================
 // COMPONENT
@@ -78,6 +93,10 @@ type ScoringTab = 'matches' | 'standings';
 
 export const MeetupScoring: React.FC<MeetupScoringProps> = ({
   meetupId,
+  meetupTitle,
+  meetupLocation,
+  meetupDate,
+  duprClubId,
   competitionType,
   competitionSettings,
   attendees,
@@ -99,6 +118,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
   // New match form
   const [newPlayer1, setNewPlayer1] = useState('');
   const [newPlayer2, setNewPlayer2] = useState('');
+  const [newMatchType, setNewMatchType] = useState<'SINGLES' | 'DOUBLES'>('SINGLES');
 
   // Score entry form
   const [scoreGames, setScoreGames] = useState<GameScore[]>([]);
@@ -109,6 +129,10 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
   // Loading states
   const [submitting, setSubmitting] = useState(false);
   const [generating, setGenerating] = useState(false);
+  
+  // DUPR submission states
+  const [duprSubmitting, setDuprSubmitting] = useState(false);
+  const [duprSubmittingMatchId, setDuprSubmittingMatchId] = useState<string | null>(null);
 
   // Settings
   const gamesPerMatch = competitionSettings?.gamesPerMatch || 1;
@@ -127,11 +151,22 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
     return attendee.odUserName || attendee.userName || 'Player';
   };
 
+  // Helper to get DUPR ID from attendee
+  const getAttendeeDuprId = (attendee: AttendeeInfo): string | undefined => {
+    return attendee.duprId;
+  };
+
   // Get confirmed attendees only
   const confirmedAttendees = useMemo(() => 
     attendees.filter(a => a.status === 'going'),
     [attendees]
   );
+
+  // DUPR stats
+  const duprStats = useMemo(() => getDuprMatchStats(matches), [matches]);
+
+  // Check if current user has DUPR access token
+  const userHasDuprToken = !!(userProfile as any)?.duprAccessToken;
 
   // ============================================
   // LOAD MATCHES (Real-time)
@@ -163,6 +198,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
       standingsMap[odUserId] = {
         odUserId,
         name: getAttendeeName(attendee),
+        duprId: getAttendeeDuprId(attendee),
         played: 0,
         wins: 0,
         losses: 0,
@@ -302,7 +338,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
   };
 
   // ============================================
-  // HANDLERS
+  // MATCH HANDLERS
   // ============================================
 
   const handleCreateMatch = async () => {
@@ -320,10 +356,13 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
     try {
       await createMeetupMatch({
         meetupId,
+        matchType: newMatchType,
         player1Id: getAttendeeId(player1),
         player1Name: getAttendeeName(player1),
+        player1DuprId: getAttendeeDuprId(player1),
         player2Id: getAttendeeId(player2),
         player2Name: getAttendeeName(player2),
+        player2DuprId: getAttendeeDuprId(player2),
       });
       setShowNewMatchModal(false);
       setNewPlayer1('');
@@ -356,7 +395,8 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
         meetupId,
         confirmedAttendees.map((a) => ({ 
           odUserId: getAttendeeId(a), 
-          odUserName: getAttendeeName(a) 
+          odUserName: getAttendeeName(a),
+          duprId: getAttendeeDuprId(a),
         }))
       );
     } catch (err: any) {
@@ -491,6 +531,147 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
   };
 
   // ============================================
+  // DUPR SUBMISSION HANDLERS
+  // ============================================
+
+  const handleSubmitMatchToDupr = async (match: MeetupMatch) => {
+    if (!userHasDuprToken) {
+      alert('Please connect your DUPR account in your profile first');
+      return;
+    }
+
+    const eligibility = isDuprEligible(match);
+    if (!eligibility.eligible) {
+      alert(`Cannot submit to DUPR: ${eligibility.reason}`);
+      return;
+    }
+
+    setDuprSubmitting(true);
+    setDuprSubmittingMatchId(match.id);
+
+    try {
+      const accessToken = (userProfile as any).duprAccessToken;
+      
+      // Build DUPR match submission
+      const duprMatch: DuprMatchSubmission = {
+        matchType: match.matchType,
+        matchDate: meetupDate 
+          ? new Date(meetupDate).toISOString() 
+          : new Date().toISOString(),
+        eventName: meetupTitle || 'Pickleball Meetup',
+        location: meetupLocation,
+        clubId: duprClubId,
+        team1: {
+          player1: { duprId: match.player1DuprId! },
+          player2: match.matchType === 'DOUBLES' && match.player1PartnerDuprId 
+            ? { duprId: match.player1PartnerDuprId } 
+            : undefined,
+          score: match.games.map(g => g.player1),
+        },
+        team2: {
+          player1: { duprId: match.player2DuprId! },
+          player2: match.matchType === 'DOUBLES' && match.player2PartnerDuprId 
+            ? { duprId: match.player2PartnerDuprId } 
+            : undefined,
+          score: match.games.map(g => g.player2),
+        },
+        games: match.games.map(g => ({
+          team1Score: g.player1,
+          team2Score: g.player2,
+        })),
+      };
+
+      const result = await submitMatchToDupr(accessToken, duprMatch);
+      
+      await markMatchDuprSubmitted(
+        meetupId, 
+        match.id, 
+        result.matchId, 
+        currentUser?.uid || ''
+      );
+
+      alert('Match submitted to DUPR successfully!');
+    } catch (err: any) {
+      console.error('DUPR submission error:', err);
+      await markMatchDuprFailed(meetupId, match.id, err.message);
+      alert(`Failed to submit to DUPR: ${err.message}`);
+    } finally {
+      setDuprSubmitting(false);
+      setDuprSubmittingMatchId(null);
+    }
+  };
+
+  const handleSubmitAllToDupr = async () => {
+    if (!userHasDuprToken) {
+      alert('Please connect your DUPR account in your profile first');
+      return;
+    }
+
+    const eligibleMatches = matches.filter(m => isDuprEligible(m).eligible);
+    
+    if (eligibleMatches.length === 0) {
+      alert('No eligible matches to submit to DUPR');
+      return;
+    }
+
+    if (!confirm(`Submit ${eligibleMatches.length} matches to DUPR?`)) return;
+
+    setDuprSubmitting(true);
+
+    try {
+      const accessToken = (userProfile as any).duprAccessToken;
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const match of eligibleMatches) {
+        try {
+          const duprMatch: DuprMatchSubmission = {
+            matchType: match.matchType,
+            matchDate: meetupDate 
+              ? new Date(meetupDate).toISOString() 
+              : new Date().toISOString(),
+            eventName: meetupTitle || 'Pickleball Meetup',
+            location: meetupLocation,
+            clubId: duprClubId,
+            team1: {
+              player1: { duprId: match.player1DuprId! },
+              player2: match.matchType === 'DOUBLES' && match.player1PartnerDuprId 
+                ? { duprId: match.player1PartnerDuprId } 
+                : undefined,
+              score: match.games.map(g => g.player1),
+            },
+            team2: {
+              player1: { duprId: match.player2DuprId! },
+              player2: match.matchType === 'DOUBLES' && match.player2PartnerDuprId 
+                ? { duprId: match.player2PartnerDuprId } 
+                : undefined,
+              score: match.games.map(g => g.player2),
+            },
+            games: match.games.map(g => ({
+              team1Score: g.player1,
+              team2Score: g.player2,
+            })),
+          };
+
+          const result = await submitMatchToDupr(accessToken, duprMatch);
+          await markMatchDuprSubmitted(meetupId, match.id, result.matchId, currentUser?.uid || '');
+          successCount++;
+        } catch (err: any) {
+          console.error(`Failed to submit match ${match.id}:`, err);
+          await markMatchDuprFailed(meetupId, match.id, err.message);
+          failCount++;
+        }
+      }
+
+      alert(`DUPR submission complete!\n✓ ${successCount} successful\n✗ ${failCount} failed`);
+    } catch (err: any) {
+      alert(`Failed to submit matches: ${err.message}`);
+    } finally {
+      setDuprSubmitting(false);
+    }
+  };
+
+  // ============================================
   // RENDER - LOADING
   // ============================================
 
@@ -531,9 +712,24 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
         >
           🏆 Standings
         </button>
+        <button
+          onClick={() => setActiveTab('dupr')}
+          className={`px-4 py-2 font-medium transition-colors ${
+            activeTab === 'dupr'
+              ? 'text-green-400 border-b-2 border-green-400'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <span className="text-[#00B4D8]">D</span> DUPR
+          {duprStats.pending > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 bg-yellow-600 text-yellow-100 text-xs rounded-full">
+              {duprStats.pending}
+            </span>
+          )}
+        </button>
       </div>
 
-      {/* Tab Content */}
+      {/* ========== MATCHES TAB ========== */}
       {activeTab === 'matches' && (
         <div className="space-y-4">
           {/* Action Buttons */}
@@ -587,6 +783,11 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
                         <span className="text-xs text-gray-500">R{match.round}</span>
                       )}
                       {getMatchStatusBadge(match.status)}
+                      {match.duprSubmitted && (
+                        <span className="px-2 py-0.5 text-xs rounded-full bg-[#00B4D8]/20 text-[#00B4D8]">
+                          DUPR ✓
+                        </span>
+                      )}
                     </div>
                     {isOrganizer && match.status !== 'completed' && (
                       <button
@@ -604,10 +805,16 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
                       <div className={`font-medium ${match.winnerId === match.player1Id ? 'text-green-400' : 'text-white'}`}>
                         {match.player1Name}
                         {match.winnerId === match.player1Id && ' 🏆'}
+                        {match.player1DuprId && (
+                          <span className="ml-1 text-xs text-[#00B4D8]">●</span>
+                        )}
                       </div>
                       <div className={`font-medium ${match.winnerId === match.player2Id ? 'text-green-400' : 'text-white'}`}>
                         {match.player2Name}
                         {match.winnerId === match.player2Id && ' 🏆'}
+                        {match.player2DuprId && (
+                          <span className="ml-1 text-xs text-[#00B4D8]">●</span>
+                        )}
                       </div>
                     </div>
 
@@ -697,6 +904,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
         </div>
       )}
 
+      {/* ========== STANDINGS TAB ========== */}
       {activeTab === 'standings' && (
         <div className="overflow-x-auto">
           {standings.length === 0 ? (
@@ -731,7 +939,12 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
                       {index === 1 && standings[1].played > 0 && ' 🥈'}
                       {index === 2 && standings[2].played > 0 && ' 🥉'}
                     </td>
-                    <td className="py-2 px-2 font-medium text-white">{player.name}</td>
+                    <td className="py-2 px-2 font-medium text-white">
+                      {player.name}
+                      {player.duprId && (
+                        <span className="ml-1 text-xs text-[#00B4D8]">●</span>
+                      )}
+                    </td>
                     <td className="py-2 px-2 text-center text-gray-400">{player.played}</td>
                     <td className="py-2 px-2 text-center text-green-400">{player.wins}</td>
                     <td className="py-2 px-2 text-center text-red-400">{player.losses}</td>
@@ -751,13 +964,161 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
           <div className="mt-4 text-xs text-gray-500">
             <p>P = Played, W = Wins, L = Losses, GD = Game Diff, Pts = Points</p>
             <p>Win = {pointsPerWin} pts | Draw = {pointsPerDraw} pts | Loss = {pointsPerLoss} pts</p>
+            <p className="mt-1">
+              <span className="text-[#00B4D8]">●</span> = DUPR account linked
+            </p>
           </div>
         </div>
       )}
 
-      {/* ============================================ */}
-      {/* NEW MATCH MODAL */}
-      {/* ============================================ */}
+      {/* ========== DUPR TAB ========== */}
+      {activeTab === 'dupr' && (
+        <div className="space-y-4">
+          {/* DUPR Stats Card */}
+          <div className="bg-gradient-to-br from-[#00B4D8]/20 to-gray-800 rounded-lg p-4 border border-[#00B4D8]/30">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg bg-[#00B4D8]/20 flex items-center justify-center">
+                <span className="text-[#00B4D8] font-bold text-lg">D</span>
+              </div>
+              <div>
+                <h3 className="font-bold text-white">DUPR Integration</h3>
+                <p className="text-xs text-gray-400">Submit matches to DUPR for official ratings</p>
+              </div>
+            </div>
+
+            {/* Stats Grid */}
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              <div className="bg-gray-900/50 rounded-lg p-3 text-center">
+                <p className="text-2xl font-bold text-white">{duprStats.total}</p>
+                <p className="text-xs text-gray-500">Total</p>
+              </div>
+              <div className="bg-gray-900/50 rounded-lg p-3 text-center">
+                <p className="text-2xl font-bold text-green-400">{duprStats.completed}</p>
+                <p className="text-xs text-gray-500">Completed</p>
+              </div>
+              <div className="bg-gray-900/50 rounded-lg p-3 text-center">
+                <p className="text-2xl font-bold text-yellow-400">{duprStats.eligible}</p>
+                <p className="text-xs text-gray-500">Eligible</p>
+              </div>
+              <div className="bg-gray-900/50 rounded-lg p-3 text-center">
+                <p className="text-2xl font-bold text-[#00B4D8]">{duprStats.submitted}</p>
+                <p className="text-xs text-gray-500">Submitted</p>
+              </div>
+            </div>
+
+            {/* Submit All Button */}
+            {isOrganizer && duprStats.pending > 0 && (
+              <button
+                onClick={handleSubmitAllToDupr}
+                disabled={duprSubmitting || !userHasDuprToken}
+                className="w-full py-3 bg-[#00B4D8] hover:bg-[#0096B4] disabled:bg-gray-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2"
+              >
+                {duprSubmitting ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Submitting...
+                  </>
+                ) : (
+                  <>
+                    Submit {duprStats.pending} Matches to DUPR
+                  </>
+                )}
+              </button>
+            )}
+
+            {!userHasDuprToken && (
+              <p className="text-xs text-yellow-400 mt-2 text-center">
+                ⚠️ Connect your DUPR account in Profile to submit matches
+              </p>
+            )}
+          </div>
+
+          {/* DUPR Club Info */}
+          {duprClubId && (
+            <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+              <p className="text-sm text-gray-400">
+                <span className="text-white font-medium">DUPR Club ID:</span> {duprClubId}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Matches will be submitted under this club for higher rating impact
+              </p>
+            </div>
+          )}
+
+          {/* Eligible Matches List */}
+          <div>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">
+              Match Status
+            </h4>
+            
+            {matches.filter(m => m.status === 'completed').length === 0 ? (
+              <div className="text-center py-8 bg-gray-800/50 rounded-lg">
+                <p className="text-gray-400">No completed matches yet</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {matches.filter(m => m.status === 'completed').map((match) => {
+                  const eligibility = isDuprEligible(match);
+                  
+                  return (
+                    <div
+                      key={match.id}
+                      className={`bg-gray-800 rounded-lg p-3 border ${
+                        match.duprSubmitted 
+                          ? 'border-[#00B4D8]/50' 
+                          : eligibility.eligible 
+                            ? 'border-green-500/30' 
+                            : 'border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <p className="text-white text-sm">
+                            {match.player1Name} vs {match.player2Name}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {formatGameScore(match.games)}
+                          </p>
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                          {match.duprSubmitted ? (
+                            <span className="px-2 py-1 bg-[#00B4D8]/20 text-[#00B4D8] text-xs rounded-full">
+                              ✓ Submitted
+                            </span>
+                          ) : eligibility.eligible ? (
+                            isOrganizer && (
+                              <button
+                                onClick={() => handleSubmitMatchToDupr(match)}
+                                disabled={duprSubmitting || !userHasDuprToken}
+                                className="px-3 py-1 bg-[#00B4D8] hover:bg-[#0096B4] disabled:bg-gray-600 text-white text-xs rounded-full"
+                              >
+                                {duprSubmittingMatchId === match.id ? 'Submitting...' : 'Submit'}
+                              </button>
+                            )
+                          ) : (
+                            <span className="px-2 py-1 bg-gray-700 text-gray-400 text-xs rounded-full" title={eligibility.reason}>
+                              {eligibility.reason?.includes('DUPR') ? 'No DUPR' : 'Ineligible'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {match.duprError && (
+                        <p className="text-xs text-red-400 mt-1">
+                          Error: {match.duprError}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========== NEW MATCH MODAL ========== */}
       {showNewMatchModal && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-gray-800 rounded-xl w-full max-w-md border border-gray-700">
@@ -768,6 +1129,33 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
               </button>
             </div>
             <div className="p-4 space-y-4">
+              {/* Match Type */}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Match Type</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setNewMatchType('SINGLES')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium ${
+                      newMatchType === 'SINGLES' 
+                        ? 'bg-green-600 text-white' 
+                        : 'bg-gray-700 text-gray-300'
+                    }`}
+                  >
+                    Singles
+                  </button>
+                  <button
+                    onClick={() => setNewMatchType('DOUBLES')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium ${
+                      newMatchType === 'DOUBLES' 
+                        ? 'bg-green-600 text-white' 
+                        : 'bg-gray-700 text-gray-300'
+                    }`}
+                  >
+                    Doubles
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Player 1</label>
                 <select
@@ -781,6 +1169,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
                     return (
                       <option key={odUserId} value={odUserId} disabled={odUserId === newPlayer2}>
                         {getAttendeeName(a)}
+                        {getAttendeeDuprId(a) && ' (DUPR)'}
                       </option>
                     );
                   })}
@@ -800,6 +1189,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
                     return (
                       <option key={odUserId} value={odUserId} disabled={odUserId === newPlayer1}>
                         {getAttendeeName(a)}
+                        {getAttendeeDuprId(a) && ' (DUPR)'}
                       </option>
                     );
                   })}
@@ -825,9 +1215,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
         </div>
       )}
 
-      {/* ============================================ */}
-      {/* SCORE ENTRY MODAL */}
-      {/* ============================================ */}
+      {/* ========== SCORE ENTRY MODAL ========== */}
       {showScoreModal && selectedMatch && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-gray-800 rounded-xl w-full max-w-md border border-gray-700">
@@ -903,9 +1291,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
         </div>
       )}
 
-      {/* ============================================ */}
-      {/* DISPUTE MODAL */}
-      {/* ============================================ */}
+      {/* ========== DISPUTE MODAL ========== */}
       {showDisputeModal && selectedMatch && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-gray-800 rounded-xl w-full max-w-md border border-gray-700">
