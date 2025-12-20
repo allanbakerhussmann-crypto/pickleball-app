@@ -1758,7 +1758,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       }),
                     };
                     
-                    // Build pricing update - use null when disabled, full object when enabled
+                    // Build pricing update
                     const pricingUpdate = editForm.pricingEnabled ? {
                       enabled: true,
                       entryFee: editForm.entryFee,

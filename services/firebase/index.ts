@@ -5,7 +5,7 @@
  * Import from here: import { ... } from './services/firebase';
  * 
  * FILE LOCATION: services/firebase/index.ts
- * VERSION: V05.17
+ * VERSION: V05.32
  */
 
 // Re-export config and core instances
@@ -144,7 +144,7 @@ export {
 } from './social';
 
 // ============================================
-// LEAGUES (UPDATED V05.17)
+// LEAGUES (UPDATED V05.32)
 // ============================================
 export {
   // League CRUD
@@ -156,7 +156,7 @@ export {
   subscribeToLeagues,
   getUserLeagues,
   
-  // League Divisions (NEW)
+  // League Divisions
   createLeagueDivision,
   getLeagueDivisions,
   subscribeToLeagueDivisions,
@@ -172,12 +172,12 @@ export {
   updateMemberStats,
   updateMemberPaymentStatus,
   
-  // League Teams (NEW - for doubles)
+  // League Teams (for doubles)
   createLeagueTeam,
   getOpenLeagueTeams,
   updateLeagueTeam,
   
-  // Partner Invites (NEW)
+  // Partner Invites
   createLeaguePartnerInvite,
   getPendingLeagueInvites,
   respondToLeaguePartnerInvite,
@@ -197,19 +197,32 @@ export {
   completeChallenge,
   subscribeToUserChallenges,
   
-  // Ladder Rankings (NEW)
+  // Ladder Rankings
   swapLadderPositions,
   
-  // Registration (NEW)
+  // Registration
   saveLeagueRegistration,
   getLeagueRegistration,
   
-  // Status Transitions (NEW)
+  // Status Transitions
   openLeagueRegistration,
   startLeague,
   completeLeague,
   cancelLeague,
 } from './leagues';
+
+// ============================================
+// LEAGUE MATCH GENERATION (NEW V05.32)
+// ============================================
+export {
+  generateLeagueSchedule,
+  generateRoundRobinSchedule,
+  generateSwissRound,
+  generateBoxLeagueSchedule,
+  processBoxLeaguePromotions,
+  clearLeagueMatches,
+  type GenerationResult,
+} from './leagueMatchGeneration';
 
 // Court Bookings
 export {
