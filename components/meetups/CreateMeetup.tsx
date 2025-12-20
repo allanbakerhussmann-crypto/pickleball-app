@@ -131,7 +131,7 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   const [hostType, setHostType] = useState<HostType>('organizer');
   const [selectedClubId, setSelectedClubId] = useState<string>('');
   const [userClubs, setUserClubs] = useState<Club[]>([]);
-  const [loadingClubs, setLoadingClubs] = useState(true);
+  const [, setLoadingClubs] = useState(true); // Used in useEffect
   
   // Basic info
   const [title, setTitle] = useState('');
@@ -176,7 +176,7 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   const [clubStripeAccountId, setClubStripeAccountId] = useState<string | null>(null);
   const [clubStripeReady, setClubStripeReady] = useState(false);
   
-  const [loadingStripe, setLoadingStripe] = useState(true);
+  const [, setLoadingStripe] = useState(true); // Used in useEffect
   
   // Form state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -228,11 +228,8 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
       }
       try {
         const clubs = await getUserClubs(currentUser.uid);
-        const adminClubs = clubs.filter(c => 
-          c.createdByUserId === currentUser.uid || 
-          c.admins?.includes(currentUser.uid)
-        );
-        setUserClubs(adminClubs);
+        // getUserClubs already returns clubs where user is admin/member
+        setUserClubs(clubs);
       } catch (err) {
         console.error('Failed to load clubs:', err);
       } finally {
@@ -567,9 +564,14 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
             <div>
               <label className="block text-sm font-medium text-gray-400 mb-1">Location *</label>
               <LocationPicker
-                value={locationName}
-                onChange={setLocationName}
-                onCoordinates={(lat, lng) => { setLat(lat); setLng(lng); }}
+                address={locationName}
+                lat={lat}
+                lng={lng}
+                onLocationChange={(address: string, newLat: number, newLng: number) => {
+                  setLocationName(address);
+                  setLat(newLat);
+                  setLng(newLng);
+                }}
               />
             </div>
 
