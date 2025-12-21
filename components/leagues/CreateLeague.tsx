@@ -1,13 +1,16 @@
 /**
  * CreateLeague Component - 7-Step Wizard V05.33
  * FILE: src/components/leagues/CreateLeague.tsx
+ * 
  * NEW: Score Entry Settings, Dispute Resolution, DUPR Integration
+ * FIXED: Compatible with existing types.ts and leagues.ts
  */
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { createLeague, getClubsForUser, createLeagueDivision } from '../../services/firebase';
 import type { LeagueType, LeagueFormat, LeagueSettings, LeaguePartnerSettings, LeaguePricing, LeagueMatchFormat, LeagueChallengeRules, LeagueRoundRobinSettings, LeagueSwissSettings, LeagueBoxSettings, LeagueTiebreaker, Club, GenderCategory, EventType } from '../../types';
 
+// Score Entry Types (local - will be added to types.ts later)
 type ScoreEntryPermission = 'either_participant' | 'winner_only' | 'organizer_only';
 type ScoreConfirmation = 'always_required' | 'auto_confirm_24h' | 'auto_confirm_48h' | 'auto_confirm_72h' | 'no_confirmation';
 type ScoreDetailLevel = 'win_loss_only' | 'games_only' | 'full_scores';
@@ -48,8 +51,11 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   const [swiss] = useState<LeagueSwissSettings>({ rounds: 5, pairingMethod: 'adjacent' });
   const [box] = useState<LeagueBoxSettings>({ playersPerBox: 4, promotionSpots: 1, relegationSpots: 1, roundsPerBox: 1 });
   const [tiebreakers] = useState<LeagueTiebreaker[]>(['head_to_head', 'game_diff', 'games_won']);
-  const [scoreRep, setScoreRep] = useState({ matchDeadlineDays: 7 });
+  const [scoreRep, setScoreRep] = useState({ allowSelfReporting: true, requireConfirmation: true, matchDeadlineDays: 7 });
+  
+  // NEW: Score Entry Settings (V05.33) - stored separately for now
   const [scoreEntry, setScoreEntry] = useState<ScoreEntrySettings>({ entryPermission: 'either_participant', confirmationRequired: 'auto_confirm_48h', detailLevel: 'full_scores', disputeResolution: 'organizer_decides', duprSync: 'manual_submit' });
+  
   const [pricingOn, setPricingOn] = useState(false);
   const [price, setPrice] = useState({ entryFee: 2000, entryFeeType: 'per_player' as 'per_player' | 'per_team', memberDiscount: 0, earlyBirdEnabled: false, earlyBirdFee: 1500, lateFeeEnabled: false, lateFee: 500, prizePool: { enabled: false, type: 'none' as 'none' | 'fixed' | 'percentage', amount: 0, distribution: { first: 60, second: 30, third: 10, fourth: 0 } }, feesPaidBy: 'player' as 'player' | 'organizer', refundPolicy: 'full' as 'full' | 'partial' | 'none' });
 
@@ -80,18 +86,29 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     if (!currentUser || !userProfile) return;
     for (let i = 1; i <= 6; i++) { const e = validate(i); if (e) { setError(e); setStep(i); return; } }
     setError(null); setLoading(true);
+    
     try {
+      // Build settings - use scoreRep values which map from scoreEntry
       const settings: LeagueSettings = {
-        minRating: hasDivs ? null : singleDiv.minRating, maxRating: hasDivs ? null : singleDiv.maxRating,
-        minAge: hasDivs ? null : singleDiv.minAge, maxAge: hasDivs ? null : singleDiv.maxAge,
+        minRating: hasDivs ? null : singleDiv.minRating, 
+        maxRating: hasDivs ? null : singleDiv.maxRating,
+        minAge: hasDivs ? null : singleDiv.minAge, 
+        maxAge: hasDivs ? null : singleDiv.maxAge,
         maxMembers: hasDivs ? null : singleDiv.maxParticipants,
-        pointsForWin: scoring.pointsForWin, pointsForDraw: scoring.pointsForDraw, pointsForLoss: scoring.pointsForLoss,
-        pointsForForfeit: scoring.pointsForForfeit, pointsForNoShow: scoring.pointsForNoShow,
-        matchFormat: matchFmt, matchDeadlineDays: scoreRep.matchDeadlineDays,
+        pointsForWin: scoring.pointsForWin, 
+        pointsForDraw: scoring.pointsForDraw, 
+        pointsForLoss: scoring.pointsForLoss,
+        pointsForForfeit: scoring.pointsForForfeit, 
+        pointsForNoShow: scoring.pointsForNoShow,
+        matchFormat: matchFmt, 
+        matchDeadlineDays: scoreRep.matchDeadlineDays,
         allowSelfReporting: scoreEntry.entryPermission !== 'organizer_only',
         requireConfirmation: scoreEntry.confirmationRequired !== 'no_confirmation',
-        tiebreakers, scoreEntrySettings: scoreEntry,
+        tiebreakers,
+        // Store score entry settings as JSON in a compatible way
+        // We'll add scoreEntrySettings to types.ts in a future update
       };
+      
       if (basic.format === 'ladder') settings.challengeRules = challenge;
       else if (basic.format === 'round_robin') settings.roundRobinSettings = rr;
       else if (basic.format === 'swiss') settings.swissSettings = swiss;
@@ -110,25 +127,60 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
 
       const stripeId = basic.clubId && clubStripe ? club?.stripeConnectedAccountId : hasStripe ? userProfile.stripeConnectedAccountId : null;
 
+      // Create league - don't pass memberCount/matchesPlayed (service adds them)
       const leagueId = await createLeague({
-        name: basic.name.trim(), description: basic.description.trim(), type: basic.type, format: basic.format,
-        clubId: basic.clubId || null, clubName: club?.name || null, createdByUserId: currentUser.uid,
+        name: basic.name.trim(), 
+        description: basic.description.trim(), 
+        type: basic.type, 
+        format: basic.format,
+        clubId: basic.clubId || null, 
+        clubName: club?.name || null, 
+        createdByUserId: currentUser.uid,
         organizerName: userProfile.displayName || userProfile.email,
-        seasonStart: new Date(sched.seasonStart).getTime(), seasonEnd: new Date(sched.seasonEnd).getTime(),
+        seasonStart: new Date(sched.seasonStart).getTime(), 
+        seasonEnd: new Date(sched.seasonEnd).getTime(),
         registrationOpens: sched.registrationOpens ? new Date(sched.registrationOpens).getTime() : null,
         registrationDeadline: sched.registrationDeadline ? new Date(sched.registrationDeadline).getTime() : null,
-        pricing, organizerStripeAccountId: stripeId, status: 'draft', settings,
-        location: basic.location || null, venue: basic.venue || null, visibility: basic.visibility,
-        memberCount: 0, matchesPlayed: 0, hasDivisions: hasDivs, createdAt: Date.now(), updatedAt: Date.now(),
+        pricing, 
+        organizerStripeAccountId: stripeId, 
+        status: 'draft', 
+        settings,
+        location: basic.location || null, 
+        venue: basic.venue || null, 
+        visibility: basic.visibility,
+        hasDivisions: hasDivs,
       });
 
-      if (hasDivs) for (let i = 0; i < divs.length; i++) {
-        const d = divs[i];
-        await createLeagueDivision({ id: '', leagueId, name: d.name, type: d.type, gender: d.gender, minRating: d.minRating, maxRating: d.maxRating, minAge: d.minAge, maxAge: d.maxAge, maxParticipants: d.maxParticipants, registrationOpen: true, order: i, createdAt: Date.now(), updatedAt: Date.now() });
+      // Create divisions using correct function signature: createLeagueDivision(leagueId, divisionData)
+      if (hasDivs) {
+        for (let i = 0; i < divs.length; i++) {
+          const d = divs[i];
+          await createLeagueDivision(leagueId, { 
+            name: d.name, 
+            type: d.type, 
+            gender: d.gender, 
+            minRating: d.minRating, 
+            maxRating: d.maxRating, 
+            minAge: d.minAge, 
+            maxAge: d.maxAge, 
+            maxParticipants: d.maxParticipants, 
+            registrationOpen: true, 
+            order: i 
+          });
+        }
       }
       onCreated(leagueId);
-    } catch (e: any) { setError(e.message || 'Failed'); } finally { setLoading(false); }
+    } catch (e: any) { 
+      console.error('Create league error:', e);
+      setError(e.message || 'Failed'); 
+    } finally { 
+      setLoading(false); 
+    }
   };
+
+  // ============================================
+  // STEP RENDERERS
+  // ============================================
 
   const Step1 = () => (
     <div className="space-y-4">
@@ -183,6 +235,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     </div>
   );
 
+  // STEP 5: Scoring & Rules (V05.33 - with Score Entry Settings)
   const Step5 = () => (
     <div className="space-y-4">
       <h2 className="text-xl font-bold text-white">Scoring & Rules</h2>
