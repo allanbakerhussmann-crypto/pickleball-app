@@ -21,6 +21,7 @@ import {
   getLeagueMemberByUserId,
   updateLeague,
 } from '../../services/firebase';
+import { LeagueScheduleManager } from './LeagueScheduleManager';
 import type { 
   League, 
   LeagueMember, 
@@ -37,7 +38,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'info';
+type TabType = 'standings' | 'matches' | 'schedule' | 'info';
 
 // ============================================
 // COMPONENT
@@ -430,6 +431,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   };
 
+  const handleScheduleGenerated = async () => {
+    // Refresh league data after schedule generation
+    const updated = await getLeague(leagueId);
+    if (updated) setLeague(updated);
+  };
+
   // ============================================
   // RENDER
   // ============================================
@@ -456,6 +463,11 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const isDoublesOrMixed = league.type === 'doubles' || league.type === 'mixed_doubles';
   const isOrganizer = currentUser?.uid === league.createdByUserId;
   const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active');
+
+  // Determine which tabs to show - Schedule tab only for organizers
+  const availableTabs: TabType[] = isOrganizer 
+    ? ['standings', 'matches', 'schedule', 'info']
+    : ['standings', 'matches', 'info'];
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -742,7 +754,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 border-b border-gray-700 overflow-x-auto">
-        {(['standings', 'matches', 'info'] as TabType[]).map(tab => (
+        {availableTabs.map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -754,6 +766,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           >
             {tab === 'standings' && '🏆 '}
             {tab === 'matches' && '🎾 '}
+            {tab === 'schedule' && '📅 '}
             {tab === 'info' && 'ℹ️ '}
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
@@ -915,6 +928,17 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             })
           )}
         </div>
+      )}
+
+      {/* SCHEDULE TAB - Organizer Only */}
+      {activeTab === 'schedule' && isOrganizer && (
+        <LeagueScheduleManager
+          league={league}
+          members={members}
+          matches={matches}
+          divisions={divisions}
+          onScheduleGenerated={handleScheduleGenerated}
+        />
       )}
 
       {/* INFO TAB */}
@@ -1777,19 +1801,28 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       currency: 'nzd',
                     } : null;
                     
-                    await updateLeague(leagueId, {
+                    // Build the update object, only including fields with actual values
+                    const updateData: Parameters<typeof updateLeague>[1] = {
                       name: editForm.name.trim(),
-                      description: editForm.description.trim() || undefined,
-                      location: editForm.location.trim() || undefined,
-                      venue: editForm.venue.trim() || undefined,
                       visibility: editForm.visibility,
-                      seasonStart: editForm.seasonStart ? new Date(editForm.seasonStart).getTime() : undefined,
-                      seasonEnd: editForm.seasonEnd ? new Date(editForm.seasonEnd).getTime() : undefined,
-                      registrationOpens: editForm.registrationOpens ? new Date(editForm.registrationOpens).getTime() : undefined,
-                      registrationDeadline: editForm.registrationDeadline ? new Date(editForm.registrationDeadline).getTime() : undefined,
                       settings: settingsUpdate,
-                      ...(pricingUpdate !== null && { pricing: pricingUpdate }),
-                    });
+                    };
+                    
+                    // Only add optional string fields if they have values
+                    if (editForm.description.trim()) updateData.description = editForm.description.trim();
+                    if (editForm.location.trim()) updateData.location = editForm.location.trim();
+                    if (editForm.venue.trim()) updateData.venue = editForm.venue.trim();
+                    
+                    // Only add date fields if they have values
+                    if (editForm.seasonStart) updateData.seasonStart = new Date(editForm.seasonStart).getTime();
+                    if (editForm.seasonEnd) updateData.seasonEnd = new Date(editForm.seasonEnd).getTime();
+                    if (editForm.registrationOpens) updateData.registrationOpens = new Date(editForm.registrationOpens).getTime();
+                    if (editForm.registrationDeadline) updateData.registrationDeadline = new Date(editForm.registrationDeadline).getTime();
+                    
+                    // Only add pricing if enabled
+                    if (pricingUpdate !== null) updateData.pricing = pricingUpdate;
+                    
+                    await updateLeague(leagueId, updateData);
                     const updated = await getLeague(leagueId);
                     if (updated) setLeague(updated);
                     setShowEditModal(false);
