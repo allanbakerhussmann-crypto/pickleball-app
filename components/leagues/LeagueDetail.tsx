@@ -28,6 +28,7 @@ import type {
   LeagueMatch, 
   LeagueDivision,
 } from '../../types';
+import { LeagueStandings } from './LeagueStandings';
 
 // ============================================
 // TYPES
@@ -333,21 +334,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     return labels[type] || type;
   };
 
-  const getFormBadges = (form: string[]) => {
-    if (!form || form.length === 0) return <span className="text-gray-600">-</span>;
-    return form.slice(-5).map((result, i) => (
-      <span
-        key={i}
-        className={`w-5 h-5 rounded-full text-xs flex items-center justify-center font-bold ${
-          result === 'W' ? 'bg-green-600 text-white' :
-          result === 'L' ? 'bg-red-600 text-white' :
-          'bg-gray-600 text-gray-300'
-        }`}
-      >
-        {result}
-      </span>
-    ));
-  };
 
   // Filter members by division
   const filteredMembers = selectedDivisionId
@@ -429,6 +415,11 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     } catch (e: any) {
       alert('Failed to leave: ' + e.message);
     }
+  };
+  const handleChallenge = (member: LeagueMember) => {
+    // TODO: Implement challenge modal
+    alert(`Challenge ${member.displayName} - Coming soon!`);
+    console.log('Challenge member:', member);
   };
 
   const handleScheduleGenerated = async () => {
@@ -773,84 +764,17 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         ))}
       </div>
 
-      {/* STANDINGS TAB */}
-      {activeTab === 'standings' && (
-        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-900/50 text-xs uppercase text-gray-500">
-              <tr>
-                <th className="py-3 px-4 text-center w-16">Rank</th>
-                <th className="py-3 px-4 text-left">{isDoublesOrMixed ? 'Team' : 'Player'}</th>
-                <th className="py-3 px-4 text-center">P</th>
-                <th className="py-3 px-4 text-center">W</th>
-                <th className="py-3 px-4 text-center">L</th>
-                <th className="py-3 px-4 text-center hidden sm:table-cell">GD</th>
-                <th className="py-3 px-4 text-center hidden sm:table-cell">Pts</th>
-                <th className="py-3 px-4 text-center hidden md:table-cell">Form</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-700">
-              {filteredMembers.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-12 text-center text-gray-400">
-                    No {isDoublesOrMixed ? 'teams' : 'players'} yet. Be the first to join!
-                  </td>
-                </tr>
-              ) : (
-                filteredMembers.map(member => {
-                  const isMe = member.userId === currentUser?.uid;
-                  const gameDiff = (member.stats.gamesWon || 0) - (member.stats.gamesLost || 0);
-                  
-                  return (
-                    <tr
-                      key={member.id}
-                      className={`${isMe ? 'bg-blue-900/20' : 'hover:bg-gray-700/50'} transition-colors`}
-                    >
-                      <td className="py-3 px-4 text-center">
-                        <span className={`font-bold ${
-                          member.currentRank === 1 ? 'text-yellow-400' :
-                          member.currentRank === 2 ? 'text-gray-300' :
-                          member.currentRank === 3 ? 'text-orange-400' :
-                          'text-white'
-                        }`}>
-                          {member.currentRank === 1 && '🥇 '}
-                          {member.currentRank === 2 && '🥈 '}
-                          {member.currentRank === 3 && '🥉 '}
-                          #{member.currentRank}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-white">{member.displayName}</span>
-                          {member.partnerDisplayName && (
-                            <span className="text-gray-400">/ {member.partnerDisplayName}</span>
-                          )}
-                          {isMe && <span className="text-blue-400 text-xs">(You)</span>}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-center text-gray-300">{member.stats.played}</td>
-                      <td className="py-3 px-4 text-center text-green-400 font-semibold">{member.stats.wins}</td>
-                      <td className="py-3 px-4 text-center text-red-400">{member.stats.losses}</td>
-                      <td className="py-3 px-4 text-center hidden sm:table-cell">
-                        <span className={gameDiff > 0 ? 'text-green-400' : gameDiff < 0 ? 'text-red-400' : 'text-gray-400'}>
-                          {gameDiff > 0 ? '+' : ''}{gameDiff}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-center text-white font-bold hidden sm:table-cell">
-                        {member.stats.points}
-                      </td>
-                      <td className="py-3 px-4 hidden md:table-cell">
-                        <div className="flex gap-1 justify-center">
-                          {getFormBadges(member.stats.recentForm || [])}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+{/* STANDINGS TAB */}
+      {activeTab === 'standings' && league && (
+        <LeagueStandings
+          members={filteredMembers}
+          format={league.format}
+          leagueType={league.type}
+          currentUserId={currentUser?.uid}
+          myMembership={myMembership}
+          onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
+          challengeRange={league.settings?.challengeRules?.challengeRange || 3}
+        />
       )}
 
       {/* MATCHES TAB */}
