@@ -12,21 +12,27 @@ import { getStorage, type FirebaseStorage } from '@firebase/storage';
 import { getFunctions, type Functions } from '@firebase/functions';
 
 // ============================================
-// 🔥 HARDCODED FIREBASE CONFIG
+// 🔥 FIREBASE CONFIG FROM ENVIRONMENT VARIABLES
 // ============================================
-// This bypasses all cookie/localStorage/env issues in AI Studio
+// Reads from .env file (VITE_ prefix required for Vite)
+// Falls back to empty strings if not found (will error on init)
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBPeYXnPobCZ7bPH0g_2IYOP55-1PFTWTE",
-  authDomain: "pickleball-app-dev.firebaseapp.com",
-  projectId: "pickleball-app-dev",
-  storageBucket: "pickleball-app-dev.firebasestorage.app",
-  messagingSenderId: "906655677998",
-  appId: "1:906655677998:web:b7fe4bb2f479ba79c069bf",
-  measurementId: "G-WWLE6K6J7Z"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || ''
 };
 
-console.log('🔥 Firebase: Using HARDCODED config for pickleball-app-dev');
+// Validate that required config is present
+if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+  console.error('❌ Firebase config missing! Check your .env file has VITE_FIREBASE_* variables.');
+} else {
+  console.log('🔥 Firebase: Config loaded from environment variables');
+}
 
 // ============================================
 // Firebase Initialization (HMR-safe)
@@ -60,4 +66,4 @@ export const saveFirebaseConfig = (_configJson: string) => {
 export const hasCustomConfig = () => true;
 export const isFirebaseConfigured = () => true;
 
-console.log('✅ Firebase initialized - pickleball-app-dev');
+console.log('✅ Firebase initialized -', firebaseConfig.projectId);

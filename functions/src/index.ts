@@ -29,6 +29,18 @@ export {
 } from './stripe';
 
 // ============================================
+// ADMIN FUNCTIONS
+// ============================================
+
+export {
+  admin_promoteToAppAdmin,
+  admin_demoteFromAppAdmin,
+  admin_promoteToOrganizer,
+  admin_demoteFromOrganizer,
+  admin_getAuditLogs,
+} from './admin';
+
+// ============================================
 // TEAM FUNCTIONS (if you have them)
 // ============================================
 

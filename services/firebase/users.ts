@@ -2,22 +2,21 @@
  * User Profile and Role Management
  */
 
-import { 
-  doc, 
-  getDoc, 
-  getDocs, 
+import {
+  doc,
+  getDoc,
+  getDocs,
   setDoc,
   updateDoc,
-  collection, 
-  query, 
+  collection,
+  query,
   limit,
   where,
-  arrayUnion,
-  arrayRemove,
 } from '@firebase/firestore';
+import { httpsCallable } from '@firebase/functions';
 import { ref, uploadBytes, getDownloadURL } from '@firebase/storage';
-import { db, storage } from './config';
-import type { UserProfile, UserRole } from '../../types';
+import { db, storage, functions } from './config';
+import type { UserProfile } from '../../types';
 
 // ============================================
 // User Profile CRUD
@@ -131,41 +130,95 @@ export const uploadProfileImage = async (userId: string, file: File): Promise<st
 };
 
 // ============================================
-// Role Management
+// Role Management (via Cloud Functions for security)
 // ============================================
 
-const addRole = async (userId: string, role: UserRole) => {
-  const userRef = doc(db, 'users', userId);
-  await updateDoc(userRef, { roles: arrayUnion(role), updatedAt: Date.now() });
-};
-
-const removeRole = async (userId: string, role: UserRole) => {
-  const userRef = doc(db, 'users', userId);
-  await updateDoc(userRef, { roles: arrayRemove(role), updatedAt: Date.now() });
-};
-
-export const promoteToAppAdmin = async (targetUserId: string) => {
-  const userRef = doc(db, 'users', targetUserId);
-  await updateDoc(userRef, {
-    roles: arrayUnion('app_admin'),
-    isAppAdmin: true,
-    updatedAt: Date.now()
-  });
-};
-
-export const demoteFromAppAdmin = async (targetUserId: string, currentUserId: string) => {
-  if (targetUserId === currentUserId) {
-    throw new Error("You cannot demote yourself from App Admin.");
+/**
+ * Promote a user to App Admin
+ * This calls a Cloud Function that verifies the caller is an admin
+ */
+export const promoteToAppAdmin = async (targetUserId: string): Promise<void> => {
+  const callable = httpsCallable<{ targetUserId: string }, { success: boolean; message: string }>(
+    functions,
+    'admin_promoteToAppAdmin'
+  );
+  const result = await callable({ targetUserId });
+  if (!result.data.success) {
+    throw new Error(result.data.message || 'Failed to promote user to admin');
   }
-  const userRef = doc(db, 'users', targetUserId);
+};
+
+/**
+ * Demote a user from App Admin
+ * This calls a Cloud Function that verifies the caller is an admin
+ */
+export const demoteFromAppAdmin = async (targetUserId: string, _currentUserId?: string): Promise<void> => {
+  const callable = httpsCallable<{ targetUserId: string }, { success: boolean; message: string }>(
+    functions,
+    'admin_demoteFromAppAdmin'
+  );
+  const result = await callable({ targetUserId });
+  if (!result.data.success) {
+    throw new Error(result.data.message || 'Failed to demote user from admin');
+  }
+};
+
+/**
+ * Promote a user to Organizer
+ * This calls a Cloud Function that verifies the caller is an admin
+ */
+export const promoteToOrganizer = async (targetUserId: string): Promise<void> => {
+  const callable = httpsCallable<{ targetUserId: string }, { success: boolean; message: string }>(
+    functions,
+    'admin_promoteToOrganizer'
+  );
+  const result = await callable({ targetUserId });
+  if (!result.data.success) {
+    throw new Error(result.data.message || 'Failed to promote user to organizer');
+  }
+};
+
+/**
+ * Demote a user from Organizer
+ * This calls a Cloud Function that verifies the caller is an admin
+ */
+export const demoteFromOrganizer = async (targetUserId: string): Promise<void> => {
+  const callable = httpsCallable<{ targetUserId: string }, { success: boolean; message: string }>(
+    functions,
+    'admin_demoteFromOrganizer'
+  );
+  const result = await callable({ targetUserId });
+  if (!result.data.success) {
+    throw new Error(result.data.message || 'Failed to demote user from organizer');
+  }
+};
+
+/**
+ * Get admin audit logs
+ * This calls a Cloud Function that verifies the caller is an admin
+ */
+export const getAdminAuditLogs = async (limitCount = 100): Promise<unknown[]> => {
+  const callable = httpsCallable<{ limit: number }, unknown[]>(
+    functions,
+    'admin_getAuditLogs'
+  );
+  const result = await callable({ limit: limitCount });
+  return result.data;
+};
+
+// Player role can still be managed locally since it's the default role
+export const promoteToPlayer = async (userId: string): Promise<void> => {
+  const userRef = doc(db, 'users', userId);
   await updateDoc(userRef, {
-    roles: arrayRemove('app_admin'),
-    isAppAdmin: false,
+    roles: ['player'],
     updatedAt: Date.now()
   });
 };
 
-export const promoteToOrganizer = async (userId: string) => addRole(userId, 'organizer');
-export const demoteFromOrganizer = async (userId: string) => removeRole(userId, 'organizer');
-export const promoteToPlayer = async (userId: string) => addRole(userId, 'player');
-export const demoteFromPlayer = async (userId: string) => removeRole(userId, 'player');
+export const demoteFromPlayer = async (userId: string): Promise<void> => {
+  const userRef = doc(db, 'users', userId);
+  await updateDoc(userRef, {
+    roles: [],
+    updatedAt: Date.now()
+  });
+};

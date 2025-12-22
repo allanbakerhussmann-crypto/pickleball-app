@@ -219,100 +219,240 @@ service cloud.firestore {
     }
     
     // ============================================
-    // EXISTING COLLECTIONS (PRESERVED)
+    // CORE COLLECTIONS (SECURED)
     // ============================================
-    
-    // Meetups collection
+
+    // Users - SECURED: Users can only modify their own profile
+    match /users/{userId} {
+      // Anyone authenticated can read profiles (needed for player search, team display)
+      allow read: if isAuthenticated();
+      // Users can only write their own profile
+      // IMPORTANT: Role changes (admin, organizer) should go through Cloud Functions
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) &&
+        // Prevent users from self-promoting to admin
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAppAdmin', 'isRootAdmin']));
+      allow delete: if false; // Users cannot delete profiles
+    }
+
+    // Meetups collection - SECURED
     match /meetups/{meetupId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
       allow update, delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
 
-      match /rsvps/{userId} {
+      match /rsvps/{odUserId} {
         allow read: if isAuthenticated();
-        allow write: if isAuthenticated() && request.auth.uid == userId;
+        allow write: if isAuthenticated() && request.auth.uid == odUserId;
       }
     }
 
-    // Users
-    match /users/{userId} {
-      allow read, write: if isAuthenticated();
-    }
-    
-    // Tournaments
+    // Tournaments - SECURED: Only organizers can modify
     match /tournaments/{tournamentId} {
-      allow read, write: if isAuthenticated();
-      match /divisions/{divisionId} { allow read, write: if isAuthenticated(); }
-      match /teams/{teamId} { allow read, write: if isAuthenticated(); }
-      match /matches/{matchId} { allow read, write: if isAuthenticated(); }
-      match /courts/{courtId} { allow read, write: if isAuthenticated(); }
-      match /scoreSubmissions/{subId} { allow read, write: if isAuthenticated(); }
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isTournamentOrganizer(tournamentId);
+
+      match /divisions/{divisionId} {
+        allow read: if isAuthenticated();
+        allow write: if isTournamentOrganizer(tournamentId);
+      }
+      match /teams/{teamId} {
+        allow read: if isAuthenticated();
+        // Teams can be created by authenticated users (registration)
+        allow create: if isAuthenticated();
+        // Only organizers or team members can update
+        allow update: if isTournamentOrganizer(tournamentId) ||
+          (isAuthenticated() && request.auth.uid in resource.data.playerIds);
+        allow delete: if isTournamentOrganizer(tournamentId);
+      }
+      match /matches/{matchId} {
+        allow read: if isAuthenticated();
+        allow write: if isTournamentOrganizer(tournamentId);
+      }
+      match /courts/{courtId} {
+        allow read: if isAuthenticated();
+        allow write: if isTournamentOrganizer(tournamentId);
+      }
+      match /scoreSubmissions/{subId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated();
+        allow update, delete: if isTournamentOrganizer(tournamentId);
+      }
     }
-    
-    // Clubs - UPDATED WITH PAYMENT SUBCOLLECTIONS
+
+    // Clubs - SECURED: Only admins can modify club settings
     match /clubs/{clubId} {
-      allow read, write: if isAuthenticated();
-      match /joinRequests/{requestId} { allow read, write: if isAuthenticated(); }
-      match /courts/{courtId} { allow read, write: if isAuthenticated(); }
-      match /bookings/{bookingId} { allow read, write: if isAuthenticated(); }
-      
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      // Only club admins or the creator can update/delete the club
+      allow update: if isClubAdmin(clubId) ||
+        (isAuthenticated() && resource.data.createdByUserId == request.auth.uid);
+      allow delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
+
+      match /joinRequests/{requestId} {
+        allow read: if isAuthenticated();
+        // Users can create their own join requests
+        allow create: if isAuthenticated();
+        // Only club admins can approve/deny requests
+        allow update, delete: if isClubAdmin(clubId);
+      }
+      match /courts/{courtId} {
+        allow read: if isAuthenticated();
+        allow write: if isClubAdmin(clubId);
+      }
+      match /bookings/{bookingId} {
+        allow read: if isAuthenticated();
+        // Members can create bookings
+        allow create: if isClubMember(clubId);
+        // Users can update/cancel their own bookings, admins can manage all
+        allow update, delete: if isClubAdmin(clubId) ||
+          (isAuthenticated() && resource.data.bookedByUserId == request.auth.uid);
+      }
+
       // Club branding settings
       match /branding/{brandingId} {
         allow read: if isAuthenticated();
         allow write: if isClubAdmin(clubId);
       }
-      
-      // Club payout settings  
+
+      // Club payout settings
       match /payoutSettings/{settingsId} {
         allow read: if isClubAdmin(clubId);
         allow write: if isClubAdmin(clubId);
       }
     }
-    
-    // Leagues
+
+    // Leagues - SECURED: Only league admins can modify
     match /leagues/{leagueId} {
-      allow read, write: if isAuthenticated();
-      match /members/{memberId} { allow read, write: if isAuthenticated(); }
-      match /matches/{matchId} { allow read, write: if isAuthenticated(); }
-      match /challenges/{challengeId} { allow read, write: if isAuthenticated(); }
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isLeagueAdmin(leagueId);
+
+      match /members/{memberId} {
+        allow read: if isAuthenticated();
+        // Users can join leagues (create their membership)
+        allow create: if isAuthenticated();
+        // Only league admin or the member themselves can update
+        allow update: if isLeagueAdmin(leagueId) || isOwner(memberId);
+        allow delete: if isLeagueAdmin(leagueId);
+      }
+      match /matches/{matchId} {
+        allow read: if isAuthenticated();
+        allow write: if isLeagueAdmin(leagueId);
+      }
+      match /challenges/{challengeId} {
+        allow read: if isAuthenticated();
+        // Users can create challenges
+        allow create: if isAuthenticated();
+        // Participants or admins can update
+        allow update: if isLeagueAdmin(leagueId) ||
+          (isAuthenticated() && (
+            resource.data.challengerId == request.auth.uid ||
+            resource.data.challengedId == request.auth.uid
+          ));
+        allow delete: if isLeagueAdmin(leagueId);
+      }
     }
-    
-    // Other existing collections
+
+    // Tournament Registrations - SECURED
     match /tournament_registrations/{regId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      // Only the registrant or tournament organizer can update/cancel
+      allow update, delete: if isAuthenticated() &&
+        (resource.data.odUserId == request.auth.uid ||
+         isTournamentOrganizer(resource.data.tournamentId));
     }
+
+    // Partner Invites - SECURED
     match /partnerInvites/{inviteId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid
+      );
+      allow create: if isAuthenticated();
+      // Only sender or recipient can update (accept/decline)
+      allow update: if isAuthenticated() && (
+        resource.data.fromUserId == request.auth.uid ||
+        resource.data.toUserId == request.auth.uid
+      );
+      allow delete: if isAuthenticated() && resource.data.fromUserId == request.auth.uid;
     }
+
+    // Social Events - SECURED
     match /social_events/{eventId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
     }
+
+    // Audit logs - only create allowed
     match /team_creation_audit/{auditId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
     }
-    
-    // Teams (root level)
+
+    // Teams (root level) - SECURED
     match /teams/{teamId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      // Only team members or related organizers can update
+      allow update: if isAuthenticated() && (
+        request.auth.uid in resource.data.playerIds ||
+        isTournamentOrganizer(resource.data.tournamentId)
+      );
+      allow delete: if isTournamentOrganizer(resource.data.tournamentId);
     }
-    
-    // Competitions
+
+    // Competitions - SECURED
     match /competitions/{competitionId} {
-      allow read, write: if isAuthenticated();
-      match /entries/{entryId} { allow read, write: if isAuthenticated(); }
-      match /matches/{matchId} { allow read, write: if isAuthenticated(); }
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
+
+      match /entries/{entryId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated();
+        allow update, delete: if isAuthenticated() && (
+          resource.data.odUserId == request.auth.uid ||
+          get(/databases/$(database)/documents/competitions/$(competitionId)).data.createdByUserId == request.auth.uid
+        );
+      }
+      match /matches/{matchId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() &&
+          get(/databases/$(database)/documents/competitions/$(competitionId)).data.createdByUserId == request.auth.uid;
+      }
     }
-    
+
     match /competitionEntries/{entryId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && resource.data.odUserId == request.auth.uid;
     }
-    
+
+    // Standings - read only for users, write via Cloud Functions
     match /standings/{standingId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow write: if false; // Updated by Cloud Functions only
     }
-    
+
+    // Match Score Submissions - SECURED
     match /matchScoreSubmissions/{submissionId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      // Only the submitter can update their submission
+      allow update: if isAuthenticated() && resource.data.submittedByUserId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // Organizer Requests - SECURED
+    match /organizerRequests/{requestId} {
+      allow read: if isAuthenticated() && resource.data.odUserId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.odUserId == request.auth.uid;
+      allow update, delete: if false; // Admin actions via Cloud Functions
     }
   }
 }

@@ -72,52 +72,22 @@ useEffect(() => {
 
         if (user) {
           // Fetch extended profile from Firestore
-          let profile = await getUserProfile(user.uid);
-
-          // Auto-promote specific admin email
-          const ADMIN_EMAIL = 'allanrbaker13@gmail.com';
-          if (user.email === ADMIN_EMAIL) {
-            const currentRoles = profile?.roles || ['player'];
-            const hasAdminRole = currentRoles.includes('admin');
-
-            if (!hasAdminRole) {
-              // Grant all roles
-              const newRoles: UserRole[] = Array.from(
-                new Set([...currentRoles, 'player', 'organizer', 'admin'])
-              ) as UserRole[];
-
-              const updatedProfileData = {
-                id: user.uid,
-                email: user.email || '',
-                displayName: profile?.displayName || user.displayName || 'Admin',
-                roles: newRoles,
-                isRootAdmin: true
-              };
-
-              // Update DB
-              await createUserProfile(user.uid, updatedProfileData);
-
-              // Update local variable so state is correct immediately
-              if (profile) {
-                profile.roles = newRoles;
-                profile.isRootAdmin = true;
-              } else {
-                profile = updatedProfileData as UserProfile;
-              }
-            }
-          }
+          const profile = await getUserProfile(user.uid);
 
           if (profile) {
+            // Use the profile from the database (roles are managed server-side)
             setUserProfile(profile);
           } else {
-            // Legacy user or error: fallback
-            setUserProfile({
+            // New user without a profile - create a basic one
+            // Admin roles should be assigned via Cloud Functions, not auto-promoted
+            const newProfile: UserProfile = {
               id: user.uid,
               displayName: user.displayName || 'User',
               email: user.email || '',
-              roles: user.email === ADMIN_EMAIL ? ['player', 'organizer', 'admin'] : ['player'],
-              isRootAdmin: user.email === ADMIN_EMAIL
-            });
+              roles: ['player']
+            };
+            await createUserProfile(user.uid, newProfile);
+            setUserProfile(newProfile);
           }
         } else {
           setUserProfile(null);
@@ -154,24 +124,16 @@ useEffect(() => {
       const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
       const user = userCredential.user;
 
-      // 2. Determine Roles
-      const ADMIN_EMAIL = 'allanrbaker13@gmail.com';
-      let roles: UserRole[] = role === 'organizer' ? ['player', 'organizer'] : ['player'];
-      let isRoot = false;
-
-      // Force admin roles for specific email
-      if (email === ADMIN_EMAIL) {
-          roles = ['player', 'organizer', 'admin'];
-          isRoot = true;
-      }
+      // 2. Determine Roles based on signup selection
+      // Admin roles should be granted via Cloud Functions by existing admins
+      const roles: UserRole[] = role === 'organizer' ? ['player', 'organizer'] : ['player'];
 
       // 3. Create Firestore Profile
       const newProfile: UserProfile = {
           id: user.uid,
-          email: email, 
+          email: email,
           displayName: name,
-          roles: roles,
-          isRootAdmin: isRoot
+          roles: roles
       };
       await createUserProfile(user.uid, newProfile);
 

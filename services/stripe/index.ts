@@ -19,10 +19,19 @@ import { functions } from '../firebase';
 
 let stripePromise: Promise<Stripe | null> | null = null;
 
-const STRIPE_PUBLISHABLE_KEY = 'pk_test_51SfRmRAbckg8jC4DDLrQk7z3wG2Mu9L8JJvVeB86tJkWP8gF0mQB9VKxRzGcEqLlVPsqbh0vS5qKUPYHsG0lZwwF00hfBMHJJu';
+// Read Stripe key from environment variable
+const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '';
+
+if (!STRIPE_PUBLISHABLE_KEY) {
+  console.error('❌ Stripe publishable key missing! Check your .env file has VITE_STRIPE_PUBLISHABLE_KEY.');
+}
 
 export const getStripe = () => {
   if (!stripePromise) {
+    if (!STRIPE_PUBLISHABLE_KEY) {
+      console.error('❌ Cannot initialize Stripe: VITE_STRIPE_PUBLISHABLE_KEY not found in .env');
+      return Promise.resolve(null);
+    }
     stripePromise = loadStripe(STRIPE_PUBLISHABLE_KEY);
   }
   return stripePromise;
