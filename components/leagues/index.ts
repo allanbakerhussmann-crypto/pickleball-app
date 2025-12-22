@@ -4,7 +4,7 @@
  * Central export file for all league-related components.
  * 
  * FILE LOCATION: components/leagues/index.ts
- * VERSION: V05.32
+ * VERSION: V05.37
  */
 
 // Main Pages
@@ -16,12 +16,17 @@ export { LeaguesList } from './LeaguesList';
 export { LeagueRegistrationWizard } from './LeagueRegistrationWizard';
 export { LeagueScoreEntryModal } from './LeagueScoreEntryModal';
 
-// Schedule Management (NEW V05.32)
+// Schedule Management (V05.32)
 export { LeagueScheduleManager } from './LeagueScheduleManager';
 
 // Display Components
 export { LeagueMatchCard } from './LeagueMatchCard';
 export { LeagueStandings } from './LeagueStandings';
+
+// Postpone/Reschedule Components (NEW V05.37)
+export { PostponeMatchModal } from './PostponeMatchModal';
+export { PostponeWeekModal } from './PostponeWeekModal';
+export { PostponedMatchesList } from './PostponedMatchesList';
 
 // Note: Import ChallengeModal directly when needed:
 // import { ChallengeModal } from './ChallengeModal';

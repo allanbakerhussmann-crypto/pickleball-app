@@ -1551,8 +1551,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       earlyBirdDeadline: editForm.earlyBirdEnabled && editForm.earlyBirdDeadline ? new Date(editForm.earlyBirdDeadline).getTime() : undefined,
                       lateFeeEnabled: editForm.lateFeeEnabled, lateFee: editForm.lateFeeEnabled ? editForm.lateFee : undefined,
                       lateRegistrationStart: editForm.lateFeeEnabled && editForm.lateRegistrationStart ? new Date(editForm.lateRegistrationStart).getTime() : undefined,
-                      prizePool: league?.pricing?.prizePool || { enabled: false, type: 'none' as const, amount: 0 }, currency: 'nzd' as const,
-                    } : undefined;
+                      prizePool: league?.pricing?.prizePool || { enabled: false, type: 'none' as const, amount: 0, distribution: { first: 60, second: 30, third: 10, fourth: 0 } }, currency: 'nzd' as const,                       } : undefined;
                     const updateData: Parameters<typeof updateLeague>[1] = { name: editForm.name.trim(), visibility: editForm.visibility, settings: settingsUpdate };
                     if (editForm.description.trim()) updateData.description = editForm.description.trim();
                     if (editForm.location.trim()) updateData.location = editForm.location.trim();

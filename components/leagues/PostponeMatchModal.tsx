@@ -10,6 +10,8 @@
  * - Cancel a postponed match
  * - Set makeup deadline
  * 
+ * FIXED: Date picker now uses light colorScheme for visibility
+ * 
  * FILE LOCATION: src/components/leagues/PostponeMatchModal.tsx
  * VERSION: V05.37
  */
@@ -211,17 +213,17 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
   const isPostponed = match.status === 'postponed';
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+      <div className="bg-gray-800 rounded-xl border border-gray-700 max-w-md w-full max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200">
+        <div className="px-6 py-4 border-b border-gray-700 bg-gray-900">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-gray-900">
+            <h2 className="text-xl font-bold text-white">
               {isPostponed ? 'Manage Postponed Match' : 'Postpone Match'}
             </h2>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              className="text-gray-400 hover:text-white transition-colors"
             >
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -231,29 +233,29 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
         </div>
 
         {/* Match Info */}
-        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-          <div className="text-sm text-gray-600 mb-1">Match</div>
-          <div className="font-medium text-gray-900">
+        <div className="px-6 py-4 bg-gray-900/50 border-b border-gray-700">
+          <div className="text-sm text-gray-400 mb-1">Match</div>
+          <div className="font-semibold text-white text-lg">
             {match.memberAName} vs {match.memberBName}
           </div>
           {match.weekNumber && (
-            <div className="text-sm text-gray-500 mt-1">
+            <div className="text-sm text-gray-400 mt-1">
               Week {match.weekNumber}
               {match.scheduledDate && ` • ${formatDate(match.scheduledDate)}`}
             </div>
           )}
           {isPostponed && match.originalScheduledDate && (
-            <div className="text-sm text-yellow-600 mt-1">
-              Originally scheduled: {formatDate(match.originalScheduledDate)}
+            <div className="text-sm text-yellow-400 mt-2">
+              ⏸️ Originally scheduled: {formatDate(match.originalScheduledDate)}
             </div>
           )}
           {isPostponed && match.postponedReason && (
-            <div className="text-sm text-gray-500 mt-1">
+            <div className="text-sm text-gray-400 mt-1">
               Reason: {formatPostponeReason(match.postponedReason)}
             </div>
           )}
           {isPostponed && match.makeupDeadline && (
-            <div className={`text-sm mt-1 ${match.makeupDeadline < Date.now() ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+            <div className={`text-sm mt-1 ${match.makeupDeadline < Date.now() ? 'text-red-400 font-medium' : 'text-gray-400'}`}>
               Makeup deadline: {formatDate(match.makeupDeadline)}
               {match.makeupDeadline < Date.now() && ' (OVERDUE)'}
             </div>
@@ -263,13 +265,13 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
         {/* Mode Tabs (only show if postponed) */}
         {isPostponed && (
           <div className="px-6 pt-4">
-            <div className="flex space-x-2">
+            <div className="flex gap-2">
               <button
                 onClick={() => setMode('reschedule')}
                 className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
                   mode === 'reschedule'
-                    ? 'bg-blue-100 text-blue-700 border-2 border-blue-300'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white'
                 }`}
               >
                 📅 Reschedule
@@ -278,8 +280,8 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
                 onClick={() => setMode('cancel')}
                 className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
                   mode === 'cancel'
-                    ? 'bg-red-100 text-red-700 border-2 border-red-300'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white'
                 }`}
               >
                 ❌ Cancel Match
@@ -291,7 +293,7 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
         {/* Content */}
         <div className="px-6 py-4">
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg text-red-400 text-sm">
               {error}
             </div>
           )}
@@ -300,13 +302,13 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
           {mode === 'postpone' && !isPostponed && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
                   Reason for postponement
                 </label>
                 <select
                   value={reason}
                   onChange={(e) => setReason(e.target.value as PostponeReason)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2.5 bg-gray-900 border border-gray-700 text-white rounded-lg focus:outline-none focus:border-blue-500"
                 >
                   {POSTPONE_REASONS.map((r) => (
                     <option key={r.value} value={r.value}>
@@ -318,7 +320,7 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
 
               {reason === 'other' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
                     Specify reason
                   </label>
                   <input
@@ -326,13 +328,13 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
                     value={otherReason}
                     onChange={(e) => setOtherReason(e.target.value)}
                     placeholder="Enter reason..."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2.5 bg-gray-900 border border-gray-700 text-white rounded-lg focus:outline-none focus:border-blue-500"
                   />
                 </div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
                   Makeup deadline (days from now)
                 </label>
                 <input
@@ -341,27 +343,26 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
                   onChange={(e) => setMakeupDays(parseInt(e.target.value) || 14)}
                   min={1}
                   max={60}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2.5 bg-gray-900 border border-gray-700 text-white rounded-lg focus:outline-none focus:border-blue-500"
                 />
                 <p className="mt-1 text-sm text-gray-500">
                   Match must be rescheduled by {formatDate(Date.now() + makeupDays * 24 * 60 * 60 * 1000)}
                 </p>
               </div>
 
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                <p className="text-sm text-yellow-800">
+              <div className="bg-yellow-900/20 border border-yellow-700 rounded-lg p-3">
+                <p className="text-sm text-yellow-400">
                   <strong>Note:</strong> Both players will be notified of the postponement. 
                   You can reschedule the match later from the league management page.
                 </p>
               </div>
             </div>
           )}
-
           {/* Reschedule Form */}
           {mode === 'reschedule' && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
                   New date *
                 </label>
                 <input
@@ -369,37 +370,40 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
                   value={newDate}
                   onChange={(e) => setNewDate(e.target.value)}
                   min={formatDateForInput(Date.now())}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2.5 bg-white border border-gray-300 text-gray-900 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                  style={{ colorScheme: 'light' }}
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
                     Start time
                   </label>
                   <input
                     type="time"
                     value={newStartTime}
                     onChange={(e) => setNewStartTime(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2.5 bg-white border border-gray-300 text-gray-900 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    style={{ colorScheme: 'light' }}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
                     End time
                   </label>
                   <input
                     type="time"
                     value={newEndTime}
                     onChange={(e) => setNewEndTime(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2.5 bg-white border border-gray-300 text-gray-900 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
+                    style={{ colorScheme: 'light' }}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
                   Court (optional)
                 </label>
                 <input
@@ -407,12 +411,12 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
                   value={newCourt}
                   onChange={(e) => setNewCourt(e.target.value)}
                   placeholder="e.g., Court 1"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2.5 bg-gray-900 border border-gray-700 text-white rounded-lg focus:outline-none focus:border-blue-500"
                 />
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                <p className="text-sm text-blue-800">
+              <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+                <p className="text-sm text-blue-400">
                   <strong>Note:</strong> Both players will be notified of the new date and time.
                 </p>
               </div>
@@ -422,18 +426,18 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
           {/* Cancel Form */}
           {mode === 'cancel' && (
             <div className="space-y-4">
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <p className="text-sm text-red-800 mb-2">
+              <div className="bg-red-900/20 border border-red-700 rounded-lg p-4">
+                <p className="text-sm text-red-400 mb-2">
                   <strong>⚠️ Warning:</strong> Cancelling a match means it will not be played or rescheduled. 
                   This is different from a forfeit - neither player will be penalized.
                 </p>
-                <p className="text-sm text-red-700">
+                <p className="text-sm text-red-300">
                   This action cannot be undone.
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
                   Reason for cancellation (optional)
                 </label>
                 <textarea
@@ -441,7 +445,7 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
                   onChange={(e) => setCancelReason(e.target.value)}
                   placeholder="e.g., Unable to find suitable makeup date..."
                   rows={3}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2.5 bg-gray-900 border border-gray-700 text-white rounded-lg focus:outline-none focus:border-blue-500 resize-none"
                 />
               </div>
             </div>
@@ -449,11 +453,11 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end space-x-3">
+        <div className="px-6 py-4 border-t border-gray-700 bg-gray-900 flex justify-end gap-3">
           <button
             onClick={onClose}
             disabled={loading}
-            className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
@@ -462,7 +466,7 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
             <button
               onClick={handlePostpone}
               disabled={loading || (reason === 'other' && !otherReason.trim())}
-              className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors disabled:opacity-50 flex items-center"
+              className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:bg-gray-600 flex items-center"
             >
               {loading ? (
                 <>
@@ -482,7 +486,7 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
             <button
               onClick={handleReschedule}
               disabled={loading || !newDate}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:bg-gray-600 flex items-center"
             >
               {loading ? (
                 <>
@@ -502,7 +506,7 @@ export const PostponeMatchModal: React.FC<PostponeMatchModalProps> = ({
             <button
               onClick={handleCancel}
               disabled={loading}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center"
+              className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:bg-gray-600 flex items-center"
             >
               {loading ? (
                 <>

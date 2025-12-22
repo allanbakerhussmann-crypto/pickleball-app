@@ -5,7 +5,7 @@
  * Import from here: import { ... } from './services/firebase';
  * 
  * FILE LOCATION: services/firebase/index.ts
- * VERSION: V05.32
+ * VERSION: V05.37
  */
 
 // Re-export config and core instances
@@ -223,6 +223,27 @@ export {
   clearLeagueMatches,
   type GenerationResult,
 } from './leagueMatchGeneration';
+
+// ============================================
+// LEAGUE POSTPONE SERVICE (NEW V05.37)
+// ============================================
+export {
+  // Match Postpone/Reschedule
+  postponeMatch,
+  rescheduleMatch,
+  cancelPostponedMatch,
+  
+  // Week Postpone/Reschedule
+  postponeWeek,
+  rescheduleWeek,
+  
+  // Queries
+  getPostponedMatches,
+  
+  // Helpers
+  formatPostponeReason,
+  getDefaultMakeupDays,
+} from './leaguePostpone';
 
 // Court Bookings
 export {
