@@ -1,58 +1,59 @@
 /**
- * Pickleball Director - Type Definitions
+ * Pickleball Director - Type Definitions V05.36
  * 
- * Central type definitions for the entire application.
+ * UPDATED: Added LeagueDuprSettings for DUPR integration options
  * 
- * FILE LOCATION: types.ts
- * VERSION: V05.34
- * 
- * CHANGELOG V05.34:
- * - Added LeagueVenueSettings, LeagueCourt, LeagueTimeSlot, DayOfWeek
- * - Updated LeagueSettings to include venueSettings
- * - Updated LeagueMatch to include timeSlotId, startTime, endTime
+ * FILE: src/types.ts
  */
 
 // ============================================
-// BASIC TYPES & ENUMS
-// ============================================
-
-export type Visibility = 'public' | 'linkOnly' | 'private';
-export type TournamentStatus = 'draft' | 'registration' | 'active' | 'completed' | 'cancelled';
-export type RegistrationMode = 'open' | 'invite_only' | 'approval_required';
-export type SchedulingMode = 'live_courts' | 'scheduled' | 'manual';
-export type SeedingMethod = 'random' | 'manual' | 'rating_based' | 'sign_up_order';
-export type TieBreaker = 'head_to_head' | 'point_differential' | 'points_for' | 'games_won' | 'buchholz';
-export type FeePaidBy = 'player' | 'organizer' | 'split';
-export type RefundPolicy = 'full' | 'partial' | 'none';
-export type PartnerFindingMode = 'invite_partner' | 'open_team' | 'join_open' | 'assigned';
-export type EventType = 'singles' | 'doubles' | 'mixed_doubles' | 'team';
-export type GenderCategory = 'open' | 'men' | 'women' | 'mixed';
-
-// ============================================
-// USER TYPES
+// USER & PROFILE TYPES
 // ============================================
 
 export interface UserProfile {
   odUserId: string;
-  odUserName: string;
-  displayName: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
   email: string;
-  photoURL?: string | null;
-  photoData?: string | null;
+  displayName: string;
   phone?: string;
-  duprId?: string | null;
-  duprRating?: number | null;
-  homeClub?: string;
-  dateOfBirth?: string;
-  gender?: 'male' | 'female' | 'other' | 'prefer_not_to_say';
-  isOrganizer?: boolean;
-  isAppAdmin?: boolean;
-  stripeConnectedAccountId?: string | null;
+  bio?: string;
+  photoURL?: string;
+  coverPhotoURL?: string;
+  region?: string;
+  country?: string;
+  city?: string;
+  skillLevel?: string;
+  playStyle?: string;
+  preferredHand?: string;
+  achievements?: string[];
+  socialLinks?: { platform: string; url: string }[];
+  isProfileComplete?: boolean;
+  createdAt: number;
+  updatedAt: number;
+  // Stripe Connect
+  stripeConnectedAccountId?: string;
   stripeOnboardingComplete?: boolean;
   stripeChargesEnabled?: boolean;
   stripePayoutsEnabled?: boolean;
-  createdAt: number;
-  updatedAt: number;
+  // DUPR Integration
+  duprId?: string;
+  duprAccessToken?: string;
+  duprRefreshToken?: string;
+  duprTokenExpiresAt?: number;
+  duprProfile?: {
+    fullName?: string;
+    imageUrl?: string;
+    doublesRating?: number;
+    singlesRating?: number;
+    isVerified?: boolean;
+    isPremium?: boolean;
+  };
+  // Organizer Request
+  organizerRequestStatus?: 'none' | 'pending' | 'approved' | 'rejected';
+  organizerRequestDate?: number;
+  organizerApprovedDate?: number;
+  isApprovedOrganizer?: boolean;
 }
 
 // ============================================
@@ -62,88 +63,85 @@ export interface UserProfile {
 export interface Club {
   id: string;
   name: string;
-  description?: string;
-  region?: string;
+  description: string;
   logoUrl?: string;
+  bannerUrl?: string;
+  location?: string;
+  region?: string;
+  country?: string;
+  contactEmail?: string;
+  contactPhone?: string;
   website?: string;
-  email?: string;
-  phone?: string;
-  memberCount?: number;
-  adminUserIds: string[];
-  adminNames?: string[];
-  members?: ClubMember[];
-  stripeConnectedAccountId?: string | null;
+  socialLinks?: { platform: string; url: string }[];
+  ownerId: string;
+  adminIds: string[];
+  memberCount: number;
+  isPublic: boolean;
+  requiresApproval: boolean;
+  createdAt: number;
+  updatedAt: number;
+  stripeConnectedAccountId?: string;
   stripeOnboardingComplete?: boolean;
   stripeChargesEnabled?: boolean;
   stripePayoutsEnabled?: boolean;
-  createdAt: number;
-  updatedAt: number;
+  bookingSettings?: ClubBookingSettings;
+  courts?: ClubCourt[];
+  // DUPR Integration
+  duprClubId?: string;
 }
 
 export interface ClubMember {
   odUserId: string;
-  odUserName: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
+  clubId: string;
   role: 'owner' | 'admin' | 'member';
-  status: 'active' | 'pending' | 'suspended';
+  displayName: string;
+  email?: string;
   joinedAt: number;
+  status: 'active' | 'suspended' | 'pending';
 }
-
-// ============================================
-// CLUB COURT BOOKING TYPES
-// ============================================
 
 export interface ClubCourt {
   id: string;
-  clubId: string;
   name: string;
-  order: number;
-  active: boolean;
+  type: 'indoor' | 'outdoor';
   surface?: string;
-  indoor?: boolean;
-  notes?: string;
-  createdAt: number;
-  updatedAt: number;
+  isActive: boolean;
+  hourlyRate?: number;
+  peakHourlyRate?: number;
+  order?: number;
 }
 
 export interface ClubBookingSettings {
-  id: string;
-  clubId: string;
   enabled: boolean;
-  slotDurationMinutes: number;
-  maxAdvanceBookingDays: number;
-  maxSlotsPerBooking: number;
+  advanceBookingDays: number;
+  minBookingMinutes: number;
+  maxBookingMinutes: number;
   cancellationMinutes: number;
-  openTime: string;
-  closeTime: string;
-  pricing: {
-    enabled: boolean;
-    pricePerSlot: number;
-    memberDiscount: number;
-    peakHoursEnabled: boolean;
-    peakHoursStart?: string;
-    peakHoursEnd?: string;
-    peakHoursMultiplier?: number;
-  };
-  createdAt: number;
-  updatedAt: number;
+  peakHours?: { start: string; end: string; days: number[] };
+  blockedTimes?: { dayOfWeek: number; start: string; end: string; reason?: string }[];
 }
 
 export interface CourtBooking {
   id: string;
+  odUserId: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
+  odUserName: string;
+  odUserEmail?: string;
   clubId: string;
   courtId: string;
   courtName: string;
-  userId: string;
-  userName: string;
   date: string;
   startTime: string;
   endTime: string;
-  status: 'confirmed' | 'cancelled' | 'pending';
-  amountPaid?: number;
-  stripeSessionId?: string;
+  durationMinutes: number;
+  status: 'confirmed' | 'cancelled' | 'completed';
+  totalAmount?: number;
+  paymentStatus?: 'pending' | 'paid' | 'refunded';
   stripePaymentIntentId?: string;
-  cancelledAt?: number;
-  cancelReason?: string;
+  notes?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -152,95 +150,59 @@ export interface CourtBooking {
 // TOURNAMENT TYPES
 // ============================================
 
+export type EventType = 'singles' | 'doubles' | 'mixed_doubles';
+export type GenderCategory = 'open' | 'mens' | 'womens' | 'mixed';
+export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'bye';
+export type PaymentStatus = 'pending' | 'processing' | 'paid' | 'failed' | 'refunded';
+
 export interface Tournament {
   id: string;
   name: string;
   description: string;
-  imageUrl?: string;
-  logoUrl?: string;
-  sport: string;
-  startDatetime: string;
-  venue: string;
-  visibility: Visibility;
-  status: TournamentStatus;
-  createdByUserId: string;
-  registrationMode?: RegistrationMode;
-  registrationOpen?: boolean;
+  bannerUrl?: string;
+  startDate: number;
+  endDate: number;
+  registrationDeadline: number;
+  location: string;
+  venue?: string;
+  status: 'draft' | 'published' | 'registration_open' | 'registration_closed' | 'in_progress' | 'completed' | 'cancelled';
+  organizerId: string;
+  organizerName?: string;
+  organizerEmail?: string;
+  clubId?: string;
+  clubName?: string;
   maxParticipants?: number;
-  clubId: string;
-  clubName: string;
-  clubLogoUrl?: string | null;
+  currentParticipants: number;
+  entryFee: number;
+  prizePool?: number;
+  rules?: string;
+  createdAt: number;
+  updatedAt: number;
   settings?: TournamentSettings;
+  stripeConnectedAccountId?: string;
+  stripeProductId?: string;
+  stripePriceId?: string;
+  divisions?: Division[];
 }
 
 export interface TournamentSettings {
-  schedulingMode: SchedulingMode;
-  totalCourts?: number;
-  defaultMatchDurationMinutes?: number;
-}
-
-export interface TournamentRegistration {
-  id: string;
-  tournamentId: string;
-  playerId: string;
-  status: 'in_progress' | 'completed' | 'withdrawn';
-  waiverAccepted: boolean;
-  emergencyContactName?: string;
-  emergencyContactPhone?: string;
-  selectedEventIds: string[];
-  partnerDetails?: Record<string, {
-    mode: 'invite' | 'open_team' | 'join_open';
-    partnerUserId?: string;
-    openTeamId?: string;
-    partnerName?: string;
-    id?: string;
-    name?: string;
-    teamId?: string;
-    teamName?: string;
-  }>;
-  createdAt: number;
-  updatedAt: number;
-  completedAt?: number;
-}
-
-export interface CustomField {
-  id: string;
-  label: string;
-  type: 'text' | 'dropdown';
-  required: boolean;
-  options?: string[];
-}
-
-// ============================================
-// DIVISION TYPES
-// ============================================
-
-export type StageMode = 'single_stage' | 'two_stage';
-export type MainFormat = 'round_robin' | 'single_elim' | 'double_elim' | 'ladder' | 'leaderboard' | 'swiss';
-export type Stage1Format = 'round_robin_pools';
-export type Stage2Format = 'single_elim' | 'double_elim' | 'medal_rounds';
-export type PlateFormat = 'single_elim' | 'round_robin';
-
-export interface DivisionFormat {
-  stageMode: StageMode;
-  mainFormat?: MainFormat | null;
-  stage1Format?: Stage1Format | null;
-  stage2Format?: Stage2Format | null;
-  numberOfPools?: number | null;
-  teamsPerPool?: number | null;
-  advanceToMainPerPool?: number | null;
-  advanceToPlatePerPool?: number | null;
-  plateEnabled: boolean;
-  plateFormat?: PlateFormat | null;
-  plateName?: string | null;
-  bestOfGames: 1 | 3 | 5;
-  pointsPerGame: 11 | 15 | 21;
-  winBy: 1 | 2;
-  hasBronzeMatch: boolean;
-  seedingMethod?: SeedingMethod;
-  tieBreakerPrimary?: TieBreaker;
-  tieBreakerSecondary?: TieBreaker;
-  tieBreakerTertiary?: TieBreaker;
+  allowPartnerSignup: boolean;
+  requirePartner: boolean;
+  allowWaitlist: boolean;
+  waitlistMax?: number;
+  checkInRequired: boolean;
+  checkInWindowMinutes?: number;
+  seeding: 'random' | 'rating' | 'manual';
+  consolationBracket: boolean;
+  thirdPlaceMatch: boolean;
+  pointsPerWin?: number;
+  pointsPerLoss?: number;
+  matchFormat?: {
+    gamesPerMatch: number;
+    pointsPerGame: number;
+    winBy: number;
+    tiebreaker?: boolean;
+  };
 }
 
 export interface Division {
@@ -249,149 +211,181 @@ export interface Division {
   name: string;
   type: EventType;
   gender: GenderCategory;
-  format: DivisionFormat;
-  maxTeams?: number | null;
-  registrationOpen: boolean;
-  minRating?: number | null;
-  maxRating?: number | null;
-  minAge?: number | null;
-  maxAge?: number | null;
-  order?: number;
-  pricing?: {
-    entryFee?: number;
-    feesPaidBy?: FeePaidBy;
-  };
-  partnerSettings?: {
-    allowInvitePartner: boolean;
-    allowOpenTeam: boolean;
-    allowJoinOpen: boolean;
-  };
-  createdAt?: number;
-  updatedAt?: number;
+  skillMin?: number;
+  skillMax?: number;
+  ageMin?: number;
+  ageMax?: number;
+  entryFee?: number;
+  maxTeams?: number;
+  currentTeams: number;
+  bracketType: 'single_elimination' | 'double_elimination' | 'round_robin' | 'pool_play';
+  status: 'registration' | 'seeding' | 'in_progress' | 'completed';
+  createdAt: number;
+  updatedAt: number;
 }
 
-// ============================================
-// TEAM TYPES
-// ============================================
+export interface Court {
+  id: string;
+  name: string;
+  tournamentId: string;
+  divisionId?: string;
+  status: 'available' | 'in_use' | 'maintenance';
+  currentMatchId?: string;
+}
 
 export interface Team {
-  id: string;
+  odTeamId: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
+  odUserId?: string;
+  odUserIds?: string[];
   tournamentId: string;
   divisionId: string;
-  type: EventType;
-  teamName?: string | null;
-  captainPlayerId: string;
-  status: 'pending_partner' | 'active' | 'cancelled' | 'withdrawn';
+  name: string;
+  players: {
+    odUserId: string;
+    odAccountId?: string;
+    odOrganizationId?: string;
+    name: string;
+    email?: string;
+    skillRating?: number;
+    duprId?: string;
+  }[];
+  seed?: number;
+  status: 'registered' | 'checked_in' | 'eliminated' | 'winner' | 'withdrawn';
+  paymentStatus: PaymentStatus;
+  stripeSessionId?: string;
+  stripePaymentIntentId?: string;
+  paidAmount?: number;
+  paidAt?: number;
+  createdAt: number;
+  updatedAt: number;
   isLookingForPartner?: boolean;
-  players: string[];
-  pendingInvitedUserId?: string | null;
-  createdAt?: number;
-  updatedAt?: number;
-  participants?: UserProfile[];
+  partnerInviteId?: string;
 }
 
 export interface PartnerInvite {
   id: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
   tournamentId: string;
   divisionId: string;
   teamId: string;
   inviterId: string;
+  inviterName: string;
   invitedUserId: string;
+  invitedUserName?: string;
   status: 'pending' | 'accepted' | 'declined' | 'expired';
-  inviteToken?: string | null;
   createdAt: number;
-  respondedAt?: number | null;
-  expiresAt?: number | null;
-}
-
-// ============================================
-// MATCH TYPES
-// ============================================
-
-export interface GameScore {
-  gameNumber?: number;
-  scoreA: number;
-  scoreB: number;
+  respondedAt?: number;
+  expiresAt?: number;
 }
 
 export interface Match {
   id: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
   tournamentId: string;
   divisionId: string;
-  scorekeeperUserId?: string | null;
-  teamAId: string;
-  teamBId: string;
-  status?: 'pending' | 'not_started' | 'scheduled' | 'in_progress' | 'pending_confirmation' | 'completed' | 'disputed' | 'cancelled' | 'skipped';
-  scoreSubmittedBy?: string | null;
-  pendingConfirmationFor?: string | null;
-  disputeReason?: string | null;
-  matchNumber?: number;
-  roundNumber: number | null;
-  stage: string | null;
-  court: string | null;
-  startTime: number | null;
-  endTime: number | null;
-  scoreTeamAGames: number[];
-  scoreTeamBGames: number[];
-  winnerTeamId: string | null;
-  lastUpdatedBy: string | null;
-  lastUpdatedAt: number | null;
-  teamA?: Team;
-  teamB?: Team;
+  round: number;
+  matchNumber: number;
+  team1Id: string | null;
+  team2Id: string | null;
+  team1Name: string;
+  team2Name: string;
+  team1Seed?: number;
+  team2Seed?: number;
+  winnerId?: string;
+  loserId?: string;
+  scores: GameScore[];
+  status: MatchStatus;
+  courtId?: string;
+  courtName?: string;
+  scheduledTime?: number;
+  startedAt?: number;
+  completedAt?: number;
+  nextMatchId?: string;
+  nextMatchSlot?: 'team1' | 'team2';
+  loserNextMatchId?: string;
+  loserNextMatchSlot?: 'team1' | 'team2';
+  isBye: boolean;
+  bracketPosition?: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface MatchScoreSubmission {
-  id: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
+  odUserId: string;
+  odTeamId: string;
   tournamentId: string;
+  divisionId: string;
   matchId: string;
-  submittedBy: string;
-  teamAId: string;
-  teamBId: string;
-  submittedScore: {
-    scoreTeamAGames: number[];
-    scoreTeamBGames: number[];
-    winnerTeamId: string;
-  };
-  status: 'pending_opponent' | 'confirmed' | 'rejected';
-  opponentUserId?: string | null;
-  respondedAt?: number | null;
-  reasonRejected?: string | null;
-  createdAt: number;
+  scores: GameScore[];
+  winnerId?: string;
+  submittedAt: number;
+  status: 'pending' | 'confirmed' | 'disputed';
+  confirmedBy?: string;
+  confirmedAt?: number;
+  disputeReason?: string;
+}
+
+export interface GameScore {
+  gameNumber: number;
+  scoreA: number;
+  scoreB: number;
 }
 
 export interface StandingsEntry {
-  teamId: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
+  odUserId?: string;
+  odTeamId: string;
+  odUserIds?: string[];
   teamName: string;
   played: number;
-  wins: number;
-  losses: number;
+  won: number;
+  lost: number;
   pointsFor: number;
   pointsAgainst: number;
-  pointDifference: number;
-  headToHeadWins?: number;
-  points?: number;
-  gamesWon?: number;
-  gamesLost?: number;
-  buchholz?: number;
-  rank?: number;
-}
-
-// ============================================
-// TOURNAMENT COURT
-// ============================================
-
-export interface Court {
-  id: string;
-  tournamentId: string;
-  name: string;
-  order: number;
-  active: boolean;
-  currentMatchId?: string;
+  pointDifferential: number;
+  leaguePoints: number;
 }
 
 // ============================================
 // MEETUP TYPES
 // ============================================
+
+export type AttendeePaymentStatus = 'not_required' | 'pending' | 'paid' | 'refunded' | 'failed';
+
+export interface Meetup {
+  id: string;
+  title: string;
+  description: string;
+  date: number;
+  endDate?: number;
+  location: string;
+  venueDetails?: string;
+  maxAttendees?: number;
+  currentAttendees: number;
+  hostId: string;
+  hostName: string;
+  clubId?: string;
+  clubName?: string;
+  status: 'upcoming' | 'in_progress' | 'completed' | 'cancelled';
+  createdAt: number;
+  updatedAt: number;
+  attendeeIds?: string[];
+  pricing?: MeetupPricing;
+  stripeConnectedAccountId?: string;
+  paidCount?: number;
+  totalCollected?: number;
+  competitionType?: MeetupCompetitionType;
+  competitionSettings?: MeetupCompetitionSettings;
+  region?: string;
+  duprClubId?: string;
+}
 
 export type MeetupCompetitionType = 
   | 'casual'
@@ -403,132 +397,55 @@ export type MeetupCompetitionType =
   | 'swiss'
   | 'pool_play_knockout';
 
+export interface MeetupCompetitionSettings {
+  pointsToWin?: number;
+  winBy?: number;
+  gamesPerMatch?: number;
+  scoringSystem?: 'rally' | 'traditional';
+  timeLimit?: number | null;
+  pointsPerWin?: number;
+  pointsPerDraw?: number;
+  pointsPerLoss?: number;
+}
+
 export interface MeetupPricing {
   enabled: boolean;
-  entryFee: number;
-  prizePoolEnabled: boolean;
-  prizePoolContribution: number;
-  prizeDistribution?: {
-    first: number;
-    second: number;
-    third?: number;
-    fourth?: number;
-  };
-  feesPaidBy: 'organizer' | 'player';
-  totalPerPerson?: number;
+  amount: number;
   currency: string;
-}
-
-export interface MeetupCompetitionSettings {
-  managedInApp: boolean;
-  type: MeetupCompetitionType;
-  settings?: {
-    gamesPerMatch?: number;
-    pointsPerWin?: number;
-    pointsPerDraw?: number;
-    consolationBracket?: boolean;
-    thirdPlaceMatch?: boolean;
-    poolSize?: number;
-    teamsAdvancing?: number;
-    numberOfRounds?: number;
-    winStreak?: number;
-    scoringSystem?: 'rally' | 'side_out';
-    pointsToWin?: number;
-    winBy?: number;
-    timeLimit?: number;
+  feesPaidBy: 'organizer' | 'player';
+  description?: string;
+  prizePool?: {
+    enabled: boolean;
+    percentage: number;
   };
 }
-
-export interface Meetup {
-  id: string;
-  title: string;
-  description: string;
-  when: number;
-  endTime?: number;
-  visibility: 'public' | 'linkOnly' | 'private';
-  maxPlayers: number;
-  locationName: string;
-  location?: { lat: number; lng: number };
-  createdByUserId: string;
-  organizerName?: string;
-  clubId?: string;
-  clubName?: string;
-  pricing?: MeetupPricing;
-  organizerStripeAccountId?: string;
-  competition?: MeetupCompetitionSettings;
-  status: 'draft' | 'active' | 'cancelled' | 'completed';
-  cancelledAt?: number;
-  cancelReason?: string;
-  currentPlayers?: number;
-  paidPlayers?: number;
-  totalCollected?: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export type AttendeePaymentStatus = 
-  | 'not_required'
-  | 'pending'
-  | 'paid'
-  | 'refunded'
-  | 'waived';
 
 export interface MeetupRSVP {
   odUserId: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
   odUserName: string;
-  status: 'going' | 'maybe' | 'waitlist' | 'cancelled';
-  paymentStatus?: AttendeePaymentStatus;
+  odUserEmail?: string;
+  odUserPhone?: string;
+  meetupId: string;
+  status: 'attending' | 'maybe' | 'not_attending' | 'waitlist';
+  paymentStatus: AttendeePaymentStatus;
   amountPaid?: number;
   paidAt?: number;
-  stripePaymentIntentId?: string;
   stripeSessionId?: string;
-  createdAt: number;
-  updatedAt?: number;
+  stripePaymentIntentId?: string;
+  rsvpAt: number;
+  updatedAt: number;
+  duprId?: string;
 }
 
 // ============================================
-// LEAGUE TYPES
+// LEAGUE TYPES (UPDATED V05.36)
 // ============================================
 
-export type LeagueType = 'singles' | 'doubles' | 'mixed_doubles' | 'team';
+export type LeagueType = 'singles' | 'doubles' | 'mixed_doubles';
 export type LeagueFormat = 'ladder' | 'round_robin' | 'swiss' | 'box_league';
 export type LeagueStatus = 'draft' | 'registration' | 'active' | 'completed' | 'cancelled';
-
-/**
- * Prize pool configuration
- */
-export interface LeaguePrizePool {
-  enabled: boolean;
-  type: 'none' | 'fixed' | 'percentage';
-  amount: number;
-  distribution?: {
-    first: number;
-    second: number;
-    third?: number;
-    fourth?: number;
-  };
-}
-
-/**
- * League pricing settings
- */
-export interface LeaguePricing {
-  enabled: boolean;
-  entryFee: number;
-  entryFeeType: 'per_player' | 'per_team';
-  memberDiscount?: number | null;
-  earlyBirdEnabled: boolean;
-  earlyBirdFee?: number | null;
-  earlyBirdDeadline?: number | null;
-  lateFeeEnabled: boolean;
-  lateFee?: number | null;
-  lateRegistrationStart?: number | null;
-  prizePool?: LeaguePrizePool;
-  feesPaidBy: FeePaidBy;
-  refundPolicy: RefundPolicy;
-  refundDeadline?: number | null;
-  currency: string;
-}
 
 /**
  * Match format settings
@@ -537,7 +454,43 @@ export interface LeagueMatchFormat {
   bestOf: 1 | 3 | 5;
   gamesTo: 11 | 15 | 21;
   winBy: 1 | 2;
-  allowDraw?: boolean;
+  capAt?: number;
+}
+
+/**
+ * Pricing settings for paid leagues
+ */
+export interface LeaguePricing {
+  enabled: boolean;
+  entryFee: number;
+  entryFeeType: 'per_player' | 'per_team';
+  memberDiscount?: number;
+  earlyBirdEnabled: boolean;
+  earlyBirdFee?: number;
+  earlyBirdDeadline?: number | null;
+  lateFeeEnabled: boolean;
+  lateFee?: number;
+  lateRegistrationStart?: number | null;
+  prizePool?: LeaguePrizePool;
+  feesPaidBy: 'player' | 'organizer';
+  refundPolicy: 'full' | 'partial' | 'none';
+  refundDeadline?: number | null;
+  currency: string;
+}
+
+/**
+ * Prize pool settings
+ */
+export interface LeaguePrizePool {
+  enabled: boolean;
+  type: 'none' | 'fixed' | 'percentage';
+  amount: number;
+  distribution: {
+    first: number;
+    second: number;
+    third: number;
+    fourth: number;
+  };
 }
 
 /**
@@ -606,7 +559,45 @@ export type LeagueTiebreaker =
   | 'recent_form';
 
 // ============================================
-// LEAGUE VENUE & COURT TYPES (NEW V05.34)
+// LEAGUE DUPR SETTINGS (NEW V05.36)
+// ============================================
+
+/**
+ * DUPR integration mode for leagues
+ */
+export type LeagueDuprMode = 'none' | 'optional' | 'required';
+
+/**
+ * DUPR integration settings for leagues
+ */
+export interface LeagueDuprSettings {
+  // DUPR mode
+  mode: LeagueDuprMode;
+  
+  // Auto-submit completed matches to DUPR
+  autoSubmit: boolean;
+  
+  // When to trigger auto-submit
+  submitTrigger: 'on_confirmation' | 'on_completion' | 'manual';
+  
+  // DUPR Club ID (if linked to a DUPR club)
+  duprClubId?: string | null;
+  
+  // Use DUPR ratings for skill restrictions
+  useDuprForSkillLevel: boolean;
+  
+  // Minimum DUPR rating required (if useDuprForSkillLevel is true)
+  minDuprRating?: number | null;
+  
+  // Maximum DUPR rating allowed (if useDuprForSkillLevel is true)
+  maxDuprRating?: number | null;
+  
+  // Rating type to use for restrictions
+  ratingType: 'singles' | 'doubles' | 'both';
+}
+
+// ============================================
+// LEAGUE VENUE & COURT TYPES
 // ============================================
 
 /**
@@ -620,9 +611,9 @@ export type DayOfWeek = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'frida
 export interface LeagueTimeSlot {
   id: string;
   dayOfWeek: DayOfWeek;
-  startTime: string;          // "18:00" format (24hr)
-  endTime: string;            // "21:00" format (24hr)
-  label?: string;             // Optional: "Tuesday Night League"
+  startTime: string;
+  endTime: string;
+  label?: string;
 }
 
 /**
@@ -630,43 +621,40 @@ export interface LeagueTimeSlot {
  */
 export interface LeagueCourt {
   id: string;
-  name: string;               // "Court 1", "Main Court", etc.
-  order: number;              // Display order
-  active: boolean;            // Is court available for scheduling
-  surface?: string;           // "indoor", "outdoor", "hard", "gym"
-  notes?: string;             // Special notes about the court
+  name: string;
+  order: number;
+  active: boolean;
+  surface?: string;
+  notes?: string;
 }
 
 /**
  * Venue settings for league scheduling
  */
 export interface LeagueVenueSettings {
-  // Venue info
   venueName: string;
   venueAddress?: string;
   venueNotes?: string;
-  
-  // Courts
   courts: LeagueCourt[];
-  
-  // Time slots
-  timeSlots: LeagueTimeSlot[];
-  
-  // Match timing
-  matchDurationMinutes: number;      // Default 20 min
-  bufferMinutes: number;             // Between matches, default 5 min
-  
-  // Scheduling mode
+  timeSlots?: LeagueTimeSlot[];
+  matchDurationMinutes: number;
+  bufferMinutes: number;
   schedulingMode: 'venue_based' | 'self_scheduled';
-  
-  // Auto-assignment settings
   autoAssignCourts: boolean;
-  avoidBackToBack?: boolean;         // Try not to schedule same player twice in a row
-  balanceCourtUsage: boolean;        // Spread matches across courts evenly
+  avoidBackToBack?: boolean;
+  balanceCourtUsage: boolean;
+  // Recurring schedule config (V05.35)
+  scheduleConfig?: {
+    numberOfWeeks: number;
+    matchDays: DayOfWeek[];
+    matchStartTime: string;
+    matchEndTime: string;
+    matchNights: string[];
+  };
 }
 
 // ============================================
-// LEAGUE SETTINGS (UPDATED V05.34)
+// LEAGUE SETTINGS (UPDATED V05.36)
 // ============================================
 
 /**
@@ -710,8 +698,11 @@ export interface LeagueSettings {
   // Partner settings (for doubles/mixed)
   partnerSettings?: LeaguePartnerSettings;
   
-  // Venue settings (NEW V05.34)
+  // Venue settings
   venueSettings?: LeagueVenueSettings | null;
+  
+  // DUPR settings (NEW V05.36)
+  duprSettings?: LeagueDuprSettings | null;
 }
 
 // ============================================
@@ -837,10 +828,12 @@ export interface LeagueMember {
   // Player info
   userId: string;
   displayName: string;
+  duprId?: string | null;
   
   // Partner info (for doubles/mixed)
   partnerUserId?: string | null;
   partnerDisplayName?: string | null;
+  partnerDuprId?: string | null;
   
   // Team info
   teamId?: string | null;
@@ -916,7 +909,7 @@ export interface LeaguePartnerInvite {
 }
 
 // ============================================
-// LEAGUE MATCH TYPES (UPDATED V05.34)
+// LEAGUE MATCH TYPES (UPDATED V05.36)
 // ============================================
 
 export type LeagueMatchStatus =
@@ -931,7 +924,7 @@ export type LeagueMatchStatus =
 export type LeagueMatchType = 'regular' | 'challenge' | 'playoff' | 'box';
 
 /**
- * League match (UPDATED V05.34 - added time slot fields)
+ * League match (UPDATED V05.36 - added DUPR tracking fields)
  */
 export interface LeagueMatch {
   id: string;
@@ -947,6 +940,12 @@ export interface LeagueMatch {
   userBId: string;
   partnerAId?: string | null;
   partnerBId?: string | null;
+  
+  // DUPR IDs for submission (NEW V05.36)
+  userADuprId?: string | null;
+  userBDuprId?: string | null;
+  partnerADuprId?: string | null;
+  partnerBDuprId?: string | null;
   
   // Display names
   memberAName: string;
@@ -964,10 +963,10 @@ export interface LeagueMatch {
   court?: string | null;
   venue?: string | null;
   
-  // Time slot fields (NEW V05.34)
+  // Time slot fields
   timeSlotId?: string | null;
-  startTime?: string | null;       // "18:00" format
-  endTime?: string | null;         // "18:20" format
+  startTime?: string | null;
+  endTime?: string | null;
   
   // Status
   status: LeagueMatchStatus;
@@ -984,6 +983,14 @@ export interface LeagueMatch {
   submittedByUserId?: string | null;
   confirmedByUserId?: string | null;
   disputeReason?: string | null;
+  
+  // DUPR submission tracking (NEW V05.36)
+  duprEligible?: boolean;
+  duprSubmitted?: boolean;
+  duprMatchId?: string | null;
+  duprSubmittedAt?: number | null;
+  duprSubmittedBy?: string | null;
+  duprError?: string | null;
   
   // Timestamps
   createdAt: number;
@@ -1004,133 +1011,127 @@ export interface LeagueChallenge {
   id: string;
   leagueId: string;
   divisionId?: string | null;
-  
-  // Challenger (lower ranked)
   challengerId: string;
-  challengerUserId: string;
   challengerName: string;
   challengerRank: number;
-  
-  // Challenged (higher ranked)
-  challengedId: string;
-  challengedUserId: string;
-  challengedName: string;
-  challengedRank: number;
-  
-  // Status
+  defenderId: string;
+  defenderName: string;
+  defenderRank: number;
   status: ChallengeStatus;
-  
-  // Deadlines
-  responseDeadline: number;
-  completionDeadline?: number;
-  
-  // Result
   matchId?: string | null;
-  winnerId?: string | null;
-  
-  // Message
-  message?: string | null;
-  declineReason?: string | null;
-  
+  responseDeadline: number;
+  matchDeadline?: number | null;
+  message?: string;
+  declineReason?: string;
   createdAt: number;
   respondedAt?: number | null;
   completedAt?: number | null;
 }
 
 // ============================================
-// LEAGUE REGISTRATION TYPES
+// LEAGUE REGISTRATION
 // ============================================
 
-/**
- * Partner details for league registration
- */
-export interface LeaguePartnerDetails {
-  mode: PartnerFindingMode;
-  partnerUserId?: string;
-  partnerName?: string;
-  openTeamId?: string;
-  teamId?: string;
-  teamName?: string;
-}
-
-/**
- * League registration
- */
 export interface LeagueRegistration {
   id: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
   leagueId: string;
-  userId: string;
-  displayName: string;
+  odUserId: string;
   divisionId?: string | null;
-  status: 'in_progress' | 'completed' | 'withdrawn';
-  waiverAccepted: boolean;
-  partnerDetails?: LeaguePartnerDetails;
+  status: 'draft' | 'pending_payment' | 'pending_partner' | 'completed' | 'cancelled';
+  partnerOption?: 'invite' | 'open' | 'join_open' | null;
+  partnerUserId?: string | null;
+  teamId?: string | null;
+  inviteId?: string | null;
   paymentStatus: AttendeePaymentStatus;
+  amountDue?: number;
   amountPaid?: number;
-  paidAt?: number;
   stripeSessionId?: string;
   stripePaymentIntentId?: string;
   createdAt: number;
   updatedAt: number;
-  completedAt?: number;
 }
 
 // ============================================
 // COMPETITION TYPES (LEGACY)
 // ============================================
 
-export interface Competition {
-  id: string;
-  name: string;
-  description?: string;
-  type: 'tournament' | 'league' | 'team_league';
-  format: 'round_robin' | 'single_elimination' | 'double_elimination' | 'swiss' | 'ladder';
-  status: 'draft' | 'registration' | 'active' | 'completed' | 'cancelled';
-  startDate: number;
-  endDate?: number;
-  registrationDeadline?: number;
-  maxEntrants?: number;
-  createdByUserId: string;
-  clubId?: string;
-  clubName?: string;
-  visibility: Visibility;
-  divisions?: CompetitionDivision[];
-  settings?: {
-    pointsForWin?: number;
-    pointsForDraw?: number;
-    pointsForLoss?: number;
-    gamesPerMatch?: number;
-    pointsPerGame?: number;
-    winBy?: number;
-  };
-  createdAt: number;
-  updatedAt: number;
-}
+export type CompetitionType = 'casual' | 'round_robin' | 'ladder' | 'tournament' | 'box_league';
+export type CompetitionStatus = 'draft' | 'registration_open' | 'in_progress' | 'completed' | 'cancelled';
 
 export interface CompetitionDivision {
   id: string;
   name: string;
-  type: EventType;
-  gender: GenderCategory;
-  minRating?: number;
-  maxRating?: number;
-  minAge?: number;
-  maxAge?: number;
+  skillLevelMin?: number;
+  skillLevelMax?: number;
+  ageMin?: number;
+  ageMax?: number;
+  gender?: 'open' | 'mens' | 'womens' | 'mixed';
 }
 
 export interface CompetitionEntry {
-  id: string;
-  competitionId: string;
   odUserId: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
   odUserName: string;
+  odUserEmail?: string;
+  odUserPhone?: string;
+  odUserPhotoURL?: string;
+  competitionId: string;
   divisionId?: string;
-  teamId?: string;
-  status: 'registered' | 'confirmed' | 'withdrawn';
-  createdAt: number;
+  partnerId?: string;
+  partnerName?: string;
+  teamName?: string;
+  status: 'registered' | 'checked_in' | 'active' | 'eliminated' | 'withdrawn';
+  seed?: number;
+  currentRank?: number;
+  wins: number;
+  losses: number;
+  pointsFor: number;
+  pointsAgainst: number;
+  registeredAt: number;
 }
 
-// ============================================
-// EXPORT ALL
-// ============================================
-
-export default {};
+export interface Competition {
+  id: string;
+  odAccountId?: string;
+  odOrganizationId?: string;
+  clubId?: string;
+  clubName?: string;
+  name: string;
+  description?: string;
+  type: CompetitionType;
+  format: 'singles' | 'doubles' | 'mixed_doubles';
+  status: CompetitionStatus;
+  startDate: number;
+  endDate?: number;
+  registrationDeadline?: number;
+  location?: string;
+  country?: string;
+  region?: string;
+  venue?: string;
+  entryFee?: number;
+  maxEntrants?: number;
+  currentEntrants: number;
+  organizerId: string;
+  organizerName?: string;
+  visibility: 'public' | 'private' | 'club_only';
+  rules?: string;
+  settings?: {
+    matchFormat?: {
+      gamesPerMatch: number;
+      pointsPerGame: number;
+      winBy: number;
+    };
+    pointsPerWin?: number;
+    pointsPerLoss?: number;
+    challengeRange?: number;
+    boxSize?: number;
+    promotionSpots?: number;
+    relegationSpots?: number;
+  };
+  divisions?: CompetitionDivision[];
+  createdAt: number;
+  updatedAt: number;
+}
