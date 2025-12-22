@@ -229,7 +229,11 @@ useEffect(() => {
 
   // Helpers
   // Root Admin implies full permissions
-  const isAppAdmin = userProfile?.isRootAdmin === true || !!userProfile?.roles?.includes('admin');
+  // Check for both 'app_admin' (new) and 'admin' (legacy) role names
+  const isAppAdmin = userProfile?.isRootAdmin === true ||
+                     userProfile?.isAppAdmin === true ||
+                     !!userProfile?.roles?.includes('app_admin') ||
+                     !!userProfile?.roles?.includes('admin');
   const isOrganizer = isAppAdmin || !!userProfile?.roles?.includes('organizer');
 
   const value = {

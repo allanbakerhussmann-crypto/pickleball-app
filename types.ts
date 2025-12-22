@@ -19,12 +19,19 @@
 // USER & PROFILE TYPES
 // ============================================
 
+export type UserRole = 'player' | 'organizer' | 'app_admin';
+
 export interface UserProfile {
+  id?: string;
   odUserId: string;
   odAccountId?: string;
   odOrganizationId?: string;
   email: string;
   displayName: string;
+  // Role management
+  roles?: UserRole[];
+  isAppAdmin?: boolean;
+  isRootAdmin?: boolean;
   phone?: string;
   bio?: string;
   photoURL?: string;

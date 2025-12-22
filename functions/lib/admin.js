@@ -56,8 +56,10 @@ async function isAppAdmin(userId) {
     if (!userDoc.exists)
         return false;
     const userData = userDoc.data();
+    // Check for both 'app_admin' (new) and 'admin' (legacy) role names
     return (userData === null || userData === void 0 ? void 0 : userData.isAppAdmin) === true ||
-        ((userData === null || userData === void 0 ? void 0 : userData.roles) && userData.roles.includes('app_admin'));
+        (userData === null || userData === void 0 ? void 0 : userData.isRootAdmin) === true ||
+        ((userData === null || userData === void 0 ? void 0 : userData.roles) && (userData.roles.includes('app_admin') || userData.roles.includes('admin')));
 }
 /**
  * Check if the calling user is a root admin (cannot be demoted)

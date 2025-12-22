@@ -24,8 +24,10 @@ async function isAppAdmin(userId: string): Promise<boolean> {
   if (!userDoc.exists) return false;
 
   const userData = userDoc.data();
+  // Check for both 'app_admin' (new) and 'admin' (legacy) role names
   return userData?.isAppAdmin === true ||
-         (userData?.roles && userData.roles.includes('app_admin'));
+         userData?.isRootAdmin === true ||
+         (userData?.roles && (userData.roles.includes('app_admin') || userData.roles.includes('admin')));
 }
 
 /**

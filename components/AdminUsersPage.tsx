@@ -192,7 +192,7 @@ export const AdminUsersPage: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                                 const roles = u.roles || [];
                                 const isPlayer = roles.includes('player');
                                 const isOrganizer = roles.includes('organizer');
-                                const isAdmin = roles.includes('admin');
+                                const isAdmin = roles.includes('app_admin') || u.isAppAdmin === true;
                                 
                                 const isRoot = u.isRootAdmin === true;
                                 const isMe = u.id === currentUser?.uid;
