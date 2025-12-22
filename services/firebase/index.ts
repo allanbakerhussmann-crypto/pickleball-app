@@ -244,6 +244,42 @@ export {
   formatPostponeReason,
   getDefaultMakeupDays,
 } from './leaguePostpone';
+// ============================================
+// BOX LEAGUE SERVICE (NEW V05.38)
+// ============================================
+export {
+  // Player operations
+  addBoxLeaguePlayer,
+  getBoxLeaguePlayers,
+  subscribeToBoxLeaguePlayers,
+  updateBoxLeaguePlayer,
+  seedBoxLeaguePlayers,
+  
+  // Match operations
+  generateWeekMatches,
+  getBoxLeagueMatchesForWeek,
+  getBoxLeagueMatchesForBox,
+  subscribeToBoxLeagueMatches,
+  
+  // Week operations
+  createBoxLeagueWeek,
+  getBoxLeagueWeek,
+  getBoxLeagueWeeks,
+  subscribeToBoxLeagueWeeks,
+  
+  // Score entry
+  enterBoxLeagueScore,
+  
+  // Standings & Processing
+  calculateBoxStandings,
+  processBoxLeagueWeek,
+  
+  // Postponement
+  postponeBoxLeagueWeek,
+  
+  // Schedule Generation
+  generateBoxLeagueSchedule as generateNewBoxLeagueSchedule,
+} from './boxLeague';
 
 // Court Bookings
 export {
