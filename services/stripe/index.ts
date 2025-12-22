@@ -244,7 +244,7 @@ export const getUserConnectAccountStatus = async (
   try {
     const callable = httpsCallable<{ accountId: string }, StripeConnectStatus>(
       functions,
-      'stripe_getUserConnectAccountStatus'
+      'stripe_getConnectAccountStatus'
     );
     
     const result = await callable({ accountId });
