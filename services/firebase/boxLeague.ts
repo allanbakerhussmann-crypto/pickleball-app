@@ -45,8 +45,9 @@ import type {
   GenerateBoxLeagueResult,
   RotatingPartnerPattern,
   BoxLeagueTiebreaker,
-  DEFAULT_BOX_TIEBREAKERS,
 } from '../../types/boxLeague';
+// Import the constant separately (not as type)
+import { DEFAULT_BOX_TIEBREAKERS } from '../../types/boxLeague';
 
 // ============================================
 // CONSTANTS
@@ -385,7 +386,7 @@ export async function generateBoxLeagueSchedule(
   input: GenerateBoxLeagueInput
 ): Promise<GenerateBoxLeagueResult> {
   try {
-    const { leagueId, players, settings, numberOfWeeks, startDate } = input;
+    const { leagueId, players, settings, startDate } = input;
     
     if (players.length < 4) {
       return { 
@@ -968,8 +969,7 @@ export async function processBoxLeagueWeek(
     
     for (const p of promoting) {
       const newBox = p.fromBox - 1;
-      const playersInNewBox = players.filter(pl => pl.currentBoxNumber === newBox).length;
-      
+            
       movements.push({
         playerId: p.playerId,
         playerName: p.playerName,
@@ -1107,7 +1107,7 @@ export async function processBoxLeagueWeek(
  */
 async function recalculateLadderPositions(
   leagueId: string,
-  boxSize: 4 | 5 | 6
+  _boxSize: 4 | 5 | 6
 ): Promise<void> {
   const players = await getBoxLeaguePlayers(leagueId);
   
@@ -1124,7 +1124,7 @@ async function recalculateLadderPositions(
   for (let i = 0; i < players.length; i++) {
     const player = players[i];
     const newLadderPosition = i + 1;
-    const newPositionInBox = (i % boxSize) + 1;
+    const newPositionInBox = (i % _boxSize) + 1;
     
     const playerRef = doc(db, LEAGUES_COLLECTION, leagueId, PLAYERS_SUBCOLLECTION, player.id);
     batch.update(playerRef, {
@@ -1142,7 +1142,7 @@ async function recalculateLadderPositions(
  */
 function getBoxAssignmentsFromPlayers(
   players: BoxLeaguePlayer[],
-  boxSize: 4 | 5 | 6
+  _boxSize: 4 | 5 | 6
 ): BoxAssignment[] {
   const boxMap = new Map<number, { ids: string[]; names: string[] }>();
   

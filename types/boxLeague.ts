@@ -57,6 +57,16 @@ export type BoxLeagueTiebreaker =
 /**
  * Default tie-breaker order
  */
+/**
+ * Default tie-breaker order
+ */
+export const DEFAULT_BOX_TIEBREAKERS: BoxLeagueTiebreaker[] = [
+  'wins',
+  'head_to_head',
+  'points_diff',
+  'points_for',
+  'points_against',
+];
 
 
 // ============================================
