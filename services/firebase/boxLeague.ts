@@ -21,7 +21,6 @@ import {
   getDocs,
   setDoc,
   updateDoc,
-  deleteDoc,
   query,
   where,
   orderBy,
@@ -407,7 +406,7 @@ export async function generateBoxLeagueSchedule(
     );
     
     let totalMatchesCreated = 0;
-    const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+    
     
     // Generate first week
     const weekMatches = await generateWeekMatches(
