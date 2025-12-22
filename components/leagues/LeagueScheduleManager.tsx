@@ -1,9 +1,13 @@
 /**
- * LeagueScheduleManager Component V05.34
+ * LeagueScheduleManager Component V05.37
  * 
  * Organizer tool to generate and manage league match schedules.
- * NEW: Court assignment with auto-assign logic
- * FIXED: Removed unused variables (formatTime, addMinutes, DAY_NAMES, timeSlots)
+ * 
+ * V05.37 UPDATES:
+ * - Added "Postpone Week" button for each week
+ * - Added PostponeWeekModal integration
+ * - Added matchesByWeek grouping for postpone functionality
+ * - Added postponed week indicators
  * 
  * FILE LOCATION: components/leagues/LeagueScheduleManager.tsx
  */
@@ -17,6 +21,7 @@ import {
 import { doc, updateDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import type { League, LeagueMember, LeagueMatch, LeagueDivision } from '../../types';
+import { PostponeWeekModal } from './PostponeWeekModal';
 
 // ============================================
 // LOCAL TYPES
@@ -55,6 +60,17 @@ interface LeagueScheduleManagerProps {
   onScheduleGenerated: () => void;
 }
 
+// V05.37: Week info for postpone modal
+interface WeekInfo {
+  weekNumber: number;
+  roundNumber: number;
+  weekDate: number | null;
+  scheduledMatchCount: number;
+  postponedMatchCount: number;
+  completedMatchCount: number;
+  isFullyPostponed: boolean;
+}
+
 // ============================================
 // COMPONENT
 // ============================================
@@ -75,11 +91,14 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [swissRound, setSwissRound] = useState(1);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
-  const [activeTab, setActiveTab] = useState<'generate' | 'courts'>('generate');
+  const [activeTab, setActiveTab] = useState<'generate' | 'courts' | 'weeks'>('generate');
   
   // Court assignment state
   const [selectedMatches, setSelectedMatches] = useState<Set<string>>(new Set());
   const [bulkCourt, setBulkCourt] = useState<string>('');
+
+  // V05.37: Postpone week modal state
+  const [postponeWeekInfo, setPostponeWeekInfo] = useState<WeekInfo | null>(null);
 
   // Get venue settings from league
   const venueSettings = (league.settings as any)?.venueSettings as LeagueVenueSettings | null;
@@ -113,10 +132,11 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     const scheduled = divisionMatches.filter(m => m.status === 'scheduled').length;
     const completed = divisionMatches.filter(m => m.status === 'completed').length;
     const pending = divisionMatches.filter(m => m.status === 'pending_confirmation').length;
+    const postponed = divisionMatches.filter(m => m.status === 'postponed').length;
     const withCourt = divisionMatches.filter(m => m.court).length;
     const total = divisionMatches.length;
     
-    return { scheduled, completed, pending, withCourt, total };
+    return { scheduled, completed, pending, postponed, withCourt, total };
   }, [divisionMatches]);
 
   const currentSwissRound = useMemo(() => {
@@ -154,6 +174,50 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     return grouped;
   }, [divisionMatches]);
 
+  // V05.37: Matches grouped by week with stats
+  const matchesByWeek = useMemo(() => {
+    const grouped: Record<number, LeagueMatch[]> = {};
+    divisionMatches.forEach(m => {
+      const week = m.weekNumber || 1;
+      if (!grouped[week]) grouped[week] = [];
+      grouped[week].push(m);
+    });
+    return grouped;
+  }, [divisionMatches]);
+
+  // V05.37: Week info for display and postpone modal
+  const weekInfoList = useMemo((): WeekInfo[] => {
+    const weeks: WeekInfo[] = [];
+    
+    Object.entries(matchesByWeek).forEach(([weekStr, weekMatches]) => {
+      const weekNumber = parseInt(weekStr);
+      const scheduledCount = weekMatches.filter(m => m.status === 'scheduled').length;
+      const postponedCount = weekMatches.filter(m => m.status === 'postponed').length;
+      const completedCount = weekMatches.filter(m => m.status === 'completed').length;
+      
+      // Get the earliest scheduled date for this week
+      const dates = weekMatches
+        .map(m => m.scheduledDate)
+        .filter((d): d is number => d !== null && d !== undefined);
+      const weekDate = dates.length > 0 ? Math.min(...dates) : null;
+      
+      // Get round number (should be same for all matches in week)
+      const roundNumber = weekMatches[0]?.roundNumber || 1;
+      
+      weeks.push({
+        weekNumber,
+        roundNumber,
+        weekDate,
+        scheduledMatchCount: scheduledCount,
+        postponedMatchCount: postponedCount,
+        completedMatchCount: completedCount,
+        isFullyPostponed: scheduledCount === 0 && postponedCount > 0 && completedCount === 0,
+      });
+    });
+    
+    return weeks.sort((a, b) => a.weekNumber - b.weekNumber);
+  }, [matchesByWeek]);
+
   // Format info
   const formatInfo = useMemo(() => {
     switch (league.format) {
@@ -165,31 +229,25 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
           description: `Everyone plays everyone ${rounds === 1 ? 'once' : `${rounds} times`}`,
           expectedMatches: matchesPerRound * rounds,
         };
-        
       case 'swiss':
         const swissRounds = (league.settings as any)?.swissSettings?.rounds || 4;
         return {
           description: `${swissRounds} rounds, paired by standings`,
           expectedMatches: Math.floor(divisionMembers.length / 2) * swissRounds,
         };
-        
       case 'box_league':
         const boxSize = (league.settings as any)?.boxSettings?.playersPerBox || 4;
-        const numBoxes = Math.ceil(divisionMembers.length / boxSize);
-        const matchesPerBox = (boxSize * (boxSize - 1)) / 2;
         return {
-          description: `${numBoxes} boxes of ~${boxSize} players each`,
-          expectedMatches: numBoxes * matchesPerBox,
+          description: `Boxes of ${boxSize}, promotion/relegation`,
+          expectedMatches: null,
         };
-        
       case 'ladder':
         return {
-          description: 'Challenge system - no pre-generated matches',
-          expectedMatches: 0,
+          description: 'Challenge-based ranking',
+          expectedMatches: null,
         };
-        
       default:
-        return { description: '', expectedMatches: 0 };
+        return { description: 'Unknown format', expectedMatches: null };
     }
   }, [league.format, league.settings, divisionMembers.length]);
 
@@ -199,7 +257,7 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
   const handleGenerate = async () => {
     if (league.format === 'ladder') {
-      setError('Ladder leagues use challenges. Matches are created when players challenge each other.');
+      setError('Ladder leagues use on-demand challenges. Matches are created when players challenge each other.');
       return;
     }
 
@@ -279,55 +337,9 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     }
   };
 
-  // Assign a single match to a court
-  const handleAssignCourt = async (matchId: string, courtName: string) => {
-    try {
-      const matchRef = doc(db, 'leagues', league.id, 'matches', matchId);
-      await updateDoc(matchRef, { 
-        court: courtName || null,
-        venue: venueSettings?.venueName || null,
-      });
-      onScheduleGenerated();
-    } catch (err: any) {
-      setError(err.message || 'Failed to assign court');
-    }
-  };
-
-  // Bulk assign selected matches
-  const handleBulkAssign = async () => {
-    if (!bulkCourt || selectedMatches.size === 0) return;
-    
-    setAssigning(true);
-    setError(null);
-
-    try {
-      const promises = Array.from(selectedMatches).map(matchId => {
-        const matchRef = doc(db, 'leagues', league.id, 'matches', matchId);
-        return updateDoc(matchRef, { 
-          court: bulkCourt,
-          venue: venueSettings?.venueName || null,
-        });
-      });
-
-      await Promise.all(promises);
-      setSelectedMatches(new Set());
-      setBulkCourt('');
-      onScheduleGenerated();
-    } catch (err: any) {
-      setError(err.message || 'Failed to bulk assign courts');
-    } finally {
-      setAssigning(false);
-    }
-  };
-
-  // Auto-assign courts to all unassigned matches
+  // Auto-assign courts
   const handleAutoAssignCourts = async () => {
-    if (!hasVenue || unassignedMatches.length === 0) {
-      if (unassignedMatches.length === 0) {
-        setError('No unassigned matches to assign');
-      }
-      return;
-    }
+    if (!hasVenue || unassignedMatches.length === 0) return;
 
     setAssigning(true);
     setError(null);
@@ -336,11 +348,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       const activeCourts = courts.filter(c => c.active);
       if (activeCourts.length === 0) {
         setError('No active courts available');
-        setAssigning(false);
         return;
       }
 
-      // Track court assignments for balancing
+      // Track court usage for balancing
       const courtAssignments: Record<string, number> = {};
       activeCourts.forEach(c => { courtAssignments[c.name] = courtUsage[c.name] || 0; });
 
@@ -421,6 +432,33 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     }
   };
 
+  // Bulk assign courts
+  const handleBulkAssign = async () => {
+    if (!bulkCourt || selectedMatches.size === 0) return;
+
+    setAssigning(true);
+    setError(null);
+
+    try {
+      const updates = Array.from(selectedMatches).map(matchId => {
+        const matchRef = doc(db, 'leagues', league.id, 'matches', matchId);
+        return updateDoc(matchRef, { 
+          court: bulkCourt,
+          venue: venueSettings?.venueName || null,
+        });
+      });
+
+      await Promise.all(updates);
+      setSelectedMatches(new Set());
+      setBulkCourt('');
+      onScheduleGenerated();
+    } catch (err: any) {
+      setError(err.message || 'Failed to assign courts');
+    } finally {
+      setAssigning(false);
+    }
+  };
+
   // Toggle match selection
   const toggleMatchSelection = (matchId: string) => {
     const newSet = new Set(selectedMatches);
@@ -435,6 +473,25 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   // Select all unassigned
   const selectAllUnassigned = () => {
     setSelectedMatches(new Set(unassignedMatches.map(m => m.id)));
+  };
+
+  // V05.37: Handle postpone week
+  const handlePostponeWeek = (weekInfo: WeekInfo) => {
+    setPostponeWeekInfo(weekInfo);
+  };
+
+  const handlePostponeWeekSuccess = () => {
+    setPostponeWeekInfo(null);
+    onScheduleGenerated();
+  };
+
+  // Helper: Format date
+  const formatDate = (timestamp: number | null) => {
+    if (!timestamp) return 'TBD';
+    return new Date(timestamp).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    });
   };
 
   // ============================================
@@ -453,19 +510,34 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
         </p>
       </div>
 
-      {/* Tabs */}
-      {hasVenue && (
-        <div className="flex border-b border-gray-700">
-          <button
-            onClick={() => setActiveTab('generate')}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${
-              activeTab === 'generate' 
-                ? 'bg-gray-700 text-white border-b-2 border-blue-500' 
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            🎲 Generate
-          </button>
+      {/* Tabs - V05.37: Added Weeks tab */}
+      <div className="flex border-b border-gray-700">
+        <button
+          onClick={() => setActiveTab('generate')}
+          className={`flex-1 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'generate' 
+              ? 'bg-gray-700 text-white border-b-2 border-blue-500' 
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          🎲 Generate
+        </button>
+        <button
+          onClick={() => setActiveTab('weeks')}
+          className={`flex-1 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'weeks' 
+              ? 'bg-gray-700 text-white border-b-2 border-blue-500' 
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          📆 Weeks
+          {matchStats.postponed > 0 && (
+            <span className="ml-1 bg-yellow-600/20 text-yellow-400 text-xs px-1.5 py-0.5 rounded">
+              {matchStats.postponed}
+            </span>
+          )}
+        </button>
+        {hasVenue && (
           <button
             onClick={() => setActiveTab('courts')}
             className={`flex-1 py-3 text-sm font-medium transition-colors ${
@@ -474,332 +546,437 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                 : 'text-gray-400 hover:text-white'
             }`}
           >
-            🎾 Courts
-            {unassignedMatches.length > 0 && (
-              <span className="ml-2 bg-yellow-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                {unassignedMatches.length}
-              </span>
-            )}
+            🏟️ Courts
           </button>
+        )}
+      </div>
+
+      {/* Division Selector */}
+      {divisions.length > 0 && (
+        <div className="p-4 border-b border-gray-700">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            <button
+              onClick={() => setSelectedDivisionId(null)}
+              className={`px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap ${
+                !selectedDivisionId ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+              }`}
+            >
+              All
+            </button>
+            {divisions.map(div => (
+              <button
+                key={div.id}
+                onClick={() => setSelectedDivisionId(div.id)}
+                className={`px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap ${
+                  selectedDivisionId === div.id ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+                }`}
+              >
+                {div.name}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      <div className="p-4 space-y-4">
-        {/* Division Selector */}
-        {divisions.length > 0 && (
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Division</label>
-            <select
-              value={selectedDivisionId || ''}
-              onChange={e => setSelectedDivisionId(e.target.value || null)}
-              className="w-full bg-gray-900 border border-gray-700 text-white p-2 rounded-lg"
-            >
-              <option value="">All Divisions</option>
-              {divisions.map(d => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
+      {/* Error/Result Display */}
+      {error && (
+        <div className="mx-4 mt-4 p-3 bg-red-900/30 border border-red-600 rounded-lg text-red-400 text-sm">
+          {error}
+        </div>
+      )}
+      {result && (
+        <div className={`mx-4 mt-4 p-3 rounded-lg text-sm ${
+          result.success 
+            ? 'bg-green-900/30 border border-green-600 text-green-400'
+            : 'bg-red-900/30 border border-red-600 text-red-400'
+        }`}>
+          {result.success 
+            ? result.matchesCreated > 0 
+              ? `✅ Generated ${result.matchesCreated} matches!`
+              : result.error
+            : `❌ ${result.error}`
+          }
+        </div>
+      )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="bg-gray-900 p-3 rounded-lg text-center">
-            <div className="text-2xl font-bold text-white">{matchStats.total}</div>
-            <div className="text-xs text-gray-500">Total Matches</div>
+      {/* GENERATE TAB */}
+      {activeTab === 'generate' && (
+        <div className="p-4 space-y-4">
+          {/* Format Info */}
+          <div className="bg-gray-900/50 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-medium text-white">{league.format.replace('_', ' ').toUpperCase()}</span>
+              <span className="text-sm text-gray-400">{divisionMembers.length} members</span>
+            </div>
+            <p className="text-sm text-gray-400">{formatInfo.description}</p>
+            {formatInfo.expectedMatches && (
+              <p className="text-xs text-gray-500 mt-1">
+                Expected: ~{formatInfo.expectedMatches} matches
+              </p>
+            )}
           </div>
-          <div className="bg-gray-900 p-3 rounded-lg text-center">
-            <div className="text-2xl font-bold text-blue-400">{matchStats.scheduled}</div>
-            <div className="text-xs text-gray-500">Scheduled</div>
+
+          {/* Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-gray-900 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-white">{matchStats.total}</div>
+              <div className="text-xs text-gray-500">Total</div>
+            </div>
+            <div className="bg-gray-900 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-blue-400">{matchStats.scheduled}</div>
+              <div className="text-xs text-gray-500">Scheduled</div>
+            </div>
+            <div className="bg-gray-900 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-green-400">{matchStats.completed}</div>
+              <div className="text-xs text-gray-500">Completed</div>
+            </div>
+            <div className="bg-gray-900 rounded-lg p-3 text-center">
+              <div className="text-2xl font-bold text-yellow-400">{matchStats.postponed}</div>
+              <div className="text-xs text-gray-500">Postponed</div>
+            </div>
           </div>
-          <div className="bg-gray-900 p-3 rounded-lg text-center">
-            <div className="text-2xl font-bold text-green-400">{matchStats.completed}</div>
-            <div className="text-xs text-gray-500">Completed</div>
-          </div>
-          {hasVenue && (
-            <div className="bg-gray-900 p-3 rounded-lg text-center">
-              <div className="text-2xl font-bold text-purple-400">{matchStats.withCourt}</div>
-              <div className="text-xs text-gray-500">With Court</div>
+
+          {/* Swiss Round Selector */}
+          {league.format === 'swiss' && (
+            <div className="bg-gray-900/50 rounded-lg p-4">
+              <label className="block text-sm text-gray-400 mb-2">Generate Round:</label>
+              <div className="flex items-center gap-3">
+                <select
+                  value={swissRound}
+                  onChange={(e) => setSwissRound(parseInt(e.target.value))}
+                  className="bg-gray-900 border border-gray-700 text-white p-2 rounded"
+                >
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map(r => (
+                    <option key={r} value={r}>Round {r}</option>
+                  ))}
+                </select>
+                <span className="text-sm text-gray-500">
+                  Current: Round {currentSwissRound - 1 || 'None'}
+                </span>
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Error/Success Messages */}
-        {error && (
-          <div className="bg-red-900/20 border border-red-600 text-red-400 p-3 rounded-lg text-sm">
-            {error}
-          </div>
-        )}
-        
-        {result && (
-          <div className={`p-3 rounded-lg text-sm ${
-            result.success 
-              ? 'bg-green-900/20 border border-green-600 text-green-400' 
-              : 'bg-red-900/20 border border-red-600 text-red-400'
-          }`}>
-            {result.success 
-              ? result.matchesCreated > 0 
-                ? `✓ Generated ${result.matchesCreated} matches` 
-                : result.error 
-              : result.error}
-          </div>
-        )}
-
-        {/* Generate Tab */}
-        {activeTab === 'generate' && (
-          <>
-            {/* Format Info */}
-            <div className="bg-gray-900/50 p-3 rounded-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-gray-400 text-sm">Format: </span>
-                  <span className="text-white font-medium capitalize">
-                    {league.format.replace('_', ' ')}
-                  </span>
-                </div>
-                <div className="text-sm text-gray-500">
-                  {divisionMembers.length} members
-                </div>
-              </div>
-              <p className="text-sm text-gray-500 mt-1">{formatInfo.description}</p>
-              {formatInfo.expectedMatches > 0 && (
-                <p className="text-xs text-gray-600 mt-1">
-                  Expected: ~{formatInfo.expectedMatches} matches
-                </p>
-              )}
-            </div>
-
-            {/* Swiss Round Selector */}
-            {league.format === 'swiss' && (
-              <div className="bg-gray-900/50 p-3 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-400">Generate Round:</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setSwissRound(Math.max(1, swissRound - 1))}
-                      className="w-8 h-8 bg-gray-700 rounded text-white"
-                      disabled={swissRound <= 1}
-                    >
-                      -
-                    </button>
-                    <span className="text-white font-bold w-8 text-center">{swissRound}</span>
-                    <button
-                      onClick={() => setSwissRound(swissRound + 1)}
-                      className="w-8 h-8 bg-gray-700 rounded text-white"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  Current highest round in schedule: {currentSwissRound - 1 || 'None'}
-                </p>
-              </div>
-            )}
-
-            {/* Generate Button */}
-            {league.format !== 'ladder' && (
-              <button
-                onClick={handleGenerate}
-                disabled={generating || divisionMembers.length < 2}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
-              >
-                {generating ? '⏳ Generating...' : `🎲 Generate ${league.format === 'swiss' ? `Round ${swissRound}` : 'Schedule'}`}
-              </button>
-            )}
-
-            {league.format === 'ladder' && (
-              <div className="text-center py-4 text-gray-400">
-                <p>🪜 Ladder leagues don't need pre-generated schedules.</p>
-                <p className="text-sm mt-1">Matches are created when players challenge each other.</p>
-              </div>
-            )}
-
-            {/* Clear Matches */}
+          {/* Action Buttons */}
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={handleGenerate}
+              disabled={generating || divisionMembers.length < 2}
+              className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
+            >
+              {generating ? '⏳ Generating...' : league.format === 'swiss' ? `Generate Round ${swissRound}` : '🎲 Generate Schedule'}
+            </button>
+            
             {matchStats.scheduled > 0 && (
               <button
                 onClick={() => setShowConfirmClear(true)}
-                className="w-full py-2 border border-red-600 text-red-400 rounded-lg hover:bg-red-600/10 transition-colors text-sm"
+                className="px-4 py-3 bg-red-600/20 border border-red-600 text-red-400 hover:bg-red-600/30 rounded-lg font-semibold transition-colors"
               >
-                🗑️ Clear Scheduled Matches ({matchStats.scheduled})
+                🗑️ Clear
               </button>
             )}
-          </>
-        )}
+          </div>
 
-        {/* Courts Tab */}
-        {activeTab === 'courts' && hasVenue && (
-          <>
-            {/* Court Usage */}
-            <div className="bg-gray-900/50 p-3 rounded-lg">
-              <h4 className="text-sm font-medium text-white mb-2">Court Usage</h4>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {courts.map(court => (
-                  <div 
-                    key={court.id} 
-                    className={`p-2 rounded text-center ${
-                      court.active ? 'bg-gray-800' : 'bg-gray-800/50'
+          {/* Ladder Note */}
+          {league.format === 'ladder' && (
+            <div className="bg-yellow-900/20 border border-yellow-600 rounded-lg p-4">
+              <p className="text-yellow-400 text-sm">
+                ⚠️ Ladder leagues use on-demand challenges. Players challenge each other to create matches.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+{/* ================================================
+    END OF PART 1 - PASTE PART 2 DIRECTLY BELOW THIS
+    ================================================ */}
+
+
+      {/* V05.37: WEEKS TAB - For managing weeks and postponements */}
+      {activeTab === 'weeks' && (
+        <div className="p-4 space-y-4">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="font-medium text-white">Week Overview</h4>
+            <span className="text-sm text-gray-400">
+              {weekInfoList.length} week{weekInfoList.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {weekInfoList.length === 0 ? (
+            <div className="bg-gray-900/50 rounded-lg p-8 text-center text-gray-400">
+              No weeks scheduled yet. Generate a schedule first.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {weekInfoList.map(weekInfo => {
+                const weekMatches = matchesByWeek[weekInfo.weekNumber] || [];
+                const hasPostponed = weekInfo.postponedMatchCount > 0;
+                const allPostponed = weekInfo.isFullyPostponed;
+                const allCompleted = weekInfo.completedMatchCount === weekMatches.length && weekMatches.length > 0;
+                
+                return (
+                  <div
+                    key={weekInfo.weekNumber}
+                    className={`bg-gray-900 rounded-lg p-4 border ${
+                      allPostponed ? 'border-yellow-500/50 bg-yellow-900/10' :
+                      allCompleted ? 'border-green-500/50' :
+                      'border-gray-700'
                     }`}
                   >
-                    <div className={`font-medium ${court.active ? 'text-white' : 'text-gray-500'}`}>
-                      {court.name}
-                    </div>
-                    <div className="text-lg font-bold text-blue-400">
-                      {courtUsage[court.name] || 0}
-                    </div>
-                    <div className="text-xs text-gray-500">matches</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Auto-Assign Button */}
-            {unassignedMatches.length > 0 && (
-              <button
-                onClick={handleAutoAssignCourts}
-                disabled={assigning}
-                className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
-              >
-                {assigning ? '⏳ Assigning...' : `⚡ Auto-Assign ${unassignedMatches.length} Matches`}
-              </button>
-            )}
-
-            {/* Bulk Actions */}
-            {selectedMatches.size > 0 && (
-              <div className="flex items-center gap-2 p-3 bg-blue-900/20 border border-blue-600 rounded-lg">
-                <span className="text-blue-400 text-sm">{selectedMatches.size} selected</span>
-                <select
-                  value={bulkCourt}
-                  onChange={e => setBulkCourt(e.target.value)}
-                  className="flex-1 bg-gray-900 border border-gray-700 text-white p-2 rounded text-sm"
-                >
-                  <option value="">Select court...</option>
-                  {courts.filter(c => c.active).map(c => (
-                    <option key={c.id} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={handleBulkAssign}
-                  disabled={!bulkCourt || assigning}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded text-sm font-medium"
-                >
-                  Assign
-                </button>
-                <button
-                  onClick={() => setSelectedMatches(new Set())}
-                  className="px-3 py-2 text-gray-400 hover:text-white text-sm"
-                >
-                  Clear
-                </button>
-              </div>
-            )}
-
-            {/* Match List by Round */}
-            <div className="space-y-4">
-              {Object.entries(matchesByRound)
-                .sort(([a], [b]) => Number(a) - Number(b))
-                .map(([round, roundMatches]) => (
-                  <div key={round} className="bg-gray-900/50 rounded-lg overflow-hidden">
-                    <div className="px-3 py-2 bg-gray-900 border-b border-gray-700 flex items-center justify-between">
-                      <span className="font-medium text-white">
-                        Round {round}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {roundMatches.filter(m => m.court).length}/{roundMatches.length} assigned
-                      </span>
-                    </div>
-                    <div className="divide-y divide-gray-700">
-                      {roundMatches.map(match => {
-                        const isSelected = selectedMatches.has(match.id);
-                        const isCompleted = match.status === 'completed';
-                        
-                        return (
-                          <div 
-                            key={match.id} 
-                            className={`p-3 flex items-center gap-3 ${
-                              isCompleted ? 'bg-gray-800/30' : ''
-                            }`}
-                          >
-                            {!isCompleted && (
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleMatchSelection(match.id)}
-                                className="w-4 h-4 accent-blue-500"
-                              />
-                            )}
-                            
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm text-white truncate">
-                                {match.memberAName}
-                              </div>
-                              <div className="text-xs text-gray-500">vs</div>
-                              <div className="text-sm text-white truncate">
-                                {match.memberBName}
-                              </div>
-                            </div>
-                            
-                            {isCompleted ? (
-                              <span className="text-xs text-green-400 bg-green-900/30 px-2 py-1 rounded">
-                                ✓ Done
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                          allPostponed ? 'bg-yellow-600/20 text-yellow-400' :
+                          allCompleted ? 'bg-green-600/20 text-green-400' :
+                          'bg-blue-600/20 text-blue-400'
+                        }`}>
+                          {weekInfo.weekNumber}
+                        </div>
+                        <div>
+                          <div className="font-medium text-white flex items-center gap-2">
+                            Week {weekInfo.weekNumber}
+                            {allPostponed && (
+                              <span className="text-xs bg-yellow-600/20 text-yellow-400 px-2 py-0.5 rounded">
+                                ⏸️ Postponed
                               </span>
-                            ) : (
-                              <select
-                                value={match.court || ''}
-                                onChange={e => handleAssignCourt(match.id, e.target.value)}
-                                className={`bg-gray-800 border text-sm p-1.5 rounded ${
-                                  match.court 
-                                    ? 'border-green-600 text-green-400' 
-                                    : 'border-gray-600 text-gray-400'
-                                }`}
-                              >
-                                <option value="">No court</option>
-                                {courts.filter(c => c.active).map(c => (
-                                  <option key={c.id} value={c.name}>{c.name}</option>
-                                ))}
-                              </select>
+                            )}
+                            {allCompleted && (
+                              <span className="text-xs bg-green-600/20 text-green-400 px-2 py-0.5 rounded">
+                                ✅ Complete
+                              </span>
                             )}
                           </div>
-                        );
-                      })}
+                          <div className="text-sm text-gray-400 flex items-center gap-3">
+                            <span>Round {weekInfo.roundNumber}</span>
+                            <span>•</span>
+                            <span>{weekMatches.length} matches</span>
+                            {weekInfo.weekDate && (
+                              <>
+                                <span>•</span>
+                                <span>{formatDate(weekInfo.weekDate)}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {/* Match status breakdown */}
+                        <div className="flex items-center gap-1 text-xs">
+                          {weekInfo.completedMatchCount > 0 && (
+                            <span className="bg-green-600/20 text-green-400 px-2 py-1 rounded">
+                              {weekInfo.completedMatchCount} done
+                            </span>
+                          )}
+                          {weekInfo.scheduledMatchCount > 0 && (
+                            <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded">
+                              {weekInfo.scheduledMatchCount} pending
+                            </span>
+                          )}
+                          {weekInfo.postponedMatchCount > 0 && (
+                            <span className="bg-yellow-600/20 text-yellow-400 px-2 py-1 rounded">
+                              {weekInfo.postponedMatchCount} postponed
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Postpone Week Button */}
+                        {weekInfo.scheduledMatchCount > 0 && !allCompleted && (
+                          <button
+                            onClick={() => handlePostponeWeek(weekInfo)}
+                            className="px-3 py-1.5 bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30 rounded text-sm font-medium transition-colors"
+                          >
+                            ⏸️ Postpone Week
+                          </button>
+                        )}
+                        
+                        {/* Reschedule if already postponed */}
+                        {hasPostponed && weekInfo.scheduledMatchCount === 0 && !allCompleted && (
+                          <button
+                            onClick={() => handlePostponeWeek(weekInfo)}
+                            className="px-3 py-1.5 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded text-sm font-medium transition-colors"
+                          >
+                            📅 Reschedule
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Expanded match list (optional - could be toggled) */}
+                    {hasPostponed && (
+                      <div className="mt-3 pt-3 border-t border-gray-700">
+                        <div className="text-xs text-gray-500 mb-2">Postponed matches:</div>
+                        <div className="space-y-1">
+                          {weekMatches.filter(m => m.status === 'postponed').slice(0, 3).map(match => (
+                            <div key={match.id} className="text-sm text-gray-400 flex items-center gap-2">
+                              <span className="text-yellow-400">⏸️</span>
+                              <span>{match.memberAName} vs {match.memberBName}</span>
+                              {match.postponedReason && (
+                                <span className="text-xs text-gray-500">- {match.postponedReason}</span>
+                              )}
+                            </div>
+                          ))}
+                          {weekMatches.filter(m => m.status === 'postponed').length > 3 && (
+                            <div className="text-xs text-gray-500">
+                              +{weekMatches.filter(m => m.status === 'postponed').length - 3} more
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
+                );
+              })}
             </div>
+          )}
+        </div>
+      )}
 
-            {/* Quick Actions */}
-            <div className="flex gap-2">
-              {unassignedMatches.length > 0 && (
-                <button
-                  onClick={selectAllUnassigned}
-                  className="flex-1 py-2 border border-gray-600 text-gray-400 rounded-lg hover:border-gray-500 hover:text-white text-sm"
-                >
-                  Select All Unassigned
-                </button>
-              )}
-              {matchStats.withCourt > 0 && (
-                <button
-                  onClick={handleClearCourtAssignments}
-                  disabled={assigning}
-                  className="flex-1 py-2 border border-yellow-600 text-yellow-400 rounded-lg hover:bg-yellow-600/10 text-sm"
-                >
-                  Clear All Courts
-                </button>
-              )}
-            </div>
-          </>
-        )}
-
-        {/* No Venue Message */}
-        {!hasVenue && activeTab === 'courts' && (
-          <div className="text-center py-8 text-gray-400">
-            <p>🏟️ No venue configured for this league.</p>
-            <p className="text-sm mt-2">
-              Edit the league to add venue and court settings.
-            </p>
+      {/* COURTS TAB */}
+      {activeTab === 'courts' && hasVenue && (
+        <div className="p-4 space-y-4">
+          {/* Court Usage Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {courts.filter(c => c.active).map(court => (
+              <div key={court.id} className="bg-gray-900 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold text-white">{courtUsage[court.name] || 0}</div>
+                <div className="text-xs text-gray-500 truncate">{court.name}</div>
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+
+          {/* Auto-Assign Button */}
+          {unassignedMatches.length > 0 && (
+            <button
+              onClick={handleAutoAssignCourts}
+              disabled={assigning}
+              className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+            >
+              {assigning ? '⏳ Assigning...' : `⚡ Auto-Assign ${unassignedMatches.length} Matches`}
+            </button>
+          )}
+
+          {/* Bulk Actions */}
+          {selectedMatches.size > 0 && (
+            <div className="flex items-center gap-2 p-3 bg-blue-900/20 border border-blue-600 rounded-lg">
+              <span className="text-blue-400 text-sm">{selectedMatches.size} selected</span>
+              <select
+                value={bulkCourt}
+                onChange={e => setBulkCourt(e.target.value)}
+                className="flex-1 bg-gray-900 border border-gray-700 text-white p-2 rounded text-sm"
+              >
+                <option value="">Select court...</option>
+                {courts.filter(c => c.active).map(c => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleBulkAssign}
+                disabled={!bulkCourt || assigning}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded text-sm font-medium"
+              >
+                Assign
+              </button>
+              <button
+                onClick={() => setSelectedMatches(new Set())}
+                className="px-3 py-2 text-gray-400 hover:text-white text-sm"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
+          {/* Match List by Round */}
+          <div className="space-y-4">
+            {Object.entries(matchesByRound)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([round, roundMatches]) => (
+                <div key={round} className="bg-gray-900/50 rounded-lg overflow-hidden">
+                  <div className="px-3 py-2 bg-gray-900 border-b border-gray-700 flex items-center justify-between">
+                    <span className="font-medium text-white">
+                      Round {round}
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {roundMatches.filter(m => m.court).length}/{roundMatches.length} assigned
+                    </span>
+                  </div>
+                  <div className="divide-y divide-gray-700">
+                    {roundMatches.map(match => {
+                      const isSelected = selectedMatches.has(match.id);
+                      const isCompleted = match.status === 'completed';
+                      const isPostponed = match.status === 'postponed';
+                      
+                      return (
+                        <div 
+                          key={match.id} 
+                          className={`p-3 flex items-center gap-3 ${
+                            isCompleted ? 'opacity-50' : 
+                            isPostponed ? 'bg-yellow-900/10' :
+                            ''
+                          }`}
+                        >
+                          {!isCompleted && !isPostponed && (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleMatchSelection(match.id)}
+                              className="w-4 h-4 rounded bg-gray-700 border-gray-600"
+                            />
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-white truncate">
+                              {match.memberAName} vs {match.memberBName}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              Week {match.weekNumber}
+                              {isPostponed && <span className="text-yellow-400 ml-2">⏸️ Postponed</span>}
+                            </div>
+                          </div>
+                          {match.court ? (
+                            <span className="text-xs bg-green-600/20 text-green-400 px-2 py-1 rounded">
+                              {match.court}
+                            </span>
+                          ) : !isCompleted && !isPostponed ? (
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  const matchRef = doc(db, 'leagues', league.id, 'matches', match.id);
+                                  updateDoc(matchRef, { 
+                                    court: e.target.value,
+                                    venue: venueSettings?.venueName || null,
+                                  }).then(() => onScheduleGenerated());
+                                }
+                              }}
+                              className="bg-gray-900 border border-gray-700 text-white text-xs p-1 rounded"
+                            >
+                              <option value="">Assign...</option>
+                              {courts.filter(c => c.active).map(c => (
+                                <option key={c.id} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+          </div>
+
+          {/* Clear All Assignments */}
+          {matchStats.withCourt > 0 && (
+            <button
+              onClick={handleClearCourtAssignments}
+              disabled={assigning}
+              className="w-full py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm"
+            >
+              Clear All Court Assignments ({matchStats.withCourt})
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Clear Confirmation Modal */}
       {showConfirmClear && (
@@ -832,6 +1009,23 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* V05.37: Postpone Week Modal */}
+      {postponeWeekInfo && (
+        <PostponeWeekModal
+          isOpen={true}
+          onClose={() => setPostponeWeekInfo(null)}
+          leagueId={league.id}
+          divisionId={selectedDivisionId || undefined}
+          weekNumber={postponeWeekInfo.weekNumber}
+          roundNumber={postponeWeekInfo.roundNumber}
+          weekDate={postponeWeekInfo.weekDate || undefined}
+          scheduledMatchCount={postponeWeekInfo.scheduledMatchCount}
+          currentUserId=""
+          currentUserName="Organizer"
+          onSuccess={handlePostponeWeekSuccess}
+        />
       )}
     </div>
   );

@@ -1,14 +1,19 @@
 /**
- * LeagueDetail Component
+ * LeagueDetail Component V05.37
  * 
  * Shows league details, standings, matches, and allows joining/playing.
- * Updated for V05.17 with divisions, partner support, improved UI.
+ * 
+ * UPDATED V05.37:
+ * - Added yellow badge for postponed matches
+ * - Added postpone button for organizers
+ * - Added PostponeMatchModal integration
+ * - Added postponed matches indicator/count
  * 
  * FILE LOCATION: components/leagues/LeagueDetail.tsx
- * VERSION: V05.17
+ * VERSION: V05.37
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -29,6 +34,7 @@ import type {
   LeagueDivision,
 } from '../../types';
 import { LeagueStandings } from './LeagueStandings';
+import { PostponeMatchModal } from './PostponeMatchModal';
 
 // ============================================
 // TYPES
@@ -125,6 +131,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     swissRounds: 4,
   });
   const [saving, setSaving] = useState(false);
+  
+  // V05.37: Postpone modal state
+  const [postponeModalMatch, setPostponeModalMatch] = useState<LeagueMatch | null>(null);
+  const [showPostponedOnly, setShowPostponedOnly] = useState(false);
 
   // ============================================
   // DATA LOADING
@@ -279,6 +289,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   }, [leagueId, currentUser, members]);
 
   // ============================================
+  // COMPUTED VALUES (V05.37)
+  // ============================================
+
+  // Count postponed matches
+  const postponedMatchCount = useMemo(() => {
+    return matches.filter(m => m.status === 'postponed').length;
+  }, [matches]);
+
+  // ============================================
   // HELPERS
   // ============================================
 
@@ -314,6 +333,36 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     );
   };
 
+  // V05.37: Match status badge with postponed support
+  const getMatchStatusBadge = (status: string) => {
+    const styles: Record<string, string> = {
+      scheduled: 'bg-gray-600/20 text-gray-400 border-gray-600',
+      pending_confirmation: 'bg-yellow-600/20 text-yellow-400 border-yellow-600',
+      completed: 'bg-green-600/20 text-green-400 border-green-600',
+      disputed: 'bg-red-600/20 text-red-400 border-red-600',
+      cancelled: 'bg-gray-600/20 text-gray-500 border-gray-600',
+      forfeit: 'bg-orange-600/20 text-orange-400 border-orange-600',
+      no_show: 'bg-red-600/20 text-red-400 border-red-600',
+      postponed: 'bg-yellow-600/20 text-yellow-400 border-yellow-500',
+      rescheduled: 'bg-blue-600/20 text-blue-400 border-blue-600',
+    };
+    const labels: Record<string, string> = {
+      scheduled: 'Scheduled',
+      pending_confirmation: 'Awaiting Confirmation',
+      completed: 'Completed',
+      disputed: 'Disputed',
+      cancelled: 'Cancelled',
+      forfeit: 'Forfeit',
+      no_show: 'No Show',
+      postponed: '⏸️ Postponed',
+      rescheduled: '📅 Rescheduled',
+    };
+    return {
+      className: styles[status] || styles.scheduled,
+      label: labels[status] || status,
+    };
+  };
+
   const getFormatLabel = (format: string) => {
     const labels: Record<string, string> = {
       ladder: '🪜 Ladder',
@@ -334,16 +383,23 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     return labels[type] || type;
   };
 
-
   // Filter members by division
   const filteredMembers = selectedDivisionId
     ? members.filter(m => m.divisionId === selectedDivisionId)
     : members;
 
-  // Filter matches by division
-  const filteredMatches = selectedDivisionId
-    ? matches.filter(m => m.divisionId === selectedDivisionId)
-    : matches;
+  // Filter matches by division and postponed filter (V05.37)
+  const filteredMatches = useMemo(() => {
+    let result = selectedDivisionId
+      ? matches.filter(m => m.divisionId === selectedDivisionId)
+      : matches;
+    
+    if (showPostponedOnly) {
+      result = result.filter(m => m.status === 'postponed');
+    }
+    
+    return result;
+  }, [matches, selectedDivisionId, showPostponedOnly]);
 
   // ============================================
   // ACTIONS
@@ -416,6 +472,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       alert('Failed to leave: ' + e.message);
     }
   };
+
   const handleChallenge = (member: LeagueMember) => {
     // TODO: Implement challenge modal
     alert(`Challenge ${member.displayName} - Coming soon!`);
@@ -426,6 +483,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     // Refresh league data after schedule generation
     const updated = await getLeague(leagueId);
     if (updated) setLeague(updated);
+  };
+
+  // V05.37: Handle postpone modal
+  const handlePostponeClick = (match: LeagueMatch) => {
+    setPostponeModalMatch(match);
+  };
+
+  const handlePostponeSuccess = () => {
+    // Matches will auto-refresh via subscription
+    setPostponeModalMatch(null);
   };
 
   // ============================================
@@ -526,9 +593,19 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </svg>
               Organizer Controls
             </h3>
-            <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-1 rounded">
-              Status: {league.status.toUpperCase()}
-            </span>
+            <div className="flex items-center gap-2">
+              {/* V05.37: Postponed matches indicator for organizers */}
+              {postponedMatchCount > 0 && (
+                <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg px-3 py-1">
+                  <span className="text-yellow-400 font-semibold text-sm">
+                    ⏸️ {postponedMatchCount} postponed
+                  </span>
+                </div>
+              )}
+              <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-1 rounded">
+                Status: {league.status.toUpperCase()}
+              </span>
+            </div>
           </div>
           
           <div className="flex flex-wrap gap-2">
@@ -760,11 +837,17 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {tab === 'schedule' && '📅 '}
             {tab === 'info' && 'ℹ️ '}
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {/* V05.37: Show postponed count on matches tab */}
+            {tab === 'matches' && postponedMatchCount > 0 && (
+              <span className="ml-2 bg-yellow-600/20 text-yellow-400 text-xs px-1.5 py-0.5 rounded">
+                {postponedMatchCount}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
-{/* STANDINGS TAB */}
+      {/* STANDINGS TAB */}
       {activeTab === 'standings' && league && (
         <LeagueStandings
           members={filteredMembers}
@@ -777,26 +860,82 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         />
       )}
 
-      {/* MATCHES TAB */}
+      {/* MATCHES TAB - V05.37 Updated */}
       {activeTab === 'matches' && (
         <div className="space-y-3">
+          {/* V05.37: Filter toggle for postponed matches */}
+          {postponedMatchCount > 0 && (
+            <div className="flex items-center justify-between bg-gray-800 rounded-lg p-3 border border-gray-700">
+              <span className="text-sm text-gray-400">
+                {showPostponedOnly 
+                  ? `Showing ${postponedMatchCount} postponed matches`
+                  : `${postponedMatchCount} match${postponedMatchCount !== 1 ? 'es' : ''} postponed`
+                }
+              </span>
+              <button
+                onClick={() => setShowPostponedOnly(!showPostponedOnly)}
+                className={`text-sm px-3 py-1 rounded-lg transition-colors ${
+                  showPostponedOnly
+                    ? 'bg-yellow-600 text-white'
+                    : 'bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30'
+                }`}
+              >
+                {showPostponedOnly ? 'Show All' : '⏸️ Show Postponed'}
+              </button>
+            </div>
+          )}
+
           {filteredMatches.length === 0 ? (
             <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center text-gray-400">
-              No matches played yet
+              {showPostponedOnly ? 'No postponed matches' : 'No matches played yet'}
             </div>
           ) : (
             filteredMatches.map(match => {
               const isMyMatch = match.memberAId === myMembership?.id || match.memberBId === myMembership?.id;
               const gamesA = match.scores?.filter(g => g.scoreA > g.scoreB).length || 0;
               const gamesB = match.scores?.filter(g => g.scoreB > g.scoreA).length || 0;
+              const statusBadge = getMatchStatusBadge(match.status);
+              const isPostponed = match.status === 'postponed';
+              const isRescheduled = match.status === 'rescheduled' || match.rescheduledTo;
               
               return (
                 <div
                   key={match.id}
                   className={`bg-gray-800 rounded-xl p-4 border ${
+                    isPostponed ? 'border-yellow-500/50 bg-yellow-900/10' :
                     isMyMatch ? 'border-blue-500/50' : 'border-gray-700'
                   }`}
                 >
+                  {/* Match Header */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      {match.weekNumber && <span>Week {match.weekNumber}</span>}
+                      {match.roundNumber && <span>Round {match.roundNumber}</span>}
+                      {match.boxNumber && <span>Box {match.boxNumber}</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* Status Badge */}
+                      <span className={`text-xs px-2 py-0.5 rounded border ${statusBadge.className}`}>
+                        {statusBadge.label}
+                      </span>
+                      
+                      {/* V05.37: Postpone button for organizers */}
+                      {isOrganizer && (match.status === 'scheduled' || match.status === 'postponed') && (
+                        <button
+                          onClick={() => handlePostponeClick(match)}
+                          className={`text-xs px-2 py-1 rounded transition-colors ${
+                            isPostponed
+                              ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
+                              : 'bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30'
+                          }`}
+                        >
+                          {isPostponed ? '📅 Reschedule' : '⏸️ Postpone'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Players and Score */}
                   <div className="flex items-center justify-between">
                     <div className={`flex-1 font-semibold ${
                       match.winnerMemberId === match.memberAId ? 'text-green-400' : 'text-white'
@@ -818,6 +957,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                         <span className="text-xs bg-red-600/20 text-red-400 px-2 py-1 rounded">
                           Disputed
                         </span>
+                      ) : match.status === 'postponed' ? (
+                        <span className="text-xs text-yellow-400">⏸️</span>
                       ) : (
                         <span className="text-xs text-gray-500">vs</span>
                       )}
@@ -839,6 +980,37 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                           {score.scoreA}-{score.scoreB}
                         </span>
                       ))}
+                    </div>
+                  )}
+                  
+                  {/* V05.37: Postpone info */}
+                  {isPostponed && (
+                    <div className="mt-3 p-2 bg-yellow-900/20 border border-yellow-700/50 rounded text-sm">
+                      <div className="text-yellow-400">
+                        {match.postponedReason && (
+                          <span>Reason: {match.postponedReason}</span>
+                        )}
+                      </div>
+                      {match.originalScheduledDate && (
+                        <div className="text-yellow-500/70 text-xs mt-1">
+                          Originally: {formatDate(match.originalScheduledDate)}
+                        </div>
+                      )}
+                      {match.makeupDeadline && (
+                        <div className={`text-xs mt-1 ${
+                          match.makeupDeadline < Date.now() ? 'text-red-400' : 'text-yellow-500/70'
+                        }`}>
+                          Makeup by: {formatDate(match.makeupDeadline)}
+                          {match.makeupDeadline < Date.now() && ' (OVERDUE)'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Rescheduled info */}
+                  {isRescheduled && match.rescheduledTo && (
+                    <div className="mt-2 text-xs text-blue-400">
+                      📅 Rescheduled to: {formatDate(match.rescheduledTo)}
                     </div>
                   )}
                   
@@ -951,21 +1123,24 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         </div>
       )}
 
+{/* ================================================
+    END OF PART 1 - PASTE PART 2 DIRECTLY BELOW THIS
+    ================================================ */}
+{/* ================================================
+    PART 2 OF LeagueDetail.tsx V05.37
+    Paste this DIRECTLY after Part 1 (remove this comment block)
+    ================================================ */}
+
       {/* Payment Modal for Paid Leagues */}
       {showPaymentModal && league?.pricing?.enabled && (() => {
-        // Calculate fees
         const baseAmount = league.pricing.entryFee;
         const platformFeePercent = 1.5;
         const stripeFeePercent = 2.9;
-        const stripeFeeFixed = 30; // 30 cents
-        
+        const stripeFeeFixed = 30;
         const platformFee = Math.round(baseAmount * (platformFeePercent / 100));
         const stripeFee = Math.round(baseAmount * (stripeFeePercent / 100)) + stripeFeeFixed;
         const totalFees = platformFee + stripeFee;
-        
-        const playerPays = league.pricing.feesPaidBy === 'player' 
-          ? baseAmount + totalFees 
-          : baseAmount;
+        const playerPays = league.pricing.feesPaidBy === 'player' ? baseAmount + totalFees : baseAmount;
         
         return (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
@@ -973,37 +1148,24 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             <div className="bg-gray-900 px-6 py-4 border-b border-gray-700">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold text-white">💳 League Registration</h2>
-                <button 
-                  onClick={() => setShowPaymentModal(false)} 
-                  className="text-gray-400 hover:text-white"
-                >
+                <button onClick={() => setShowPaymentModal(false)} className="text-gray-400 hover:text-white">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
             </div>
-            
             <div className="p-6">
               <div className="text-center mb-6">
                 <h3 className="text-xl font-bold text-white mb-2">{league.name}</h3>
                 <p className="text-gray-400 text-sm">{league.type === 'singles' ? 'Singles' : 'Doubles'} • {league.format.replace('_', ' ')}</p>
               </div>
-              
-              {/* Pricing Summary with Fee Breakdown */}
               <div className="bg-gray-900 rounded-lg p-4 mb-6">
-                {/* Entry Fee */}
                 <div className="flex justify-between items-center">
                   <span className="text-gray-400">Entry Fee</span>
-                  <span className="text-white font-semibold">
-                    ${(baseAmount / 100).toFixed(2)}
-                  </span>
+                  <span className="text-white font-semibold">${(baseAmount / 100).toFixed(2)}</span>
                 </div>
-                <div className="text-xs text-gray-500 mb-3">
-                  {league.pricing.entryFeeType === 'per_player' ? 'Per player' : 'Per team'}
-                </div>
-                
-                {/* Fee Breakdown - Only show if player pays fees */}
+                <div className="text-xs text-gray-500 mb-3">{league.pricing.entryFeeType === 'per_player' ? 'Per player' : 'Per team'}</div>
                 {league.pricing.feesPaidBy === 'player' && (
                   <>
                     <div className="border-t border-gray-700 pt-3 mt-3 space-y-2">
@@ -1016,118 +1178,67 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                         <span className="text-gray-400">${(stripeFee / 100).toFixed(2)}</span>
                       </div>
                     </div>
-                    
-                    {/* Total */}
                     <div className="border-t border-gray-700 pt-3 mt-3">
                       <div className="flex justify-between items-center">
                         <span className="text-white font-bold">Total</span>
-                        <span className="text-white font-bold text-lg">
-                          ${(playerPays / 100).toFixed(2)} NZD
-                        </span>
+                        <span className="text-white font-bold text-lg">${(playerPays / 100).toFixed(2)} NZD</span>
                       </div>
                     </div>
                   </>
                 )}
-                
-                {/* If organizer pays fees, just show the entry fee as total */}
                 {league.pricing.feesPaidBy === 'organizer' && (
                   <div className="border-t border-gray-700 pt-3 mt-3">
                     <div className="flex justify-between items-center">
                       <span className="text-white font-bold">Total</span>
-                      <span className="text-white font-bold text-lg">
-                        ${(baseAmount / 100).toFixed(2)} NZD
-                      </span>
+                      <span className="text-white font-bold text-lg">${(baseAmount / 100).toFixed(2)} NZD</span>
                     </div>
                     <p className="text-xs text-gray-500 mt-1">Processing fees covered by organizer</p>
                   </div>
                 )}
-                
-                {/* Early Bird */}
-                {league.pricing.earlyBirdEnabled && league.pricing.earlyBirdDeadline && 
-                 Date.now() < league.pricing.earlyBirdDeadline && (
+                {league.pricing.earlyBirdEnabled && league.pricing.earlyBirdDeadline && Date.now() < league.pricing.earlyBirdDeadline && (
                   <div className="mt-3 pt-3 border-t border-gray-700">
                     <div className="flex justify-between items-center text-green-400">
                       <span>🎉 Early Bird Price</span>
                       <span className="font-bold">${((league.pricing.earlyBirdFee || league.pricing.entryFee) / 100).toFixed(2)}</span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Until {new Date(league.pricing.earlyBirdDeadline).toLocaleDateString()}
-                    </p>
+                    <p className="text-xs text-gray-500 mt-1">Until {new Date(league.pricing.earlyBirdDeadline).toLocaleDateString()}</p>
                   </div>
                 )}
               </div>
-              
-              {/* Refund Policy */}
               <div className="text-xs text-gray-500 mb-6 text-center">
-                Refund Policy: {league.pricing.refundPolicy === 'full' ? 'Full refund before league starts' : 
-                               league.pricing.refundPolicy === 'partial' ? '50% refund before league starts' : 'No refunds'}
+                Refund Policy: {league.pricing.refundPolicy === 'full' ? 'Full refund before league starts' : league.pricing.refundPolicy === 'partial' ? '50% refund before league starts' : 'No refunds'}
               </div>
-              
-              {/* Action Buttons */}
               <div className="space-y-3">
                 <button
                   onClick={async () => {
-                    // TODO: Integrate with Stripe checkout
-                    // For now, check if organizer has Stripe connected
                     if (!league.organizerStripeAccountId) {
                       alert('Payment is not available yet. The organizer needs to set up Stripe. Joining as unpaid for now.');
                       await handleFreeJoin();
                       return;
                     }
-                    
-                    // Create checkout session and redirect
                     try {
                       setJoining(true);
                       const { createCheckoutSession } = await import('../../services/stripe');
-                      
-                      // Need to check pricing exists
-                      if (!league.pricing) {
-                        throw new Error('League pricing not configured');
-                      }
-                      
+                      if (!league.pricing) throw new Error('League pricing not configured');
                       const session = await createCheckoutSession({
-                        items: [{
-                          name: `${league.name} - League Entry`,
-                          description: `${league.type} ${league.format} league registration`,
-                          amount: playerPays, // Use calculated total with fees if player pays
-                          quantity: 1,
-                        }],
-                        // Use hash-based URLs for routing
+                        items: [{ name: `${league.name} - League Entry`, description: `${league.type} ${league.format} league registration`, amount: playerPays, quantity: 1 }],
                         successUrl: `${window.location.origin}/#/leagues/${leagueId}?payment=success`,
                         cancelUrl: `${window.location.origin}/#/leagues/${leagueId}?payment=cancelled`,
-                        metadata: {
-                          type: 'league_registration',
-                          leagueId: leagueId,
-                          userId: currentUser?.uid || '',
-                          userName: userProfile?.displayName || '',
-                        },
+                        metadata: { type: 'league_registration', leagueId: leagueId, userId: currentUser?.uid || '', userName: userProfile?.displayName || '' },
                         organizerStripeAccountId: league.organizerStripeAccountId || undefined,
                       });
-                      
-                      if (session?.url) {
-                        window.location.href = session.url;
-                      } else {
-                        throw new Error('Failed to create checkout session');
-                      }
+                      if (session?.url) { window.location.href = session.url; } else { throw new Error('Failed to create checkout session'); }
                     } catch (e: any) {
                       console.error('Payment error:', e);
                       alert('Payment setup failed: ' + e.message);
-                    } finally {
-                      setJoining(false);
-                    }
+                    } finally { setJoining(false); }
                   }}
                   disabled={joining}
                   className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-bold transition-colors"
                 >
                   {joining ? 'Processing...' : `Pay $${(playerPays / 100).toFixed(2)} & Join`}
                 </button>
-                
-                <button
-                  onClick={() => setShowPaymentModal(false)}
-                  className="w-full py-2 text-gray-400 hover:text-white transition-colors text-sm"
-                >
-                  Cancel
-                </button>
+                <button onClick={() => setShowPaymentModal(false)} className="w-full py-2 text-gray-400 hover:text-white transition-colors text-sm">Cancel</button>
               </div>
             </div>
           </div>
@@ -1135,17 +1246,14 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         );
       })()}
 
-      {/* Edit League Modal - Full Featured */}
+      {/* Edit League Modal */}
       {showEditModal && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-gray-800 w-full max-w-3xl rounded-xl border border-gray-700 overflow-hidden my-4">
             <div className="bg-gray-900 px-6 py-4 border-b border-gray-700 sticky top-0 z-10">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold text-white">✏️ Edit League</h2>
-                <button 
-                  onClick={() => setShowEditModal(false)} 
-                  className="text-gray-400 hover:text-white"
-                >
+                <button onClick={() => setShowEditModal(false)} className="text-gray-400 hover:text-white">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
@@ -1154,64 +1262,31 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </div>
             
             <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
-              
-              {/* ========== BASIC INFO ========== */}
+              {/* BASIC INFO */}
               <div className="bg-gray-900/50 rounded-lg p-4">
-                <h3 className="text-sm font-bold text-blue-400 uppercase mb-4 flex items-center gap-2">
-                  <span>📋</span> Basic Information
-                </h3>
+                <h3 className="text-sm font-bold text-blue-400 uppercase mb-4 flex items-center gap-2"><span>📋</span> Basic Information</h3>
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">League Name *</label>
-                    <input
-                      type="text"
-                      value={editForm.name}
-                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      placeholder="League name"
-                    />
+                    <input type="text" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="League name" />
                   </div>
-                  
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Description</label>
-                    <textarea
-                      value={editForm.description}
-                      onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500 min-h-[80px] resize-none"
-                      placeholder="Describe your league..."
-                    />
+                    <textarea value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500 min-h-[80px] resize-none" placeholder="Describe your league..." />
                   </div>
-                  
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Location</label>
-                      <input
-                        type="text"
-                        value={editForm.location}
-                        onChange={(e) => setEditForm({ ...editForm, location: e.target.value })}
-                        className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                        placeholder="City, Region"
-                      />
+                      <input type="text" value={editForm.location} onChange={(e) => setEditForm({ ...editForm, location: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="City, Region" />
                     </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Venue</label>
-                      <input
-                        type="text"
-                        value={editForm.venue}
-                        onChange={(e) => setEditForm({ ...editForm, venue: e.target.value })}
-                        className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                        placeholder="Venue name"
-                      />
+                      <input type="text" value={editForm.venue} onChange={(e) => setEditForm({ ...editForm, venue: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="Venue name" />
                     </div>
                   </div>
-                  
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Visibility</label>
-                    <select
-                      value={editForm.visibility}
-                      onChange={(e) => setEditForm({ ...editForm, visibility: e.target.value as 'public' | 'private' | 'club_only' })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    >
+                    <select value={editForm.visibility} onChange={(e) => setEditForm({ ...editForm, visibility: e.target.value as 'public' | 'private' | 'club_only' })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
                       <option value="public">Public - Anyone can find and view</option>
                       <option value="private">Private - Invite only</option>
                       <option value="club_only">Club Only - Club members only</option>
@@ -1219,133 +1294,64 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   </div>
                 </div>
               </div>
-              
-              {/* ========== SCHEDULE ========== */}
+
+              {/* SCHEDULE */}
               <div className="bg-gray-900/50 rounded-lg p-4">
-                <h3 className="text-sm font-bold text-green-400 uppercase mb-4 flex items-center gap-2">
-                  <span>📅</span> Schedule
-                </h3>
+                <h3 className="text-sm font-bold text-green-400 uppercase mb-4 flex items-center gap-2"><span>📅</span> Schedule</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Registration Opens</label>
-                    <input
-                      type="date"
-                      value={editForm.registrationOpens}
-                      onChange={(e) => setEditForm({ ...editForm, registrationOpens: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="date" value={editForm.registrationOpens} onChange={(e) => setEditForm({ ...editForm, registrationOpens: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Registration Deadline</label>
-                    <input
-                      type="date"
-                      value={editForm.registrationDeadline}
-                      onChange={(e) => setEditForm({ ...editForm, registrationDeadline: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="date" value={editForm.registrationDeadline} onChange={(e) => setEditForm({ ...editForm, registrationDeadline: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Season Start</label>
-                    <input
-                      type="date"
-                      value={editForm.seasonStart}
-                      onChange={(e) => setEditForm({ ...editForm, seasonStart: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="date" value={editForm.seasonStart} onChange={(e) => setEditForm({ ...editForm, seasonStart: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Season End</label>
-                    <input
-                      type="date"
-                      value={editForm.seasonEnd}
-                      onChange={(e) => setEditForm({ ...editForm, seasonEnd: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="date" value={editForm.seasonEnd} onChange={(e) => setEditForm({ ...editForm, seasonEnd: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                 </div>
               </div>
-              
-              {/* ========== CAPACITY & RESTRICTIONS ========== */}
+
+              {/* CAPACITY & RESTRICTIONS */}
               <div className="bg-gray-900/50 rounded-lg p-4">
-                <h3 className="text-sm font-bold text-yellow-400 uppercase mb-4 flex items-center gap-2">
-                  <span>👥</span> Capacity & Restrictions
-                </h3>
+                <h3 className="text-sm font-bold text-yellow-400 uppercase mb-4 flex items-center gap-2"><span>👥</span> Capacity & Restrictions</h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Max Players/Teams</label>
-                    <input
-                      type="number"
-                      value={editForm.maxMembers}
-                      onChange={(e) => setEditForm({ ...editForm, maxMembers: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      placeholder="Unlimited"
-                      min="2"
-                    />
+                    <input type="number" value={editForm.maxMembers} onChange={(e) => setEditForm({ ...editForm, maxMembers: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="Unlimited" min="2" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Min Rating</label>
-                    <input
-                      type="number"
-                      value={editForm.minRating}
-                      onChange={(e) => setEditForm({ ...editForm, minRating: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      placeholder="Any"
-                      step="0.1"
-                      min="1"
-                      max="8"
-                    />
+                    <input type="number" value={editForm.minRating} onChange={(e) => setEditForm({ ...editForm, minRating: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="Any" step="0.1" min="1" max="8" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Max Rating</label>
-                    <input
-                      type="number"
-                      value={editForm.maxRating}
-                      onChange={(e) => setEditForm({ ...editForm, maxRating: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      placeholder="Any"
-                      step="0.1"
-                      min="1"
-                      max="8"
-                    />
+                    <input type="number" value={editForm.maxRating} onChange={(e) => setEditForm({ ...editForm, maxRating: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="Any" step="0.1" min="1" max="8" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Min Age</label>
-                    <input
-                      type="number"
-                      value={editForm.minAge}
-                      onChange={(e) => setEditForm({ ...editForm, minAge: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      placeholder="Any"
-                      min="1"
-                    />
+                    <input type="number" value={editForm.minAge} onChange={(e) => setEditForm({ ...editForm, minAge: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="Any" min="1" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Max Age</label>
-                    <input
-                      type="number"
-                      value={editForm.maxAge}
-                      onChange={(e) => setEditForm({ ...editForm, maxAge: e.target.value })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      placeholder="Any"
-                      min="1"
-                    />
+                    <input type="number" value={editForm.maxAge} onChange={(e) => setEditForm({ ...editForm, maxAge: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" placeholder="Any" min="1" />
                   </div>
                 </div>
               </div>
-              
-              {/* ========== MATCH FORMAT ========== */}
+
+              {/* MATCH FORMAT */}
               <div className="bg-gray-900/50 rounded-lg p-4">
-                <h3 className="text-sm font-bold text-purple-400 uppercase mb-4 flex items-center gap-2">
-                  <span>🎾</span> Match Format
-                </h3>
+                <h3 className="text-sm font-bold text-purple-400 uppercase mb-4 flex items-center gap-2"><span>🎾</span> Match Format</h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Best Of</label>
-                    <select
-                      value={editForm.bestOf}
-                      onChange={(e) => setEditForm({ ...editForm, bestOf: parseInt(e.target.value) as 1 | 3 | 5 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    >
+                    <select value={editForm.bestOf} onChange={(e) => setEditForm({ ...editForm, bestOf: parseInt(e.target.value) as 1 | 3 | 5 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
                       <option value={1}>1 Game</option>
                       <option value={3}>Best of 3</option>
                       <option value={5}>Best of 5</option>
@@ -1353,11 +1359,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Points/Game</label>
-                    <select
-                      value={editForm.gamesTo}
-                      onChange={(e) => setEditForm({ ...editForm, gamesTo: parseInt(e.target.value) as 11 | 15 | 21 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    >
+                    <select value={editForm.gamesTo} onChange={(e) => setEditForm({ ...editForm, gamesTo: parseInt(e.target.value) as 11 | 15 | 21 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
                       <option value={11}>11 Points</option>
                       <option value={15}>15 Points</option>
                       <option value={21}>21 Points</option>
@@ -1365,281 +1367,149 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Win By</label>
-                    <select
-                      value={editForm.winBy}
-                      onChange={(e) => setEditForm({ ...editForm, winBy: parseInt(e.target.value) as 1 | 2 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    >
+                    <select value={editForm.winBy} onChange={(e) => setEditForm({ ...editForm, winBy: parseInt(e.target.value) as 1 | 2 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
                       <option value={1}>1 Point</option>
                       <option value={2}>2 Points</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Match Deadline (Days)</label>
-                    <input
-                      type="number"
-                      value={editForm.matchDeadlineDays}
-                      onChange={(e) => setEditForm({ ...editForm, matchDeadlineDays: parseInt(e.target.value) || 7 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      min="1"
-                      max="30"
-                    />
+                    <input type="number" value={editForm.matchDeadlineDays} onChange={(e) => setEditForm({ ...editForm, matchDeadlineDays: parseInt(e.target.value) || 7 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="1" max="30" />
                   </div>
                 </div>
-                
                 <div className="flex flex-wrap gap-4">
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={editForm.allowSelfReporting}
-                      onChange={(e) => setEditForm({ ...editForm, allowSelfReporting: e.target.checked })}
-                      className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
-                    />
+                    <input type="checkbox" checked={editForm.allowSelfReporting} onChange={(e) => setEditForm({ ...editForm, allowSelfReporting: e.target.checked })} className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500" />
                     <span className="text-sm text-gray-300">Allow Self-Reporting</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={editForm.requireConfirmation}
-                      onChange={(e) => setEditForm({ ...editForm, requireConfirmation: e.target.checked })}
-                      className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
-                    />
+                    <input type="checkbox" checked={editForm.requireConfirmation} onChange={(e) => setEditForm({ ...editForm, requireConfirmation: e.target.checked })} className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500" />
                     <span className="text-sm text-gray-300">Require Score Confirmation</span>
                   </label>
                 </div>
               </div>
-              
-              {/* ========== FORMAT SPECIFIC (Round Robin / Swiss) ========== */}
+
+              {/* FORMAT SPECIFIC */}
               {(league?.format === 'round_robin' || league?.format === 'swiss') && (
                 <div className="bg-gray-900/50 rounded-lg p-4">
-                  <h3 className="text-sm font-bold text-cyan-400 uppercase mb-4 flex items-center gap-2">
-                    <span>🔄</span> {league.format === 'round_robin' ? 'Round Robin Settings' : 'Swiss Settings'}
-                  </h3>
+                  <h3 className="text-sm font-bold text-cyan-400 uppercase mb-4 flex items-center gap-2"><span>🔄</span> {league.format === 'round_robin' ? 'Round Robin Settings' : 'Swiss Settings'}</h3>
                   <div className="grid grid-cols-2 gap-4">
                     {league.format === 'round_robin' && (
                       <div>
                         <label className="block text-sm text-gray-400 mb-1">Number of Rounds</label>
-                        <input
-                          type="number"
-                          value={editForm.roundRobinRounds}
-                          onChange={(e) => setEditForm({ ...editForm, roundRobinRounds: parseInt(e.target.value) || 1 })}
-                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                          min="1"
-                          max="5"
-                        />
+                        <input type="number" value={editForm.roundRobinRounds} onChange={(e) => setEditForm({ ...editForm, roundRobinRounds: parseInt(e.target.value) || 1 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="1" max="5" />
                         <p className="text-xs text-gray-500 mt-1">How many times each player plays each opponent</p>
                       </div>
                     )}
                     {league.format === 'swiss' && (
                       <div>
                         <label className="block text-sm text-gray-400 mb-1">Number of Rounds</label>
-                        <input
-                          type="number"
-                          value={editForm.swissRounds}
-                          onChange={(e) => setEditForm({ ...editForm, swissRounds: parseInt(e.target.value) || 4 })}
-                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                          min="1"
-                          max="10"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">Total rounds to play (typically log2 of participants)</p>
+                        <input type="number" value={editForm.swissRounds} onChange={(e) => setEditForm({ ...editForm, swissRounds: parseInt(e.target.value) || 4 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="1" max="10" />
+                        <p className="text-xs text-gray-500 mt-1">Total rounds to play</p>
                       </div>
                     )}
                   </div>
                 </div>
               )}
-              
-              {/* ========== SCORING POINTS ========== */}
+
+              {/* SCORING POINTS */}
               <div className="bg-gray-900/50 rounded-lg p-4">
-                <h3 className="text-sm font-bold text-orange-400 uppercase mb-4 flex items-center gap-2">
-                  <span>🏆</span> Standings Points
-                </h3>
+                <h3 className="text-sm font-bold text-orange-400 uppercase mb-4 flex items-center gap-2"><span>🏆</span> Standings Points</h3>
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Win</label>
-                    <input
-                      type="number"
-                      value={editForm.pointsForWin}
-                      onChange={(e) => setEditForm({ ...editForm, pointsForWin: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="number" value={editForm.pointsForWin} onChange={(e) => setEditForm({ ...editForm, pointsForWin: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Draw</label>
-                    <input
-                      type="number"
-                      value={editForm.pointsForDraw}
-                      onChange={(e) => setEditForm({ ...editForm, pointsForDraw: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="number" value={editForm.pointsForDraw} onChange={(e) => setEditForm({ ...editForm, pointsForDraw: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Loss</label>
-                    <input
-                      type="number"
-                      value={editForm.pointsForLoss}
-                      onChange={(e) => setEditForm({ ...editForm, pointsForLoss: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="number" value={editForm.pointsForLoss} onChange={(e) => setEditForm({ ...editForm, pointsForLoss: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">Forfeit</label>
-                    <input
-                      type="number"
-                      value={editForm.pointsForForfeit}
-                      onChange={(e) => setEditForm({ ...editForm, pointsForForfeit: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="number" value={editForm.pointsForForfeit} onChange={(e) => setEditForm({ ...editForm, pointsForForfeit: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                   <div>
                     <label className="block text-sm text-gray-400 mb-1">No-Show</label>
-                    <input
-                      type="number"
-                      value={editForm.pointsForNoShow}
-                      onChange={(e) => setEditForm({ ...editForm, pointsForNoShow: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                    />
+                    <input type="number" value={editForm.pointsForNoShow} onChange={(e) => setEditForm({ ...editForm, pointsForNoShow: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                   </div>
                 </div>
               </div>
-              
-              {/* ========== PRICING ========== */}
+
+              {/* PRICING */}
               <div className="bg-gray-900/50 rounded-lg p-4">
-                <h3 className="text-sm font-bold text-green-400 uppercase mb-4 flex items-center gap-2">
-                  <span>💰</span> Pricing
-                </h3>
-                
+                <h3 className="text-sm font-bold text-green-400 uppercase mb-4 flex items-center gap-2"><span>💰</span> Pricing</h3>
                 <label className="flex items-center gap-2 cursor-pointer mb-4">
-                  <input
-                    type="checkbox"
-                    checked={editForm.pricingEnabled}
-                    onChange={(e) => setEditForm({ ...editForm, pricingEnabled: e.target.checked })}
-                    className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500"
-                  />
+                  <input type="checkbox" checked={editForm.pricingEnabled} onChange={(e) => setEditForm({ ...editForm, pricingEnabled: e.target.checked })} className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500" />
                   <span className="text-sm text-gray-300">Enable Paid Registration</span>
                 </label>
-                
                 {editForm.pricingEnabled && (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm text-gray-400 mb-1">Entry Fee ($)</label>
-                        <input
-                          type="number"
-                          value={(editForm.entryFee / 100).toFixed(2)}
-                          onChange={(e) => setEditForm({ ...editForm, entryFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
-                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                          min="0"
-                          step="0.01"
-                        />
+                        <input type="number" value={(editForm.entryFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, entryFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="0.01" />
                       </div>
                       <div>
                         <label className="block text-sm text-gray-400 mb-1">Fee Type</label>
-                        <select
-                          value={editForm.entryFeeType}
-                          onChange={(e) => setEditForm({ ...editForm, entryFeeType: e.target.value as 'per_player' | 'per_team' })}
-                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                        >
+                        <select value={editForm.entryFeeType} onChange={(e) => setEditForm({ ...editForm, entryFeeType: e.target.value as 'per_player' | 'per_team' })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
                           <option value="per_player">Per Player</option>
                           <option value="per_team">Per Team</option>
                         </select>
                       </div>
                       <div>
-                        <label className="block text-sm text-gray-400 mb-1">Processing Fees Paid By</label>
-                        <select
-                          value={editForm.feesPaidBy}
-                          onChange={(e) => setEditForm({ ...editForm, feesPaidBy: e.target.value as 'player' | 'organizer' })}
-                          className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                        >
+                        <label className="block text-sm text-gray-400 mb-1">Fees Paid By</label>
+                        <select value={editForm.feesPaidBy} onChange={(e) => setEditForm({ ...editForm, feesPaidBy: e.target.value as 'player' | 'organizer' })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
                           <option value="player">Player pays fees</option>
                           <option value="organizer">Organizer absorbs fees</option>
                         </select>
                       </div>
                     </div>
-                    
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Refund Policy</label>
-                      <select
-                        value={editForm.refundPolicy}
-                        onChange={(e) => setEditForm({ ...editForm, refundPolicy: e.target.value as 'full' | 'partial' | 'none' })}
-                        className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                      >
+                      <select value={editForm.refundPolicy} onChange={(e) => setEditForm({ ...editForm, refundPolicy: e.target.value as 'full' | 'partial' | 'none' })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
                         <option value="full">Full refund before league starts</option>
                         <option value="partial">50% refund before league starts</option>
                         <option value="none">No refunds</option>
                       </select>
                     </div>
-                    
                     {/* Early Bird */}
                     <div className="border-t border-gray-700 pt-4">
                       <label className="flex items-center gap-2 cursor-pointer mb-3">
-                        <input
-                          type="checkbox"
-                          checked={editForm.earlyBirdEnabled}
-                          onChange={(e) => setEditForm({ ...editForm, earlyBirdEnabled: e.target.checked })}
-                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500"
-                        />
+                        <input type="checkbox" checked={editForm.earlyBirdEnabled} onChange={(e) => setEditForm({ ...editForm, earlyBirdEnabled: e.target.checked })} className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500" />
                         <span className="text-sm text-gray-300">🎉 Enable Early Bird Pricing</span>
                       </label>
-                      
                       {editForm.earlyBirdEnabled && (
                         <div className="grid grid-cols-2 gap-4 ml-6">
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Early Bird Fee ($)</label>
-                            <input
-                              type="number"
-                              value={(editForm.earlyBirdFee / 100).toFixed(2)}
-                              onChange={(e) => setEditForm({ ...editForm, earlyBirdFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
-                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                              min="0"
-                              step="0.01"
-                            />
+                            <input type="number" value={(editForm.earlyBirdFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, earlyBirdFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="0.01" />
                           </div>
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Early Bird Deadline</label>
-                            <input
-                              type="date"
-                              value={editForm.earlyBirdDeadline}
-                              onChange={(e) => setEditForm({ ...editForm, earlyBirdDeadline: e.target.value })}
-                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                            />
+                            <input type="date" value={editForm.earlyBirdDeadline} onChange={(e) => setEditForm({ ...editForm, earlyBirdDeadline: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                           </div>
                         </div>
                       )}
                     </div>
-                    
                     {/* Late Fee */}
                     <div className="border-t border-gray-700 pt-4">
                       <label className="flex items-center gap-2 cursor-pointer mb-3">
-                        <input
-                          type="checkbox"
-                          checked={editForm.lateFeeEnabled}
-                          onChange={(e) => setEditForm({ ...editForm, lateFeeEnabled: e.target.checked })}
-                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-red-500 focus:ring-red-500"
-                        />
+                        <input type="checkbox" checked={editForm.lateFeeEnabled} onChange={(e) => setEditForm({ ...editForm, lateFeeEnabled: e.target.checked })} className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-red-500 focus:ring-red-500" />
                         <span className="text-sm text-gray-300">⏰ Enable Late Registration Fee</span>
                       </label>
-                      
                       {editForm.lateFeeEnabled && (
                         <div className="grid grid-cols-2 gap-4 ml-6">
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Late Fee ($)</label>
-                            <input
-                              type="number"
-                              value={(editForm.lateFee / 100).toFixed(2)}
-                              onChange={(e) => setEditForm({ ...editForm, lateFee: Math.round(parseFloat(e.target.value) * 100) || 0 })}
-                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                              min="0"
-                              step="0.01"
-                            />
+                            <input type="number" value={(editForm.lateFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, lateFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="0.01" />
                           </div>
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Late Fee Starts</label>
-                            <input
-                              type="date"
-                              value={editForm.lateRegistrationStart}
-                              onChange={(e) => setEditForm({ ...editForm, lateRegistrationStart: e.target.value })}
-                              className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500"
-                            />
+                            <input type="date" value={editForm.lateRegistrationStart} onChange={(e) => setEditForm({ ...editForm, lateRegistrationStart: e.target.value })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
                           </div>
                         </div>
                       )}
@@ -1647,8 +1517,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   </div>
                 )}
               </div>
-              
-              {/* Note */}
+
               <p className="text-xs text-gray-500 bg-gray-900 p-3 rounded-lg">
                 💡 <strong>Note:</strong> League type ({league?.type}) and format ({league?.format}) cannot be changed after creation.
               </p>
@@ -1656,21 +1525,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             
             {/* Footer Buttons */}
             <div className="bg-gray-900 px-6 py-4 border-t border-gray-700 flex gap-3 sticky bottom-0">
-              <button
-                onClick={() => setShowEditModal(false)}
-                className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
+              <button onClick={() => setShowEditModal(false)} className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors">Cancel</button>
               <button
                 onClick={async () => {
-                  if (!editForm.name.trim()) {
-                    alert('League name is required');
-                    return;
-                  }
+                  if (!editForm.name.trim()) { alert('League name is required'); return; }
                   setSaving(true);
                   try {
-                    // Build settings update
                     const settingsUpdate = {
                       ...league?.settings,
                       maxMembers: editForm.maxMembers ? parseInt(editForm.maxMembers) : null,
@@ -1678,83 +1538,35 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       maxRating: editForm.maxRating ? parseFloat(editForm.maxRating) : null,
                       minAge: editForm.minAge ? parseInt(editForm.minAge) : null,
                       maxAge: editForm.maxAge ? parseInt(editForm.maxAge) : null,
-                      pointsForWin: editForm.pointsForWin,
-                      pointsForDraw: editForm.pointsForDraw,
-                      pointsForLoss: editForm.pointsForLoss,
-                      pointsForForfeit: editForm.pointsForForfeit,
-                      pointsForNoShow: editForm.pointsForNoShow,
-                      matchDeadlineDays: editForm.matchDeadlineDays,
-                      allowSelfReporting: editForm.allowSelfReporting,
-                      requireConfirmation: editForm.requireConfirmation,
-                      matchFormat: {
-                        bestOf: editForm.bestOf,
-                        gamesTo: editForm.gamesTo,
-                        winBy: editForm.winBy,
-                      },
-                      ...(league?.format === 'round_robin' && {
-                        roundRobinSettings: {
-                          rounds: editForm.roundRobinRounds,
-                          matchesPerWeek: league?.settings?.roundRobinSettings?.matchesPerWeek ?? 2,
-                          scheduleGeneration: league?.settings?.roundRobinSettings?.scheduleGeneration ?? 'auto',
-                        },
-                      }),
-                      ...(league?.format === 'swiss' && {
-                        swissSettings: {
-                          rounds: editForm.swissRounds,
-                          pairingMethod: league?.settings?.swissSettings?.pairingMethod ?? 'adjacent',
-                        },
-                      }),
+                      pointsForWin: editForm.pointsForWin, pointsForDraw: editForm.pointsForDraw, pointsForLoss: editForm.pointsForLoss,
+                      pointsForForfeit: editForm.pointsForForfeit, pointsForNoShow: editForm.pointsForNoShow,
+                      matchDeadlineDays: editForm.matchDeadlineDays, allowSelfReporting: editForm.allowSelfReporting, requireConfirmation: editForm.requireConfirmation,
+                      matchFormat: { bestOf: editForm.bestOf, gamesTo: editForm.gamesTo, winBy: editForm.winBy },
+                      ...(league?.format === 'round_robin' && { roundRobinSettings: { rounds: editForm.roundRobinRounds, matchesPerWeek: league?.settings?.roundRobinSettings?.matchesPerWeek ?? 2, scheduleGeneration: league?.settings?.roundRobinSettings?.scheduleGeneration ?? 'auto' } }),
+                      ...(league?.format === 'swiss' && { swissSettings: { rounds: editForm.swissRounds, pairingMethod: league?.settings?.swissSettings?.pairingMethod ?? 'adjacent' } }),
                     };
-                    
-                    // Build pricing update
                     const pricingUpdate = editForm.pricingEnabled ? {
-                      enabled: true,
-                      entryFee: editForm.entryFee,
-                      entryFeeType: editForm.entryFeeType,
-                      feesPaidBy: editForm.feesPaidBy,
-                      refundPolicy: editForm.refundPolicy,
-                      earlyBirdEnabled: editForm.earlyBirdEnabled,
-                      earlyBirdFee: editForm.earlyBirdEnabled ? editForm.earlyBirdFee : null,
-                      earlyBirdDeadline: editForm.earlyBirdEnabled && editForm.earlyBirdDeadline 
-                        ? new Date(editForm.earlyBirdDeadline).getTime() : null,
-                      lateFeeEnabled: editForm.lateFeeEnabled,
-                      lateFee: editForm.lateFeeEnabled ? editForm.lateFee : null,
-                      lateRegistrationStart: editForm.lateFeeEnabled && editForm.lateRegistrationStart 
-                        ? new Date(editForm.lateRegistrationStart).getTime() : null,
-                      prizePool: league?.pricing?.prizePool || { enabled: false, type: 'none' as const, amount: 0 },
-                      currency: 'nzd',
-                    } : null;
-                    
-                    // Build the update object, only including fields with actual values
-                    const updateData: Parameters<typeof updateLeague>[1] = {
-                      name: editForm.name.trim(),
-                      visibility: editForm.visibility,
-                      settings: settingsUpdate,
-                    };
-                    
-                    // Only add optional string fields if they have values
+                      enabled: true, entryFee: editForm.entryFee, entryFeeType: editForm.entryFeeType, feesPaidBy: editForm.feesPaidBy, refundPolicy: editForm.refundPolicy,
+                      earlyBirdEnabled: editForm.earlyBirdEnabled, earlyBirdFee: editForm.earlyBirdEnabled ? editForm.earlyBirdFee : undefined,
+                      earlyBirdDeadline: editForm.earlyBirdEnabled && editForm.earlyBirdDeadline ? new Date(editForm.earlyBirdDeadline).getTime() : undefined,
+                      lateFeeEnabled: editForm.lateFeeEnabled, lateFee: editForm.lateFeeEnabled ? editForm.lateFee : undefined,
+                      lateRegistrationStart: editForm.lateFeeEnabled && editForm.lateRegistrationStart ? new Date(editForm.lateRegistrationStart).getTime() : undefined,
+                      prizePool: league?.pricing?.prizePool || { enabled: false, type: 'none' as const, amount: 0 }, currency: 'nzd' as const,
+                    } : undefined;
+                    const updateData: Parameters<typeof updateLeague>[1] = { name: editForm.name.trim(), visibility: editForm.visibility, settings: settingsUpdate };
                     if (editForm.description.trim()) updateData.description = editForm.description.trim();
                     if (editForm.location.trim()) updateData.location = editForm.location.trim();
                     if (editForm.venue.trim()) updateData.venue = editForm.venue.trim();
-                    
-                    // Only add date fields if they have values
                     if (editForm.seasonStart) updateData.seasonStart = new Date(editForm.seasonStart).getTime();
                     if (editForm.seasonEnd) updateData.seasonEnd = new Date(editForm.seasonEnd).getTime();
                     if (editForm.registrationOpens) updateData.registrationOpens = new Date(editForm.registrationOpens).getTime();
                     if (editForm.registrationDeadline) updateData.registrationDeadline = new Date(editForm.registrationDeadline).getTime();
-                    
-                    // Only add pricing if enabled
-                    if (pricingUpdate !== null) updateData.pricing = pricingUpdate;
-                    
+                    if (pricingUpdate) updateData.pricing = pricingUpdate;
                     await updateLeague(leagueId, updateData);
                     const updated = await getLeague(leagueId);
                     if (updated) setLeague(updated);
                     setShowEditModal(false);
-                  } catch (e: any) {
-                    alert('Failed to save: ' + e.message);
-                  } finally {
-                    setSaving(false);
-                  }
+                  } catch (e: any) { alert('Failed to save: ' + e.message); } finally { setSaving(false); }
                 }}
                 disabled={saving}
                 className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
@@ -1764,6 +1576,19 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </div>
           </div>
         </div>
+      )}
+
+      {/* V05.37: Postpone Match Modal */}
+      {postponeModalMatch && currentUser && userProfile && (
+        <PostponeMatchModal
+          isOpen={true}
+          onClose={() => setPostponeModalMatch(null)}
+          match={postponeModalMatch}
+          leagueId={leagueId}
+          currentUserId={currentUser.uid}
+          currentUserName={userProfile.displayName || 'Organizer'}
+          onSuccess={handlePostponeSuccess}
+        />
       )}
     </div>
   );

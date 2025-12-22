@@ -1,7 +1,16 @@
 /**
- * Pickleball Director - Type Definitions V05.36
+ * Pickleball Director - Type Definitions V05.37
  * 
- * UPDATED: Added LeagueDuprSettings for DUPR integration options
+ * UPDATED V05.37:
+ * - Added 'postponed' and 'rescheduled' to LeagueMatchStatus
+ * - Added postpone tracking fields to LeagueMatch
+ * - Added LeagueWeekPostponement interface
+ * - Added LeagueByePolicy interface (for Phase 3)
+ * - Added LeaguePool interface (for Phase 2)
+ * - Added LeagueBoxOverride interface (for Phase 4)
+ * - Added byeCount to MemberStats
+ * - Added poolId, poolName, lastBoxOverride to LeagueMember
+ * - Added pool support to LeagueRoundRobinSettings
  * 
  * FILE: src/types.ts
  */
@@ -215,84 +224,58 @@ export interface Division {
   skillMax?: number;
   ageMin?: number;
   ageMax?: number;
-  entryFee?: number;
   maxTeams?: number;
-  currentTeams: number;
-  bracketType: 'single_elimination' | 'double_elimination' | 'round_robin' | 'pool_play';
-  status: 'registration' | 'seeding' | 'in_progress' | 'completed';
+  entryFee?: number;
+  format: DivisionFormat;
+  status: 'setup' | 'ready' | 'in_progress' | 'completed';
   createdAt: number;
   updatedAt: number;
 }
 
-export interface Court {
-  id: string;
-  name: string;
-  tournamentId: string;
-  divisionId?: string;
-  status: 'available' | 'in_use' | 'maintenance';
-  currentMatchId?: string;
+export interface DivisionFormat {
+  stageMode: 'single_stage' | 'two_stage';
+  mainFormat: MainFormat;
+  numberOfPools?: number;
+  teamsPerPool?: number;
+  advancingPerPool?: number;
+  playoffFormat?: MainFormat;
+  seedingMethod?: 'random' | 'snake' | 'manual';
+  thirdPlaceMatch?: boolean;
+  consolationBracket?: boolean;
 }
+
+export type MainFormat = 'single_elim' | 'double_elim' | 'round_robin' | 'swiss' | 'ladder';
 
 export interface Team {
   odTeamId: string;
   odAccountId?: string;
   odOrganizationId?: string;
-  odUserId?: string;
-  odUserIds?: string[];
   tournamentId: string;
   divisionId: string;
   name: string;
-  players: {
-    odUserId: string;
-    odAccountId?: string;
-    odOrganizationId?: string;
-    name: string;
-    email?: string;
-    skillRating?: number;
-    duprId?: string;
-  }[];
+  playerIds: string[];
+  players?: { odUserId: string; name: string; email?: string }[];
   seed?: number;
-  status: 'registered' | 'checked_in' | 'eliminated' | 'winner' | 'withdrawn';
-  paymentStatus: PaymentStatus;
-  stripeSessionId?: string;
-  stripePaymentIntentId?: string;
-  paidAmount?: number;
-  paidAt?: number;
-  createdAt: number;
-  updatedAt: number;
-  isLookingForPartner?: boolean;
-  partnerInviteId?: string;
-}
-
-export interface PartnerInvite {
-  id: string;
-  odAccountId?: string;
-  odOrganizationId?: string;
-  tournamentId: string;
-  divisionId: string;
-  teamId: string;
-  inviterId: string;
-  inviterName: string;
-  invitedUserId: string;
-  invitedUserName?: string;
-  status: 'pending' | 'accepted' | 'declined' | 'expired';
-  createdAt: number;
-  respondedAt?: number;
-  expiresAt?: number;
+  poolGroup?: string;
+  status: 'registered' | 'confirmed' | 'checked_in' | 'active' | 'eliminated' | 'withdrawn';
+  registeredAt: number;
+  registeredByUserId: string;
+  paymentStatus?: PaymentStatus;
+  checkInAt?: number;
 }
 
 export interface Match {
   id: string;
-  odAccountId?: string;
-  odOrganizationId?: string;
   tournamentId: string;
   divisionId: string;
   round: number;
   matchNumber: number;
-  team1Id: string | null;
-  team2Id: string | null;
-  team1Name: string;
-  team2Name: string;
+  stage: 'pool' | 'bracket' | 'finals' | 'consolation';
+  poolGroup?: string;
+  team1Id?: string;
+  team2Id?: string;
+  team1Name?: string;
+  team2Name?: string;
   team1Seed?: number;
   team2Seed?: number;
   winnerId?: string;
@@ -440,7 +423,7 @@ export interface MeetupRSVP {
 }
 
 // ============================================
-// LEAGUE TYPES (UPDATED V05.36)
+// LEAGUE TYPES (UPDATED V05.37)
 // ============================================
 
 export type LeagueType = 'singles' | 'doubles' | 'mixed_doubles';
@@ -507,12 +490,18 @@ export interface LeagueChallengeRules {
 }
 
 /**
- * Round robin schedule settings
+ * Round robin schedule settings (UPDATED V05.37 - added pool support)
  */
 export interface LeagueRoundRobinSettings {
   rounds: number;
   matchesPerWeek?: number;
   scheduleGeneration: 'auto' | 'manual';
+  // NEW V05.37: Pool support
+  numberOfPools?: number;
+  poolNames?: string[];
+  poolAssignment?: 'random' | 'seeded' | 'manual';
+  standingsMode?: 'per_pool' | 'combined';
+  crossPoolPlay?: boolean;
 }
 
 /**
@@ -559,7 +548,7 @@ export type LeagueTiebreaker =
   | 'recent_form';
 
 // ============================================
-// LEAGUE DUPR SETTINGS (NEW V05.36)
+// LEAGUE DUPR SETTINGS (V05.36)
 // ============================================
 
 /**
@@ -571,29 +560,110 @@ export type LeagueDuprMode = 'none' | 'optional' | 'required';
  * DUPR integration settings for leagues
  */
 export interface LeagueDuprSettings {
-  // DUPR mode
   mode: LeagueDuprMode;
-  
-  // Auto-submit completed matches to DUPR
   autoSubmit: boolean;
-  
-  // When to trigger auto-submit
   submitTrigger: 'on_confirmation' | 'on_completion' | 'manual';
-  
-  // DUPR Club ID (if linked to a DUPR club)
   duprClubId?: string | null;
-  
-  // Use DUPR ratings for skill restrictions
   useDuprForSkillLevel: boolean;
-  
-  // Minimum DUPR rating required (if useDuprForSkillLevel is true)
   minDuprRating?: number | null;
-  
-  // Maximum DUPR rating allowed (if useDuprForSkillLevel is true)
   maxDuprRating?: number | null;
-  
-  // Rating type to use for restrictions
   ratingType: 'singles' | 'doubles' | 'both';
+}
+
+// ============================================
+// LEAGUE BYE POLICY (NEW V05.37)
+// ============================================
+
+/**
+ * BYE handling configuration for leagues
+ */
+export interface LeagueByePolicy {
+  /** How BYEs are assigned when odd number of players */
+  assignmentMode: 'rotate_fair' | 'lowest_rank' | 'random' | 'manual';
+  /** Points awarded for a BYE */
+  pointsForBye: number;
+  /** Maximum BYEs allowed per player per season */
+  maxByesPerPlayer?: number | null;
+  /** Whether to count BYE as a "played" match in stats */
+  countByeAsPlayed: boolean;
+}
+
+// ============================================
+// LEAGUE POOL (NEW V05.37)
+// ============================================
+
+/**
+ * Pool/Group for round robin leagues with multiple pools
+ */
+export interface LeaguePool {
+  id: string;
+  leagueId: string;
+  divisionId?: string | null;
+  name: string;
+  order: number;
+  memberIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ============================================
+// LEAGUE BOX OVERRIDE (NEW V05.37)
+// ============================================
+
+/**
+ * Admin manual box move for box league format
+ */
+export interface LeagueBoxOverride {
+  id: string;
+  leagueId: string;
+  memberId: string;
+  memberName: string;
+  fromBox: number;
+  toBox: number;
+  reason: string;
+  overriddenByUserId: string;
+  overriddenByName: string;
+  createdAt: number;
+}
+
+// ============================================
+// LEAGUE WEEK POSTPONEMENT (NEW V05.37)
+// ============================================
+
+/**
+ * Tracks week-level postponements (e.g., entire match night cancelled)
+ */
+export interface LeagueWeekPostponement {
+  id: string;
+  leagueId: string;
+  divisionId?: string | null;
+  
+  // Which week/round was postponed
+  weekNumber: number;
+  roundNumber?: number | null;
+  originalDate: number;
+  
+  // Reason
+  reason: string;
+  
+  // Rescheduling
+  rescheduledTo?: number | null;
+  makeupDeadline?: number | null;
+  
+  // Status
+  status: 'postponed' | 'rescheduled' | 'cancelled';
+  
+  // Affected matches
+  affectedMatchIds: string[];
+  affectedMatchCount: number;
+  
+  // Who did it
+  postponedByUserId: string;
+  postponedByName: string;
+  
+  // Timestamps
+  createdAt: number;
+  updatedAt: number;
 }
 
 // ============================================
@@ -654,7 +724,7 @@ export interface LeagueVenueSettings {
 }
 
 // ============================================
-// LEAGUE SETTINGS (UPDATED V05.36)
+// LEAGUE SETTINGS (UPDATED V05.37)
 // ============================================
 
 /**
@@ -701,8 +771,11 @@ export interface LeagueSettings {
   // Venue settings
   venueSettings?: LeagueVenueSettings | null;
   
-  // DUPR settings (NEW V05.36)
+  // DUPR settings (V05.36)
   duprSettings?: LeagueDuprSettings | null;
+  
+  // BYE policy (NEW V05.37)
+  byePolicy?: LeagueByePolicy | null;
 }
 
 // ============================================
@@ -792,14 +865,14 @@ export interface League {
 }
 
 // ============================================
-// LEAGUE MEMBER TYPES
+// LEAGUE MEMBER TYPES (UPDATED V05.37)
 // ============================================
 
 export type MembershipStatus = 'pending' | 'active' | 'suspended' | 'withdrawn';
 export type MemberRole = 'member' | 'captain' | 'admin';
 
 /**
- * Member statistics
+ * Member statistics (UPDATED V05.37 - added byeCount)
  */
 export interface MemberStats {
   played: number;
@@ -815,10 +888,12 @@ export interface MemberStats {
   currentStreak: number;
   bestWinStreak: number;
   recentForm: ('W' | 'L' | 'D' | 'F')[];
+  // NEW V05.37: BYE tracking
+  byeCount?: number;
 }
 
 /**
- * League member (individual or team depending on league type)
+ * League member (UPDATED V05.37 - added pool and box override fields)
  */
 export interface LeagueMember {
   id: string;
@@ -857,6 +932,13 @@ export interface LeagueMember {
   
   // Box league specific
   currentBox?: number | null;
+  
+  // NEW V05.37: Pool assignment
+  poolId?: string | null;
+  poolName?: string | null;
+  
+  // NEW V05.37: Box override tracking
+  lastBoxOverride?: LeagueBoxOverride | null;
   
   // Stats
   stats: MemberStats;
@@ -909,9 +991,12 @@ export interface LeaguePartnerInvite {
 }
 
 // ============================================
-// LEAGUE MATCH TYPES (UPDATED V05.36)
+// LEAGUE MATCH TYPES (UPDATED V05.37)
 // ============================================
 
+/**
+ * League match status (UPDATED V05.37 - added postponed and rescheduled)
+ */
 export type LeagueMatchStatus =
   | 'scheduled'
   | 'pending_confirmation'
@@ -919,12 +1004,26 @@ export type LeagueMatchStatus =
   | 'disputed'
   | 'cancelled'
   | 'forfeit'
-  | 'no_show';
+  | 'no_show'
+  // NEW V05.37: Postpone statuses
+  | 'postponed'
+  | 'rescheduled';
 
 export type LeagueMatchType = 'regular' | 'challenge' | 'playoff' | 'box';
 
 /**
- * League match (UPDATED V05.36 - added DUPR tracking fields)
+ * Common postpone reasons
+ */
+export type PostponeReason = 
+  | 'weather'
+  | 'venue_unavailable'
+  | 'player_unavailable'
+  | 'holiday'
+  | 'emergency'
+  | 'other';
+
+/**
+ * League match (UPDATED V05.37 - added postpone tracking fields)
  */
 export interface LeagueMatch {
   id: string;
@@ -941,7 +1040,7 @@ export interface LeagueMatch {
   partnerAId?: string | null;
   partnerBId?: string | null;
   
-  // DUPR IDs for submission (NEW V05.36)
+  // DUPR IDs for submission (V05.36)
   userADuprId?: string | null;
   userBDuprId?: string | null;
   partnerADuprId?: string | null;
@@ -984,13 +1083,24 @@ export interface LeagueMatch {
   confirmedByUserId?: string | null;
   disputeReason?: string | null;
   
-  // DUPR submission tracking (NEW V05.36)
+  // DUPR submission tracking (V05.36)
   duprEligible?: boolean;
   duprSubmitted?: boolean;
   duprMatchId?: string | null;
   duprSubmittedAt?: number | null;
   duprSubmittedBy?: string | null;
   duprError?: string | null;
+  
+  // NEW V05.37: Postpone tracking
+  postponedAt?: number | null;
+  postponedByUserId?: string | null;
+  postponedByName?: string | null;
+  postponedReason?: PostponeReason | string | null;
+  originalScheduledDate?: number | null;
+  rescheduledTo?: number | null;
+  rescheduledCourt?: string | null;
+  makeupDeadline?: number | null;
+  weekPostponementId?: string | null;
   
   // Timestamps
   createdAt: number;
