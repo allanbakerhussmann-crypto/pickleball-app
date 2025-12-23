@@ -81,6 +81,44 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
     []
   );
 
+  // Handle division move (drag & drop in preview)
+  const handleDivisionMove = useCallback(
+    (divisionId: string, newStartTime: string, newDayId: string) => {
+      setSettings((prev) => {
+        const updatedDivisions = prev.divisions.map((div) => {
+          if (div.id !== divisionId) return div;
+
+          // Calculate duration to get new end time
+          const parseTime = (time: string) => {
+            const [h, m] = time.split(':').map(Number);
+            return h * 60 + m;
+          };
+          const formatTime = (mins: number) => {
+            const h = Math.floor(mins / 60);
+            const m = mins % 60;
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+          };
+
+          const oldStart = parseTime(div.estimatedStartTime || '09:00');
+          const oldEnd = parseTime(div.estimatedEndTime || '12:00');
+          const duration = oldEnd - oldStart;
+          const newStart = parseTime(newStartTime);
+          const newEnd = newStart + duration;
+
+          return {
+            ...div,
+            estimatedStartTime: newStartTime,
+            estimatedEndTime: formatTime(newEnd),
+            assignedDayId: newDayId,
+          };
+        });
+
+        return { ...prev, divisions: updatedDivisions };
+      });
+    },
+    []
+  );
+
   // Render current step
   const renderStep = () => {
     switch (step) {
@@ -142,6 +180,7 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
           <PlannerStep5Preview
             settings={settings}
             capacity={capacity}
+            onDivisionMove={handleDivisionMove}
           />
         );
       default:

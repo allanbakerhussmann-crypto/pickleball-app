@@ -664,19 +664,19 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         {step === 2 && (
           <div className="space-y-6">
             {/* Enable Pricing Toggle */}
-            <div className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-700">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-green-600/20 flex items-center justify-center">
+            <div className="flex items-center justify-between gap-4 p-4 bg-gray-900 rounded-lg border border-gray-700">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-lg bg-green-600/20 flex items-center justify-center flex-shrink-0">
                   <span className="text-xl">💰</span>
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h3 className="text-white font-semibold">Charge Entry Fee</h3>
                   <p className="text-sm text-gray-400">Collect payment from players</p>
                 </div>
               </div>
               <button
                 onClick={() => setPricingEnabled(!pricingEnabled)}
-                className={`relative w-14 h-8 rounded-full transition-colors ${pricingEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                className={`relative w-14 h-8 flex-shrink-0 rounded-full transition-colors ${pricingEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
               >
                 <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${pricingEnabled ? 'translate-x-7' : 'translate-x-1'}`}></span>
               </button>
@@ -709,19 +709,19 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                 </div>
 
                 {/* Prize Pool Toggle */}
-                <div className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-700">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-amber-600/20 flex items-center justify-center">
+                <div className="flex items-center justify-between gap-4 p-4 bg-gray-900 rounded-lg border border-gray-700">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-lg bg-amber-600/20 flex items-center justify-center flex-shrink-0">
                       <span className="text-xl">🏆</span>
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h3 className="text-white font-semibold">Prize Pool</h3>
                       <p className="text-sm text-gray-400">Collect additional for prizes</p>
                     </div>
                   </div>
                   <button
                     onClick={() => setPrizePoolEnabled(!prizePoolEnabled)}
-                    className={`relative w-14 h-8 rounded-full transition-colors ${prizePoolEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                    className={`relative w-14 h-8 flex-shrink-0 rounded-full transition-colors ${prizePoolEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
                   >
                     <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${prizePoolEnabled ? 'translate-x-7' : 'translate-x-1'}`}></span>
                   </button>

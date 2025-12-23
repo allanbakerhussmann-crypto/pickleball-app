@@ -2,19 +2,121 @@
  * Tournament Planner - Step 5: Preview (Multi-Day Support)
  *
  * Final preview showing timeline, summary, and any warnings.
+ * Supports drag-and-drop division repositioning with conflict detection.
  *
  * FILE LOCATION: components/tournament/planner/PlannerStep5Preview.tsx
- * VERSION: V06.00
+ * VERSION: V06.02
  */
 
-import React from 'react';
+import React, { useState, useCallback } from 'react';
+import {
+  DndContext,
+  DragEndEvent,
+  DragStartEvent,
+  DragOverlay,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+} from '@dnd-kit/core';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
 import type { TournamentPlannerSettings, PlannerCapacity, TournamentDay } from '../../../types';
+
+// Division breakdown type (matches inline type in PlannerCapacity)
+interface DivisionBreakdown {
+  divisionId: string;
+  name: string;
+  matches: number;
+  minutes: number;
+  startTime: string;
+  endTime: string;
+  dayId?: string;
+}
 import { MATCH_PRESETS } from '../../../types';
 
 interface PlannerStep5PreviewProps {
   settings: TournamentPlannerSettings;
   capacity: PlannerCapacity;
+  onDivisionMove?: (divisionId: string, newStartTime: string, newDayId: string) => void;
 }
+
+// Conflict error state
+interface ConflictError {
+  message: string;
+  divisionId: string;
+}
+
+// Draggable division bar component
+interface DraggableDivisionBarProps {
+  div: DivisionBreakdown;
+  globalIndex: number;
+  left: number;
+  width: number;
+  isDragging: boolean;
+}
+
+const DraggableDivisionBar: React.FC<DraggableDivisionBarProps> = ({
+  div,
+  globalIndex,
+  left,
+  width,
+  isDragging,
+}) => {
+  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+    id: div.divisionId,
+    data: { division: div, globalIndex },
+  });
+
+  const style = {
+    left: `${left}%`,
+    width: `${Math.max(width, 5)}%`,
+    transform: CSS.Translate.toString(transform),
+    opacity: isDragging ? 0.5 : 1,
+    cursor: 'grab',
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className={`absolute h-full ${DIVISION_COLORS[globalIndex % DIVISION_COLORS.length]} rounded flex items-center px-2 overflow-hidden transition-shadow hover:ring-2 hover:ring-white/50 active:cursor-grabbing`}
+      style={style}
+    >
+      <span className="text-white text-xs font-medium truncate select-none">
+        {div.name}
+      </span>
+      <span className="ml-auto text-white/60 text-xs">⋮⋮</span>
+    </div>
+  );
+};
+
+// Droppable timeline track
+interface DroppableTrackProps {
+  dayId: string;
+  rowIndex: number;
+  children: React.ReactNode;
+}
+
+const DroppableTrack: React.FC<DroppableTrackProps> = ({ dayId, rowIndex, children }) => {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `${dayId}-row-${rowIndex}`,
+    data: { dayId, rowIndex },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`relative h-8 transition-colors ${isOver ? 'ring-2 ring-indigo-500 ring-opacity-50' : ''}`}
+    >
+      {/* Background track */}
+      <div className={`absolute inset-0 rounded ${isOver ? 'bg-indigo-900/30' : 'bg-gray-600'}`} />
+      {children}
+    </div>
+  );
+};
 
 // Colors for timeline bars
 const DIVISION_COLORS = [
@@ -39,7 +141,21 @@ const formatDateDisplay = (dateStr: string): string => {
 export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
   settings,
   capacity,
+  onDivisionMove,
 }) => {
+  // Drag state
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [conflictError, setConflictError] = useState<ConflictError | null>(null);
+
+  // Sensors for drag and drop (pointer for desktop, touch for mobile with delay)
+  const pointerSensor = useSensor(PointerSensor, {
+    activationConstraint: { distance: 8 },
+  });
+  const touchSensor = useSensor(TouchSensor, {
+    activationConstraint: { delay: 200, tolerance: 5 },
+  });
+  const sensors = useSensors(pointerSensor, touchSensor);
+
   // Parse time for timeline positioning
   const parseTimeToMinutes = (time: string): number => {
     // Handle both "HH:MM" and "H:MM AM/PM" formats
@@ -90,6 +206,122 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
   const getDivisionsForDay = (dayId: string) => {
     return capacity.divisionBreakdown.filter((div) => div.dayId === dayId);
   };
+
+  // Convert minutes to time string (HH:MM format)
+  const minutesToTimeString = (minutes: number): string => {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+  };
+
+  // Check for conflicts when moving a division
+  const checkForConflicts = useCallback((
+    movingDivisionId: string,
+    newStartMinutes: number,
+    targetDayId: string
+  ): { hasConflict: boolean; conflictingDivision?: DivisionBreakdown } => {
+    const movingDiv = capacity.divisionBreakdown.find(d => d.divisionId === movingDivisionId);
+    if (!movingDiv) return { hasConflict: false };
+
+    // Calculate the duration of the moving division
+    const movingDuration = parseTimeToMinutes(movingDiv.endTime) - parseTimeToMinutes(movingDiv.startTime);
+    const newEndMinutes = newStartMinutes + movingDuration;
+
+    // Get all divisions on the target day except the one being moved
+    const otherDivisionsOnDay = capacity.divisionBreakdown.filter(
+      d => d.dayId === targetDayId && d.divisionId !== movingDivisionId
+    );
+
+    // Check for overlaps
+    for (const otherDiv of otherDivisionsOnDay) {
+      const otherStart = parseTimeToMinutes(otherDiv.startTime);
+      const otherEnd = parseTimeToMinutes(otherDiv.endTime);
+
+      // Check if there's an overlap
+      if (newStartMinutes < otherEnd && newEndMinutes > otherStart) {
+        return { hasConflict: true, conflictingDivision: otherDiv };
+      }
+    }
+
+    // Check if within day bounds
+    const targetDay = tournamentDays.find(d => d.id === targetDayId);
+    if (targetDay) {
+      const dayStart = parseTimeToMinutes(targetDay.startTime);
+      const dayEnd = parseTimeToMinutes(targetDay.endTime);
+      if (newStartMinutes < dayStart || newEndMinutes > dayEnd) {
+        return {
+          hasConflict: true,
+          conflictingDivision: {
+            divisionId: 'bounds',
+            name: 'day boundaries',
+            startTime: targetDay.startTime,
+            endTime: targetDay.endTime
+          } as DivisionBreakdown
+        };
+      }
+    }
+
+    return { hasConflict: false };
+  }, [capacity.divisionBreakdown, tournamentDays, parseTimeToMinutes]);
+
+  // Handle drag start
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string);
+    setConflictError(null);
+  }, []);
+
+  // Handle drag end
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over, delta } = event;
+    setActiveDragId(null);
+
+    if (!over || !onDivisionMove) return;
+
+    const divisionId = active.id as string;
+    const movingDiv = capacity.divisionBreakdown.find(d => d.divisionId === divisionId);
+    if (!movingDiv) return;
+
+    // Get the target day from the droppable area
+    const targetDayId = over.data.current?.dayId || movingDiv.dayId;
+    const targetDay = tournamentDays.find(d => d.id === targetDayId);
+    if (!targetDay) return;
+
+    // Calculate new start time based on horizontal drag delta
+    const dayStartMinutes = parseTimeToMinutes(targetDay.startTime);
+    const dayEndMinutes = parseTimeToMinutes(targetDay.endTime);
+    const dayTotalMinutes = dayEndMinutes - dayStartMinutes;
+
+    // Assume timeline is roughly 100% = full day, convert pixel delta to minutes
+    // Get the timeline width (approximate - we use 600px as base)
+    const timelineWidth = 600;
+    const minutesPerPixel = dayTotalMinutes / timelineWidth;
+    const deltaMinutes = Math.round((delta.x * minutesPerPixel) / 15) * 15; // Snap to 15-min increments
+
+    const currentStartMinutes = parseTimeToMinutes(movingDiv.startTime);
+    const newStartMinutes = Math.max(dayStartMinutes, Math.min(
+      dayEndMinutes - (parseTimeToMinutes(movingDiv.endTime) - currentStartMinutes),
+      currentStartMinutes + deltaMinutes
+    ));
+
+    // Check for conflicts
+    const { hasConflict, conflictingDivision } = checkForConflicts(divisionId, newStartMinutes, targetDayId);
+
+    if (hasConflict && conflictingDivision) {
+      // Show error and revert
+      setConflictError({
+        message: `Cannot move "${movingDiv.name}" - conflicts with "${conflictingDivision.name}"`,
+        divisionId,
+      });
+
+      // Auto-clear error after 3 seconds
+      setTimeout(() => setConflictError(null), 3000);
+      return;
+    }
+
+    // No conflict - apply the move
+    const newStartTime = minutesToTimeString(newStartMinutes);
+    onDivisionMove(divisionId, newStartTime, targetDayId);
+  }, [capacity.divisionBreakdown, tournamentDays, onDivisionMove, checkForConflicts, parseTimeToMinutes]);
 
   // Render timeline for a single day
   const renderDayTimeline = (day: TournamentDay, dayIndex: number) => {
@@ -143,20 +375,16 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
             const globalIndex = capacity.divisionBreakdown.findIndex((d) => d.divisionId === div.divisionId);
 
             return (
-              <div key={div.divisionId} className="relative h-8">
-                {/* Background track */}
-                <div className="absolute inset-0 bg-gray-600 rounded" />
-
-                {/* Division bar */}
-                <div
-                  className={`absolute h-full ${DIVISION_COLORS[globalIndex % DIVISION_COLORS.length]} rounded flex items-center px-2 overflow-hidden`}
-                  style={{ left: `${left}%`, width: `${Math.max(width, 5)}%` }}
-                >
-                  <span className="text-white text-xs font-medium truncate">
-                    {div.name}
-                  </span>
-                </div>
-              </div>
+              <DroppableTrack key={div.divisionId} dayId={day.id} rowIndex={index}>
+                {/* Division bar - draggable */}
+                <DraggableDivisionBar
+                  div={div}
+                  globalIndex={globalIndex}
+                  left={left}
+                  width={width}
+                  isDragging={activeDragId === div.divisionId}
+                />
+              </DroppableTrack>
             );
           })}
         </div>
@@ -176,14 +404,51 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
         </p>
       </div>
 
-      {/* Timeline */}
+      {/* Timeline with Drag & Drop */}
       {settings.divisions.length > 0 && (
         <div className="bg-gray-700 rounded-lg p-4 mb-6">
-          <h3 className="text-sm text-gray-400 mb-4">
-            {isMultiDay ? 'SCHEDULE BY DAY' : 'TIMELINE'}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm text-gray-400">
+              {isMultiDay ? 'SCHEDULE BY DAY' : 'TIMELINE'}
+            </h3>
+            {onDivisionMove && (
+              <span className="text-xs text-gray-500">
+                Drag divisions to reposition • Snaps to 15min
+              </span>
+            )}
+          </div>
 
-          {tournamentDays.map((day, index) => renderDayTimeline(day, index))}
+          {/* Conflict Error Toast */}
+          {conflictError && (
+            <div className="mb-4 p-3 bg-red-900/50 border border-red-500 rounded-lg flex items-center gap-3 animate-pulse">
+              <span className="text-red-400 text-lg">⚠️</span>
+              <span className="text-red-200 text-sm font-medium">{conflictError.message}</span>
+              <button
+                onClick={() => setConflictError(null)}
+                className="ml-auto text-red-400 hover:text-red-300"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
+            {tournamentDays.map((day, index) => renderDayTimeline(day, index))}
+
+            {/* Drag Overlay - shows while dragging */}
+            <DragOverlay>
+              {activeDragId ? (
+                <div className="bg-indigo-500 rounded px-3 py-1 text-white text-xs font-medium shadow-lg opacity-90">
+                  {capacity.divisionBreakdown.find(d => d.divisionId === activeDragId)?.name || 'Division'}
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
 
           {/* Legend */}
           <div className="flex flex-wrap gap-4 mt-4 pt-4 border-t border-gray-600 text-sm">
