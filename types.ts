@@ -1,10 +1,9 @@
 /**
- * Pickleball Director - Type Definitions V05.37
- * 
- * UPDATED V05.37:
- * - Added 'postponed' and 'rescheduled' to LeagueMatchStatus
- * - Added postpone tracking fields to LeagueMatch
- * - Added LeagueWeekPostponement interface
+ * Pickleball Director - Type Definitions V05.44
+ *
+ * UPDATED V05.44:
+ * - Removed postpone functionality (not needed)
+ * - Added score verification types
  * - Added LeagueByePolicy interface (for Phase 3)
  * - Added LeaguePool interface (for Phase 2)
  * - Added LeagueBoxOverride interface (for Phase 4)
@@ -448,10 +447,23 @@ export interface LeagueMatchFormat {
 }
 
 /**
+ * Payment collection mode for leagues (NEW V05.44)
+ * - free: No payment required
+ * - external: Organizer collects payment outside the app (display fee only)
+ * - stripe: Collect payment via Stripe Connect
+ */
+export type PaymentMode = 'free' | 'external' | 'stripe';
+
+/**
  * Pricing settings for paid leagues
  */
 export interface LeaguePricing {
+  // Payment mode (NEW V05.44)
+  paymentMode: PaymentMode;
+
+  // Legacy field - still used for backwards compatibility
   enabled: boolean;
+
   entryFee: number;
   entryFeeType: 'per_player' | 'per_team';
   memberDiscount?: number;
@@ -634,46 +646,6 @@ export interface LeagueBoxOverride {
 }
 
 // ============================================
-// LEAGUE WEEK POSTPONEMENT (NEW V05.37)
-// ============================================
-
-/**
- * Tracks week-level postponements (e.g., entire match night cancelled)
- */
-export interface LeagueWeekPostponement {
-  id: string;
-  leagueId: string;
-  divisionId?: string | null;
-  
-  // Which week/round was postponed
-  weekNumber: number;
-  roundNumber?: number | null;
-  originalDate: number;
-  
-  // Reason
-  reason: string;
-  
-  // Rescheduling
-  rescheduledTo?: number | null;
-  makeupDeadline?: number | null;
-  
-  // Status
-  status: 'postponed' | 'rescheduled' | 'cancelled';
-  
-  // Affected matches
-  affectedMatchIds: string[];
-  affectedMatchCount: number;
-  
-  // Who did it
-  postponedByUserId: string;
-  postponedByName: string;
-  
-  // Timestamps
-  createdAt: number;
-  updatedAt: number;
-}
-
-// ============================================
 // LEAGUE VENUE & COURT TYPES
 // ============================================
 
@@ -731,7 +703,85 @@ export interface LeagueVenueSettings {
 }
 
 // ============================================
-// LEAGUE SETTINGS (UPDATED V05.37)
+// SCORE VERIFICATION TYPES (NEW V05.44)
+// ============================================
+
+/**
+ * Who can enter scores for a match
+ */
+export type ScoreEntryMode =
+  | 'any_player'        // Any player in the match
+  | 'winner_only'       // Only winning side can enter
+  | 'organizer_only';   // Only organizer can enter
+
+/**
+ * How scores are verified after entry
+ */
+export type ScoreVerificationMethod =
+  | 'auto_confirm'      // Immediate - no confirmation needed
+  | 'one_opponent'      // One player from opposing side confirms
+  | 'majority'          // Majority of players confirm (2/4 for doubles, 1/2 for singles)
+  | 'organizer_only';   // Organizer must approve all scores
+
+/**
+ * Match verification status (applies to ALL match types)
+ */
+export type MatchVerificationStatus =
+  | 'pending'           // Score entered, awaiting verification
+  | 'confirmed'         // Required confirmations received
+  | 'disputed'          // Player disputed the score
+  | 'final';            // Locked - affects standings
+
+/**
+ * Dispute reasons for score challenges
+ */
+export type DisputeReason =
+  | 'wrong_score'
+  | 'wrong_winner'
+  | 'other';
+
+/**
+ * Score verification settings for a league
+ */
+export interface ScoreVerificationSettings {
+  entryMode: ScoreEntryMode;
+  verificationMethod: ScoreVerificationMethod;
+  autoFinalizeHours: number;      // 0 = disabled
+  allowDisputes: boolean;
+}
+
+/**
+ * Verification data stored on a match
+ */
+export interface MatchVerificationData {
+  verificationStatus: MatchVerificationStatus;
+  confirmations: string[];        // User IDs who confirmed
+  requiredConfirmations: number;  // Based on method + player count
+
+  // Dispute tracking
+  disputedAt?: number;
+  disputedByUserId?: string;
+  disputeReason?: DisputeReason;
+  disputeNotes?: string;
+
+  // Finalization
+  finalizedAt?: number;
+  finalizedByUserId?: string;
+  autoFinalized?: boolean;
+}
+
+/**
+ * Default score verification settings
+ */
+export const DEFAULT_SCORE_VERIFICATION: ScoreVerificationSettings = {
+  entryMode: 'any_player',
+  verificationMethod: 'one_opponent',
+  autoFinalizeHours: 24,
+  allowDisputes: true,
+};
+
+// ============================================
+// LEAGUE SETTINGS (UPDATED V05.44)
 // ============================================
 
 /**
@@ -780,9 +830,12 @@ export interface LeagueSettings {
   
   // DUPR settings (V05.36)
   duprSettings?: LeagueDuprSettings | null;
-  
+
   // BYE policy (NEW V05.37)
   byePolicy?: LeagueByePolicy | null;
+
+  // Score verification (NEW V05.44)
+  scoreVerification?: ScoreVerificationSettings | null;
 }
 
 // ============================================
@@ -998,11 +1051,11 @@ export interface LeaguePartnerInvite {
 }
 
 // ============================================
-// LEAGUE MATCH TYPES (UPDATED V05.37)
+// LEAGUE MATCH TYPES
 // ============================================
 
 /**
- * League match status (UPDATED V05.37 - added postponed and rescheduled)
+ * League match status
  */
 export type LeagueMatchStatus =
   | 'scheduled'
@@ -1011,26 +1064,12 @@ export type LeagueMatchStatus =
   | 'disputed'
   | 'cancelled'
   | 'forfeit'
-  | 'no_show'
-  // NEW V05.37: Postpone statuses
-  | 'postponed'
-  | 'rescheduled';
+  | 'no_show';
 
 export type LeagueMatchType = 'regular' | 'challenge' | 'playoff' | 'box';
 
 /**
- * Common postpone reasons
- */
-export type PostponeReason = 
-  | 'weather'
-  | 'venue_unavailable'
-  | 'player_unavailable'
-  | 'holiday'
-  | 'emergency'
-  | 'other';
-
-/**
- * League match (UPDATED V05.37 - added postpone tracking fields)
+ * League match
  */
 export interface LeagueMatch {
   id: string;
@@ -1097,18 +1136,10 @@ export interface LeagueMatch {
   duprSubmittedAt?: number | null;
   duprSubmittedBy?: string | null;
   duprError?: string | null;
-  
-  // NEW V05.37: Postpone tracking
-  postponedAt?: number | null;
-  postponedByUserId?: string | null;
-  postponedByName?: string | null;
-  postponedReason?: PostponeReason | string | null;
-  originalScheduledDate?: number | null;
-  rescheduledTo?: number | null;
-  rescheduledCourt?: string | null;
-  makeupDeadline?: number | null;
-  weekPostponementId?: string | null;
-  
+
+  // Score verification (NEW V05.44)
+  verification?: MatchVerificationData | null;
+
   // Timestamps
   createdAt: number;
   playedAt?: number | null;

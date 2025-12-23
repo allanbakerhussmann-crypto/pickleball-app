@@ -1,17 +1,23 @@
 /**
- * Box League Types V05.38
- * 
+ * Box League Types V05.44
+ *
  * Types for Individual Rotating Doubles Box League format.
- * 
+ *
+ * UPDATED V05.44:
+ * - Added score verification support (uses shared MatchVerificationData)
+ * - Removed postpone functionality
+ *
  * KEY CONCEPT:
  * - Players are tracked as INDIVIDUALS, not teams
  * - Partners ROTATE within each box each week
  * - Each individual player's wins/points determine their rank
  * - Top players promote, bottom players relegate INDIVIDUALLY
- * 
+ *
  * FILE LOCATION: types/boxLeague.ts
- * VERSION: V05.38
+ * VERSION: V05.44
  */
+
+import type { MatchVerificationData } from '../types';
 
 // ============================================
 // BOX LEAGUE CONFIGURATION
@@ -150,10 +156,9 @@ export interface BoxLeaguePlayer {
 /**
  * Match status for Box League
  */
-export type BoxLeagueMatchStatus = 
+export type BoxLeagueMatchStatus =
   | 'scheduled'
   | 'completed'
-  | 'postponed'
   | 'cancelled'
   | 'bye';
 
@@ -216,12 +221,10 @@ export interface BoxLeagueMatch {
   enteredAt?: number | null;
   confirmedByUserId?: string | null;
   confirmedAt?: number | null;
-  
-  // Postpone info
-  postponedAt?: number | null;
-  postponedReason?: string | null;
-  rescheduledTo?: number | null;
-  
+
+  // Score verification (NEW V05.44 - uses shared type from types.ts)
+  verification?: MatchVerificationData | null;
+
   // Timestamps
   createdAt: number;
   playedAt?: number | null;
@@ -293,7 +296,7 @@ export interface BoxLeagueWeek {
   weekNumber: number;
   
   // Status
-  status: 'upcoming' | 'in_progress' | 'completed' | 'postponed';
+  status: 'upcoming' | 'in_progress' | 'completed';
   
   // Dates
   weekStartDate: number;
@@ -313,12 +316,7 @@ export interface BoxLeagueWeek {
   
   // Movements AFTER week ends
   movements?: PlayerMovement[];
-  
-  // Postpone info
-  postponedAt?: number | null;
-  postponedReason?: string | null;
-  rescheduledTo?: number | null;
-  
+
   // Processing
   processedAt?: number | null;
   processedByUserId?: string | null;

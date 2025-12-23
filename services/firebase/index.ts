@@ -1,11 +1,15 @@
 /**
  * Firebase Services - Main Entry Point
- * 
+ *
  * This file re-exports all Firebase functionality for backwards compatibility.
  * Import from here: import { ... } from './services/firebase';
- * 
+ *
+ * UPDATED V05.44:
+ * - Added score verification service exports
+ * - Removed postpone functionality exports
+ *
  * FILE LOCATION: services/firebase/index.ts
- * VERSION: V05.37
+ * VERSION: V05.44
  */
 
 // Re-export config and core instances
@@ -209,6 +213,10 @@ export {
   startLeague,
   completeLeague,
   cancelLeague,
+
+  // Auto-Registration (NEW V05.44)
+  checkAndUpdateLeagueStatus,
+  getExpectedLeagueStatus,
 } from './leagues';
 
 // ============================================
@@ -225,27 +233,7 @@ export {
 } from './leagueMatchGeneration';
 
 // ============================================
-// LEAGUE POSTPONE SERVICE (NEW V05.37)
-// ============================================
-export {
-  // Match Postpone/Reschedule
-  postponeMatch,
-  rescheduleMatch,
-  cancelPostponedMatch,
-  
-  // Week Postpone/Reschedule
-  postponeWeek,
-  rescheduleWeek,
-  
-  // Queries
-  getPostponedMatches,
-  
-  // Helpers
-  formatPostponeReason,
-  getDefaultMakeupDays,
-} from './leaguePostpone';
-// ============================================
-// BOX LEAGUE SERVICE (NEW V05.38)
+// BOX LEAGUE SERVICE (UPDATED V05.44)
 // ============================================
 export {
   // Player operations
@@ -254,32 +242,60 @@ export {
   subscribeToBoxLeaguePlayers,
   updateBoxLeaguePlayer,
   seedBoxLeaguePlayers,
-  
+
+  // Player drag-and-drop (NEW V05.44)
+  movePlayerBetweenBoxes,
+  reorderPlayersInBox,
+  swapPlayersBetweenBoxes,
+
   // Match operations
   generateWeekMatches,
   getBoxLeagueMatchesForWeek,
   getBoxLeagueMatchesForBox,
   subscribeToBoxLeagueMatches,
-  
+
   // Week operations
   createBoxLeagueWeek,
   getBoxLeagueWeek,
   getBoxLeagueWeeks,
   subscribeToBoxLeagueWeeks,
-  
+
   // Score entry
   enterBoxLeagueScore,
-  
+
   // Standings & Processing
   calculateBoxStandings,
   processBoxLeagueWeek,
-  
-  // Postponement
-  postponeBoxLeagueWeek,
-  
+
   // Schedule Generation
   generateBoxLeagueSchedule as generateNewBoxLeagueSchedule,
 } from './boxLeague';
+
+// ============================================
+// SCORE VERIFICATION SERVICE (NEW V05.44)
+// ============================================
+export {
+  // Core functions
+  confirmMatchScore,
+  disputeMatchScore,
+  resolveDispute,
+  autoFinalizeMatch,
+
+  // Helpers
+  getRequiredConfirmations,
+  createInitialVerificationData,
+  canUserConfirm,
+  shouldAutoFinalize,
+
+  // Constants
+  DEFAULT_VERIFICATION_SETTINGS,
+
+  // Types
+  type VerifiableEventType,
+  type VerificationResult,
+  type DisputeResult,
+  type ResolveResult,
+} from './scoreVerification';
 
 // Court Bookings
 export {

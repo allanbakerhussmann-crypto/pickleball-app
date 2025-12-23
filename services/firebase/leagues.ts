@@ -1,10 +1,13 @@
 /**
  * League Firebase Services
- * 
+ *
  * Database operations for the Leagues feature.
- * 
+ *
+ * UPDATED V05.44:
+ * - Added auto-registration check functions
+ *
  * FILE LOCATION: src/services/firebase/leagues.ts
- * VERSION: V05.17
+ * VERSION: V05.44
  */
 
 import {
@@ -995,4 +998,89 @@ export const completeLeague = async (leagueId: string): Promise<void> => {
  */
 export const cancelLeague = async (leagueId: string): Promise<void> => {
   await updateLeague(leagueId, { status: 'cancelled' });
+};
+
+// ============================================
+// AUTO-REGISTRATION CHECK (NEW V05.44)
+// ============================================
+
+/**
+ * Check if league status should be auto-updated based on dates
+ *
+ * This function checks:
+ * 1. If 'draft' and registrationOpens has passed → change to 'registration'
+ * 2. If 'registration' and registrationDeadline has passed → change to 'active'
+ *
+ * Called on page load to automatically open registration or start leagues
+ * based on the dates set by the organizer.
+ *
+ * @param league - The league to check
+ * @returns Object with newStatus (if changed) and wasUpdated boolean
+ */
+export const checkAndUpdateLeagueStatus = async (
+  league: League
+): Promise<{ newStatus: LeagueStatus | null; wasUpdated: boolean }> => {
+  const now = Date.now();
+
+  // Only check draft or registration status leagues
+  if (league.status !== 'draft' && league.status !== 'registration') {
+    return { newStatus: null, wasUpdated: false };
+  }
+
+  // Check Draft → Registration transition
+  if (
+    league.status === 'draft' &&
+    league.registrationOpens &&
+    now >= league.registrationOpens
+  ) {
+    await updateLeague(league.id, { status: 'registration' });
+    return { newStatus: 'registration', wasUpdated: true };
+  }
+
+  // Check Registration → Active transition
+  if (
+    league.status === 'registration' &&
+    league.registrationDeadline &&
+    now >= league.registrationDeadline
+  ) {
+    await updateLeague(league.id, { status: 'active' });
+    return { newStatus: 'active', wasUpdated: true };
+  }
+
+  return { newStatus: null, wasUpdated: false };
+};
+
+/**
+ * Get the expected status for a league based on current dates
+ * (for display purposes, doesn't update the database)
+ *
+ * @param league - The league to check
+ * @returns The expected status based on dates
+ */
+export const getExpectedLeagueStatus = (league: League): LeagueStatus => {
+  const now = Date.now();
+
+  // If already completed/cancelled, don't change
+  if (league.status === 'completed' || league.status === 'cancelled') {
+    return league.status;
+  }
+
+  // Check if should be active
+  if (
+    league.registrationDeadline &&
+    now >= league.registrationDeadline
+  ) {
+    return 'active';
+  }
+
+  // Check if should be in registration
+  if (
+    league.registrationOpens &&
+    now >= league.registrationOpens
+  ) {
+    return 'registration';
+  }
+
+  // Default to draft
+  return league.status;
 };

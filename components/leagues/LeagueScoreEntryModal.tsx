@@ -1,17 +1,26 @@
 /**
- * LeagueScoreEntryModal Component
- * 
+ * LeagueScoreEntryModal Component V05.44
+ *
  * Modal for entering league match scores with game-by-game entry.
  * Supports best of 1, 3, or 5 games with validation.
- * 
+ * Includes score verification (confirm/dispute) workflow.
+ *
  * FILE LOCATION: components/leagues/LeagueScoreEntryModal.tsx
- * VERSION: V05.17
+ * VERSION: V05.44
  */
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { submitLeagueMatchResult, confirmLeagueMatchResult, disputeLeagueMatchResult } from '../../services/firebase';
-import type { LeagueMatch, GameScore } from '../../types';
+import {
+  submitLeagueMatchResult,
+  confirmMatchScore,
+  DEFAULT_VERIFICATION_SETTINGS,
+} from '../../services/firebase';
+import type { LeagueMatch, GameScore, ScoreVerificationSettings } from '../../types';
+import {
+  ScoreVerificationBadge,
+  DisputeScoreModal,
+} from './verification';
 
 // ============================================
 // TYPES
@@ -23,6 +32,7 @@ interface LeagueScoreEntryModalProps {
   bestOf: 1 | 3 | 5;
   pointsPerGame: 11 | 15 | 21;
   winBy: 1 | 2;
+  verificationSettings?: ScoreVerificationSettings;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -42,23 +52,51 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   bestOf,
   pointsPerGame,
   winBy,
+  verificationSettings = DEFAULT_VERIFICATION_SETTINGS,
   onClose,
   onSuccess,
 }) => {
   const { currentUser } = useAuth();
-  
+
   const [games, setGames] = useState<GameInput[]>([]);
   const [loading, setLoading] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [disputeReason, setDisputeReason] = useState('');
-  const [showDispute, setShowDispute] = useState(false);
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
 
   // Determine user's role in this match
   const isPlayerA = currentUser?.uid === match.userAId;
   const isPlayerB = currentUser?.uid === match.userBId;
   const isParticipant = isPlayerA || isPlayerB;
-  const isPendingConfirmation = match.status === 'pending_confirmation';
-  const canConfirm = isPendingConfirmation && match.submittedByUserId !== currentUser?.uid && isParticipant;
+
+  // Get all player IDs
+  const matchPlayerIds = [match.userAId, match.userBId];
+  if (match.partnerAId) matchPlayerIds.push(match.partnerAId);
+  if (match.partnerBId) matchPlayerIds.push(match.partnerBId);
+
+  // Check verification status (use new verification system or fall back to legacy)
+  const verification = match.verification;
+  const hasScore = match.status === 'completed' || match.status === 'pending_confirmation' || match.scores?.length > 0;
+  const verificationStatus = verification?.verificationStatus ||
+    (match.status === 'pending_confirmation' ? 'pending' :
+     match.status === 'completed' ? 'final' : undefined);
+  const isPending = verificationStatus === 'pending' || verificationStatus === 'confirmed';
+  const isFinal = verificationStatus === 'final';
+  const isDisputed = verificationStatus === 'disputed';
+
+  // Check if user can confirm
+  const userCanConfirm = isParticipant &&
+    hasScore &&
+    isPending &&
+    match.submittedByUserId !== currentUser?.uid &&
+    !(verification?.confirmations || []).includes(currentUser?.uid || '');
+
+  // Check if user can dispute
+  const userCanDispute = isParticipant &&
+    hasScore &&
+    !isFinal &&
+    !isDisputed &&
+    verificationSettings.allowDisputes;
 
   // Initialize games from existing scores or empty
   useEffect(() => {
@@ -230,42 +268,35 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     }
   };
 
+  // Handle confirm using new verification service
   const handleConfirm = async () => {
     if (!currentUser) return;
 
-    setLoading(true);
+    setConfirming(true);
     setError(null);
 
     try {
-      // confirmLeagueMatchResult(leagueId, matchId, confirmedByUserId)
-      await confirmLeagueMatchResult(leagueId, match.id, currentUser.uid);
-      onSuccess();
+      const result = await confirmMatchScore(
+        'league',
+        leagueId,
+        match.id,
+        currentUser.uid,
+        verificationSettings
+      );
+
+      if (result.success) {
+        onSuccess();
+        if (result.newStatus === 'final') {
+          onClose();
+        }
+      } else {
+        setError(result.error || result.message || 'Failed to confirm');
+      }
     } catch (e: any) {
       console.error('Failed to confirm score:', e);
       setError(e.message || 'Failed to confirm score');
     } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDispute = async () => {
-    if (!currentUser || !disputeReason.trim()) {
-      setError('Please provide a reason for the dispute');
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      // disputeLeagueMatchResult(leagueId, matchId, reason)
-      await disputeLeagueMatchResult(leagueId, match.id, disputeReason);
-      onSuccess();
-    } catch (e: any) {
-      console.error('Failed to dispute score:', e);
-      setError(e.message || 'Failed to dispute score');
-    } finally {
-      setLoading(false);
+      setConfirming(false);
     }
   };
 
@@ -282,9 +313,22 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
         {/* Header */}
         <div className="bg-gray-900 px-6 py-4 border-b border-gray-700">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-white">
-              {isPendingConfirmation ? 'Confirm Score' : 'Enter Match Score'}
-            </h2>
+            <div>
+              <h2 className="text-lg font-bold text-white">
+                {hasScore && !isFinal ? 'Confirm Score' : hasScore ? 'Match Score' : 'Enter Match Score'}
+              </h2>
+              {/* Verification Badge */}
+              {verificationStatus && (
+                <div className="mt-1">
+                  <ScoreVerificationBadge
+                    status={verificationStatus}
+                    confirmationCount={verification?.confirmations?.length || 0}
+                    requiredConfirmations={verification?.requiredConfirmations || 1}
+                    showCount={isPending}
+                  />
+                </div>
+              )}
+            </div>
             <button onClick={onClose} className="text-gray-400 hover:text-white">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -338,7 +382,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                         inputMode="numeric"
                         value={game.scoreA}
                         onChange={(e) => handleGameChange(index, 'scoreA', e.target.value)}
-                        disabled={isPendingConfirmation && !canConfirm}
+                        disabled={hasScore}
                         placeholder="0"
                         className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-blue-500 disabled:opacity-50"
                       />
@@ -348,12 +392,12 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                         inputMode="numeric"
                         value={game.scoreB}
                         onChange={(e) => handleGameChange(index, 'scoreB', e.target.value)}
-                        disabled={isPendingConfirmation && !canConfirm}
+                        disabled={hasScore}
                         placeholder="0"
                         className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-blue-500 disabled:opacity-50"
                       />
                     </div>
-                    {games.length > 1 && !isPendingConfirmation && (
+                    {games.length > 1 && !hasScore && (
                       <button
                         onClick={() => removeGame(index)}
                         className="text-gray-500 hover:text-red-400"
@@ -368,7 +412,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
               </div>
 
               {/* Add Game Button */}
-              {games.length < bestOf && !isPendingConfirmation && (
+              {games.length < bestOf && !hasScore && (
                 <button
                   onClick={addGame}
                   className="w-full py-2 border border-dashed border-gray-600 text-gray-400 rounded-lg hover:border-gray-500 hover:text-gray-300 transition-colors text-sm"
@@ -395,85 +439,94 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             </>
           )}
 
-          {/* Dispute Form */}
-          {showDispute && (
-            <div className="space-y-3">
-              <label className="block text-sm text-gray-400">
-                Reason for dispute:
-              </label>
-              <textarea
-                value={disputeReason}
-                onChange={(e) => setDisputeReason(e.target.value)}
-                placeholder="Please describe what is incorrect about this score..."
-                className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500 min-h-[100px]"
-              />
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowDispute(false)}
-                  className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDispute}
-                  disabled={loading || !disputeReason.trim()}
-                  className="flex-1 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
-                >
-                  {loading ? 'Submitting...' : 'Submit Dispute'}
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer */}
-        {!showDispute && (
-          <div className="bg-gray-900 px-6 py-4 border-t border-gray-700">
-            {isPendingConfirmation && canConfirm ? (
-              <div className="space-y-3">
-                <div className="text-sm text-yellow-400 text-center">
-                  ⚠️ Your opponent submitted this score. Please confirm or dispute.
-                </div>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setShowDispute(true)}
-                    className="flex-1 py-2 bg-red-600/20 border border-red-600 text-red-400 rounded-lg font-semibold hover:bg-red-600/30"
-                  >
-                    Dispute
-                  </button>
-                  <button
-                    onClick={handleConfirm}
-                    disabled={loading}
-                    className="flex-1 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
-                  >
-                    {loading ? 'Confirming...' : 'Confirm Score'}
-                  </button>
-                </div>
-              </div>
-            ) : isPendingConfirmation ? (
-              <div className="text-sm text-yellow-400 text-center">
-                Waiting for opponent to confirm this score...
-              </div>
-            ) : (
-              <div className="flex gap-3">
-                <button
-                  onClick={onClose}
-                  className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSubmit}
-                  disabled={loading || !isParticipant}
-                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
-                >
-                  {loading ? 'Submitting...' : 'Submit Score'}
-                </button>
-              </div>
+        <div className="bg-gray-900 px-6 py-4 border-t border-gray-700">
+          {/* Waiting for confirmation message */}
+          {hasScore && isPending && !userCanConfirm && match.submittedByUserId === currentUser?.uid && (
+            <div className="text-sm text-yellow-400 text-center mb-3">
+              ⏳ Waiting for opponent to confirm this score...
+            </div>
+          )}
+
+          {/* Disputed message */}
+          {isDisputed && (
+            <div className="text-sm text-red-400 text-center mb-3">
+              ⚠️ This match is disputed and awaiting organizer review.
+            </div>
+          )}
+
+          {/* Confirm prompt */}
+          {userCanConfirm && (
+            <div className="text-sm text-yellow-400 text-center mb-3">
+              ⚠️ Your opponent submitted this score. Please confirm or dispute.
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            {/* Cancel/Close button */}
+            <button
+              onClick={onClose}
+              disabled={loading || confirming}
+              className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg disabled:opacity-50"
+            >
+              {isFinal || isDisputed ? 'Close' : 'Cancel'}
+            </button>
+
+            {/* Dispute button - only show when user can dispute */}
+            {userCanDispute && !isFinal && (
+              <button
+                onClick={() => setShowDisputeModal(true)}
+                className="flex-1 py-2 bg-red-600/20 border border-red-600 text-red-400 rounded-lg font-semibold hover:bg-red-600/30"
+              >
+                Dispute
+              </button>
+            )}
+
+            {/* Confirm button - only show when user can confirm */}
+            {userCanConfirm && (
+              <button
+                onClick={handleConfirm}
+                disabled={confirming}
+                className="flex-1 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+              >
+                {confirming ? 'Confirming...' : 'Confirm Score'}
+              </button>
+            )}
+
+            {/* Submit button - only show when entering new score */}
+            {!hasScore && (
+              <button
+                onClick={handleSubmit}
+                disabled={loading || !isParticipant}
+                className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+              >
+                {loading ? 'Submitting...' : 'Submit Score'}
+              </button>
             )}
           </div>
-        )}
+        </div>
       </div>
+
+      {/* Dispute Modal */}
+      <DisputeScoreModal
+        isOpen={showDisputeModal}
+        onClose={() => setShowDisputeModal(false)}
+        eventType="league"
+        eventId={leagueId}
+        matchId={match.id}
+        userId={currentUser?.uid || ''}
+        matchDescription={`${match.memberAName} vs ${match.memberBName}`}
+        currentScore={match.scores?.length
+          ? match.scores.map(s => `${s.scoreA}-${s.scoreB}`).join(', ')
+          : undefined
+        }
+        onDisputed={() => {
+          onSuccess();
+          setShowDisputeModal(false);
+        }}
+      />
     </div>
   );
 };

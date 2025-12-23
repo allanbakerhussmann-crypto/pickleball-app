@@ -1,16 +1,27 @@
 /**
- * BoxLeagueScoreModal Component V05.38
- * 
+ * BoxLeagueScoreModal Component V05.44
+ *
  * Modal for entering match scores in Box League format.
  * Shows both teams with their rotating partners and allows score entry.
- * 
+ * Includes score verification (confirm/dispute) workflow.
+ *
  * FILE LOCATION: components/leagues/BoxLeagueScoreModal.tsx
- * VERSION: V05.38
+ * VERSION: V05.44
  */
 
 import React, { useState, useEffect } from 'react';
 import { enterBoxLeagueScore } from '../../services/firebase/boxLeague';
+import {
+  confirmMatchScore,
+  canUserConfirm,
+  DEFAULT_VERIFICATION_SETTINGS,
+} from '../../services/firebase';
 import type { BoxLeagueMatch, BoxLeagueSettings } from '../../types/boxLeague';
+import type { ScoreVerificationSettings } from '../../types';
+import {
+  ScoreVerificationBadge,
+  DisputeScoreModal,
+} from './verification';
 
 // ============================================
 // TYPES
@@ -24,6 +35,7 @@ interface BoxLeagueScoreModalProps {
   settings: BoxLeagueSettings;
   currentUserId: string;
   currentUserName: string;
+  verificationSettings?: ScoreVerificationSettings;
   onSuccess?: () => void;
 }
 
@@ -39,12 +51,48 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
   settings,
   currentUserId,
   currentUserName,
+  verificationSettings = DEFAULT_VERIFICATION_SETTINGS,
   onSuccess,
 }) => {
   const [team1Score, setTeam1Score] = useState<number>(0);
   const [team2Score, setTeam2Score] = useState<number>(0);
   const [loading, setLoading] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showDisputeModal, setShowDisputeModal] = useState(false);
+
+  // Get all player IDs in this match
+  const matchPlayerIds = [
+    match.team1Player1Id,
+    match.team1Player2Id,
+    match.team2Player1Id,
+    match.team2Player2Id,
+  ];
+
+  // Check if current user is a player in this match
+  const isPlayer = matchPlayerIds.includes(currentUserId);
+
+  // Check verification status
+  const verification = match.verification;
+  const hasScore = match.status === 'completed' || (match.team1Score !== null && match.team2Score !== null);
+  const verificationStatus = verification?.verificationStatus || (hasScore ? 'pending' : undefined);
+  const isPending = verificationStatus === 'pending' || verificationStatus === 'confirmed';
+  const isFinal = verificationStatus === 'final';
+  const isDisputed = verificationStatus === 'disputed';
+
+  // Check if user can confirm (opponent who didn't enter the score)
+  const userCanConfirm = isPlayer &&
+    hasScore &&
+    isPending &&
+    canUserConfirm(currentUserId, match.enteredByUserId, matchPlayerIds) &&
+    !(verification?.confirmations || []).includes(currentUserId);
+
+  // Check if user can dispute
+  const userCanDispute = isPlayer &&
+    hasScore &&
+    !isFinal &&
+    !isDisputed &&
+    verificationSettings.allowDisputes;
 
   // Reset when modal opens
   useEffect(() => {
@@ -118,6 +166,35 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
     }
   };
 
+  // Handle confirm score
+  const handleConfirm = async () => {
+    setConfirming(true);
+    setError(null);
+
+    try {
+      const result = await confirmMatchScore(
+        'box_league',
+        leagueId,
+        match.id,
+        currentUserId,
+        verificationSettings
+      );
+
+      if (result.success) {
+        onSuccess?.();
+        if (result.newStatus === 'final') {
+          onClose();
+        }
+      } else {
+        setError(result.error || result.message || 'Failed to confirm');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to confirm');
+    } finally {
+      setConfirming(false);
+    }
+  };
+
   const winningTeam = team1Score > team2Score ? 1 : team2Score > team1Score ? 2 : null;
 
   return (
@@ -127,10 +204,23 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
         <div className="px-6 py-4 border-b border-gray-700 bg-gray-900">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xl font-bold text-white">Enter Match Score</h2>
+              <h2 className="text-xl font-bold text-white">
+                {hasScore && !isFinal ? 'Confirm Match Score' : hasScore ? 'Match Score' : 'Enter Match Score'}
+              </h2>
               <p className="text-sm text-gray-400 mt-1">
                 Week {match.weekNumber} • Box {match.boxNumber} • Match {match.matchNumberInBox}
               </p>
+              {/* Verification Badge */}
+              {verificationStatus && (
+                <div className="mt-2">
+                  <ScoreVerificationBadge
+                    status={verificationStatus}
+                    confirmationCount={verification?.confirmations?.length || 0}
+                    requiredConfirmations={verification?.requiredConfirmations || 1}
+                    showCount={isPending}
+                  />
+                </div>
+              )}
             </div>
             <button
               onClick={onClose}
@@ -322,33 +412,101 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-700 bg-gray-900 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            disabled={loading}
-            className="px-4 py-2 text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={loading || !winningTeam}
-            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:bg-gray-600 flex items-center"
-          >
-            {loading ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Saving...
-              </>
-            ) : (
-              '✓ Save Score'
+        <div className="px-6 py-4 border-t border-gray-700 bg-gray-900">
+          {/* Waiting for confirmation message */}
+          {hasScore && isPending && !userCanConfirm && match.enteredByUserId === currentUserId && (
+            <div className="text-sm text-yellow-400 text-center mb-3">
+              ⏳ Waiting for opponent to confirm this score...
+            </div>
+          )}
+
+          {/* Disputed message */}
+          {isDisputed && (
+            <div className="text-sm text-red-400 text-center mb-3">
+              ⚠️ This match is disputed and awaiting organizer review.
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3">
+            {/* Cancel/Close button */}
+            <button
+              onClick={onClose}
+              disabled={loading || confirming}
+              className="px-4 py-2 text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {isFinal || isDisputed ? 'Close' : 'Cancel'}
+            </button>
+
+            {/* Dispute button - only show when user can dispute */}
+            {userCanDispute && !isFinal && (
+              <button
+                onClick={() => setShowDisputeModal(true)}
+                className="px-4 py-2 text-red-400 bg-red-600/20 border border-red-600 hover:bg-red-600/30 rounded-lg transition-colors"
+              >
+                Dispute
+              </button>
             )}
-          </button>
+
+            {/* Confirm button - only show when user can confirm */}
+            {userCanConfirm && (
+              <button
+                onClick={handleConfirm}
+                disabled={confirming}
+                className="px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:bg-gray-600 flex items-center"
+              >
+                {confirming ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Confirming...
+                  </>
+                ) : (
+                  '✓ Confirm Score'
+                )}
+              </button>
+            )}
+
+            {/* Save button - only show when entering new score */}
+            {!hasScore && (
+              <button
+                onClick={handleSubmit}
+                disabled={loading || !winningTeam}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:bg-gray-600 flex items-center"
+              >
+                {loading ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Saving...
+                  </>
+                ) : (
+                  '✓ Save Score'
+                )}
+              </button>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Dispute Modal */}
+      <DisputeScoreModal
+        isOpen={showDisputeModal}
+        onClose={() => setShowDisputeModal(false)}
+        eventType="box_league"
+        eventId={leagueId}
+        matchId={match.id}
+        userId={currentUserId}
+        matchDescription={`${match.team1Player1Name} & ${match.team1Player2Name} vs ${match.team2Player1Name} & ${match.team2Player2Name}`}
+        currentScore={hasScore ? `${match.team1Score}-${match.team2Score}` : undefined}
+        onDisputed={() => {
+          onSuccess?.();
+          setShowDisputeModal(false);
+        }}
+      />
     </div>
   );
 };

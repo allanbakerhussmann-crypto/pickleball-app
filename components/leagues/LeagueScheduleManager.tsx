@@ -1,14 +1,8 @@
 /**
- * LeagueScheduleManager Component V05.37
- * 
+ * LeagueScheduleManager Component V05.44
+ *
  * Organizer tool to generate and manage league match schedules.
- * 
- * V05.37 UPDATES:
- * - Added "Postpone Week" button for each week
- * - Added PostponeWeekModal integration
- * - Added matchesByWeek grouping for postpone functionality
- * - Added postponed week indicators
- * 
+ *
  * FILE LOCATION: components/leagues/LeagueScheduleManager.tsx
  */
 
@@ -21,7 +15,6 @@ import {
 import { doc, updateDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import type { League, LeagueMember, LeagueMatch, LeagueDivision } from '../../types';
-import { PostponeWeekModal } from './PostponeWeekModal';
 
 // ============================================
 // LOCAL TYPES
@@ -60,15 +53,13 @@ interface LeagueScheduleManagerProps {
   onScheduleGenerated: () => void;
 }
 
-// V05.37: Week info for postpone modal
+// Week info for display
 interface WeekInfo {
   weekNumber: number;
   roundNumber: number;
   weekDate: number | null;
   scheduledMatchCount: number;
-  postponedMatchCount: number;
   completedMatchCount: number;
-  isFullyPostponed: boolean;
 }
 
 // ============================================
@@ -96,9 +87,6 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   // Court assignment state
   const [selectedMatches, setSelectedMatches] = useState<Set<string>>(new Set());
   const [bulkCourt, setBulkCourt] = useState<string>('');
-
-  // V05.37: Postpone week modal state
-  const [postponeWeekInfo, setPostponeWeekInfo] = useState<WeekInfo | null>(null);
 
   // Get venue settings from league
   const venueSettings = (league.settings as any)?.venueSettings as LeagueVenueSettings | null;
@@ -132,11 +120,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     const scheduled = divisionMatches.filter(m => m.status === 'scheduled').length;
     const completed = divisionMatches.filter(m => m.status === 'completed').length;
     const pending = divisionMatches.filter(m => m.status === 'pending_confirmation').length;
-    const postponed = divisionMatches.filter(m => m.status === 'postponed').length;
     const withCourt = divisionMatches.filter(m => m.court).length;
     const total = divisionMatches.length;
-    
-    return { scheduled, completed, pending, postponed, withCourt, total };
+
+    return { scheduled, completed, pending, withCourt, total };
   }, [divisionMatches]);
 
   const currentSwissRound = useMemo(() => {
@@ -185,36 +172,33 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     return grouped;
   }, [divisionMatches]);
 
-  // V05.37: Week info for display and postpone modal
+  // Week info for display
   const weekInfoList = useMemo((): WeekInfo[] => {
     const weeks: WeekInfo[] = [];
-    
+
     Object.entries(matchesByWeek).forEach(([weekStr, weekMatches]) => {
       const weekNumber = parseInt(weekStr);
       const scheduledCount = weekMatches.filter(m => m.status === 'scheduled').length;
-      const postponedCount = weekMatches.filter(m => m.status === 'postponed').length;
       const completedCount = weekMatches.filter(m => m.status === 'completed').length;
-      
+
       // Get the earliest scheduled date for this week
       const dates = weekMatches
         .map(m => m.scheduledDate)
         .filter((d): d is number => d !== null && d !== undefined);
       const weekDate = dates.length > 0 ? Math.min(...dates) : null;
-      
+
       // Get round number (should be same for all matches in week)
       const roundNumber = weekMatches[0]?.roundNumber || 1;
-      
+
       weeks.push({
         weekNumber,
         roundNumber,
         weekDate,
         scheduledMatchCount: scheduledCount,
-        postponedMatchCount: postponedCount,
         completedMatchCount: completedCount,
-        isFullyPostponed: scheduledCount === 0 && postponedCount > 0 && completedCount === 0,
       });
     });
-    
+
     return weeks.sort((a, b) => a.weekNumber - b.weekNumber);
   }, [matchesByWeek]);
 
@@ -475,16 +459,6 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     setSelectedMatches(new Set(unassignedMatches.map(m => m.id)));
   };
 
-  // V05.37: Handle postpone week
-  const handlePostponeWeek = (weekInfo: WeekInfo) => {
-    setPostponeWeekInfo(weekInfo);
-  };
-
-  const handlePostponeWeekSuccess = () => {
-    setPostponeWeekInfo(null);
-    onScheduleGenerated();
-  };
-
   // Helper: Format date
   const formatDate = (timestamp: number | null) => {
     if (!timestamp) return 'TBD';
@@ -531,11 +505,6 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
           }`}
         >
           📆 Weeks
-          {matchStats.postponed > 0 && (
-            <span className="ml-1 bg-yellow-600/20 text-yellow-400 text-xs px-1.5 py-0.5 rounded">
-              {matchStats.postponed}
-            </span>
-          )}
         </button>
         {hasVenue && (
           <button
@@ -630,10 +599,6 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
               <div className="text-2xl font-bold text-green-400">{matchStats.completed}</div>
               <div className="text-xs text-gray-500">Completed</div>
             </div>
-            <div className="bg-gray-900 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-yellow-400">{matchStats.postponed}</div>
-              <div className="text-xs text-gray-500">Postponed</div>
-            </div>
           </div>
 
           {/* Swiss Round Selector */}
@@ -693,7 +658,7 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     ================================================ */}
 
 
-      {/* V05.37: WEEKS TAB - For managing weeks and postponements */}
+      {/* WEEKS TAB */}
       {activeTab === 'weeks' && (
         <div className="p-4 space-y-4">
           <div className="flex items-center justify-between mb-2">
@@ -711,36 +676,25 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
             <div className="space-y-2">
               {weekInfoList.map(weekInfo => {
                 const weekMatches = matchesByWeek[weekInfo.weekNumber] || [];
-                const hasPostponed = weekInfo.postponedMatchCount > 0;
-                const allPostponed = weekInfo.isFullyPostponed;
                 const allCompleted = weekInfo.completedMatchCount === weekMatches.length && weekMatches.length > 0;
-                
+
                 return (
                   <div
                     key={weekInfo.weekNumber}
                     className={`bg-gray-900 rounded-lg p-4 border ${
-                      allPostponed ? 'border-yellow-500/50 bg-yellow-900/10' :
-                      allCompleted ? 'border-green-500/50' :
-                      'border-gray-700'
+                      allCompleted ? 'border-green-500/50' : 'border-gray-700'
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
-                          allPostponed ? 'bg-yellow-600/20 text-yellow-400' :
-                          allCompleted ? 'bg-green-600/20 text-green-400' :
-                          'bg-blue-600/20 text-blue-400'
+                          allCompleted ? 'bg-green-600/20 text-green-400' : 'bg-blue-600/20 text-blue-400'
                         }`}>
                           {weekInfo.weekNumber}
                         </div>
                         <div>
                           <div className="font-medium text-white flex items-center gap-2">
                             Week {weekInfo.weekNumber}
-                            {allPostponed && (
-                              <span className="text-xs bg-yellow-600/20 text-yellow-400 px-2 py-0.5 rounded">
-                                ⏸️ Postponed
-                              </span>
-                            )}
                             {allCompleted && (
                               <span className="text-xs bg-green-600/20 text-green-400 px-2 py-0.5 rounded">
                                 ✅ Complete
@@ -761,70 +715,19 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        {/* Match status breakdown */}
-                        <div className="flex items-center gap-1 text-xs">
-                          {weekInfo.completedMatchCount > 0 && (
-                            <span className="bg-green-600/20 text-green-400 px-2 py-1 rounded">
-                              {weekInfo.completedMatchCount} done
-                            </span>
-                          )}
-                          {weekInfo.scheduledMatchCount > 0 && (
-                            <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded">
-                              {weekInfo.scheduledMatchCount} pending
-                            </span>
-                          )}
-                          {weekInfo.postponedMatchCount > 0 && (
-                            <span className="bg-yellow-600/20 text-yellow-400 px-2 py-1 rounded">
-                              {weekInfo.postponedMatchCount} postponed
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Postpone Week Button */}
-                        {weekInfo.scheduledMatchCount > 0 && !allCompleted && (
-                          <button
-                            onClick={() => handlePostponeWeek(weekInfo)}
-                            className="px-3 py-1.5 bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30 rounded text-sm font-medium transition-colors"
-                          >
-                            ⏸️ Postpone Week
-                          </button>
+                      <div className="flex items-center gap-1 text-xs">
+                        {weekInfo.completedMatchCount > 0 && (
+                          <span className="bg-green-600/20 text-green-400 px-2 py-1 rounded">
+                            {weekInfo.completedMatchCount} done
+                          </span>
                         )}
-                        
-                        {/* Reschedule if already postponed */}
-                        {hasPostponed && weekInfo.scheduledMatchCount === 0 && !allCompleted && (
-                          <button
-                            onClick={() => handlePostponeWeek(weekInfo)}
-                            className="px-3 py-1.5 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded text-sm font-medium transition-colors"
-                          >
-                            📅 Reschedule
-                          </button>
+                        {weekInfo.scheduledMatchCount > 0 && (
+                          <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded">
+                            {weekInfo.scheduledMatchCount} pending
+                          </span>
                         )}
                       </div>
                     </div>
-
-                    {/* Expanded match list (optional - could be toggled) */}
-                    {hasPostponed && (
-                      <div className="mt-3 pt-3 border-t border-gray-700">
-                        <div className="text-xs text-gray-500 mb-2">Postponed matches:</div>
-                        <div className="space-y-1">
-                          {weekMatches.filter(m => m.status === 'postponed').slice(0, 3).map(match => (
-                            <div key={match.id} className="text-sm text-gray-400 flex items-center gap-2">
-                              <span className="text-yellow-400">⏸️</span>
-                              <span>{match.memberAName} vs {match.memberBName}</span>
-                              {match.postponedReason && (
-                                <span className="text-xs text-gray-500">- {match.postponedReason}</span>
-                              )}
-                            </div>
-                          ))}
-                          {weekMatches.filter(m => m.status === 'postponed').length > 3 && (
-                            <div className="text-xs text-gray-500">
-                              +{weekMatches.filter(m => m.status === 'postponed').length - 3} more
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -905,18 +808,15 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                     {roundMatches.map(match => {
                       const isSelected = selectedMatches.has(match.id);
                       const isCompleted = match.status === 'completed';
-                      const isPostponed = match.status === 'postponed';
-                      
+
                       return (
-                        <div 
-                          key={match.id} 
+                        <div
+                          key={match.id}
                           className={`p-3 flex items-center gap-3 ${
-                            isCompleted ? 'opacity-50' : 
-                            isPostponed ? 'bg-yellow-900/10' :
-                            ''
+                            isCompleted ? 'opacity-50' : ''
                           }`}
                         >
-                          {!isCompleted && !isPostponed && (
+                          {!isCompleted && (
                             <input
                               type="checkbox"
                               checked={isSelected}
@@ -930,20 +830,19 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                             </div>
                             <div className="text-xs text-gray-500">
                               Week {match.weekNumber}
-                              {isPostponed && <span className="text-yellow-400 ml-2">⏸️ Postponed</span>}
                             </div>
                           </div>
                           {match.court ? (
                             <span className="text-xs bg-green-600/20 text-green-400 px-2 py-1 rounded">
                               {match.court}
                             </span>
-                          ) : !isCompleted && !isPostponed ? (
+                          ) : !isCompleted ? (
                             <select
                               value=""
                               onChange={(e) => {
                                 if (e.target.value) {
                                   const matchRef = doc(db, 'leagues', league.id, 'matches', match.id);
-                                  updateDoc(matchRef, { 
+                                  updateDoc(matchRef, {
                                     court: e.target.value,
                                     venue: venueSettings?.venueName || null,
                                   }).then(() => onScheduleGenerated());
@@ -1011,22 +910,6 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
         </div>
       )}
 
-      {/* V05.37: Postpone Week Modal */}
-      {postponeWeekInfo && (
-        <PostponeWeekModal
-          isOpen={true}
-          onClose={() => setPostponeWeekInfo(null)}
-          leagueId={league.id}
-          divisionId={selectedDivisionId || undefined}
-          weekNumber={postponeWeekInfo.weekNumber}
-          roundNumber={postponeWeekInfo.roundNumber}
-          weekDate={postponeWeekInfo.weekDate || undefined}
-          scheduledMatchCount={postponeWeekInfo.scheduledMatchCount}
-          currentUserId=""
-          currentUserName="Organizer"
-          onSuccess={handlePostponeWeekSuccess}
-        />
-      )}
     </div>
   );
 };

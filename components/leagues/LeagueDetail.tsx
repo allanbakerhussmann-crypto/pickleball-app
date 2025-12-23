@@ -1,16 +1,10 @@
 /**
- * LeagueDetail Component V05.37
- * 
+ * LeagueDetail Component V05.44
+ *
  * Shows league details, standings, matches, and allows joining/playing.
- * 
- * UPDATED V05.37:
- * - Added yellow badge for postponed matches
- * - Added postpone button for organizers
- * - Added PostponeMatchModal integration
- * - Added postponed matches indicator/count
- * 
+ *
  * FILE LOCATION: components/leagues/LeagueDetail.tsx
- * VERSION: V05.37
+ * VERSION: V05.44
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -34,7 +28,6 @@ import type {
   LeagueDivision,
 } from '../../types';
 import { LeagueStandings } from './LeagueStandings';
-import { PostponeMatchModal } from './PostponeMatchModal';
 
 // ============================================
 // TYPES
@@ -131,10 +124,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     swissRounds: 4,
   });
   const [saving, setSaving] = useState(false);
-  
-  // V05.37: Postpone modal state
-  const [postponeModalMatch, setPostponeModalMatch] = useState<LeagueMatch | null>(null);
-  const [showPostponedOnly, setShowPostponedOnly] = useState(false);
 
   // ============================================
   // DATA LOADING
@@ -289,15 +278,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   }, [leagueId, currentUser, members]);
 
   // ============================================
-  // COMPUTED VALUES (V05.37)
-  // ============================================
-
-  // Count postponed matches
-  const postponedMatchCount = useMemo(() => {
-    return matches.filter(m => m.status === 'postponed').length;
-  }, [matches]);
-
-  // ============================================
   // HELPERS
   // ============================================
 
@@ -333,7 +313,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     );
   };
 
-  // V05.37: Match status badge with postponed support
+  // Match status badge
   const getMatchStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
       scheduled: 'bg-gray-600/20 text-gray-400 border-gray-600',
@@ -343,8 +323,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       cancelled: 'bg-gray-600/20 text-gray-500 border-gray-600',
       forfeit: 'bg-orange-600/20 text-orange-400 border-orange-600',
       no_show: 'bg-red-600/20 text-red-400 border-red-600',
-      postponed: 'bg-yellow-600/20 text-yellow-400 border-yellow-500',
-      rescheduled: 'bg-blue-600/20 text-blue-400 border-blue-600',
     };
     const labels: Record<string, string> = {
       scheduled: 'Scheduled',
@@ -354,8 +332,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       cancelled: 'Cancelled',
       forfeit: 'Forfeit',
       no_show: 'No Show',
-      postponed: '⏸️ Postponed',
-      rescheduled: '📅 Rescheduled',
     };
     return {
       className: styles[status] || styles.scheduled,
@@ -388,18 +364,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     ? members.filter(m => m.divisionId === selectedDivisionId)
     : members;
 
-  // Filter matches by division and postponed filter (V05.37)
+  // Filter matches by division
   const filteredMatches = useMemo(() => {
-    let result = selectedDivisionId
+    return selectedDivisionId
       ? matches.filter(m => m.divisionId === selectedDivisionId)
       : matches;
-    
-    if (showPostponedOnly) {
-      result = result.filter(m => m.status === 'postponed');
-    }
-    
-    return result;
-  }, [matches, selectedDivisionId, showPostponedOnly]);
+  }, [matches, selectedDivisionId]);
 
   // ============================================
   // ACTIONS
@@ -483,16 +453,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     // Refresh league data after schedule generation
     const updated = await getLeague(leagueId);
     if (updated) setLeague(updated);
-  };
-
-  // V05.37: Handle postpone modal
-  const handlePostponeClick = (match: LeagueMatch) => {
-    setPostponeModalMatch(match);
-  };
-
-  const handlePostponeSuccess = () => {
-    // Matches will auto-refresh via subscription
-    setPostponeModalMatch(null);
   };
 
   // ============================================
@@ -593,19 +553,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </svg>
               Organizer Controls
             </h3>
-            <div className="flex items-center gap-2">
-              {/* V05.37: Postponed matches indicator for organizers */}
-              {postponedMatchCount > 0 && (
-                <div className="bg-yellow-900/50 border border-yellow-600 rounded-lg px-3 py-1">
-                  <span className="text-yellow-400 font-semibold text-sm">
-                    ⏸️ {postponedMatchCount} postponed
-                  </span>
-                </div>
-              )}
-              <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-1 rounded">
-                Status: {league.status.toUpperCase()}
-              </span>
-            </div>
+            <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-1 rounded">
+              Status: {league.status.toUpperCase()}
+            </span>
           </div>
           
           <div className="flex flex-wrap gap-2">
@@ -837,12 +787,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {tab === 'schedule' && '📅 '}
             {tab === 'info' && 'ℹ️ '}
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            {/* V05.37: Show postponed count on matches tab */}
-            {tab === 'matches' && postponedMatchCount > 0 && (
-              <span className="ml-2 bg-yellow-600/20 text-yellow-400 text-xs px-1.5 py-0.5 rounded">
-                {postponedMatchCount}
-              </span>
-            )}
           </button>
         ))}
       </div>
@@ -860,34 +804,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         />
       )}
 
-      {/* MATCHES TAB - V05.37 Updated */}
+      {/* MATCHES TAB */}
       {activeTab === 'matches' && (
         <div className="space-y-3">
-          {/* V05.37: Filter toggle for postponed matches */}
-          {postponedMatchCount > 0 && (
-            <div className="flex items-center justify-between bg-gray-800 rounded-lg p-3 border border-gray-700">
-              <span className="text-sm text-gray-400">
-                {showPostponedOnly 
-                  ? `Showing ${postponedMatchCount} postponed matches`
-                  : `${postponedMatchCount} match${postponedMatchCount !== 1 ? 'es' : ''} postponed`
-                }
-              </span>
-              <button
-                onClick={() => setShowPostponedOnly(!showPostponedOnly)}
-                className={`text-sm px-3 py-1 rounded-lg transition-colors ${
-                  showPostponedOnly
-                    ? 'bg-yellow-600 text-white'
-                    : 'bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30'
-                }`}
-              >
-                {showPostponedOnly ? 'Show All' : '⏸️ Show Postponed'}
-              </button>
-            </div>
-          )}
-
           {filteredMatches.length === 0 ? (
             <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center text-gray-400">
-              {showPostponedOnly ? 'No postponed matches' : 'No matches played yet'}
+              No matches played yet
             </div>
           ) : (
             filteredMatches.map(match => {
@@ -895,14 +817,11 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               const gamesA = match.scores?.filter(g => g.scoreA > g.scoreB).length || 0;
               const gamesB = match.scores?.filter(g => g.scoreB > g.scoreA).length || 0;
               const statusBadge = getMatchStatusBadge(match.status);
-              const isPostponed = match.status === 'postponed';
-              const isRescheduled = match.status === 'rescheduled' || match.rescheduledTo;
-              
+
               return (
                 <div
                   key={match.id}
                   className={`bg-gray-800 rounded-xl p-4 border ${
-                    isPostponed ? 'border-yellow-500/50 bg-yellow-900/10' :
                     isMyMatch ? 'border-blue-500/50' : 'border-gray-700'
                   }`}
                 >
@@ -913,26 +832,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       {match.roundNumber && <span>Round {match.roundNumber}</span>}
                       {match.boxNumber && <span>Box {match.boxNumber}</span>}
                     </div>
-                    <div className="flex items-center gap-2">
-                      {/* Status Badge */}
-                      <span className={`text-xs px-2 py-0.5 rounded border ${statusBadge.className}`}>
-                        {statusBadge.label}
-                      </span>
-                      
-                      {/* V05.37: Postpone button for organizers */}
-                      {isOrganizer && (match.status === 'scheduled' || match.status === 'postponed') && (
-                        <button
-                          onClick={() => handlePostponeClick(match)}
-                          className={`text-xs px-2 py-1 rounded transition-colors ${
-                            isPostponed
-                              ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
-                              : 'bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/30'
-                          }`}
-                        >
-                          {isPostponed ? '📅 Reschedule' : '⏸️ Postpone'}
-                        </button>
-                      )}
-                    </div>
+                    {/* Status Badge */}
+                    <span className={`text-xs px-2 py-0.5 rounded border ${statusBadge.className}`}>
+                      {statusBadge.label}
+                    </span>
                   </div>
 
                   {/* Players and Score */}
@@ -957,8 +860,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                         <span className="text-xs bg-red-600/20 text-red-400 px-2 py-1 rounded">
                           Disputed
                         </span>
-                      ) : match.status === 'postponed' ? (
-                        <span className="text-xs text-yellow-400">⏸️</span>
                       ) : (
                         <span className="text-xs text-gray-500">vs</span>
                       )}
@@ -982,38 +883,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       ))}
                     </div>
                   )}
-                  
-                  {/* V05.37: Postpone info */}
-                  {isPostponed && (
-                    <div className="mt-3 p-2 bg-yellow-900/20 border border-yellow-700/50 rounded text-sm">
-                      <div className="text-yellow-400">
-                        {match.postponedReason && (
-                          <span>Reason: {match.postponedReason}</span>
-                        )}
-                      </div>
-                      {match.originalScheduledDate && (
-                        <div className="text-yellow-500/70 text-xs mt-1">
-                          Originally: {formatDate(match.originalScheduledDate)}
-                        </div>
-                      )}
-                      {match.makeupDeadline && (
-                        <div className={`text-xs mt-1 ${
-                          match.makeupDeadline < Date.now() ? 'text-red-400' : 'text-yellow-500/70'
-                        }`}>
-                          Makeup by: {formatDate(match.makeupDeadline)}
-                          {match.makeupDeadline < Date.now() && ' (OVERDUE)'}
-                        </div>
-                      )}
-                    </div>
-                  )}
 
-                  {/* Rescheduled info */}
-                  {isRescheduled && match.rescheduledTo && (
-                    <div className="mt-2 text-xs text-blue-400">
-                      📅 Rescheduled to: {formatDate(match.rescheduledTo)}
-                    </div>
-                  )}
-                  
                   {match.playedAt && (
                     <div className="text-xs text-gray-500 text-center mt-2">
                       {formatDate(match.playedAt)}
@@ -1575,19 +1445,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </div>
           </div>
         </div>
-      )}
-
-      {/* V05.37: Postpone Match Modal */}
-      {postponeModalMatch && currentUser && userProfile && (
-        <PostponeMatchModal
-          isOpen={true}
-          onClose={() => setPostponeModalMatch(null)}
-          match={postponeModalMatch}
-          leagueId={leagueId}
-          currentUserId={currentUser.uid}
-          currentUserName={userProfile.displayName || 'Organizer'}
-          onSuccess={handlePostponeSuccess}
-        />
       )}
     </div>
   );

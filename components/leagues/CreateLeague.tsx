@@ -1,34 +1,31 @@
 /**
- * CreateLeague Component - 7-Step Wizard V05.36 (CONTINUED)
- * 
+ * CreateLeague Component - 7-Step Wizard V05.44
+ *
+ * UPDATED V05.44:
+ * - Added Score Verification Settings in Step 5
+ * - Uses VerificationSettingsForm component
+ *
  * This is the complete file - copy entire contents to:
  * src/components/leagues/CreateLeague.tsx
- * 
- * NEW: DUPR Integration Settings in Step 5
- * - No DUPR / DUPR Optional / DUPR Required modes
- * - Auto-submit matches to DUPR option
- * - DUPR rating restrictions
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { createLeague, getClubsForUser, createLeagueDivision } from '../../services/firebase';
-import type { 
-  LeagueType, LeagueFormat, LeagueSettings, LeaguePartnerSettings, 
-  LeaguePricing, LeagueMatchFormat, LeagueChallengeRules, 
-  LeagueRoundRobinSettings, LeagueSwissSettings, LeagueBoxSettings, 
+import type {
+  LeagueType, LeagueFormat, LeagueSettings, LeaguePartnerSettings,
+  LeaguePricing, LeagueMatchFormat, LeagueChallengeRules,
+  LeagueRoundRobinSettings, LeagueSwissSettings, LeagueBoxSettings,
   LeagueTiebreaker, Club, GenderCategory, EventType, LeaguePrizePool,
-  LeagueDuprSettings, LeagueDuprMode
+  LeagueDuprSettings, LeagueDuprMode, ScoreVerificationSettings,
 } from '../../types';
+import { DEFAULT_SCORE_VERIFICATION } from '../../types';
+import { VerificationSettingsForm } from './verification';
 
 // ============================================
 // LOCAL TYPES
 // ============================================
 
 type DayOfWeek = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
-type ScoreEntryPermission = 'either_participant' | 'winner_only' | 'organizer_only';
-type ScoreConfirmation = 'always_required' | 'auto_confirm_24h' | 'auto_confirm_48h' | 'auto_confirm_72h' | 'no_confirmation';
-type ScoreDetailLevel = 'win_loss_only' | 'games_only' | 'full_scores';
-type DisputeResolution = 'organizer_decides' | 'match_replayed' | 'both_lose';
 
 interface LeagueCourt { id: string; name: string; order: number; active: boolean; }
 
@@ -50,13 +47,6 @@ interface LeagueVenueSettings {
   bufferMinutes: number;
   autoAssignCourts: boolean;
   balanceCourtUsage: boolean;
-}
-
-interface ScoreEntrySettings { 
-  entryPermission: ScoreEntryPermission; 
-  confirmationRequired: ScoreConfirmation; 
-  detailLevel: ScoreDetailLevel; 
-  disputeResolution: DisputeResolution; 
 }
 
 interface CreateLeagueProps { onBack: () => void; onCreated: (leagueId: string) => void; }
@@ -94,32 +84,6 @@ const FORMATS: { value: LeagueFormat; label: string; desc: string }[] = [
   { value: 'round_robin', label: '🔄 Round Robin', desc: 'Play everyone' },
   { value: 'swiss', label: '🎯 Swiss', desc: 'Similar skill' },
   { value: 'box_league', label: '📦 Box League', desc: 'Small groups' },
-];
-
-const ENTRY_OPTS: { v: ScoreEntryPermission; l: string; d: string }[] = [
-  { v: 'either_participant', l: 'Either Player', d: 'Any participant can enter' },
-  { v: 'winner_only', l: 'Winner Only', d: 'Only winner enters score' },
-  { v: 'organizer_only', l: 'Organizer Only', d: 'Organizer enters all scores' },
-];
-
-const CONFIRM_OPTS: { v: ScoreConfirmation; l: string; d: string }[] = [
-  { v: 'always_required', l: 'Always Required', d: 'Opponent must confirm' },
-  { v: 'auto_confirm_24h', l: 'Auto 24h', d: 'Auto-confirm after 24h' },
-  { v: 'auto_confirm_48h', l: 'Auto 48h', d: 'Auto-confirm after 48h' },
-  { v: 'auto_confirm_72h', l: 'Auto 72h', d: 'Auto-confirm after 72h' },
-  { v: 'no_confirmation', l: 'No Confirmation', d: 'Trust first entry' },
-];
-
-const DETAIL_OPTS: { v: ScoreDetailLevel; l: string; d: string }[] = [
-  { v: 'full_scores', l: 'Full Scores', d: 'Game-by-game (11-7, 11-9)' },
-  { v: 'games_only', l: 'Games Only', d: 'Just games won (2-1)' },
-  { v: 'win_loss_only', l: 'Win/Loss Only', d: 'Just who won' },
-];
-
-const DISPUTE_OPTS: { v: DisputeResolution; l: string; d: string }[] = [
-  { v: 'organizer_decides', l: 'Organizer Decides', d: 'Review & decide' },
-  { v: 'match_replayed', l: 'Replay Match', d: 'Must play again' },
-  { v: 'both_lose', l: 'Both Lose', d: 'Both get a loss' },
 ];
 
 const DUPR_MODE_OPTIONS: { value: LeagueDuprMode; label: string; desc: string; icon: string }[] = [
@@ -245,10 +209,6 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   });
   const [matchFmt, setMatchFmt] = useState<LeagueMatchFormat>({ bestOf: 3, gamesTo: 11, winBy: 2 });
   const [scoreRep, setScoreRep] = useState({ matchDeadlineDays: 7 });
-  const [scoreEntry, setScoreEntry] = useState<ScoreEntrySettings>({
-    entryPermission: 'either_participant', confirmationRequired: 'auto_confirm_48h',
-    detailLevel: 'full_scores', disputeResolution: 'organizer_decides',
-  });
   const [challenge, setChallenge] = useState<LeagueChallengeRules>({ 
     challengeRange: 3, responseDeadlineHours: 48, matchDeadlineHours: 168, 
     maxActiveChallenges: 2, cooldownDays: 3 
@@ -266,7 +226,12 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     duprClubId: null, useDuprForSkillLevel: false,
     minDuprRating: null, maxDuprRating: null, ratingType: 'doubles',
   });
-  
+
+  // Score Verification Settings (NEW V05.44)
+  const [verificationSettings, setVerificationSettings] = useState<ScoreVerificationSettings>(
+    DEFAULT_SCORE_VERIFICATION
+  );
+
   // Step 6: Payment
   const [pricingOn, setPricingOn] = useState(false);
   const [price, setPrice] = useState({ 
@@ -404,11 +369,12 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
         pointsForLoss: scoring.pointsForLoss, pointsForForfeit: scoring.pointsForForfeit, 
         pointsForNoShow: scoring.pointsForNoShow,
         matchFormat: matchFmt, matchDeadlineDays: scoreRep.matchDeadlineDays,
-        allowSelfReporting: scoreEntry.entryPermission !== 'organizer_only',
-        requireConfirmation: scoreEntry.confirmationRequired !== 'no_confirmation',
+        allowSelfReporting: verificationSettings.entryMode !== 'organizer_only',
+        requireConfirmation: verificationSettings.verificationMethod !== 'auto_confirm',
         tiebreakers, matchDays: scheduleConfig.matchDays,
         venueSettings: venueSettings as any,
         duprSettings: duprSettings.mode !== 'none' ? duprSettings : null,
+        scoreVerification: verificationSettings,
       };
       
       if (basic.format === 'ladder') settings.challengeRules = challenge;
@@ -418,16 +384,17 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       if (isDoubles) settings.partnerSettings = partner;
 
       const pricing: LeaguePricing | null = pricingOn ? {
-        enabled: true, entryFee: price.entryFee, entryFeeType: price.entryFeeType, 
-        memberDiscount: price.memberDiscount, earlyBirdEnabled: price.earlyBirdEnabled, 
+        paymentMode: hasStripe ? 'stripe' : 'external',
+        enabled: true, entryFee: price.entryFee, entryFeeType: price.entryFeeType,
+        memberDiscount: price.memberDiscount, earlyBirdEnabled: price.earlyBirdEnabled,
         earlyBirdFee: price.earlyBirdFee,
-        earlyBirdDeadline: price.earlyBirdEnabled && scheduleConfig.startDate 
+        earlyBirdDeadline: price.earlyBirdEnabled && scheduleConfig.startDate
           ? new Date(scheduleConfig.startDate).getTime() - 604800000 : null,
         lateFeeEnabled: price.lateFeeEnabled, lateFee: price.lateFee,
-        lateRegistrationStart: price.lateFeeEnabled && scheduleConfig.startDate 
+        lateRegistrationStart: price.lateFeeEnabled && scheduleConfig.startDate
           ? new Date(scheduleConfig.startDate).getTime() - 259200000 : null,
         prizePool: price.prizePool, feesPaidBy: price.feesPaidBy, refundPolicy: price.refundPolicy,
-        refundDeadline: scheduleConfig.startDate ? new Date(scheduleConfig.startDate).getTime() : null, 
+        refundDeadline: scheduleConfig.startDate ? new Date(scheduleConfig.startDate).getTime() : null,
         currency: 'nzd',
       } : null;
 
@@ -800,20 +767,14 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               </div>
             </div>
 
-            {/* Score Entry */}
+            {/* Score Verification (NEW V05.44) */}
             <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-3">📝 Score Entry</h3>
-              <div className="space-y-3">
-                <div><label className="block text-xs text-gray-500 mb-1">Who Can Enter Scores</label><select value={scoreEntry.entryPermission} onChange={e => setScoreEntry({ ...scoreEntry, entryPermission: e.target.value as ScoreEntryPermission })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600">{ENTRY_OPTS.map(o => <option key={o.v} value={o.v}>{o.l} - {o.d}</option>)}</select></div>
-                <div><label className="block text-xs text-gray-500 mb-1">Score Detail Level</label><select value={scoreEntry.detailLevel} onChange={e => setScoreEntry({ ...scoreEntry, detailLevel: e.target.value as ScoreDetailLevel })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600">{DETAIL_OPTS.map(o => <option key={o.v} value={o.v}>{o.l} - {o.d}</option>)}</select></div>
-                <div><label className="block text-xs text-gray-500 mb-1">Confirmation Required</label><select value={scoreEntry.confirmationRequired} onChange={e => setScoreEntry({ ...scoreEntry, confirmationRequired: e.target.value as ScoreConfirmation })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600">{CONFIRM_OPTS.map(o => <option key={o.v} value={o.v}>{o.l} - {o.d}</option>)}</select></div>
-              </div>
-            </div>
-
-            {/* Dispute Resolution */}
-            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-2">⚠️ Dispute Resolution</h3>
-              <select value={scoreEntry.disputeResolution} onChange={e => setScoreEntry({ ...scoreEntry, disputeResolution: e.target.value as DisputeResolution })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600">{DISPUTE_OPTS.map(o => <option key={o.v} value={o.v}>{o.l} - {o.d}</option>)}</select>
+              <h3 className="font-semibold text-white mb-3">📝 Score Verification</h3>
+              <VerificationSettingsForm
+                settings={verificationSettings}
+                onChange={setVerificationSettings}
+                leagueFormat={basic.format}
+              />
             </div>
 
             {/* Match Deadline */}
@@ -1075,9 +1036,17 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
             </div>
             
             <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-2">🎯 Scoring</h3>
+              <h3 className="font-semibold text-white mb-2">🎯 Scoring & Verification</h3>
               <div className="text-sm text-white">W:{scoring.pointsForWin} D:{scoring.pointsForDraw} L:{scoring.pointsForLoss}</div>
               <div className="text-sm text-gray-400">Best of {matchFmt.bestOf}, to {matchFmt.gamesTo}</div>
+              <div className="mt-2 pt-2 border-t border-gray-700 text-sm space-y-1">
+                <div><span className="text-gray-400">Entry:</span> <span className="text-white">{verificationSettings.entryMode.replace('_', ' ')}</span></div>
+                <div><span className="text-gray-400">Verification:</span> <span className="text-white">{verificationSettings.verificationMethod.replace('_', ' ')}</span></div>
+                {verificationSettings.autoFinalizeHours > 0 && (
+                  <div><span className="text-gray-400">Auto-finalize:</span> <span className="text-white">{verificationSettings.autoFinalizeHours}h</span></div>
+                )}
+                <div><span className="text-gray-400">Disputes:</span> <span className="text-white">{verificationSettings.allowDisputes ? 'Allowed' : 'Not allowed'}</span></div>
+              </div>
             </div>
 
             {/* DUPR Summary */}

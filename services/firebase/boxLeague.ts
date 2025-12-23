@@ -183,6 +183,163 @@ export async function updateBoxLeaguePlayer(
 }
 
 /**
+ * Move a player between boxes (organizer only)
+ * V05.44 - Drag-and-drop support
+ */
+export async function movePlayerBetweenBoxes(
+  leagueId: string,
+  playerId: string,
+  fromBoxNumber: number,
+  toBoxNumber: number,
+  newPositionInBox: number
+): Promise<{ success: boolean; message: string }> {
+  try {
+    // Get all active players
+    const players = await getBoxLeaguePlayers(leagueId);
+    const playerToMove = players.find(p => p.id === playerId);
+
+    if (!playerToMove) {
+      return { success: false, message: 'Player not found' };
+    }
+
+    // Get players in the destination box
+    const playersInTargetBox = players.filter(p => p.currentBoxNumber === toBoxNumber && p.id !== playerId);
+
+    // Calculate new positions
+    const batch = writeBatch(db);
+    const now = Date.now();
+
+    // Update the moved player
+    const movedPlayerRef = doc(db, LEAGUES_COLLECTION, leagueId, PLAYERS_SUBCOLLECTION, playerId);
+    batch.update(movedPlayerRef, {
+      currentBoxNumber: toBoxNumber,
+      positionInBox: newPositionInBox,
+      updatedAt: now,
+    });
+
+    // Shift other players in the target box
+    for (const player of playersInTargetBox) {
+      if (player.positionInBox >= newPositionInBox) {
+        const playerRef = doc(db, LEAGUES_COLLECTION, leagueId, PLAYERS_SUBCOLLECTION, player.id);
+        batch.update(playerRef, {
+          positionInBox: player.positionInBox + 1,
+          updatedAt: now,
+        });
+      }
+    }
+
+    // Shift players in the source box (close the gap)
+    const playersInSourceBox = players.filter(p => p.currentBoxNumber === fromBoxNumber && p.id !== playerId);
+    for (const player of playersInSourceBox) {
+      if (player.positionInBox > playerToMove.positionInBox) {
+        const playerRef = doc(db, LEAGUES_COLLECTION, leagueId, PLAYERS_SUBCOLLECTION, player.id);
+        batch.update(playerRef, {
+          positionInBox: player.positionInBox - 1,
+          updatedAt: now,
+        });
+      }
+    }
+
+    await batch.commit();
+
+    return {
+      success: true,
+      message: `Moved ${playerToMove.displayName} to Box ${toBoxNumber}`,
+    };
+  } catch (error: any) {
+    console.error('Failed to move player between boxes:', error);
+    return { success: false, message: error.message || 'Failed to move player' };
+  }
+}
+
+/**
+ * Reorder players within a box (organizer only)
+ * V05.44 - Drag-and-drop support
+ */
+export async function reorderPlayersInBox(
+  leagueId: string,
+  boxNumber: number,
+  playerIdsInOrder: string[]
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const batch = writeBatch(db);
+    const now = Date.now();
+
+    // Update each player's position in box
+    for (let i = 0; i < playerIdsInOrder.length; i++) {
+      const playerId = playerIdsInOrder[i];
+      const playerRef = doc(db, LEAGUES_COLLECTION, leagueId, PLAYERS_SUBCOLLECTION, playerId);
+      batch.update(playerRef, {
+        positionInBox: i + 1,
+        updatedAt: now,
+      });
+    }
+
+    await batch.commit();
+
+    return {
+      success: true,
+      message: `Reordered players in Box ${boxNumber}`,
+    };
+  } catch (error: any) {
+    console.error('Failed to reorder players in box:', error);
+    return { success: false, message: error.message || 'Failed to reorder players' };
+  }
+}
+
+/**
+ * Swap two players between boxes (organizer only)
+ * V05.44 - Drag-and-drop support
+ */
+export async function swapPlayersBetweenBoxes(
+  leagueId: string,
+  player1Id: string,
+  player2Id: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    // Get both players
+    const players = await getBoxLeaguePlayers(leagueId);
+    const player1 = players.find(p => p.id === player1Id);
+    const player2 = players.find(p => p.id === player2Id);
+
+    if (!player1 || !player2) {
+      return { success: false, message: 'One or both players not found' };
+    }
+
+    const batch = writeBatch(db);
+    const now = Date.now();
+
+    // Swap box assignments
+    const player1Ref = doc(db, LEAGUES_COLLECTION, leagueId, PLAYERS_SUBCOLLECTION, player1Id);
+    const player2Ref = doc(db, LEAGUES_COLLECTION, leagueId, PLAYERS_SUBCOLLECTION, player2Id);
+
+    batch.update(player1Ref, {
+      currentBoxNumber: player2.currentBoxNumber,
+      positionInBox: player2.positionInBox,
+      ladderPosition: player2.ladderPosition,
+      updatedAt: now,
+    });
+
+    batch.update(player2Ref, {
+      currentBoxNumber: player1.currentBoxNumber,
+      positionInBox: player1.positionInBox,
+      ladderPosition: player1.ladderPosition,
+      updatedAt: now,
+    });
+
+    await batch.commit();
+
+    return {
+      success: true,
+      message: `Swapped ${player1.displayName} and ${player2.displayName}`,
+    };
+  } catch (error: any) {
+    console.error('Failed to swap players:', error);
+    return { success: false, message: error.message || 'Failed to swap players' };
+  }
+}
+
+/**
  * Seed players by DUPR rating or manual order
  */
 export async function seedBoxLeaguePlayers(
@@ -1167,53 +1324,6 @@ function getBoxAssignmentsFromPlayers(
   }
   
   return assignments;
-}
-
-// ============================================
-// WEEK POSTPONEMENT
-// ============================================
-
-/**
- * Postpone an entire week
- */
-export async function postponeBoxLeagueWeek(
-  leagueId: string,
-  weekNumber: number,
-  reason: string,
-  rescheduledTo?: number
-): Promise<void> {
-  const week = await getBoxLeagueWeek(leagueId, weekNumber);
-  if (!week) throw new Error('Week not found');
-  
-  const batch = writeBatch(db);
-  const now = Date.now();
-  
-  // Update week
-  const weekRef = doc(db, LEAGUES_COLLECTION, leagueId, WEEKS_SUBCOLLECTION, week.id);
-  batch.update(weekRef, {
-    status: 'postponed',
-    postponedAt: now,
-    postponedReason: reason,
-    rescheduledTo: rescheduledTo || null,
-    updatedAt: now,
-  });
-  
-  // Update all matches in the week
-  const matches = await getBoxLeagueMatchesForWeek(leagueId, weekNumber);
-  for (const match of matches) {
-    if (match.status === 'scheduled') {
-      const matchRef = doc(db, LEAGUES_COLLECTION, leagueId, MATCHES_SUBCOLLECTION, match.id);
-      batch.update(matchRef, {
-        status: 'postponed',
-        postponedAt: now,
-        postponedReason: reason,
-        rescheduledTo: rescheduledTo || null,
-        updatedAt: now,
-      });
-    }
-  }
-  
-  await batch.commit();
 }
 
 // ============================================

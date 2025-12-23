@@ -1,15 +1,19 @@
 /**
- * LeagueMatchCard Component
- * 
+ * LeagueMatchCard Component V05.44
+ *
  * Displays a league match with status, scores, and action buttons.
- * Can trigger score entry modal for participants.
- * 
+ * Now includes verification badges and confirm/dispute actions.
+ *
  * FILE LOCATION: components/leagues/LeagueMatchCard.tsx
- * VERSION: V05.17
+ * VERSION: V05.44
  */
 
 import React from 'react';
-import type { LeagueMatch, GameScore } from '../../types';
+import type { LeagueMatch, GameScore, ScoreVerificationSettings } from '../../types';
+import {
+  ScoreVerificationBadge,
+  ScoreVerificationIcon,
+} from './verification';
 
 // ============================================
 // TYPES
@@ -20,9 +24,12 @@ interface LeagueMatchCardProps {
   currentUserId?: string;
   onEnterScore?: (match: LeagueMatch) => void;
   onViewDetails?: (match: LeagueMatch) => void;
+  onConfirmScore?: (match: LeagueMatch) => void;
+  onDisputeScore?: (match: LeagueMatch) => void;
   showWeek?: boolean;
   showRound?: boolean;
   compact?: boolean;
+  verificationSettings?: ScoreVerificationSettings;
 }
 
 // ============================================
@@ -100,31 +107,53 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   currentUserId,
   onEnterScore,
   onViewDetails,
+  onConfirmScore,
+  onDisputeScore,
   showWeek = false,
   showRound = false,
   compact = false,
+  verificationSettings,
 }) => {
   // Calculate game scores
-  const { gamesA, gamesB } = match.scores?.length > 0 
-    ? calculateGameScores(match.scores) 
+  const { gamesA, gamesB } = match.scores?.length > 0
+    ? calculateGameScores(match.scores)
     : { gamesA: 0, gamesB: 0 };
 
   // Determine if current user is a participant
   const isPlayerA = currentUserId === match.userAId;
   const isPlayerB = currentUserId === match.userBId;
   const isParticipant = isPlayerA || isPlayerB;
-  
+
+  // Get verification status from match
+  const verificationStatus = match.verification?.verificationStatus;
+  const hasVerification = !!verificationStatus;
+  const confirmations = match.verification?.confirmations || [];
+  const requiredConfirmations = match.verification?.requiredConfirmations || 1;
+
+  // Determine if user can confirm (has not already confirmed and is opponent)
+  const hasAlreadyConfirmed = currentUserId ? confirmations.includes(currentUserId) : false;
+  const isOpponent = isParticipant && match.submittedByUserId !== currentUserId;
+  const canConfirm = isOpponent &&
+    !hasAlreadyConfirmed &&
+    verificationStatus === 'pending' &&
+    verificationSettings?.verificationMethod !== 'auto_confirm';
+
+  // Determine if user can dispute
+  const canDispute = isParticipant &&
+    verificationStatus === 'pending' &&
+    verificationSettings?.allowDisputes !== false;
+
   // Determine if user needs to take action
-  const isPendingConfirmation = match.status === 'pending_confirmation';
-  const isWaitingOnYou = isPendingConfirmation && 
-    match.submittedByUserId !== currentUserId && 
+  const isPendingConfirmation = match.status === 'pending_confirmation' || verificationStatus === 'pending';
+  const isWaitingOnYou = isPendingConfirmation &&
+    match.submittedByUserId !== currentUserId &&
     isParticipant;
-  
+
   // Can enter/edit score
-  const canEnterScore = isParticipant && 
+  const canEnterScore = isParticipant &&
     (match.status === 'scheduled' || match.status === 'pending_confirmation' || match.status === 'disputed');
 
-  // Status badge
+  // Status badge (use verification status if available)
   const statusBadge = getStatusBadge(match.status);
 
   // Winner highlight
@@ -151,9 +180,12 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
           </div>
 
           {/* Score or Status */}
-          <div className="text-center min-w-[60px]">
-            {match.status === 'completed' || match.status === 'pending_confirmation' ? (
-              <span className="font-bold text-white">{gamesA} - {gamesB}</span>
+          <div className="text-center min-w-[60px] flex items-center justify-center gap-1">
+            {match.status === 'completed' || match.status === 'pending_confirmation' || hasVerification ? (
+              <>
+                <span className="font-bold text-white">{gamesA} - {gamesB}</span>
+                {hasVerification && <ScoreVerificationIcon status={verificationStatus!} size="sm" />}
+              </>
             ) : (
               <span className="text-xs text-gray-500">vs</span>
             )}
@@ -208,10 +240,19 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
           )}
         </div>
         
-        {/* Status Badge */}
-        <span className={`text-xs px-2 py-0.5 rounded border ${statusBadge.className}`}>
-          {statusBadge.label}
-        </span>
+        {/* Status Badge - Use verification badge when available */}
+        {hasVerification ? (
+          <ScoreVerificationBadge
+            status={verificationStatus!}
+            confirmationCount={confirmations.length}
+            requiredConfirmations={requiredConfirmations}
+            size="sm"
+          />
+        ) : (
+          <span className={`text-xs px-2 py-0.5 rounded border ${statusBadge.className}`}>
+            {statusBadge.label}
+          </span>
+        )}
       </div>
 
       {/* Match Content */}
@@ -308,32 +349,56 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
           )}
         </div>
 
-        {/* Dispute reason */}
-        {match.status === 'disputed' && match.disputeReason && (
+        {/* Dispute reason - from match or verification data */}
+        {(match.status === 'disputed' || verificationStatus === 'disputed') && (
           <div className="mt-3 p-2 bg-red-900/20 border border-red-700 rounded text-sm text-red-300">
-            <span className="font-semibold">Dispute reason:</span> {match.disputeReason}
+            <span className="font-semibold">Dispute reason:</span>{' '}
+            {match.verification?.disputeReason || match.disputeReason || 'No reason provided'}
+            {match.verification?.disputeNotes && (
+              <div className="mt-1 text-xs text-red-400">
+                {match.verification.disputeNotes}
+              </div>
+            )}
           </div>
         )}
       </div>
 
       {/* Action Footer */}
-      {(canEnterScore || isWaitingOnYou) && onEnterScore && (
+      {(canEnterScore || isWaitingOnYou || canConfirm || canDispute) && (
         <div className="bg-gray-900/50 px-4 py-3 border-t border-gray-700">
-          {isWaitingOnYou ? (
+          {/* Verification actions - separate confirm/dispute buttons */}
+          {canConfirm && onConfirmScore && onDisputeScore ? (
+            <div className="flex gap-2">
+              <button
+                onClick={() => onConfirmScore(match)}
+                className="flex-1 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-semibold transition-colors"
+              >
+                Confirm Score
+              </button>
+              {canDispute && (
+                <button
+                  onClick={() => onDisputeScore(match)}
+                  className="px-4 py-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg font-semibold transition-colors border border-red-600/30"
+                >
+                  Dispute
+                </button>
+              )}
+            </div>
+          ) : isWaitingOnYou && onEnterScore ? (
             <button
               onClick={() => onEnterScore(match)}
               className="w-full py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg font-semibold transition-colors"
             >
-              ⚠️ Confirm or Dispute Score
+              Confirm or Dispute Score
             </button>
-          ) : match.status === 'scheduled' ? (
+          ) : match.status === 'scheduled' && onEnterScore ? (
             <button
               onClick={() => onEnterScore(match)}
               className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold transition-colors"
             >
               Enter Score
             </button>
-          ) : match.status === 'disputed' ? (
+          ) : (match.status === 'disputed' || verificationStatus === 'disputed') && onEnterScore ? (
             <button
               onClick={() => onEnterScore(match)}
               className="w-full py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-semibold transition-colors"
@@ -344,10 +409,13 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
         </div>
       )}
 
-      {/* Completed timestamp */}
-      {match.status === 'completed' && match.completedAt && (
+      {/* Completed/Finalized timestamp */}
+      {(match.status === 'completed' || verificationStatus === 'final') && (match.completedAt || match.verification?.finalizedAt) && (
         <div className="bg-gray-900/30 px-4 py-2 border-t border-gray-700 text-xs text-gray-500 text-center">
-          Completed {formatDate(match.completedAt)}
+          {match.verification?.autoFinalized
+            ? `Auto-finalized ${formatDate(match.verification.finalizedAt!)}`
+            : `Finalized ${formatDate(match.verification?.finalizedAt || match.completedAt!)}`
+          }
         </div>
       )}
     </div>
