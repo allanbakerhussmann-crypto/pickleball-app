@@ -1443,3 +1443,267 @@ export function mapFormatToLegacy(format: CompetitionFormat): LeagueFormat {
   return mapping[format];
 }
 
+// ============================================
+// TOURNAMENT PLANNER TYPES (V06.00)
+// ============================================
+
+/**
+ * Match preset templates for quick selection
+ */
+export type MatchPreset = 'quick' | 'standard' | 'finals' | 'custom';
+
+/**
+ * Game settings for scoring
+ */
+export interface PlannerGameSettings {
+  pointsToWin: 11 | 15 | 21;
+  winBy: 1 | 2;
+  bestOf: 1 | 3 | 5;
+}
+
+/**
+ * Timing settings for matches
+ */
+export interface PlannerTimingSettings {
+  warmupMinutes: number;      // Time before match starts (default: 3)
+  restMinutes: number;        // Rest between matches (default: 8)
+  courtChangeMinutes: number; // Court transition time (default: 2)
+}
+
+/**
+ * A single tournament day with its schedule
+ */
+export interface TournamentDay {
+  id: string;
+  date: string;       // "2024-03-15" (ISO date string)
+  startTime: string;  // "09:00"
+  endTime: string;    // "17:00"
+  label?: string;     // Optional: "Day 1", "Finals Day", etc.
+}
+
+/**
+ * A division in the planner
+ */
+export interface PlannerDivision {
+  id: string;
+  name: string;
+  playType: 'singles' | 'doubles';
+  format: CompetitionFormat;
+  expectedPlayers: number;
+
+  // DUPR rating requirements
+  minRating?: number;  // e.g., 3.0
+  maxRating?: number;  // e.g., 4.5
+
+  // Pool settings (for pool_play_medals format)
+  poolSize?: number;
+
+  // Calculated fields (set by planner)
+  poolCount?: number;
+  matchCount?: number;
+  estimatedMinutes?: number;
+  estimatedStartTime?: string;
+  estimatedEndTime?: string;
+  assignedDayId?: string;  // Which day this division runs on
+}
+
+/**
+ * Tournament Planner settings - captures all wizard inputs
+ */
+export interface TournamentPlannerSettings {
+  // Step 1: Courts
+  courts: number;
+
+  // Step 2: Time Window (multi-day support)
+  days: TournamentDay[];
+
+  // Legacy single-day fields (computed from first/last day for backwards compat)
+  startTime: string;  // "09:00" - from first day
+  endTime: string;    // "17:00" - from last day
+
+  // Step 3: Match Settings
+  matchPreset: MatchPreset;
+  gameSettings: PlannerGameSettings;           // Legacy - used as default
+  poolGameSettings: PlannerGameSettings;       // Pool play scoring (e.g., 1 game to 11)
+  medalGameSettings: PlannerGameSettings;      // Medal rounds scoring (e.g., best of 3)
+  useSeparateMedalSettings: boolean;           // Whether to use different settings for medals
+  timingSettings: PlannerTimingSettings;
+
+  // Step 4: Divisions
+  divisions: PlannerDivision[];
+}
+
+/**
+ * Capacity calculation result
+ */
+export interface PlannerCapacity {
+  // Totals
+  totalPlayers: number;
+  totalMatches: number;
+  totalMinutes: number;
+  totalHours: number;
+
+  // Court hours
+  courtHoursAvailable: number;
+  courtHoursUsed: number;
+  utilizationPercent: number;
+
+  // Feasibility
+  fitsInTimeframe: boolean;
+  overtimeMinutes: number;
+
+  // Per-day breakdown (for multi-day tournaments)
+  dayBreakdown: {
+    dayId: string;
+    date: string;
+    label?: string;
+    courtHoursAvailable: number;
+    courtHoursUsed: number;
+    utilizationPercent: number;
+    fitsInTimeframe: boolean;
+  }[];
+
+  // Per-division breakdown
+  divisionBreakdown: {
+    divisionId: string;
+    name: string;
+    matches: number;
+    minutes: number;
+    startTime: string;
+    endTime: string;
+    dayId?: string;  // Which day this division is on
+  }[];
+
+  // Feedback
+  warningMessages: string[];
+  suggestions: string[];
+}
+
+/**
+ * Default values for Tournament Planner
+ */
+export const DEFAULT_PLANNER_GAME_SETTINGS: PlannerGameSettings = {
+  pointsToWin: 11,
+  winBy: 2,
+  bestOf: 1,
+};
+
+export const DEFAULT_POOL_GAME_SETTINGS: PlannerGameSettings = {
+  pointsToWin: 11,
+  winBy: 2,
+  bestOf: 1,  // Pool play: typically single game
+};
+
+export const DEFAULT_MEDAL_GAME_SETTINGS: PlannerGameSettings = {
+  pointsToWin: 11,
+  winBy: 2,
+  bestOf: 3,  // Medal rounds: typically best of 3
+};
+
+export const DEFAULT_PLANNER_TIMING_SETTINGS: PlannerTimingSettings = {
+  warmupMinutes: 3,
+  restMinutes: 8,
+  courtChangeMinutes: 2,
+};
+
+/**
+ * Generate a default tournament day for today
+ */
+export const createDefaultTournamentDay = (daysFromNow = 0): TournamentDay => {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  const dateStr = date.toISOString().split('T')[0];
+  return {
+    id: `day-${Date.now()}-${daysFromNow}`,
+    date: dateStr,
+    startTime: '09:00',
+    endTime: '17:00',
+    label: daysFromNow === 0 ? 'Day 1' : `Day ${daysFromNow + 1}`,
+  };
+};
+
+export const DEFAULT_TOURNAMENT_PLANNER_SETTINGS: TournamentPlannerSettings = {
+  courts: 4,
+  days: [createDefaultTournamentDay()],
+  startTime: '09:00',
+  endTime: '17:00',
+  matchPreset: 'standard',
+  gameSettings: DEFAULT_PLANNER_GAME_SETTINGS,
+  poolGameSettings: DEFAULT_POOL_GAME_SETTINGS,
+  medalGameSettings: DEFAULT_MEDAL_GAME_SETTINGS,
+  useSeparateMedalSettings: true,  // Default: pool=1 game, medals=best of 3
+  timingSettings: DEFAULT_PLANNER_TIMING_SETTINGS,
+  divisions: [],
+};
+
+/**
+ * Match preset configurations
+ * Now includes separate pool and medal game settings
+ */
+export const MATCH_PRESETS: Record<MatchPreset, {
+  gameSettings: PlannerGameSettings;           // Legacy/default
+  poolGameSettings: PlannerGameSettings;       // Pool play scoring
+  medalGameSettings: PlannerGameSettings;      // Medal rounds scoring
+  useSeparateMedalSettings: boolean;           // Whether pool ≠ medal
+  label: string;
+  description: string;
+  poolDescription: string;
+  medalDescription: string;
+  estimatedMinutes: number;                    // Average across both
+  poolEstimatedMinutes: number;
+  medalEstimatedMinutes: number;
+}> = {
+  quick: {
+    gameSettings: { pointsToWin: 11, winBy: 1, bestOf: 1 },
+    poolGameSettings: { pointsToWin: 11, winBy: 1, bestOf: 1 },
+    medalGameSettings: { pointsToWin: 11, winBy: 1, bestOf: 1 },
+    useSeparateMedalSettings: false,
+    label: 'Quick',
+    description: '11 pts, Win by 1, 1 game',
+    poolDescription: '1 game to 11',
+    medalDescription: '1 game to 11',
+    estimatedMinutes: 10,
+    poolEstimatedMinutes: 10,
+    medalEstimatedMinutes: 10,
+  },
+  standard: {
+    gameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+    poolGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+    medalGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 3 },
+    useSeparateMedalSettings: true,
+    label: 'Standard',
+    description: 'Pool: 1 game • Medals: Best of 3',
+    poolDescription: '1 game to 11',
+    medalDescription: 'Best of 3 to 11',
+    estimatedMinutes: 15,
+    poolEstimatedMinutes: 12,
+    medalEstimatedMinutes: 28,
+  },
+  finals: {
+    gameSettings: { pointsToWin: 15, winBy: 2, bestOf: 3 },
+    poolGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+    medalGameSettings: { pointsToWin: 15, winBy: 2, bestOf: 3 },
+    useSeparateMedalSettings: true,
+    label: 'Pro',
+    description: 'Pool: 1 game • Medals: Best of 3 to 15',
+    poolDescription: '1 game to 11',
+    medalDescription: 'Best of 3 to 15',
+    estimatedMinutes: 20,
+    poolEstimatedMinutes: 12,
+    medalEstimatedMinutes: 40,
+  },
+  custom: {
+    gameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+    poolGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+    medalGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 3 },
+    useSeparateMedalSettings: true,
+    label: 'Custom',
+    description: 'Your settings',
+    poolDescription: 'Custom',
+    medalDescription: 'Custom',
+    estimatedMinutes: 15,
+    poolEstimatedMinutes: 12,
+    medalEstimatedMinutes: 28,
+  },
+};
+

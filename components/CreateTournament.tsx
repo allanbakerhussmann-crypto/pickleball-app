@@ -6,6 +6,7 @@
  * - Maps CompetitionFormat to DivisionFormat structure
  * - Visual format cards with dark theme styling
  * - Pool Play → Medals integration with generator settings
+ * - NEW: Tournament Planner integration for capacity planning
  *
  * FILE LOCATION: components/CreateTournament.tsx
  * VERSION: V06.00
@@ -22,13 +23,16 @@ import type {
     PlateFormat,
     Club,
     SeedingMethod,
-    TieBreaker
+    TieBreaker,
+    TournamentPlannerSettings,
+    PlannerDivision
 } from '../types';
 import { saveTournament, getUserClubs, getAllClubs } from '../services/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { CompetitionFormat, PoolPlayMedalsSettings } from '../types/formats';
 import { getFormatOption, DEFAULT_POOL_PLAY_MEDALS_SETTINGS } from '../types/formats';
 import { FormatCards } from './shared/FormatSelector';
+import { TournamentPlanner } from './tournament/planner';
 
 interface CreateTournamentProps {
   onCreateTournament: (tournament: Tournament) => Promise<void> | void;
@@ -115,7 +119,8 @@ const mapCompetitionToTournamentFormat = (format: CompetitionFormat): Partial<Di
 
 export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTournament, onCancel, onCreateClub, userId }) => {
   const { isAppAdmin } = useAuth();
-  const [step, setStep] = useState(1);
+  // Step: 0 = mode selection, 'planner' = planner flow, 1 = basic info, 2 = divisions
+  const [step, setStep] = useState<number | 'planner'>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -134,6 +139,9 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     createdByUserId: userId,
     clubId: '' // Required
   });
+
+  // Planner settings (if using planner flow)
+  const [plannerSettings, setPlannerSettings] = useState<TournamentPlannerSettings | null>(null);
 
   // Divisions List
   const [divisions, setDivisions] = useState<Division[]>([]);
@@ -178,6 +186,95 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     if (format === 'pool_play_medals') {
       setPoolPlaySettings(DEFAULT_POOL_PLAY_MEDALS_SETTINGS);
     }
+  };
+
+  // Convert planner division to tournament division
+  const convertPlannerDivision = (plannerDiv: PlannerDivision, settings: TournamentPlannerSettings): Division => {
+    const formatSettings = mapCompetitionToTournamentFormat(plannerDiv.format);
+
+    // Build division format with planner game settings
+    const divFormat: DivisionFormat = {
+      ...DEFAULT_FORMAT,
+      ...formatSettings,
+      bestOfGames: settings.gameSettings.bestOf,
+      pointsPerGame: settings.gameSettings.pointsToWin,
+      winBy: settings.gameSettings.winBy,
+      // Pool play specific
+      ...(plannerDiv.format === 'pool_play_medals' && plannerDiv.poolSize && {
+        teamsPerPool: plannerDiv.poolSize,
+        numberOfPools: plannerDiv.poolCount || Math.ceil(plannerDiv.expectedPlayers / plannerDiv.poolSize),
+      }),
+    };
+
+    return {
+      id: plannerDiv.id,
+      tournamentId: '', // Set on save
+      name: plannerDiv.name,
+      type: plannerDiv.playType === 'singles' ? 'singles' : 'doubles',
+      gender: 'open', // Default, can be edited
+      // Transfer DUPR ratings from planner
+      minRating: plannerDiv.minRating ?? null,
+      maxRating: plannerDiv.maxRating ?? null,
+      minAge: null,
+      maxAge: null,
+      registrationOpen: true,
+      format: divFormat,
+      createdByUserId: userId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      // Store expected players for reference
+      maxTeams: plannerDiv.expectedPlayers,
+    };
+  };
+
+  // Handle planner completion
+  const handlePlannerComplete = (settings: TournamentPlannerSettings) => {
+    setPlannerSettings(settings);
+
+    // Convert planner divisions to tournament divisions
+    const convertedDivisions = settings.divisions.map(d => convertPlannerDivision(d, settings));
+    setDivisions(convertedDivisions);
+
+    // Calculate tournament dates from planner days
+    const tournamentDays = settings.days && settings.days.length > 0 ? settings.days : [];
+    const firstDay = tournamentDays[0];
+    const lastDay = tournamentDays[tournamentDays.length - 1] || firstDay;
+
+    // Build start and end datetime
+    const startDatetime = firstDay
+      ? `${firstDay.date}T${firstDay.startTime}:00`
+      : new Date().toISOString();
+    const endDatetime = lastDay
+      ? `${lastDay.date}T${lastDay.endTime}:00`
+      : startDatetime;
+
+    // Store planner-specific data in tournament
+    setFormData(prev => ({
+      ...prev,
+      // Set tournament dates from planner
+      startDatetime,
+      endDatetime,
+      // Store court count and time settings for future use
+      courts: settings.courts,
+      startTime: settings.startTime,
+      endTime: settings.endTime,
+      // Store the full days array for multi-day tournaments
+      tournamentDays: tournamentDays,
+      // Store timing settings as custom field
+      plannerSettings: {
+        matchPreset: settings.matchPreset,
+        gameSettings: settings.gameSettings,
+        timingSettings: settings.timingSettings,
+      },
+    }));
+
+    // Move to step 1 (basic info)
+    setStep(1);
+  };
+
+  // Handle planner back (return to mode selection)
+  const handlePlannerBack = () => {
+    setStep(0);
   };
 
   // Load Clubs
@@ -379,12 +476,103 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       );
   }
 
+  // If using planner flow, show the planner component
+  if (step === 'planner') {
+    return (
+      <TournamentPlanner
+        onComplete={handlePlannerComplete}
+        onBack={handlePlannerBack}
+      />
+    );
+  }
+
   return (
       <div className="max-w-4xl mx-auto bg-gray-800 rounded-lg p-8 border border-gray-700 mb-10">
-          <h2 className="text-2xl text-white font-bold mb-6">Create Tournament</h2>
-          {errorMessage && <div className="bg-red-900/50 text-red-200 p-3 mb-4 rounded text-sm font-bold border border-red-800">{errorMessage}</div>}
-          
+          {/* Step 0: Mode Selection */}
+          {step === 0 && (
+            <div className="text-center py-8">
+              <h2 className="text-3xl text-white font-bold mb-4">Create Tournament</h2>
+              <p className="text-gray-400 mb-10 max-w-lg mx-auto">
+                Choose how you'd like to set up your tournament
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+                {/* Planner Option */}
+                <button
+                  onClick={() => setStep('planner')}
+                  className="group bg-gradient-to-br from-blue-900/50 to-blue-800/30 border-2 border-blue-600/50 hover:border-blue-500 rounded-xl p-8 text-left transition-all hover:shadow-lg hover:shadow-blue-500/10"
+                >
+                  <div className="text-4xl mb-4">📊</div>
+                  <h3 className="text-xl font-bold text-white mb-2 group-hover:text-blue-400 transition-colors">
+                    Use Tournament Planner
+                  </h3>
+                  <p className="text-sm text-gray-400 mb-4">
+                    Answer a few questions about your courts, time, and divisions.
+                    We'll help you plan capacity and timing.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="px-2 py-1 bg-blue-900/50 text-blue-300 text-xs rounded">Capacity planning</span>
+                    <span className="px-2 py-1 bg-blue-900/50 text-blue-300 text-xs rounded">Time estimates</span>
+                    <span className="px-2 py-1 bg-blue-900/50 text-blue-300 text-xs rounded">Guided setup</span>
+                  </div>
+                </button>
+
+                {/* Manual Option */}
+                <button
+                  onClick={() => setStep(1)}
+                  className="group bg-gradient-to-br from-gray-700/50 to-gray-800/30 border-2 border-gray-600/50 hover:border-gray-500 rounded-xl p-8 text-left transition-all hover:shadow-lg hover:shadow-gray-500/10"
+                >
+                  <div className="text-4xl mb-4">✏️</div>
+                  <h3 className="text-xl font-bold text-white mb-2 group-hover:text-gray-300 transition-colors">
+                    Create Manually
+                  </h3>
+                  <p className="text-sm text-gray-400 mb-4">
+                    Jump straight into creating divisions and setting up formats.
+                    Best if you know exactly what you want.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="px-2 py-1 bg-gray-700/50 text-gray-400 text-xs rounded">Full control</span>
+                    <span className="px-2 py-1 bg-gray-700/50 text-gray-400 text-xs rounded">Quick setup</span>
+                    <span className="px-2 py-1 bg-gray-700/50 text-gray-400 text-xs rounded">Experienced users</span>
+                  </div>
+                </button>
+              </div>
+
+              <button
+                onClick={onCancel}
+                className="mt-8 text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {/* Step 1: Basic Info */}
           {step === 1 && (
+            <>
+              <h2 className="text-2xl text-white font-bold mb-6">
+                {plannerSettings ? 'Tournament Details' : 'Create Tournament'}
+              </h2>
+              {plannerSettings && (
+                <div className="mb-6 p-4 bg-blue-900/30 border border-blue-700 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-blue-400">📊</span>
+                    <span className="text-blue-300 font-medium">Planner Summary</span>
+                  </div>
+                  <div className="flex flex-wrap gap-4 text-sm">
+                    <span className="text-gray-300">
+                      <strong className="text-white">{plannerSettings.courts}</strong> courts
+                    </span>
+                    <span className="text-gray-300">
+                      <strong className="text-white">{plannerSettings.startTime}</strong> - <strong className="text-white">{plannerSettings.endTime}</strong>
+                    </span>
+                    <span className="text-gray-300">
+                      <strong className="text-white">{divisions.length}</strong> divisions pre-configured
+                    </span>
+                  </div>
+                </div>
+              )}
+              {errorMessage && <div className="bg-red-900/50 text-red-200 p-3 mb-4 rounded text-sm font-bold border border-red-800">{errorMessage}</div>}
               <div className="space-y-4">
                   <div>
                       <label className="block text-sm font-medium text-gray-400 mb-1">Tournament Name</label>
@@ -429,14 +617,42 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                   </div>
 
                    <div className="flex justify-between items-center pt-4">
-                      <button onClick={onCancel} className="text-gray-400 hover:text-white">Cancel</button>
-                      <button onClick={handleNext} className="bg-green-600 text-white px-6 py-2 rounded font-bold hover:bg-green-500">Next: Divisions</button>
+                      <button
+                        onClick={() => plannerSettings ? setStep(0) : onCancel()}
+                        className="text-gray-400 hover:text-white"
+                      >
+                        {plannerSettings ? 'Back to Options' : 'Cancel'}
+                      </button>
+                      <button onClick={handleNext} className="bg-green-600 text-white px-6 py-2 rounded font-bold hover:bg-green-500">
+                        {plannerSettings && divisions.length > 0 ? 'Review Divisions' : 'Next: Divisions'}
+                      </button>
                    </div>
               </div>
+            </>
           )}
 
           {step === 2 && (
               <div className="space-y-8">
+                  {/* Planner Summary Banner */}
+                  {plannerSettings && (
+                    <div className="mb-2 p-4 bg-blue-900/20 border border-blue-700/50 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-blue-400">📊</span>
+                          <span className="text-blue-300 font-medium text-sm">From Planner</span>
+                        </div>
+                        <span className="text-xs text-gray-400">
+                          {plannerSettings.courts} courts • {plannerSettings.startTime} - {plannerSettings.endTime}
+                        </span>
+                      </div>
+                      {divisions.length > 0 && (
+                        <p className="text-xs text-gray-400 mt-2">
+                          {divisions.length} divisions pre-configured from planner. You can edit or add more below.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {/* ADD DIVISION PANEL */}
                   <div className={`bg-gray-700/50 p-6 rounded border ${editingId ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]' : 'border-gray-600'} space-y-6 transition-all duration-300`}>
                       <div className="flex justify-between items-center border-b border-gray-600 pb-2">
