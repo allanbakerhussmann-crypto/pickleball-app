@@ -1392,6 +1392,7 @@ export function mapPlayTypeToLegacy(playType: PlayType): LeagueType {
  */
 export function mapFormatToLegacy(format: CompetitionFormat): LeagueFormat {
   const mapping: Record<CompetitionFormat, LeagueFormat> = {
+    pool_play_medals: 'round_robin', // Pools use round robin
     round_robin: 'round_robin',
     rotating_doubles_box: 'box_league',
     fixed_doubles_box: 'box_league',

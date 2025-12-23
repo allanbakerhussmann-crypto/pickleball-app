@@ -1,5 +1,11 @@
 /**
- * CreateLeague Component - 7-Step Wizard V05.50
+ * CreateLeague Component - 7-Step Wizard V06.00
+ *
+ * UPDATED V06.00:
+ * - Replaced FORMATS constant with FormatCards component
+ * - Now uses unified CompetitionFormat from types/formats
+ * - Shows all 10 formats with dark theme styling
+ * - Filters formats by play type (singles/doubles/mixed)
  *
  * UPDATED V05.50:
  * - Added payment mode selector (Free/External/Stripe) in Step 6
@@ -9,7 +15,7 @@
  * - Uses VerificationSettingsForm component
  *
  * FILE LOCATION: components/leagues/CreateLeague.tsx
- * VERSION: V05.50
+ * VERSION: V06.00
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -21,8 +27,11 @@ import type {
   LeagueTiebreaker, Club, GenderCategory, EventType, LeaguePrizePool,
   LeagueDuprSettings, LeagueDuprMode, ScoreVerificationSettings,
 } from '../../types';
-import { DEFAULT_SCORE_VERIFICATION } from '../../types';
+import { DEFAULT_SCORE_VERIFICATION, mapLegacyType, mapFormatToLegacy } from '../../types';
+import type { CompetitionFormat } from '../../types/formats';
+import { getFormatOption } from '../../types/formats';
 import { VerificationSettingsForm } from './verification';
+import { FormatCards } from '../shared/FormatSelector';
 
 // ============================================
 // LOCAL TYPES
@@ -80,13 +89,6 @@ const TYPES: { value: LeagueType; label: string; desc: string }[] = [
   { value: 'singles', label: 'Singles', desc: '1v1' },
   { value: 'doubles', label: 'Doubles', desc: '2v2' },
   { value: 'mixed_doubles', label: 'Mixed', desc: 'M+F' },
-];
-
-const FORMATS: { value: LeagueFormat; label: string; desc: string }[] = [
-  { value: 'ladder', label: '🪜 Ladder', desc: 'Challenge up' },
-  { value: 'round_robin', label: '🔄 Round Robin', desc: 'Play everyone' },
-  { value: 'swiss', label: '🎯 Swiss', desc: 'Similar skill' },
-  { value: 'box_league', label: '📦 Box League', desc: 'Small groups' },
 ];
 
 const DUPR_MODE_OPTIONS: { value: LeagueDuprMode; label: string; desc: string; icon: string }[] = [
@@ -173,10 +175,13 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   const hasStripe = userProfile?.stripeConnectedAccountId && userProfile?.stripeChargesEnabled;
 
   // Step 1: Basic Info
-  const [basic, setBasic] = useState({ 
-    name: '', description: '', type: 'singles' as LeagueType, format: 'round_robin' as LeagueFormat, 
-    clubId: '', location: '', visibility: 'public' as 'public' | 'private' | 'club_only' 
+  const [basic, setBasic] = useState({
+    name: '', description: '', type: 'singles' as LeagueType, format: 'round_robin' as LeagueFormat,
+    clubId: '', location: '', visibility: 'public' as 'public' | 'private' | 'club_only'
   });
+
+  // New unified format (V06.00)
+  const [selectedFormat, setSelectedFormat] = useState<CompetitionFormat>('round_robin');
   
   // Step 2: Schedule & Venue
   const [scheduleConfig, setScheduleConfig] = useState<LeagueScheduleConfig>({
@@ -264,6 +269,12 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   useEffect(() => {
     setDuprSettings(d => ({ ...d, ratingType: basic.type === 'singles' ? 'singles' : 'doubles' }));
   }, [basic.type]);
+
+  // Sync legacy format when new unified format changes
+  useEffect(() => {
+    const legacyFormat = mapFormatToLegacy(selectedFormat);
+    setBasic(b => ({ ...b, format: legacyFormat }));
+  }, [selectedFormat]);
 
   const generatedDates = useMemo(() => {
     return generateMatchDates(scheduleConfig.startDate, scheduleConfig.numberOfWeeks, 
@@ -481,14 +492,12 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
             
             <div>
               <label className="block text-sm text-gray-400 mb-2">Format *</label>
-              <div className="grid grid-cols-2 gap-2">
-                {FORMATS.map(f => (
-                  <label key={f.value} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${basic.format === f.value ? 'bg-blue-900/30 border-blue-500' : 'bg-gray-900 border-gray-700 hover:border-gray-600'}`}>
-                    <input type="radio" checked={basic.format === f.value} onChange={() => setBasic({ ...basic, format: f.value })} className="sr-only"/>
-                    <div><div className="text-white font-medium">{f.label}</div><div className="text-xs text-gray-500">{f.desc}</div></div>
-                  </label>
-                ))}
-              </div>
+              <FormatCards
+                value={selectedFormat}
+                onChange={setSelectedFormat}
+                playType={mapLegacyType(basic.type)}
+                theme="dark"
+              />
             </div>
             
             {clubs.length > 0 && (
@@ -1084,7 +1093,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               <div className="grid grid-cols-2 gap-1 text-sm">
                 <span className="text-gray-400">Name:</span><span className="text-white">{basic.name}</span>
                 <span className="text-gray-400">Type:</span><span className="text-white capitalize">{basic.type.replace('_', ' ')}</span>
-                <span className="text-gray-400">Format:</span><span className="text-white capitalize">{basic.format.replace('_', ' ')}</span>
+                <span className="text-gray-400">Format:</span><span className="text-white">{getFormatOption(selectedFormat)?.label || selectedFormat}</span>
               </div>
             </div>
             

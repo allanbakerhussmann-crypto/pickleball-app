@@ -1,17 +1,17 @@
 /**
  * CreateMeetup Component (Enhanced with Game Format Settings)
- * 
+ *
  * Form for creating a new meetup with:
  * - Host selection (Individual Organizer OR Club)
  * - Basic info (title, date, location)
  * - Pricing options (entry fee, prize pool)
  * - Fee handling (organizer or player pays)
- * - Competition type selection
+ * - Competition type selection (using FormatCards V06.00)
  * - Game format settings (points, games, scoring system)
  * - Stripe Connect requirement for paid meetups
- * 
+ *
  * FILE LOCATION: components/meetups/CreateMeetup.tsx
- * VERSION: V05.17 - Enhanced with Game Format
+ * VERSION: V06.00 - Integrated FormatCards for unified format selection
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -20,13 +20,16 @@ import { createMeetup, getUserClubs } from '../../services/firebase';
 import { doc, getDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import { LocationPicker } from './LocationPicker';
-import { 
-  calculateFees, 
+import {
+  calculateFees,
   PLATFORM_FEE_PERCENT,
   STRIPE_FEE_PERCENT,
   STRIPE_FEE_FIXED,
 } from '../../services/stripe';
 import type { Club } from '../../types';
+import type { CompetitionFormat } from '../../types/formats';
+import { getFormatOption } from '../../types/formats';
+import { FormatCards } from '../shared/FormatSelector';
 
 // ============================================
 // TYPES
@@ -117,6 +120,35 @@ const DEFAULT_GAME_FORMAT: GameFormatSettings = {
   pointsPerLoss: 0,
 };
 
+/**
+ * Map CompetitionFormat to MeetupCompetitionType
+ * Meetups use slightly different type names
+ */
+const mapCompetitionFormatToMeetup = (format: CompetitionFormat): MeetupCompetitionType => {
+  switch (format) {
+    case 'round_robin':
+      return 'round_robin';
+    case 'singles_elimination':
+    case 'doubles_elimination':
+      return 'single_elimination';
+    case 'king_of_court':
+      return 'king_of_court';
+    case 'ladder':
+      return 'ladder';
+    case 'swiss':
+      return 'swiss';
+    case 'pool_play_medals':
+      return 'pool_play_knockout';
+    case 'rotating_doubles_box':
+    case 'fixed_doubles_box':
+      return 'round_robin'; // Box formats map to round robin for meetups
+    case 'team_league_interclub':
+      return 'round_robin'; // Team league maps to round robin for meetups
+    default:
+      return 'casual';
+  }
+};
+
 // ============================================
 // COMPONENT
 // ============================================
@@ -155,7 +187,20 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   
   // Competition
   const [competitionType, setCompetitionType] = useState<MeetupCompetitionType>('casual');
+  const [selectedFormat, setSelectedFormat] = useState<CompetitionFormat | 'casual'>('casual');
   const [managedInApp, setManagedInApp] = useState(true);
+
+  // Handle format card selection
+  const handleFormatSelect = (format: CompetitionFormat) => {
+    setSelectedFormat(format);
+    setCompetitionType(mapCompetitionFormatToMeetup(format));
+  };
+
+  // Handle casual selection (special case - not in FormatCards)
+  const handleCasualSelect = () => {
+    setSelectedFormat('casual');
+    setCompetitionType('casual');
+  };
   
   // Game Format Settings (NEW)
   const [gameFormat, setGameFormat] = useState<GameFormatSettings>(DEFAULT_GAME_FORMAT);
@@ -774,27 +819,36 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
             {/* Competition Format Selection */}
             <div>
               <label className="block text-sm font-medium text-gray-400 mb-3">Competition Format</label>
-              <div className="grid gap-2">
-                {COMPETITION_TYPES.map((type) => (
-                  <button
-                    key={type.value}
-                    onClick={() => setCompetitionType(type.value)}
-                    className={`p-3 rounded-lg border text-left transition-colors flex items-center gap-3 ${
-                      competitionType === type.value
-                        ? 'border-green-500 bg-green-900/30'
-                        : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'
-                    }`}
-                  >
-                    <span className="text-2xl">{type.icon}</span>
-                    <div>
-                      <p className={`font-medium ${competitionType === type.value ? 'text-green-400' : 'text-white'}`}>
-                        {type.label}
-                      </p>
-                      <p className="text-sm text-gray-500">{type.description}</p>
-                    </div>
-                  </button>
-                ))}
-              </div>
+
+              {/* Casual Option (special - not in FormatCards) */}
+              <button
+                onClick={handleCasualSelect}
+                className={`w-full p-4 mb-3 rounded-lg border text-left transition-colors flex items-center gap-3 ${
+                  selectedFormat === 'casual'
+                    ? 'border-blue-500 bg-blue-900/30'
+                    : 'border-gray-600 bg-gray-900/50 hover:border-gray-500'
+                }`}
+              >
+                <span className="text-2xl">🎾</span>
+                <div>
+                  <p className={`font-medium ${selectedFormat === 'casual' ? 'text-blue-400' : 'text-white'}`}>
+                    Casual Play
+                  </p>
+                  <p className="text-sm text-gray-500">No formal competition, just social games</p>
+                </div>
+                {selectedFormat === 'casual' && (
+                  <svg className="w-5 h-5 ml-auto text-blue-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                )}
+              </button>
+
+              {/* Competition Formats (FormatCards) */}
+              <FormatCards
+                value={selectedFormat === 'casual' ? '' : selectedFormat}
+                onChange={handleFormatSelect}
+                theme="dark"
+              />
             </div>
 
             {/* Game Format Settings - Only show for competitive formats */}
@@ -1107,7 +1161,9 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">Format</span>
-                  <span className="text-white">{COMPETITION_TYPES.find(t => t.value === competitionType)?.label}</span>
+                  <span className="text-white">
+                    {selectedFormat === 'casual' ? 'Casual Play' : getFormatOption(selectedFormat)?.label || competitionType}
+                  </span>
                 </div>
                 {competitionType !== 'casual' && (
                   <div className="flex justify-between">

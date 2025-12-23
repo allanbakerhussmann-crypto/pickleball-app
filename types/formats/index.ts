@@ -19,6 +19,7 @@ export {
   COMPETITION_FORMATS,
 
   // Format-specific settings
+  type PoolPlayMedalsSettings,
   type RoundRobinSettings,
   type BoxSettings,
   type EliminationSettings,
@@ -29,6 +30,7 @@ export {
   type FormatSettings,
 
   // Default settings
+  DEFAULT_POOL_PLAY_MEDALS_SETTINGS,
   DEFAULT_ROUND_ROBIN_SETTINGS,
   DEFAULT_BOX_SETTINGS,
   DEFAULT_ELIMINATION_SETTINGS,

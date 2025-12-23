@@ -21,6 +21,7 @@ import type { PlayType } from '../game/gameSettings';
  * The same dropdown appears in all event creation wizards.
  */
 export type CompetitionFormat =
+  | 'pool_play_medals'
   | 'round_robin'
   | 'rotating_doubles_box'
   | 'fixed_doubles_box'
@@ -68,6 +69,14 @@ export interface FormatOption {
  * in CreateTournament, CreateLeague, and CreateMeetup wizards.
  */
 export const COMPETITION_FORMATS: FormatOption[] = [
+  {
+    value: 'pool_play_medals',
+    label: 'Pool Play → Medals',
+    description: 'Pools then bracket with medals 🥇🥈🥉',
+    supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
+    generatesMatchesUpfront: false, // Bracket generated after pools complete
+    icon: '🏅',
+  },
   {
     value: 'round_robin',
     label: 'Round Robin',
@@ -293,6 +302,34 @@ export const DEFAULT_TEAM_LEAGUE_SETTINGS: TeamLeagueSettings = {
   maxPlayersPerTeam: 8,
 };
 
+/**
+ * Settings for Pool Play → Medals format
+ * The most common tournament format in pickleball
+ */
+export interface PoolPlayMedalsSettings {
+  /** Number of participants per pool (3-6) */
+  poolSize: 3 | 4 | 5 | 6;
+
+  /** How many advance from each pool */
+  advancementRule: 'top_1' | 'top_2' | 'top_n_plus_best';
+
+  /** For 'top_n_plus_best', how many total advance */
+  advancementCount?: number;
+
+  /** Bronze medal handling */
+  bronzeMatch: 'yes' | 'shared' | 'no';
+
+  /** Tiebreaker order for pool standings */
+  tiebreakers: ('wins' | 'head_to_head' | 'point_diff' | 'points_scored')[];
+}
+
+export const DEFAULT_POOL_PLAY_MEDALS_SETTINGS: PoolPlayMedalsSettings = {
+  poolSize: 4,
+  advancementRule: 'top_2',
+  bronzeMatch: 'yes',
+  tiebreakers: ['wins', 'head_to_head', 'point_diff', 'points_scored'],
+};
+
 // ============================================
 // UNION TYPE FOR ALL FORMAT SETTINGS
 // ============================================
@@ -301,6 +338,7 @@ export const DEFAULT_TEAM_LEAGUE_SETTINGS: TeamLeagueSettings = {
  * Union of all format-specific settings
  */
 export type FormatSettings =
+  | { format: 'pool_play_medals'; settings: PoolPlayMedalsSettings }
   | { format: 'round_robin'; settings: RoundRobinSettings }
   | { format: 'rotating_doubles_box'; settings: BoxSettings }
   | { format: 'fixed_doubles_box'; settings: BoxSettings }
@@ -350,6 +388,8 @@ export function formatGeneratesMatchesUpfront(format: CompetitionFormat): boolea
  */
 export function getDefaultFormatSettings(format: CompetitionFormat): FormatSettings {
   switch (format) {
+    case 'pool_play_medals':
+      return { format, settings: DEFAULT_POOL_PLAY_MEDALS_SETTINGS };
     case 'round_robin':
       return { format, settings: DEFAULT_ROUND_ROBIN_SETTINGS };
     case 'rotating_doubles_box':

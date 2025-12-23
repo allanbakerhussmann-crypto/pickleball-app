@@ -1,9 +1,19 @@
-
+/**
+ * CreateTournament Component
+ *
+ * UPDATED V06.00:
+ * - Integrated FormatCards for unified format selection
+ * - Maps CompetitionFormat to DivisionFormat structure
+ * - Visual format cards with dark theme styling
+ *
+ * FILE LOCATION: components/CreateTournament.tsx
+ * VERSION: V06.00
+ */
 import React, { useState, useEffect } from 'react';
-import type { 
-    Tournament, 
-    Division, 
-    EventType, 
+import type {
+    Tournament,
+    Division,
+    EventType,
     GenderCategory,
     DivisionFormat,
     MainFormat,
@@ -15,6 +25,9 @@ import type {
 } from '../types';
 import { saveTournament, getUserClubs, getAllClubs } from '../services/firebase';
 import { useAuth } from '../contexts/AuthContext';
+import type { CompetitionFormat } from '../types/formats';
+import { getFormatOption } from '../types/formats';
+import { FormatCards } from './shared/FormatSelector';
 
 interface CreateTournamentProps {
   onCreateTournament: (tournament: Tournament) => Promise<void> | void;
@@ -45,6 +58,58 @@ const DEFAULT_FORMAT: DivisionFormat = {
     tieBreakerPrimary: 'match_wins',
     tieBreakerSecondary: 'point_diff',
     tieBreakerTertiary: 'head_to_head'
+};
+
+/**
+ * Map CompetitionFormat to DivisionFormat settings
+ */
+const mapCompetitionToTournamentFormat = (format: CompetitionFormat): Partial<DivisionFormat> => {
+    switch (format) {
+        case 'pool_play_medals':
+            return {
+                stageMode: 'two_stage',
+                stage1Format: 'round_robin_pools',
+                stage2Format: 'single_elim',
+                numberOfPools: 2,
+                teamsPerPool: 4,
+                advanceToMainPerPool: 2,
+                hasBronzeMatch: true,
+            };
+        case 'round_robin':
+            return {
+                stageMode: 'single_stage',
+                mainFormat: 'round_robin',
+            };
+        case 'singles_elimination':
+        case 'doubles_elimination':
+            return {
+                stageMode: 'single_stage',
+                mainFormat: 'single_elim',
+            };
+        case 'swiss':
+            return {
+                stageMode: 'single_stage',
+                mainFormat: 'round_robin', // Swiss maps to round robin for now
+            };
+        case 'ladder':
+            return {
+                stageMode: 'single_stage',
+                mainFormat: 'ladder',
+            };
+        case 'rotating_doubles_box':
+        case 'fixed_doubles_box':
+            return {
+                stageMode: 'single_stage',
+                mainFormat: 'round_robin', // Box leagues use round robin within boxes
+            };
+        case 'king_of_court':
+        case 'team_league_interclub':
+        default:
+            return {
+                stageMode: 'single_stage',
+                mainFormat: 'round_robin',
+            };
+    }
 };
 
 export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTournament, onCancel, onCreateClub, userId }) => {
@@ -93,6 +158,16 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
   });
 
   const [newDivFormat, setNewDivFormat] = useState<DivisionFormat>(DEFAULT_FORMAT);
+
+  // Selected format from FormatCards (V06.00)
+  const [selectedFormat, setSelectedFormat] = useState<CompetitionFormat>('round_robin');
+
+  // Handle format card selection - update DivisionFormat settings
+  const handleFormatSelect = (format: CompetitionFormat) => {
+    setSelectedFormat(format);
+    const mappedSettings = mapCompetitionToTournamentFormat(format);
+    setNewDivFormat(prev => ({ ...prev, ...mappedSettings }));
+  };
 
   // Load Clubs
   useEffect(() => {
@@ -413,7 +488,19 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
                       {/* 2. Format */}
                       <div>
-                          <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">2. Format & Seeding</h4>
+                          <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">2. Competition Format</h4>
+
+                          {/* Format Cards Selection (V06.00) */}
+                          <div className="mb-4">
+                              <FormatCards
+                                  value={selectedFormat}
+                                  onChange={handleFormatSelect}
+                                  playType={newDivBasic.type === 'singles' ? 'singles' : 'doubles'}
+                                  theme="dark"
+                              />
+                          </div>
+
+                          {/* Advanced Settings Panel */}
                           <div className="bg-gray-800 p-4 rounded border border-gray-600">
                               <div className="mb-4">
                                    <label className="block text-xs text-gray-400 mb-1">Seeding Method</label>
@@ -427,46 +514,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                                    </select>
                               </div>
 
-                              <div className="flex gap-6 mb-4 pb-4 border-b border-gray-700">
-                                  <label className="flex items-center gap-2 cursor-pointer">
-                                      <input 
-                                        type="radio" name="stageMode" value="single_stage"
-                                        checked={newDivFormat.stageMode === 'single_stage'}
-                                        onChange={() => setNewDivFormat({...newDivFormat, stageMode: 'single_stage'})}
-                                        className="text-green-600 focus:ring-green-500"
-                                      />
-                                      <span className="text-white text-sm font-bold">Single Stage</span>
-                                  </label>
-                                  <label className="flex items-center gap-2 cursor-pointer">
-                                      <input 
-                                        type="radio" name="stageMode" value="two_stage"
-                                        checked={newDivFormat.stageMode === 'two_stage'}
-                                        onChange={() => setNewDivFormat({...newDivFormat, stageMode: 'two_stage'})}
-                                        className="text-green-600 focus:ring-green-500"
-                                      />
-                                      <span className="text-white text-sm font-bold">Two Stage (Pools + Finals)</span>
-                                  </label>
-                              </div>
-
-                              {newDivFormat.stageMode === 'single_stage' && (
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                      <div>
-                                          <label className="block text-xs text-gray-400 mb-1">Format</label>
-                                          <select 
-                                              className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
-                                              value={newDivFormat.mainFormat || ''}
-                                              onChange={e => setNewDivFormat({...newDivFormat, mainFormat: e.target.value as MainFormat})}
-                                          >
-                                              <option value="round_robin">Round Robin</option>
-                                              <option value="single_elim">Single Elimination</option>
-                                              <option value="double_elim">Double Elimination</option>
-                                              <option value="ladder">Ladder</option>
-                                          </select>
-                                      </div>
-                                  </div>
-                              )}
-
-                              {newDivFormat.stageMode === 'two_stage' && (
+                              {/* Pool Play → Medals Settings */}
+                              {selectedFormat === 'pool_play_medals' && (
                                   <div className="space-y-4">
                                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                           <div>
