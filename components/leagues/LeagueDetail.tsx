@@ -1,10 +1,11 @@
 /**
- * LeagueDetail Component V05.44
+ * LeagueDetail Component V05.48
  *
  * Shows league details, standings, matches, and allows joining/playing.
+ * Now includes player management with drag-and-drop for organizers.
  *
  * FILE LOCATION: components/leagues/LeagueDetail.tsx
- * VERSION: V05.44
+ * VERSION: V05.48
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -19,14 +20,18 @@ import {
   leaveLeague,
   getLeagueMemberByUserId,
   updateLeague,
+  subscribeToBoxLeaguePlayers,
 } from '../../services/firebase';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
-import type { 
-  League, 
-  LeagueMember, 
-  LeagueMatch, 
+import { BoxPlayerDragDrop } from './boxLeague';
+import { PlayerSeedingList } from './PlayerSeedingList';
+import type {
+  League,
+  LeagueMember,
+  LeagueMatch,
   LeagueDivision,
 } from '../../types';
+import type { BoxLeaguePlayer } from '../../types/boxLeague';
 import { LeagueStandings } from './LeagueStandings';
 
 // ============================================
@@ -38,7 +43,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'schedule' | 'info';
+type TabType = 'standings' | 'matches' | 'players' | 'schedule' | 'info';
 
 // ============================================
 // COMPONENT
@@ -54,6 +59,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [members, setMembers] = useState<LeagueMember[]>([]);
   const [matches, setMatches] = useState<LeagueMatch[]>([]);
   const [myMembership, setMyMembership] = useState<LeagueMember | null>(null);
+  const [boxPlayers, setBoxPlayers] = useState<BoxLeaguePlayer[]>([]);
   
   // UI state
   const [loading, setLoading] = useState(true);
@@ -270,6 +276,14 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     return () => unsubscribe();
   }, [leagueId]);
 
+  // Subscribe to box league players (only for box_league format)
+  useEffect(() => {
+    if (league?.format === 'box_league') {
+      const unsubscribe = subscribeToBoxLeaguePlayers(leagueId, setBoxPlayers);
+      return () => unsubscribe();
+    }
+  }, [leagueId, league?.format]);
+
   // Get my membership
   useEffect(() => {
     if (currentUser) {
@@ -482,9 +496,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const isOrganizer = currentUser?.uid === league.createdByUserId;
   const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active');
 
-  // Determine which tabs to show - Schedule tab only for organizers
-  const availableTabs: TabType[] = isOrganizer 
-    ? ['standings', 'matches', 'schedule', 'info']
+  // Determine which tabs to show - Schedule and Players tabs only for organizers
+  const availableTabs: TabType[] = isOrganizer
+    ? ['standings', 'matches', 'players', 'schedule', 'info']
     : ['standings', 'matches', 'info'];
 
   return (
@@ -784,6 +798,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           >
             {tab === 'standings' && '🏆 '}
             {tab === 'matches' && '🎾 '}
+            {tab === 'players' && '👥 '}
             {tab === 'schedule' && '📅 '}
             {tab === 'info' && 'ℹ️ '}
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -893,6 +908,48 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               );
             })
           )}
+        </div>
+      )}
+
+      {/* PLAYERS TAB - Organizer Only */}
+      {activeTab === 'players' && isOrganizer && (
+        <div className="space-y-4">
+          {league.format === 'box_league' ? (
+            // Box League: Show box-based drag-drop management
+            <BoxPlayerDragDrop
+              leagueId={leagueId}
+              players={boxPlayers}
+              boxCount={Math.ceil(boxPlayers.length / (league.settings?.boxSettings?.playersPerBox || 4))}
+              boxSize={league.settings?.boxSettings?.playersPerBox || 4}
+              onPlayersUpdated={() => {
+                // Players will auto-update via subscription
+              }}
+              disabled={league.status === 'completed'}
+            />
+          ) : (
+            // Other formats: Show seeding list
+            <PlayerSeedingList
+              leagueId={leagueId}
+              members={filteredMembers}
+              onMembersUpdated={() => {
+                // Members will auto-update via subscription
+              }}
+              disabled={league.status === 'completed'}
+              showStats={true}
+            />
+          )}
+
+          {/* Help text */}
+          <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+            <h4 className="text-sm font-medium text-gray-300 mb-2">
+              {league.format === 'box_league' ? 'Managing Boxes' : 'Managing Seeding'}
+            </h4>
+            <p className="text-sm text-gray-500">
+              {league.format === 'box_league'
+                ? 'Drag players between boxes to rebalance skill levels. Players within a box will play against each other.'
+                : 'Drag players to reorder their seeding. Seeding affects match generation and bracket placement.'}
+            </p>
+          </div>
         </div>
       )}
 
@@ -1416,12 +1473,14 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                       ...(league?.format === 'swiss' && { swissSettings: { rounds: editForm.swissRounds, pairingMethod: league?.settings?.swissSettings?.pairingMethod ?? 'adjacent' } }),
                     };
                     const pricingUpdate = editForm.pricingEnabled ? {
+                      paymentMode: league?.pricing?.paymentMode || 'external' as const,
                       enabled: true, entryFee: editForm.entryFee, entryFeeType: editForm.entryFeeType, feesPaidBy: editForm.feesPaidBy, refundPolicy: editForm.refundPolicy,
                       earlyBirdEnabled: editForm.earlyBirdEnabled, earlyBirdFee: editForm.earlyBirdEnabled ? editForm.earlyBirdFee : undefined,
                       earlyBirdDeadline: editForm.earlyBirdEnabled && editForm.earlyBirdDeadline ? new Date(editForm.earlyBirdDeadline).getTime() : undefined,
                       lateFeeEnabled: editForm.lateFeeEnabled, lateFee: editForm.lateFeeEnabled ? editForm.lateFee : undefined,
                       lateRegistrationStart: editForm.lateFeeEnabled && editForm.lateRegistrationStart ? new Date(editForm.lateRegistrationStart).getTime() : undefined,
-                      prizePool: league?.pricing?.prizePool || { enabled: false, type: 'none' as const, amount: 0, distribution: { first: 60, second: 30, third: 10, fourth: 0 } }, currency: 'nzd' as const,                       } : undefined;
+                      prizePool: league?.pricing?.prizePool || { enabled: false, type: 'none' as const, amount: 0, distribution: { first: 60, second: 30, third: 10, fourth: 0 } }, currency: 'nzd' as const,
+                    } : undefined;
                     const updateData: Parameters<typeof updateLeague>[1] = { name: editForm.name.trim(), visibility: editForm.visibility, settings: settingsUpdate };
                     if (editForm.description.trim()) updateData.description = editForm.description.trim();
                     if (editForm.location.trim()) updateData.location = editForm.location.trim();
