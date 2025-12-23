@@ -1707,3 +1707,155 @@ export const MATCH_PRESETS: Record<MatchPreset, {
   },
 };
 
+// ============================================
+// PHASE 2: SCHEDULE BUILDER TYPES
+// ============================================
+
+/**
+ * Types of scheduling conflicts
+ */
+export type ConflictType =
+  | 'player_double_booked'    // Same player in 2 matches at same time
+  | 'insufficient_rest'       // Player doesn't have enough rest between matches
+  | 'court_double_booked'     // Same court assigned to 2 matches
+  | 'bracket_dependency';     // Match scheduled before its prerequisite
+
+/**
+ * A scheduling conflict detected in the schedule
+ */
+export interface ScheduleConflict {
+  id: string;
+  type: ConflictType;
+  severity: 'error' | 'warning';
+  message: string;
+
+  // Affected entities
+  matchIds: string[];
+  playerIds?: string[];
+  courtId?: string;
+
+  // Time info
+  scheduledTime: string;
+
+  // Resolution options
+  canAutoFix: boolean;
+  autoFixDescription?: string;
+  ignored: boolean;
+}
+
+/**
+ * A scheduled match slot
+ */
+export interface ScheduledMatch {
+  matchId: string;
+  divisionId: string;
+  divisionName: string;
+
+  // Match details
+  stage: 'pool' | 'bracket' | 'medal';
+  roundNumber?: number;
+  matchNumber: number;
+
+  // Participants
+  teamA: {
+    name: string;
+    playerIds: string[];
+  };
+  teamB: {
+    name: string;
+    playerIds: string[];
+  };
+
+  // Schedule
+  courtId: string;
+  courtName: string;
+  dayId: string;
+  scheduledTime: string;       // "09:00"
+  estimatedEndTime: string;    // "09:25"
+  durationMinutes: number;
+
+  // Status
+  isLocked: boolean;           // Can't be moved by auto-scheduler
+  hasConflict: boolean;
+}
+
+/**
+ * Division schedule block for timeline
+ */
+export interface DivisionScheduleBlock {
+  divisionId: string;
+  divisionName: string;
+  dayId: string;
+  startTime: string;
+  endTime: string;
+  matchCount: number;
+  stage: 'pool' | 'bracket' | 'all';
+  color: string;
+}
+
+/**
+ * Court availability for a day
+ */
+export interface CourtAvailability {
+  courtId: string;
+  courtName: string;
+  dayId: string;
+  available: boolean;
+  startTime?: string;
+  endTime?: string;
+}
+
+/**
+ * Schedule Builder settings and state
+ */
+export interface ScheduleBuilderState {
+  tournamentId: string;
+
+  // Configuration
+  courts: CourtAvailability[];
+  enabledDivisions: string[];
+
+  // Generated schedule
+  matches: ScheduledMatch[];
+  divisionBlocks: DivisionScheduleBlock[];
+
+  // Conflicts
+  conflicts: ScheduleConflict[];
+  unresolvedConflictCount: number;
+
+  // Status
+  isGenerated: boolean;
+  isPublished: boolean;
+  lastGeneratedAt?: number;
+  lastPublishedAt?: number;
+}
+
+/**
+ * Schedule generation options
+ */
+export interface ScheduleGenerationOptions {
+  // Timing
+  minRestMinutes: number;          // Min rest between matches for same player
+  slotDurationMinutes: number;     // Match slot duration
+
+  // Preferences
+  prioritizeEarlyFinish: boolean;  // Finish divisions ASAP vs spread out
+  balanceCourtUsage: boolean;      // Distribute matches evenly across courts
+  keepPoolsTogether: boolean;      // Schedule pool matches consecutively
+
+  // Conflict handling
+  autoResolveConflicts: boolean;   // Try to auto-fix conflicts
+}
+
+/**
+ * Default schedule generation options
+ */
+export const DEFAULT_SCHEDULE_OPTIONS: ScheduleGenerationOptions = {
+  minRestMinutes: 15,
+  slotDurationMinutes: 25,
+  prioritizeEarlyFinish: true,
+  balanceCourtUsage: true,
+  keepPoolsTogether: true,
+  autoResolveConflicts: true,
+};
+
