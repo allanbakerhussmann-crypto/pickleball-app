@@ -215,6 +215,8 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
   };
 
   // Check for conflicts when moving a division
+  // NOTE: Divisions on separate rows/tracks can overlap (parallel courts)
+  // Only check day boundaries - not overlap with other divisions
   const checkForConflicts = useCallback((
     movingDivisionId: string,
     newStartMinutes: number,
@@ -227,23 +229,7 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
     const movingDuration = parseTimeToMinutes(movingDiv.endTime) - parseTimeToMinutes(movingDiv.startTime);
     const newEndMinutes = newStartMinutes + movingDuration;
 
-    // Get all divisions on the target day except the one being moved
-    const otherDivisionsOnDay = capacity.divisionBreakdown.filter(
-      d => d.dayId === targetDayId && d.divisionId !== movingDivisionId
-    );
-
-    // Check for overlaps
-    for (const otherDiv of otherDivisionsOnDay) {
-      const otherStart = parseTimeToMinutes(otherDiv.startTime);
-      const otherEnd = parseTimeToMinutes(otherDiv.endTime);
-
-      // Check if there's an overlap
-      if (newStartMinutes < otherEnd && newEndMinutes > otherStart) {
-        return { hasConflict: true, conflictingDivision: otherDiv };
-      }
-    }
-
-    // Check if within day bounds
+    // Only check if within day bounds (divisions can overlap on different tracks)
     const targetDay = tournamentDays.find(d => d.id === targetDayId);
     if (targetDay) {
       const dayStart = parseTimeToMinutes(targetDay.startTime);
@@ -253,7 +239,7 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
           hasConflict: true,
           conflictingDivision: {
             divisionId: 'bounds',
-            name: 'day boundaries',
+            name: 'day time window',
             startTime: targetDay.startTime,
             endTime: targetDay.endTime
           } as DivisionBreakdown
@@ -262,7 +248,7 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
     }
 
     return { hasConflict: false };
-  }, [capacity.divisionBreakdown, tournamentDays, parseTimeToMinutes]);
+  }, [capacity.divisionBreakdown, tournamentDays]);
 
   // Handle drag start
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -272,17 +258,21 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
 
   // Handle drag end
   const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over, delta } = event;
+    const { active, delta } = event;
     setActiveDragId(null);
 
-    if (!over || !onDivisionMove) return;
+    // Don't require 'over' - just use delta for horizontal movement
+    if (!onDivisionMove) return;
 
     const divisionId = active.id as string;
     const movingDiv = capacity.divisionBreakdown.find(d => d.divisionId === divisionId);
     if (!movingDiv) return;
 
-    // Get the target day from the droppable area
-    const targetDayId = over.data.current?.dayId || movingDiv.dayId;
+    // Skip if no significant movement (less than 5 pixels)
+    if (Math.abs(delta.x) < 5) return;
+
+    // Use the division's current day
+    const targetDayId = movingDiv.dayId || tournamentDays[0]?.id;
     const targetDay = tournamentDays.find(d => d.id === targetDayId);
     if (!targetDay) return;
 
@@ -291,17 +281,26 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
     const dayEndMinutes = parseTimeToMinutes(targetDay.endTime);
     const dayTotalMinutes = dayEndMinutes - dayStartMinutes;
 
-    // Assume timeline is roughly 100% = full day, convert pixel delta to minutes
-    // Get the timeline width (approximate - we use 600px as base)
-    const timelineWidth = 600;
+    // Calculate timeline width dynamically based on day hours (approx 80px per hour)
+    const dayHours = dayTotalMinutes / 60;
+    const timelineWidth = Math.max(500, dayHours * 80);
     const minutesPerPixel = dayTotalMinutes / timelineWidth;
     const deltaMinutes = Math.round((delta.x * minutesPerPixel) / 15) * 15; // Snap to 15-min increments
 
+    // Skip if delta results in no change after snapping
+    if (deltaMinutes === 0) return;
+
     const currentStartMinutes = parseTimeToMinutes(movingDiv.startTime);
-    const newStartMinutes = Math.max(dayStartMinutes, Math.min(
-      dayEndMinutes - (parseTimeToMinutes(movingDiv.endTime) - currentStartMinutes),
-      currentStartMinutes + deltaMinutes
-    ));
+    const divisionDuration = parseTimeToMinutes(movingDiv.endTime) - currentStartMinutes;
+
+    // Calculate new start, clamped to day bounds
+    const newStartMinutes = Math.max(
+      dayStartMinutes,
+      Math.min(dayEndMinutes - divisionDuration, currentStartMinutes + deltaMinutes)
+    );
+
+    // Skip if position didn't actually change
+    if (newStartMinutes === currentStartMinutes) return;
 
     // Check for conflicts
     const { hasConflict, conflictingDivision } = checkForConflicts(divisionId, newStartMinutes, targetDayId);
@@ -309,7 +308,7 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
     if (hasConflict && conflictingDivision) {
       // Show error and revert
       setConflictError({
-        message: `Cannot move "${movingDiv.name}" - conflicts with "${conflictingDivision.name}"`,
+        message: `Cannot move "${movingDiv.name}" here - overlaps with "${conflictingDivision.name}"`,
         divisionId,
       });
 
@@ -321,7 +320,7 @@ export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
     // No conflict - apply the move
     const newStartTime = minutesToTimeString(newStartMinutes);
     onDivisionMove(divisionId, newStartTime, targetDayId);
-  }, [capacity.divisionBreakdown, tournamentDays, onDivisionMove, checkForConflicts, parseTimeToMinutes]);
+  }, [capacity.divisionBreakdown, tournamentDays, onDivisionMove, checkForConflicts]);
 
   // Render timeline for a single day
   const renderDayTimeline = (day: TournamentDay, dayIndex: number) => {
