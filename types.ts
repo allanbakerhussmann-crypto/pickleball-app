@@ -1,5 +1,10 @@
 /**
- * Pickleball Director - Type Definitions V05.44
+ * Pickleball Director - Type Definitions V06.00
+ *
+ * UPDATED V06.00:
+ * - Added Pool Play → Medals integration to DivisionFormat
+ * - Added competitionFormat and poolPlayMedalsSettings fields
+ * - Extended DivisionFormat with all tournament settings
  *
  * UPDATED V05.44:
  * - Removed postpone functionality (not needed)
@@ -10,9 +15,11 @@
  * - Added byeCount to MemberStats
  * - Added poolId, poolName, lastBoxOverride to LeagueMember
  * - Added pool support to LeagueRoundRobinSettings
- * 
+ *
  * FILE: src/types.ts
  */
+
+import type { CompetitionFormat, PoolPlayMedalsSettings } from './types/formats';
 
 // ============================================
 // USER & PROFILE TYPES
@@ -241,13 +248,43 @@ export interface Division {
 export interface DivisionFormat {
   stageMode: 'single_stage' | 'two_stage';
   mainFormat: MainFormat;
+
+  // Pool settings
   numberOfPools?: number;
   teamsPerPool?: number;
   advancingPerPool?: number;
+  advanceToMainPerPool?: number;
+  advanceToPlatePerPool?: number;
+
+  // Stage formats
+  stage1Format?: 'round_robin_pools' | 'swiss_pools';
+  stage2Format?: 'single_elim' | 'double_elim' | 'medal_rounds';
   playoffFormat?: MainFormat;
-  seedingMethod?: 'random' | 'snake' | 'manual';
+
+  // Plate/Consolation
+  plateEnabled?: boolean;
+  plateFormat?: 'single_elim' | 'round_robin';
+  plateName?: string;
+
+  // Match settings
+  bestOfGames?: 1 | 3 | 5;
+  pointsPerGame?: 11 | 15 | 21;
+  winBy?: 1 | 2;
+  hasBronzeMatch?: boolean;
+
+  // Seeding
+  seedingMethod?: SeedingMethod;
+
+  // Tiebreakers
   thirdPlaceMatch?: boolean;
   consolationBracket?: boolean;
+  tieBreakerPrimary?: TieBreaker;
+  tieBreakerSecondary?: TieBreaker;
+  tieBreakerTertiary?: TieBreaker;
+
+  // V06.00: Pool Play → Medals integration
+  competitionFormat?: CompetitionFormat;
+  poolPlayMedalsSettings?: PoolPlayMedalsSettings;
 }
 
 export type MainFormat = 'single_elim' | 'double_elim' | 'round_robin' | 'swiss' | 'ladder';

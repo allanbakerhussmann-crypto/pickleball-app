@@ -5,6 +5,7 @@
  * - Integrated FormatCards for unified format selection
  * - Maps CompetitionFormat to DivisionFormat structure
  * - Visual format cards with dark theme styling
+ * - Pool Play → Medals integration with generator settings
  *
  * FILE LOCATION: components/CreateTournament.tsx
  * VERSION: V06.00
@@ -25,8 +26,8 @@ import type {
 } from '../types';
 import { saveTournament, getUserClubs, getAllClubs } from '../services/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import type { CompetitionFormat } from '../types/formats';
-import { getFormatOption } from '../types/formats';
+import type { CompetitionFormat, PoolPlayMedalsSettings } from '../types/formats';
+import { getFormatOption, DEFAULT_POOL_PLAY_MEDALS_SETTINGS } from '../types/formats';
 import { FormatCards } from './shared/FormatSelector';
 
 interface CreateTournamentProps {
@@ -162,11 +163,21 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
   // Selected format from FormatCards (V06.00)
   const [selectedFormat, setSelectedFormat] = useState<CompetitionFormat>('round_robin');
 
+  // Pool Play → Medals specific settings
+  const [poolPlaySettings, setPoolPlaySettings] = useState<PoolPlayMedalsSettings>(
+    DEFAULT_POOL_PLAY_MEDALS_SETTINGS
+  );
+
   // Handle format card selection - update DivisionFormat settings
   const handleFormatSelect = (format: CompetitionFormat) => {
     setSelectedFormat(format);
     const mappedSettings = mapCompetitionToTournamentFormat(format);
     setNewDivFormat(prev => ({ ...prev, ...mappedSettings }));
+
+    // Reset pool play settings when switching to pool_play_medals
+    if (format === 'pool_play_medals') {
+      setPoolPlaySettings(DEFAULT_POOL_PLAY_MEDALS_SETTINGS);
+    }
   };
 
   // Load Clubs
@@ -225,8 +236,13 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
   const handleSaveDivision = () => {
       setErrorMessage(null);
 
-      // Validation
-      if (newDivFormat.stageMode === 'two_stage') {
+      // Validation for pool play medals
+      if (selectedFormat === 'pool_play_medals') {
+          if (poolPlaySettings.poolSize < 3) return setErrorMessage("Pool size must be at least 3.");
+      }
+
+      // Validation for legacy two-stage
+      if (newDivFormat.stageMode === 'two_stage' && selectedFormat !== 'pool_play_medals') {
           const pools = newDivFormat.numberOfPools || 0;
           const tpp = newDivFormat.teamsPerPool || 0;
           const advMain = newDivFormat.advanceToMainPerPool || 0;
@@ -235,27 +251,46 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
           if (pools < 2) return setErrorMessage("Must have at least 2 pools.");
           if (pools % 2 !== 0) return setErrorMessage("Number of pools must be an EVEN number (2, 4, 6...).");
           if (tpp < 4) return setErrorMessage("Minimum 4 teams per pool required.");
-          
+
           if (advMain < 1) return setErrorMessage("At least one team must advance to Main.");
           if ((advMain + advPlate) > tpp) return setErrorMessage("Total advancing teams cannot exceed teams per pool.");
       }
 
-      // Generate Name
+      // Generate Name based on format
       const genderLabel = newDivBasic.gender.charAt(0).toUpperCase() + newDivBasic.gender.slice(1);
       const typeLabel = newDivBasic.type === 'doubles' ? 'Doubles' : 'Singles';
-      const formatLabel = newDivFormat.stageMode === 'single_stage' 
-        ? (newDivFormat.mainFormat?.replace('_', ' ') || 'Format')
-        : `${newDivFormat.numberOfPools} Pools → ${newDivFormat.stage2Format?.replace('_', ' ')}`;
-      
-      const ratingLabel = newDivBasic.minRating 
-        ? `(${newDivBasic.minRating}${newDivBasic.maxRating ? `-${newDivBasic.maxRating}` : '+'})` 
+
+      let formatLabel: string;
+      if (selectedFormat === 'pool_play_medals') {
+          const advRule = poolPlaySettings.advancementRule === 'top_1' ? 'Top 1'
+            : poolPlaySettings.advancementRule === 'top_2' ? 'Top 2'
+            : 'Top + Best';
+          formatLabel = `Pool Play → Medals (${poolPlaySettings.poolSize}/pool, ${advRule})`;
+      } else if (newDivFormat.stageMode === 'single_stage') {
+          formatLabel = getFormatOption(selectedFormat)?.label || newDivFormat.mainFormat?.replace('_', ' ') || 'Format';
+      } else {
+          formatLabel = `${newDivFormat.numberOfPools} Pools → ${newDivFormat.stage2Format?.replace('_', ' ')}`;
+      }
+
+      const ratingLabel = newDivBasic.minRating
+        ? `(${newDivBasic.minRating}${newDivBasic.maxRating ? `-${newDivBasic.maxRating}` : '+'})`
         : '';
-      
-      const ageLabel = newDivBasic.minAge 
+
+      const ageLabel = newDivBasic.minAge
         ? `(${newDivBasic.minAge}${newDivBasic.maxAge ? `-${newDivBasic.maxAge}` : '+'} yrs)`
         : '';
-      
-      const name = `${genderLabel} ${typeLabel} ${ratingLabel} ${ageLabel} - ${formatLabel}`;
+
+      const name = `${genderLabel} ${typeLabel} ${ratingLabel} ${ageLabel} - ${formatLabel}`.trim().replace(/\s+/g, ' ');
+
+      // Build format object with pool play settings if applicable
+      const divisionFormat: DivisionFormat = {
+          ...newDivFormat,
+          // Store pool play settings in format for generator access
+          ...(selectedFormat === 'pool_play_medals' && {
+              poolPlayMedalsSettings: poolPlaySettings,
+              competitionFormat: selectedFormat,
+          }),
+      };
 
       const div: Division = {
           id: editingId || generateId(),
@@ -268,7 +303,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
           minAge: newDivBasic.minAge ? parseInt(newDivBasic.minAge) : null,
           maxAge: newDivBasic.maxAge ? parseInt(newDivBasic.maxAge) : null,
           registrationOpen: true,
-          format: { ...newDivFormat },
+          format: divisionFormat,
           createdByUserId: userId,
           createdAt: Date.now(),
           updatedAt: Date.now()
@@ -517,90 +552,90 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                               {/* Pool Play → Medals Settings */}
                               {selectedFormat === 'pool_play_medals' && (
                                   <div className="space-y-4">
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                      <div className="p-3 bg-blue-900/20 border border-blue-700/30 rounded">
+                                          <p className="text-xs text-blue-300">
+                                            <strong>Pool Play → Medals:</strong> Teams play round robin in pools, then top finishers advance to a medal bracket.
+                                          </p>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                           <div>
-                                              <label className="block text-xs text-gray-400 mb-1">Stage 1 Format</label>
-                                              <input disabled value="Round Robin Pools" className="w-full bg-gray-900/50 text-gray-500 p-2 rounded border border-gray-700 cursor-not-allowed" />
+                                              <label className="block text-xs text-gray-400 mb-1">Pool Size</label>
+                                              <select
+                                                  className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
+                                                  value={poolPlaySettings.poolSize}
+                                                  onChange={e => setPoolPlaySettings({...poolPlaySettings, poolSize: parseInt(e.target.value) as 3|4|5|6})}
+                                              >
+                                                  <option value="3">3 teams per pool</option>
+                                                  <option value="4">4 teams per pool</option>
+                                                  <option value="5">5 teams per pool</option>
+                                                  <option value="6">6 teams per pool</option>
+                                              </select>
                                           </div>
                                           <div>
-                                              <label className="block text-xs text-gray-400 mb-1">Stage 2 (Finals) Format</label>
-                                              <select 
+                                              <label className="block text-xs text-gray-400 mb-1">Advancement Rule</label>
+                                              <select
                                                   className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
-                                                  value={newDivFormat.stage2Format || ''}
+                                                  value={poolPlaySettings.advancementRule}
+                                                  onChange={e => setPoolPlaySettings({...poolPlaySettings, advancementRule: e.target.value as 'top_1'|'top_2'|'top_n_plus_best'})}
+                                              >
+                                                  <option value="top_1">Top 1 from each pool</option>
+                                                  <option value="top_2">Top 2 from each pool</option>
+                                                  <option value="top_n_plus_best">Top 1 + Best remaining</option>
+                                              </select>
+                                          </div>
+                                          <div>
+                                              <label className="block text-xs text-gray-400 mb-1">Bronze Medal Match</label>
+                                              <select
+                                                  className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
+                                                  value={poolPlaySettings.bronzeMatch}
+                                                  onChange={e => setPoolPlaySettings({...poolPlaySettings, bronzeMatch: e.target.value as 'yes'|'shared'|'no'})}
+                                              >
+                                                  <option value="yes">Yes - Play for bronze</option>
+                                                  <option value="shared">Shared bronze (no match)</option>
+                                                  <option value="no">No bronze medal</option>
+                                              </select>
+                                          </div>
+                                      </div>
+
+                                      <div className="p-3 bg-gray-900/50 rounded border border-gray-700/50">
+                                          <label className="block text-xs text-gray-400 mb-2">Pool Standings Tiebreakers (in order)</label>
+                                          <div className="flex flex-wrap gap-2">
+                                              {poolPlaySettings.tiebreakers.map((tb, idx) => (
+                                                  <span key={tb} className="px-2 py-1 bg-gray-800 text-gray-300 rounded text-xs">
+                                                      {idx + 1}. {tb.replace('_', ' ')}
+                                                  </span>
+                                              ))}
+                                          </div>
+                                          <p className="text-[10px] text-gray-500 mt-1">
+                                              Wins → Head-to-Head → Point Diff → Points Scored
+                                          </p>
+                                      </div>
+
+                                      {/* Legacy format sync for backwards compatibility */}
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 bg-gray-900/30 rounded border border-gray-700/30">
+                                          <div>
+                                              <label className="block text-xs text-gray-400 mb-1">Medal Bracket Format</label>
+                                              <select
+                                                  className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
+                                                  value={newDivFormat.stage2Format || 'single_elim'}
                                                   onChange={e => setNewDivFormat({...newDivFormat, stage2Format: e.target.value as Stage2Format})}
                                               >
                                                   <option value="single_elim">Single Elimination</option>
                                                   <option value="double_elim">Double Elimination</option>
-                                                  <option value="medal_rounds">Medal Rounds</option>
                                               </select>
                                           </div>
-                                      </div>
-                                      
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 bg-gray-900/50 rounded border border-gray-700/50">
-                                          <div>
-                                              <label className="block text-xs text-gray-400 mb-1">Number of Pools (Even Number)</label>
-                                              <input 
-                                                  type="number" step="2" min="2" className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
-                                                  value={newDivFormat.numberOfPools || ''}
-                                                  onChange={e => setNewDivFormat({...newDivFormat, numberOfPools: parseInt(e.target.value)})}
-                                              />
-                                              <p className="text-[10px] text-gray-500">Must be 2, 4, 6, etc.</p>
-                                          </div>
-                                          <div>
-                                              <label className="block text-xs text-gray-400 mb-1">Min Teams Per Pool</label>
-                                              <input 
-                                                  type="number" min="4" className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
-                                                  value={newDivFormat.teamsPerPool || ''}
-                                                  onChange={e => setNewDivFormat({...newDivFormat, teamsPerPool: parseInt(e.target.value)})}
-                                              />
-                                              <p className="text-[10px] text-gray-500">Minimum 4</p>
-                                          </div>
-                                          <div>
-                                              <label className="block text-xs text-gray-400 mb-1">Advance to Main (Per Pool)</label>
-                                              <input 
-                                                  type="number" min="1" className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
-                                                  value={newDivFormat.advanceToMainPerPool || ''}
-                                                  onChange={e => setNewDivFormat({...newDivFormat, advanceToMainPerPool: parseInt(e.target.value)})}
-                                              />
-                                          </div>
-                                          <div>
-                                              <label className="block text-xs text-gray-400 mb-1">Advance to Plate (Per Pool)</label>
-                                              <input 
-                                                  type="number" min="0" className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
-                                                  value={newDivFormat.advanceToPlatePerPool || 0}
-                                                  onChange={e => setNewDivFormat({...newDivFormat, advanceToPlatePerPool: parseInt(e.target.value)})}
-                                              />
-                                          </div>
-                                      </div>
-
-                                      <div>
-                                          <label className="flex items-center gap-2 mb-2">
-                                              <input 
-                                                  type="checkbox" 
-                                                  checked={newDivFormat.plateEnabled}
-                                                  onChange={e => setNewDivFormat({...newDivFormat, plateEnabled: e.target.checked})}
-                                                  className="rounded bg-gray-900 border-gray-700 text-green-600"
-                                              />
-                                              <span className="text-sm text-white">Enable Plate Finals (Consolation Bracket)</span>
-                                          </label>
-                                          {newDivFormat.plateEnabled && (
-                                              <div className="grid grid-cols-2 gap-4 ml-6">
-                                                  <select 
-                                                      className="bg-gray-900 text-white p-2 rounded border border-gray-700 text-sm"
-                                                      value={newDivFormat.plateFormat || ''}
-                                                      onChange={e => setNewDivFormat({...newDivFormat, plateFormat: e.target.value as PlateFormat})}
-                                                  >
-                                                      <option value="single_elim">Single Elimination</option>
-                                                      <option value="round_robin">Round Robin</option>
-                                                  </select>
-                                                  <input 
-                                                      placeholder="Plate Name"
-                                                      className="bg-gray-900 text-white p-2 rounded border border-gray-700 text-sm"
-                                                      value={newDivFormat.plateName || ''}
-                                                      onChange={e => setNewDivFormat({...newDivFormat, plateName: e.target.value})}
+                                          <div className="flex items-end">
+                                              <label className="flex items-center gap-2 pb-2">
+                                                  <input
+                                                      type="checkbox"
+                                                      checked={newDivFormat.plateEnabled}
+                                                      onChange={e => setNewDivFormat({...newDivFormat, plateEnabled: e.target.checked})}
+                                                      className="rounded bg-gray-900 border-gray-700 text-green-600"
                                                   />
-                                              </div>
-                                          )}
+                                                  <span className="text-sm text-white">Enable Consolation Bracket</span>
+                                              </label>
+                                          </div>
                                       </div>
                                   </div>
                               )}
