@@ -109,3 +109,27 @@ export {
   getActiveMatches,
   isSessionComplete,
 } from './kingOfCourt';
+
+// Pool Play → Medals
+export {
+  type PoolParticipant,
+  type Pool,
+  type PoolPlayConfig,
+  type PoolStanding,
+  type PoolPlayResult,
+  type MedalBracketConfig,
+  type MedalBracketResult,
+  type PoolPlayMedalsResult,
+  getPoolName,
+  assignParticipantsToPools,
+  calculatePoolCount,
+  generatePoolStage,
+  calculatePoolStandings,
+  determineQualifiers,
+  getQualifiedParticipants,
+  generateMedalBracket,
+  generatePoolPlayMedals,
+  isPoolStageComplete,
+  getPoolStageProgress,
+  getMatchesForPool,
+} from './poolPlayMedals';
