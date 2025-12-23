@@ -1,12 +1,15 @@
 /**
- * CreateLeague Component - 7-Step Wizard V05.44
+ * CreateLeague Component - 7-Step Wizard V05.50
+ *
+ * UPDATED V05.50:
+ * - Added payment mode selector (Free/External/Stripe) in Step 6
  *
  * UPDATED V05.44:
  * - Added Score Verification Settings in Step 5
  * - Uses VerificationSettingsForm component
  *
- * This is the complete file - copy entire contents to:
- * src/components/leagues/CreateLeague.tsx
+ * FILE LOCATION: components/leagues/CreateLeague.tsx
+ * VERSION: V05.50
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -233,7 +236,8 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   );
 
   // Step 6: Payment
-  const [pricingOn, setPricingOn] = useState(false);
+  // Payment modes: 'free' = no payment, 'external' = collect outside app, 'stripe' = collect via Stripe
+  const [paymentMode, setPaymentMode] = useState<'free' | 'external' | 'stripe'>('free');
   const [price, setPrice] = useState({ 
     entryFee: 1500, entryFeeType: 'per_player' as 'per_player' | 'per_team', 
     memberDiscount: 0, earlyBirdEnabled: false, earlyBirdFee: 1000, 
@@ -292,7 +296,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     if (s === 2 && scheduleConfig.numberOfWeeks < 1) return 'Must be at least 1 week';
     if (s === 2 && venueEnabled && !venue.venueName.trim()) return 'Venue name required';
     if (s === 3 && hasDivs && divs.length === 0) return 'Add at least one division';
-    if (s === 6 && pricingOn && price.entryFee < 100) return 'Minimum $1.00';
+    if (s === 6 && paymentMode !== 'free' && price.entryFee < 100) return 'Minimum $1.00';
     return null;
   };
 
@@ -383,8 +387,8 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       else if (basic.format === 'box_league') settings.boxSettings = box;
       if (isDoubles) settings.partnerSettings = partner;
 
-      const pricing: LeaguePricing | null = pricingOn ? {
-        paymentMode: hasStripe ? 'stripe' : 'external',
+      const pricing: LeaguePricing | null = paymentMode !== 'free' ? {
+        paymentMode: paymentMode,
         enabled: true, entryFee: price.entryFee, entryFeeType: price.entryFeeType,
         memberDiscount: price.memberDiscount, earlyBirdEnabled: price.earlyBirdEnabled,
         earlyBirdFee: price.earlyBirdFee,
@@ -968,41 +972,103 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
           <div className="space-y-4">
             <h2 className="text-xl font-bold text-white">Payment</h2>
             
-            {!canPay ? (
-              <div className="bg-yellow-900/20 border border-yellow-600 p-4 rounded-lg">
-                <p className="text-yellow-400 text-sm">💳 Connect Stripe to accept payments. Without it, only free leagues can be created.</p>
-              </div>
-            ) : (
-              <>
-                <label className="flex items-center justify-between p-4 bg-gray-800 rounded-lg border border-gray-700 cursor-pointer">
-                  <div><div className="font-semibold text-white">Enable Paid Entry</div><div className="text-sm text-gray-400">Collect entry fees via Stripe</div></div>
-                  <button type="button" onClick={() => setPricingOn(!pricingOn)} className={`w-12 h-6 rounded-full ${pricingOn ? 'bg-green-600' : 'bg-gray-600'}`}>
-                    <div className={`w-5 h-5 bg-white rounded-full transition-transform ${pricingOn ? 'translate-x-6' : 'translate-x-1'}`}/>
-                  </button>
-                </label>
-                
-                {pricingOn && (
-                  <div className="space-y-4">
-                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div><label className="block text-xs text-gray-500 mb-1">Entry Fee *</label><input type="text" value={fmtCur(price.entryFee)} onChange={e => setPrice({ ...price, entryFee: parseCur(e.target.value) })} className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"/></div>
-                        <div><label className="block text-xs text-gray-500 mb-1">Fee Type</label><select value={price.entryFeeType} onChange={e => setPrice({ ...price, entryFeeType: e.target.value as 'per_player' | 'per_team' })} className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"><option value="per_player">Per Player</option><option value="per_team">Per Team</option></select></div>
-                      </div>
-                    </div>
-                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                      <label className="block text-xs text-gray-500 mb-1">Refund Policy</label>
-                      <div className="flex gap-2">
-                        {(['full', 'partial', 'none'] as const).map(p => (
-                          <label key={p} className={`flex-1 text-center py-2 rounded cursor-pointer border ${price.refundPolicy === p ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-900 border-gray-700 text-gray-400'}`}>
-                            <input type="radio" checked={price.refundPolicy === p} onChange={() => setPrice({ ...price, refundPolicy: p })} className="sr-only"/>
-                            {p === 'full' ? 'Full Refund' : p === 'partial' ? '50% Refund' : 'No Refunds'}
-                          </label>
-                        ))}
-                      </div>
+            {/* Payment Mode Selection */}
+            <div className="space-y-3">
+              {/* Free League Option */}
+              <label
+                className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                  paymentMode === 'free'
+                    ? 'bg-green-900/20 border-green-600'
+                    : 'bg-gray-800 border-gray-700 hover:border-gray-600'
+                }`}
+                onClick={() => setPaymentMode('free')}
+              >
+                <input type="radio" name="paymentMode" checked={paymentMode === 'free'} onChange={() => setPaymentMode('free')} className="sr-only"/>
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMode === 'free' ? 'border-green-500' : 'border-gray-500'}`}>
+                  {paymentMode === 'free' && <div className="w-2.5 h-2.5 rounded-full bg-green-500"/>}
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-white">Free League</div>
+                  <div className="text-sm text-gray-400">No payment required to join</div>
+                </div>
+              </label>
+
+              {/* External Payment Option */}
+              <label
+                className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                  paymentMode === 'external'
+                    ? 'bg-blue-900/20 border-blue-600'
+                    : 'bg-gray-800 border-gray-700 hover:border-gray-600'
+                }`}
+                onClick={() => setPaymentMode('external')}
+              >
+                <input type="radio" name="paymentMode" checked={paymentMode === 'external'} onChange={() => setPaymentMode('external')} className="sr-only"/>
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMode === 'external' ? 'border-blue-500' : 'border-gray-500'}`}>
+                  {paymentMode === 'external' && <div className="w-2.5 h-2.5 rounded-full bg-blue-500"/>}
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-white">Collect Payment Outside App</div>
+                  <div className="text-sm text-gray-400">Entry fee shown but you collect payment directly</div>
+                </div>
+              </label>
+
+              {/* Stripe Payment Option */}
+              <label
+                className={`flex items-center gap-3 p-4 rounded-lg border transition-colors ${
+                  !canPay
+                    ? 'opacity-50 cursor-not-allowed bg-gray-800 border-gray-700'
+                    : paymentMode === 'stripe'
+                      ? 'bg-purple-900/20 border-purple-600 cursor-pointer'
+                      : 'bg-gray-800 border-gray-700 hover:border-gray-600 cursor-pointer'
+                }`}
+                onClick={() => canPay && setPaymentMode('stripe')}
+              >
+                <input type="radio" name="paymentMode" checked={paymentMode === 'stripe'} onChange={() => canPay && setPaymentMode('stripe')} disabled={!canPay} className="sr-only"/>
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${paymentMode === 'stripe' ? 'border-purple-500' : 'border-gray-500'}`}>
+                  {paymentMode === 'stripe' && <div className="w-2.5 h-2.5 rounded-full bg-purple-500"/>}
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-white flex items-center gap-2">
+                    Collect via Stripe
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-purple-600/30 text-purple-300">⚡ Recommended</span>
+                  </div>
+                  <div className="text-sm text-gray-400">Secure online payments, automatic registration</div>
+                </div>
+                {!canPay && (
+                  <span className="text-xs text-yellow-400">Setup Required</span>
+                )}
+              </label>
+
+              {!canPay && (
+                <div className="bg-yellow-900/20 border border-yellow-600 p-3 rounded-lg">
+                  <p className="text-yellow-400 text-sm">💳 Connect Stripe to accept online payments. Go to Settings → Stripe to set up.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Fee Details (shown for external and stripe modes) */}
+            {paymentMode !== 'free' && (
+              <div className="space-y-4 mt-4">
+                <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="block text-xs text-gray-500 mb-1">Entry Fee *</label><input type="text" value={fmtCur(price.entryFee)} onChange={e => setPrice({ ...price, entryFee: parseCur(e.target.value) })} className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"/></div>
+                    <div><label className="block text-xs text-gray-500 mb-1">Fee Type</label><select value={price.entryFeeType} onChange={e => setPrice({ ...price, entryFeeType: e.target.value as 'per_player' | 'per_team' })} className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"><option value="per_player">Per Player</option><option value="per_team">Per Team</option></select></div>
+                  </div>
+                </div>
+                {paymentMode === 'stripe' && (
+                  <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                    <label className="block text-xs text-gray-500 mb-1">Refund Policy</label>
+                    <div className="flex gap-2">
+                      {(['full', 'partial', 'none'] as const).map(p => (
+                        <label key={p} className={`flex-1 text-center py-2 rounded cursor-pointer border ${price.refundPolicy === p ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-900 border-gray-700 text-gray-400'}`}>
+                          <input type="radio" checked={price.refundPolicy === p} onChange={() => setPrice({ ...price, refundPolicy: p })} className="sr-only"/>
+                          {p === 'full' ? 'Full Refund' : p === 'partial' ? '50% Refund' : 'No Refunds'}
+                        </label>
+                      ))}
                     </div>
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         );
@@ -1072,12 +1138,19 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               </div>
             </div>
             
-            {pricingOn && (
-              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                <h3 className="font-semibold text-white mb-2">💰 Payment</h3>
-                <div className="text-sm text-white">{fmtCur(price.entryFee)} per {price.entryFeeType === 'per_team' ? 'team' : 'player'}</div>
-              </div>
-            )}
+            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+              <h3 className="font-semibold text-white mb-2">💰 Payment</h3>
+              {paymentMode === 'free' ? (
+                <div className="text-sm text-green-400">Free - No payment required</div>
+              ) : (
+                <div className="text-sm space-y-1">
+                  <div className="text-white">{fmtCur(price.entryFee)} per {price.entryFeeType === 'per_team' ? 'team' : 'player'}</div>
+                  <div className="text-gray-400">
+                    {paymentMode === 'stripe' ? 'Collected via Stripe' : 'Collected outside app'}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         );
 

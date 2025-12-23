@@ -1,11 +1,12 @@
 /**
- * LeagueDetail Component V05.48
+ * LeagueDetail Component V05.50
  *
  * Shows league details, standings, matches, and allows joining/playing.
  * Now includes player management with drag-and-drop for organizers.
+ * Auto-updates league status based on registration dates.
  *
  * FILE LOCATION: components/leagues/LeagueDetail.tsx
- * VERSION: V05.48
+ * VERSION: V05.50
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -21,6 +22,7 @@ import {
   getLeagueMemberByUserId,
   updateLeague,
   subscribeToBoxLeaguePlayers,
+  checkAndUpdateLeagueStatus,
 } from '../../services/firebase';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
 import { BoxPlayerDragDrop } from './boxLeague';
@@ -207,7 +209,22 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       setLoading(false);
     });
   }, [leagueId]);
-  
+
+  // Auto-check and update league status based on registration dates
+  useEffect(() => {
+    if (league) {
+      // Check if league status should be updated based on dates
+      // This runs for any viewer - first viewer after date passes triggers update
+      checkAndUpdateLeagueStatus(league).then(({ wasUpdated, newStatus }) => {
+        if (wasUpdated) {
+          console.log(`League status auto-updated to: ${newStatus}`);
+          // Refresh league data if status was updated
+          getLeague(leagueId).then(setLeague);
+        }
+      });
+    }
+  }, [league?.id, league?.status, league?.registrationOpens, league?.registrationDeadline, leagueId]);
+
   // Handle payment success/cancel from Stripe redirect
   const paymentParam = searchParams.get('payment');
   useEffect(() => {
