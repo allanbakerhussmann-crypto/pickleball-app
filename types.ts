@@ -1283,3 +1283,125 @@ export interface Competition {
   createdAt: number;
   updatedAt: number;
 }
+
+// ============================================
+// V06.00 UNIFIED GAME & FORMAT SYSTEM
+// Re-export new types for gradual migration
+// ============================================
+
+// Export new game types
+export type {
+  PlayType,
+  PointsPerGame,
+  WinBy,
+  BestOf,
+  GameSettings,
+} from './types/game';
+
+export {
+  DEFAULT_GAME_SETTINGS,
+  GAME_SETTINGS_PRESETS,
+  POINTS_PER_GAME_OPTIONS,
+  WIN_BY_OPTIONS,
+  BEST_OF_OPTIONS,
+  PLAY_TYPE_OPTIONS,
+} from './types/game';
+
+// Export new format types
+export type {
+  CompetitionFormat,
+  FormatOption,
+  RoundRobinSettings,
+  BoxSettings,
+  EliminationSettings,
+  SwissSettings,
+  LadderSettings,
+  KingOfCourtSettings,
+  TeamLeagueSettings,
+  FormatSettings,
+} from './types/formats';
+
+export {
+  COMPETITION_FORMATS,
+  DEFAULT_ROUND_ROBIN_SETTINGS,
+  DEFAULT_BOX_SETTINGS,
+  DEFAULT_ELIMINATION_SETTINGS,
+  DEFAULT_SWISS_SETTINGS,
+  DEFAULT_LADDER_SETTINGS,
+  DEFAULT_KING_OF_COURT_SETTINGS,
+  DEFAULT_TEAM_LEAGUE_SETTINGS,
+  getFormatOption,
+  getFormatsForPlayType,
+  formatRequiresTeams,
+  formatGeneratesMatchesUpfront,
+  getDefaultFormatSettings,
+} from './types/formats';
+
+// Export new match types
+export type {
+  GameScore,
+  MatchStatus as UnifiedMatchStatus,
+  MatchParticipant,
+  Match as UnifiedMatch,
+} from './types/game';
+
+// ============================================
+// TYPE MAPPING HELPERS (for migration)
+// ============================================
+
+/**
+ * Map legacy LeagueFormat to new CompetitionFormat
+ */
+export function mapLegacyFormat(legacyFormat: LeagueFormat): CompetitionFormat {
+  const mapping: Record<LeagueFormat, CompetitionFormat> = {
+    ladder: 'ladder',
+    round_robin: 'round_robin',
+    swiss: 'swiss',
+    box_league: 'rotating_doubles_box',
+  };
+  return mapping[legacyFormat];
+}
+
+/**
+ * Map legacy LeagueType to new PlayType
+ */
+export function mapLegacyType(legacyType: LeagueType): PlayType {
+  const mapping: Record<LeagueType, PlayType> = {
+    singles: 'singles',
+    doubles: 'doubles',
+    mixed_doubles: 'mixed',
+  };
+  return mapping[legacyType];
+}
+
+/**
+ * Map new PlayType back to legacy LeagueType
+ */
+export function mapPlayTypeToLegacy(playType: PlayType): LeagueType {
+  const mapping: Record<PlayType, LeagueType> = {
+    singles: 'singles',
+    doubles: 'doubles',
+    mixed: 'mixed_doubles',
+    open: 'doubles', // Open maps to doubles for backward compatibility
+  };
+  return mapping[playType];
+}
+
+/**
+ * Map new CompetitionFormat back to legacy LeagueFormat
+ */
+export function mapFormatToLegacy(format: CompetitionFormat): LeagueFormat {
+  const mapping: Record<CompetitionFormat, LeagueFormat> = {
+    round_robin: 'round_robin',
+    rotating_doubles_box: 'box_league',
+    fixed_doubles_box: 'box_league',
+    singles_elimination: 'round_robin', // No direct mapping
+    doubles_elimination: 'round_robin', // No direct mapping
+    king_of_court: 'round_robin', // No direct mapping
+    team_league_interclub: 'round_robin', // No direct mapping
+    swiss: 'swiss',
+    ladder: 'ladder',
+  };
+  return mapping[format];
+}
+
