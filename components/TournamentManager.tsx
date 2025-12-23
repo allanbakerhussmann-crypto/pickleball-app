@@ -28,6 +28,7 @@ import { useTournamentPhase } from './tournament/hooks/useTournamentPhase';
 import { useTournamentData } from './tournament/hooks/useTournamentData';
 import { useCourtManagement } from './tournament/hooks/useCourtManagement';
 import { useMatchActions } from './tournament/hooks/useMatchActions';
+import { ScheduleBuilder } from './tournament/scheduleBuilder';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -149,6 +150,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     // Tournament Phase (using new hook)
 
   const [autoAllocateCourts, setAutoAllocateCourts] = useState(false);
+  const [showScheduleBuilder, setShowScheduleBuilder] = useState(false);
   /* -------- Active Division / Tabs -------- */
 
   const [activeTab, setActiveTab] = useState<
@@ -548,42 +550,154 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         />
       )}
 
-      {/* Header */}
-      <div className="mb-6 flex items-center gap-2 text-sm text-gray-500">
+      {/* Breadcrumb */}
+      <div className="mb-4 flex items-center gap-2 text-sm">
         <button
           onClick={onBack}
-          className="hover:text-green-400 transition-colors"
+          className="flex items-center gap-1 text-gray-400 hover:text-white transition-colors group"
         >
+          <svg className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
           Tournaments
         </button>
-        <span>/</span>
-        <span className="text-gray-300">{tournament.name}</span>
+        <span className="text-gray-600">/</span>
+        <span className="text-gray-300 font-medium truncate">{tournament.name}</span>
       </div>
 
-      {/* Banner */}
-      <div className="relative h-64 w-full rounded-xl overflow-hidden mb-8 shadow-2xl bg-gray-800 border border-gray-700">
+      {/* Hero Banner */}
+      <div className="relative w-full rounded-2xl overflow-hidden mb-6 bg-gradient-to-br from-gray-800 via-gray-900 to-gray-800 border border-white/5">
+        {/* Background Image */}
         {tournament.bannerUrl && (
           <img
             src={tournament.bannerUrl}
-            className="absolute inset-0 w-full h-full object-cover opacity-50"
+            className="absolute inset-0 w-full h-full object-cover opacity-30"
             alt=""
           />
         )}
-        <div className="absolute bottom-0 left-0 p-8 w-full bg-gradient-to-t from-gray-900 to-transparent">
-          <h1 className="text-4xl font-bold text-white">{tournament.name}</h1>
-        </div>
-        {isOrganizer && (
-          <div className="absolute top-4 right-4 flex gap-2">
-            <button
-              onClick={() =>
-                setViewMode(viewMode === 'public' ? 'admin' : 'public')
-              }
-              className="bg-black/50 hover:bg-black/70 backdrop-blur text-white px-4 py-2 rounded border border-white/20"
-            >
-              Switch to {viewMode === 'public' ? 'Manager' : 'Public'} View
-            </button>
+
+        {/* Gradient Overlay */}
+        <div className="absolute inset-0 bg-gradient-to-t from-gray-900 via-gray-900/80 to-transparent" />
+
+        {/* Content */}
+        <div className="relative px-6 py-8 md:px-8 md:py-10">
+          {/* Top Row - View Toggle */}
+          {isOrganizer && (
+            <div className="flex justify-end mb-6">
+              <button
+                onClick={() => setViewMode(viewMode === 'public' ? 'admin' : 'public')}
+                className={`
+                  flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
+                  ${viewMode === 'admin'
+                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-500/30'
+                    : 'bg-white/10 text-white border border-white/10 hover:bg-white/20'
+                  }
+                `}
+              >
+                {viewMode === 'admin' ? (
+                  <>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                    Public View
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Manager View
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Tournament Title */}
+          <h1 className="text-3xl md:text-4xl font-bold text-white mb-6 tracking-tight">
+            {tournament.name}
+          </h1>
+
+          {/* Stats Row */}
+          <div className="flex flex-wrap gap-3 md:gap-4">
+            {/* Players Stat */}
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 backdrop-blur-sm border border-white/10">
+              <div className="w-10 h-10 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+                <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-white">{teams.length}</div>
+                <div className="text-xs text-gray-400 uppercase tracking-wide">Teams</div>
+              </div>
+            </div>
+
+            {/* Divisions Stat */}
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 backdrop-blur-sm border border-white/10">
+              <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-white">{divisions.length}</div>
+                <div className="text-xs text-gray-400 uppercase tracking-wide">Divisions</div>
+              </div>
+            </div>
+
+            {/* Courts Stat */}
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 backdrop-blur-sm border border-white/10">
+              <div className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                <svg className="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-white">{courts.filter(c => c.active).length}</div>
+                <div className="text-xs text-gray-400 uppercase tracking-wide">Courts</div>
+              </div>
+            </div>
+
+            {/* Live Status */}
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 backdrop-blur-sm border border-white/10">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                tournamentPhase === 'in_progress'
+                  ? 'bg-green-500/20'
+                  : tournamentPhase === 'registration'
+                    ? 'bg-amber-500/20'
+                    : 'bg-gray-500/20'
+              }`}>
+                {tournamentPhase === 'in_progress' ? (
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                  </span>
+                ) : (
+                  <svg className={`w-5 h-5 ${tournamentPhase === 'registration' ? 'text-amber-400' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                )}
+              </div>
+              <div>
+                <div className={`text-sm font-bold uppercase tracking-wide ${
+                  tournamentPhase === 'in_progress'
+                    ? 'text-green-400'
+                    : tournamentPhase === 'registration'
+                      ? 'text-amber-400'
+                      : 'text-gray-400'
+                }`}>
+                  {tournamentPhaseLabel}
+                </div>
+                <div className="text-xs text-gray-400">
+                  {matches.filter(m => m.status === 'in_progress').length} active
+                </div>
+              </div>
+            </div>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Division Selector */}
@@ -595,116 +709,172 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             id="division-select"
             value={activeDivisionId}
             onChange={(e) => setActiveDivisionId(e.target.value)}
-            className="w-full bg-gray-800 text-white border border-gray-700 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+            className="w-full bg-gray-800/80 text-white border border-white/10 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            {divisions.map((div) => (
-              <option key={div.id} value={div.id}>{div.name}</option>
-            ))}
+            {divisions.map((div) => {
+              const teamCount = teams.filter(t => t.divisionId === div.id).length;
+              return (
+                <option key={div.id} value={div.id}>
+                  {div.name} ({teamCount} teams)
+                </option>
+              );
+            })}
           </select>
         </div>
 
         {/* Desktop Tabs */}
         <div className="hidden md:flex overflow-x-auto gap-2 pb-2">
-          {divisions.map(div => (
-            <button
-              key={div.id}
-              onClick={() => setActiveDivisionId(div.id)}
-              className={`flex-shrink-0 px-4 py-2 rounded-full text-sm font-bold border transition-colors ${
-                activeDivisionId === div.id
-                  ? 'bg-white text-gray-900 border-white'
-                  : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-500'
-              }`}
-            >
-              {div.name}
-            </button>
-          ))}
+          {divisions.map(div => {
+            const teamCount = teams.filter(t => t.divisionId === div.id).length;
+            const isActive = activeDivisionId === div.id;
+            const hasAttention = attentionMatches.some(m => m.divisionId === div.id);
+
+            return (
+              <button
+                key={div.id}
+                onClick={() => setActiveDivisionId(div.id)}
+                className={`
+                  relative flex-shrink-0 px-5 py-3 rounded-xl text-sm font-semibold
+                  transition-all duration-200 group
+                  ${isActive
+                    ? 'bg-white text-gray-900 shadow-lg shadow-white/10'
+                    : 'bg-gray-800/50 text-gray-300 border border-white/5 hover:bg-gray-800 hover:border-white/10'
+                  }
+                `}
+              >
+                <div className="flex flex-col items-start gap-0.5">
+                  <span className="flex items-center gap-2">
+                    {div.name}
+                    {hasAttention && (
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                    )}
+                  </span>
+                  <span className={`text-xs ${isActive ? 'text-gray-600' : 'text-gray-500'}`}>
+                    {teamCount} team{teamCount !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                {/* Active Indicator */}
+                {isActive && (
+                  <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full bg-indigo-500" />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* ADMIN VIEW */}
       {viewMode === 'admin' ? (
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
-          <div className="flex justify-between mb-6 gap-4 flex-wrap">
-            <h2 className="text-xl font-bold text-white">
-              Manage: {activeDivision.name}
-            </h2>
-            <div className="flex flex-col items-end gap-2 w-full md:w-auto">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-semibold uppercase ${tournamentPhaseClass}`}
-                >
-                  {tournamentPhaseLabel}
-                </span>
-                {tournamentPhase === 'registration' && (
-                  <button
-                    onClick={handleStartTournament}
-                    className="px-3 py-1 rounded text-xs font-semibold bg-green-600 hover:bg-green-500 text-white"
+        <div className="space-y-4">
+          {/* Admin Header Card */}
+          <div className="bg-gradient-to-r from-gray-800 to-gray-800/80 rounded-2xl border border-white/5 overflow-hidden">
+            {/* Header Bar */}
+            <div className="px-6 py-4 border-b border-white/5">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    {activeDivision.name}
+                  </h2>
+                  <p className="text-sm text-gray-400 mt-0.5">
+                    {activeDivision.type === 'doubles' ? 'Doubles' : 'Singles'} • {divisionTeams.length} team{divisionTeams.length !== 1 ? 's' : ''} • {divisionMatches.length} match{divisionMatches.length !== 1 ? 'es' : ''}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`
+                      inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase
+                      ${tournamentPhase === 'in_progress'
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                        : tournamentPhase === 'registration'
+                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                          : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+                      }
+                    `}
                   >
-                    Start Tournament
-                  </button>
-                )}
-              </div>
-              
-              {/* Admin Tabs */}
-              <div className="w-full md:w-auto">
-                {/* Mobile Admin Dropdown */}
-                <select
-                  value={adminTab}
-                  onChange={(e) => setAdminTab(e.target.value as any)}
-                  className="md:hidden w-full bg-gray-700 text-white border border-gray-600 rounded p-2 text-sm mt-2 focus:ring-2 focus:ring-green-500"
-                >
-                  <option value="livecourts">Live Courts</option>
-                  <option value="participants">Participants</option>
-                  <option value="courts">Courts</option>
-                  <option value="settings">Settings</option>
-                </select>
-
-                {/* Desktop Admin Buttons */}
-                <div className="hidden md:flex gap-2 text-sm">
-                  <button
-                    onClick={() => setAdminTab('participants')}
-                    className={`px-3 py-1 rounded transition-colors ${
-                      adminTab === 'participants'
-                        ? 'bg-gray-600 text-white'
-                        : 'text-gray-400 hover:text-gray-200'
-                    }`}
-                  >
-                    Participants
-                  </button>
-                  <button
-                    onClick={() => setAdminTab('courts')}
-                    className={`px-3 py-1 rounded transition-colors ${
-                      adminTab === 'courts'
-                        ? 'bg-gray-600 text-white'
-                        : 'text-gray-400 hover:text-gray-200'
-                    }`}
-                  >
-                    Courts
-                  </button>
-                  <button
-                    onClick={() => setAdminTab('settings')}
-                    className={`px-3 py-1 rounded transition-colors ${
-                      adminTab === 'settings'
-                        ? 'bg-gray-600 text-white'
-                        : 'text-gray-400 hover:text-gray-200'
-                    }`}
-                  >
-                    Settings
-                  </button>
-                  <button
-                    onClick={() => setAdminTab('livecourts')}
-                    className={`px-3 py-1 rounded transition-colors ${
-                      adminTab === 'livecourts'
-                        ? 'bg-gray-600 text-white'
-                        : 'text-gray-400 hover:text-gray-200'
-                    }`}
-                  >
-                    Live Courts
-                  </button>
+                    {tournamentPhase === 'in_progress' && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                    )}
+                    {tournamentPhaseLabel}
+                  </span>
+                  {tournamentPhase === 'registration' && (
+                    <button
+                      onClick={handleStartTournament}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-green-600 hover:bg-green-500 text-white transition-colors shadow-lg shadow-green-600/20"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Start Tournament
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
+
+            {/* Tab Navigation */}
+            <div className="px-6 py-2 bg-gray-900/30">
+              {/* Mobile Admin Dropdown */}
+              <select
+                value={adminTab}
+                onChange={(e) => setAdminTab(e.target.value as any)}
+                className="md:hidden w-full bg-gray-800 text-white border border-white/10 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="livecourts">📺 Live Courts</option>
+                <option value="participants">👥 Participants</option>
+                <option value="courts">🏟️ Courts</option>
+                <option value="settings">⚙️ Settings</option>
+              </select>
+
+              {/* Desktop Admin Tabs */}
+              <div className="hidden md:flex gap-1">
+                {[
+                  { id: 'livecourts', label: 'Live Courts', icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  )},
+                  { id: 'participants', label: 'Teams', icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  )},
+                  { id: 'courts', label: 'Courts', icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                    </svg>
+                  )},
+                  { id: 'settings', label: 'Settings', icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                    </svg>
+                  )},
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setAdminTab(tab.id as any)}
+                    className={`
+                      flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all
+                      ${adminTab === tab.id
+                        ? 'bg-white/10 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                      }
+                    `}
+                  >
+                    {tab.icon}
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
+
+          {/* Tab Content */}
+          <div className="bg-gray-800/50 rounded-2xl border border-white/5 p-6">
 
           {adminTab === 'participants' && (
             <div className="space-y-6">
@@ -731,6 +901,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       Generate Finals from Pools
                     </button>
                   )}
+                  <button
+                    onClick={() => setShowScheduleBuilder(true)}
+                    disabled={matches.length === 0}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold disabled:bg-gray-700 flex items-center gap-2"
+                  >
+                    <span>📅</span>
+                    Build Schedule
+                  </button>
                 </div>
               </div>
 
@@ -1098,55 +1276,114 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           )}
 
           {adminTab === 'livecourts' && (
-            <div className="mt-6 space-y-4">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-3">
-                  <h3 className="text-sm font-semibold text-white">
-                    Court Allocation
-                  </h3>
-                  <div className="inline-flex rounded-full bg-gray-900 p-1 border border-gray-700">
-                    <button
-                      type="button"
-                      onClick={() => setAutoAllocateCourts(false)}
-                      className={`px-3 py-1 text-xs font-semibold rounded-full ${
-                        !autoAllocateCourts
-                          ? 'bg-gray-100 text-gray-900'
-                          : 'text-gray-300'
-                      }`}
-                    >
-                      Manually allocate courts
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAutoAllocateCourts(true)}
-                      className={`px-3 py-1 text-xs font-semibold rounded-full ${
-                        autoAllocateCourts
-                          ? 'bg-green-500 text-gray-900'
-                          : 'text-gray-300'
-                      }`}
-                    >
-                      Auto-allocate courts
-                    </button>
+            <div className="space-y-6">
+              {/* Live Status Bar */}
+              <div className="flex flex-wrap items-center gap-4 p-4 rounded-xl bg-gray-900/50 border border-white/5">
+                {/* Live Indicator */}
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                  </span>
+                  <span className="text-sm font-semibold text-green-400 uppercase tracking-wide">Live</span>
+                </div>
+
+                <div className="h-4 w-px bg-gray-700" />
+
+                {/* Stats */}
+                <div className="flex flex-wrap items-center gap-6 text-sm">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    </svg>
+                    <span className="text-white font-semibold">
+                      {courtMatchModels.filter(m => m.status === 'in_progress').length}
+                    </span>
+                    <span className="text-gray-400">in progress</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-white font-semibold">{queue.length}</span>
+                    <span className="text-gray-400">waiting</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-white font-semibold">
+                      {courts.filter(c => c.active && !courtMatchModels.some(m => m.court === c.name && m.status === 'in_progress')).length}
+                    </span>
+                    <span className="text-gray-400">courts free</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+              </div>
+
+              {/* Mode Toggle & Actions */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                {/* Mode Toggle */}
+                <div className="inline-flex rounded-xl bg-gray-900 p-1.5 border border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => setAutoAllocateCourts(false)}
+                    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+                      !autoAllocateCourts
+                        ? 'bg-white/10 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" />
+                    </svg>
+                    Manual
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAutoAllocateCourts(true)}
+                    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+                      autoAllocateCourts
+                        ? 'bg-green-600 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                    Auto-Allocate
+                  </button>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-3">
                   {!autoAllocateCourts && (
                     <button
                       type="button"
                       onClick={() => autoAssignFreeCourts()}
-                      className="px-3 py-1 rounded text-xs font-semibold bg-green-600 hover:bg-green-500 text-white"
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-lg shadow-indigo-600/20"
                     >
-                      Auto-fill free courts
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Fill Free Courts
                     </button>
                   )}
                   {autoAllocateCourts && (
-                    <span className="text-[11px] text-gray-400">
-                      Auto-allocation is ON – matches will be placed on free courts automatically.
-                    </span>
+                    <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-500/10 border border-green-500/20">
+                      <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <span className="text-sm text-green-400">
+                        Auto-allocation active
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
 
+              {/* Court Allocation Component */}
               <CourtAllocation
                 courts={courtViewModels}
                 matches={courtMatchModels}
@@ -1162,6 +1399,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               />
             </div>
           )}
+          </div>
+          {/* End Tab Content */}
         </div>
       ) : (
         /* PUBLIC VIEW */
@@ -1411,6 +1650,57 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Schedule Builder Modal */}
+      {showScheduleBuilder && (
+        <div className="fixed inset-0 z-50">
+          <ScheduleBuilder
+            tournamentId={tournament.id}
+            tournamentName={tournament.name}
+            days={[{
+              id: 'day-1',
+              date: new Date(tournament.startDate).toISOString().split('T')[0],
+              startTime: '09:00',
+              endTime: '17:00',
+              label: 'Tournament Day',
+            }]}
+            divisions={divisions.map(d => ({
+              id: d.id,
+              name: d.name,
+              matchCount: matches.filter(m => m.divisionId === d.id).length,
+            }))}
+            courts={courts.map(c => ({
+              courtId: c.id,
+              courtName: c.name,
+              dayId: 'day-1',
+              available: c.active,
+              startTime: '09:00',
+              endTime: '17:00',
+            }))}
+            registrations={teams.map(t => ({
+              divisionId: t.divisionId,
+              teamId: t.id,
+              teamName: t.teamName || `Team ${t.id.slice(0, 4)}`,
+              playerIds: t.playerIds,
+            }))}
+            matchups={matches.map((m, idx) => ({
+              divisionId: m.divisionId,
+              matchId: m.id,
+              stage: (m.stage === 'pool' ? 'pool' : m.stage === 'final' || m.stage === 'semifinal' || m.stage === 'quarterfinal' ? 'medal' : 'bracket') as 'pool' | 'bracket' | 'medal',
+              roundNumber: m.roundNumber,
+              matchNumber: idx + 1,
+              teamAId: m.teamAId,
+              teamBId: m.teamBId,
+            }))}
+            onPublish={(scheduledMatches) => {
+              console.log('Publishing schedule:', scheduledMatches);
+              // TODO: Save scheduled times to matches
+              setShowScheduleBuilder(false);
+            }}
+            onCancel={() => setShowScheduleBuilder(false)}
+          />
         </div>
       )}
     </div>

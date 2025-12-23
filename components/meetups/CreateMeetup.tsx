@@ -664,10 +664,15 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         {step === 2 && (
           <div className="space-y-6">
             {/* Enable Pricing Toggle */}
-            <div className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg">
-              <div>
-                <h3 className="text-white font-medium">Charge Entry Fee</h3>
-                <p className="text-sm text-gray-400">Collect payment from players</p>
+            <div className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-green-600/20 flex items-center justify-center">
+                  <span className="text-xl">💰</span>
+                </div>
+                <div>
+                  <h3 className="text-white font-semibold">Charge Entry Fee</h3>
+                  <p className="text-sm text-gray-400">Collect payment from players</p>
+                </div>
               </div>
               <button
                 onClick={() => setPricingEnabled(!pricingEnabled)}
@@ -691,12 +696,12 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
 
                 {/* Entry Fee */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-1">Entry Fee (NZD)</label>
+                  <label className="block text-sm font-semibold text-gray-300 mb-2">Entry Fee (NZD)</label>
                   <input
                     type="number"
                     value={entryFee}
                     onChange={(e) => setEntryFee(e.target.value)}
-                    className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                    className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500 placeholder-gray-500"
                     placeholder="0.00"
                     step="0.50"
                     min="0"
@@ -704,10 +709,15 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                 </div>
 
                 {/* Prize Pool Toggle */}
-                <div className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg">
-                  <div>
-                    <h3 className="text-white font-medium">Prize Pool</h3>
-                    <p className="text-sm text-gray-400">Collect additional for prizes</p>
+                <div className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-700">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-amber-600/20 flex items-center justify-center">
+                      <span className="text-xl">🏆</span>
+                    </div>
+                    <div>
+                      <h3 className="text-white font-semibold">Prize Pool</h3>
+                      <p className="text-sm text-gray-400">Collect additional for prizes</p>
+                    </div>
                   </div>
                   <button
                     onClick={() => setPrizePoolEnabled(!prizePoolEnabled)}
@@ -720,19 +730,19 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                 {prizePoolEnabled && (
                   <>
                     <div>
-                      <label className="block text-sm font-medium text-gray-400 mb-1">Prize Contribution per Person (NZD)</label>
+                      <label className="block text-sm font-semibold text-gray-300 mb-2">Prize Contribution per Person (NZD)</label>
                       <input
                         type="number"
                         value={prizePoolContribution}
                         onChange={(e) => setPrizePoolContribution(e.target.value)}
-                        className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                        className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500 placeholder-gray-500"
                         placeholder="0.00"
                         step="0.50"
                         min="0"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-400 mb-1">Prize Distribution</label>
+                      <label className="block text-sm font-semibold text-gray-300 mb-2">Prize Distribution</label>
                       <select
                         value={prizeDistributionIndex}
                         onChange={(e) => setPrizeDistributionIndex(parseInt(e.target.value))}
@@ -748,7 +758,7 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
 
                 {/* Who Pays Fees */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-2">Processing Fees Paid By</label>
+                  <label className="block text-sm font-semibold text-gray-300 mb-2">Processing Fees Paid By</label>
                   <div className="flex gap-3">
                     <button
                       onClick={() => setFeesPaidBy('organizer')}
@@ -855,10 +865,15 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
             {competitionType !== 'casual' && (
               <>
                 {/* Manage in App Toggle */}
-                <div className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg">
-                  <div>
-                    <h3 className="text-white font-medium">Manage in App</h3>
-                    <p className="text-sm text-gray-400">Track matches, scores & standings automatically</p>
+                <div className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-700">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-blue-600/20 flex items-center justify-center">
+                      <span className="text-xl">📱</span>
+                    </div>
+                    <div>
+                      <h3 className="text-white font-semibold">Manage in App</h3>
+                      <p className="text-sm text-gray-400">Track matches, scores & standings automatically</p>
+                    </div>
                   </div>
                   <button
                     onClick={() => setManagedInApp(!managedInApp)}
