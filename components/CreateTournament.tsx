@@ -612,30 +612,18 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                                           </p>
                                       </div>
 
-                                      {/* Legacy format sync for backwards compatibility */}
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 bg-gray-900/30 rounded border border-gray-700/30">
-                                          <div>
-                                              <label className="block text-xs text-gray-400 mb-1">Medal Bracket Format</label>
-                                              <select
-                                                  className="w-full bg-gray-900 text-white p-2 rounded border border-gray-700"
-                                                  value={newDivFormat.stage2Format || 'single_elim'}
-                                                  onChange={e => setNewDivFormat({...newDivFormat, stage2Format: e.target.value as Stage2Format})}
-                                              >
-                                                  <option value="single_elim">Single Elimination</option>
-                                                  <option value="double_elim">Double Elimination</option>
-                                              </select>
-                                          </div>
-                                          <div className="flex items-end">
-                                              <label className="flex items-center gap-2 pb-2">
-                                                  <input
-                                                      type="checkbox"
-                                                      checked={newDivFormat.plateEnabled}
-                                                      onChange={e => setNewDivFormat({...newDivFormat, plateEnabled: e.target.checked})}
-                                                      className="rounded bg-gray-900 border-gray-700 text-green-600"
-                                                  />
-                                                  <span className="text-sm text-white">Enable Consolation Bracket</span>
-                                              </label>
-                                          </div>
+                                      {/* Consolation bracket option */}
+                                      <div className="flex items-center gap-4 p-3 bg-gray-900/30 rounded border border-gray-700/30">
+                                          <label className="flex items-center gap-2">
+                                              <input
+                                                  type="checkbox"
+                                                  checked={newDivFormat.plateEnabled}
+                                                  onChange={e => setNewDivFormat({...newDivFormat, plateEnabled: e.target.checked})}
+                                                  className="rounded bg-gray-900 border-gray-700 text-green-600"
+                                              />
+                                              <span className="text-sm text-white">Enable Consolation Bracket</span>
+                                          </label>
+                                          <span className="text-xs text-gray-500">(Medal bracket uses single elimination)</span>
                                       </div>
                                   </div>
                               )}
