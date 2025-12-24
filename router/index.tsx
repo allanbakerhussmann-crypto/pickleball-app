@@ -1,11 +1,15 @@
 /**
  * Router Configuration - AI Studio Compatible
- * 
+ *
  * Uses createHashRouter instead of createBrowserRouter for AI Studio compatibility.
  * No lazy loading - direct imports for reliability.
- * 
+ *
+ * UPDATED V06.03:
+ * - Added live scoring routes (/score/live/:id, /score/watch/:id)
+ * - Added multi-court scoreboard route (/scoreboard/:eventId)
+ *
  * FILE LOCATION: router/index.tsx
- * VERSION: V05.17
+ * VERSION: V06.03
  */
 
 import { createHashRouter } from 'react-router-dom';
@@ -39,6 +43,12 @@ import AdminTestPaymentsPage from '../pages/AdminTestPaymentsPage';
 import AdminDashboard from '../pages/AdminDashboard';
 import StripeDebugPage from '../pages/StripeDebugPage';
 
+// Scoring Pages (NEW V06.03)
+import LiveScoringPage from '../pages/LiveScoringPage';
+import WatchScorePage from '../pages/WatchScorePage';
+import ScoreboardPage from '../pages/ScoreboardPage';
+import ScoringDashboardPage from '../pages/ScoringDashboardPage';
+
 // ============================================
 // Router Configuration - Using HashRouter
 // URLs will be like: /#/tournaments, /#/clubs/123
@@ -59,6 +69,16 @@ export const router = createHashRouter([
       {
         path: 'dashboard',
         element: <HomePage />,
+      },
+
+      // Dashboard - Score a Game tab
+      {
+        path: 'dashboard/score',
+        element: (
+          <ProtectedRoute>
+            <ScoringDashboardPage />
+          </ProtectedRoute>
+        ),
       },
       
       // ==========================================
@@ -279,6 +299,32 @@ export const router = createHashRouter([
             <PlaceholderPage title="My Team Leagues" message="Your team league memberships." />
           </ProtectedRoute>
         ),
+      },
+
+      // ==========================================
+      // LIVE SCORING (NEW V06.03)
+      // ==========================================
+
+      // Live scoring interface (for scorers)
+      {
+        path: 'score/live/:id',
+        element: (
+          <ProtectedRoute>
+            <LiveScoringPage />
+          </ProtectedRoute>
+        ),
+      },
+
+      // Watch a match (spectator view - public)
+      {
+        path: 'score/watch/:id',
+        element: <WatchScorePage />,
+      },
+
+      // Multi-court scoreboard (public)
+      {
+        path: 'scoreboard/:eventId',
+        element: <ScoreboardPage />,
       },
     ],
   },

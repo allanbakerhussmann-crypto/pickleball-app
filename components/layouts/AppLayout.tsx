@@ -96,9 +96,11 @@ export const AppLayout: React.FC = () => {
     if (path.startsWith('/profile')) return 'profile';
     if (path.startsWith('/admin/organizer-requests')) return 'adminOrganizerRequests';
     if (path.startsWith('/admin')) return 'adminUsers';
+    if (path.startsWith('/dashboard/score')) return 'score';
     if (path.startsWith('/dashboard')) return 'dashboard';
     if (path.startsWith('/results')) return 'results';
     if (path.startsWith('/leagues')) return 'leagues';
+    if (path.startsWith('/score')) return 'score';
     return 'tournaments';
   };
 
@@ -153,6 +155,9 @@ export const AppLayout: React.FC = () => {
         break;
       case 'leagues':
         navigate(ROUTES.LEAGUES);
+        break;
+      case 'score':
+        navigate('/dashboard/score');
         break;
       default:
         navigate(ROUTES.HOME);

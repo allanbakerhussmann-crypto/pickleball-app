@@ -4,12 +4,11 @@
  * This file re-exports all Firebase functionality for backwards compatibility.
  * Import from here: import { ... } from './services/firebase';
  *
- * UPDATED V05.44:
- * - Added score verification service exports
- * - Removed postpone functionality exports
+ * UPDATED V06.03:
+ * - Added live scores service exports
  *
  * FILE LOCATION: services/firebase/index.ts
- * VERSION: V05.44
+ * VERSION: V06.03
  */
 
 // Re-export config and core instances
@@ -345,3 +344,39 @@ export { logAudit } from './audit';
 
 // Meetup Matches
 export * from './meetupMatches';
+
+// ============================================
+// LIVE SCORES SERVICE (NEW V06.03)
+// ============================================
+export {
+  // Create
+  createLiveScore,
+  createStandaloneGame,
+  // Read
+  getLiveScore,
+  subscribeToLiveScore,
+  subscribeToEventLiveScores,
+  getLiveScoreByMatchId,
+  getGameByShareCode,
+  subscribeToStandaloneGame,
+  getUserStandaloneGames,
+  // Update
+  updateLiveScore,
+  updateStandaloneGame,
+  syncLiveScoreState,
+  assignScorer,
+  removeScorer,
+  // Delete
+  deleteLiveScore,
+  deleteStandaloneGame,
+  // Scoreboard
+  getScoreboardConfig,
+  saveScoreboardConfig,
+  subscribeToScoreboardConfig,
+  // Batch
+  batchCreateLiveScores,
+  completeLiveScore,
+  // Helpers
+  canUserScore,
+  getActiveMatchesCount,
+} from './liveScores';

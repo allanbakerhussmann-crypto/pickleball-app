@@ -6,3 +6,6 @@
  */
 
 export { LiveScoringInterface } from './LiveScoringInterface';
+export { LiveScoreDisplay } from './LiveScoreDisplay';
+export { MultiCourtScoreboard } from './MultiCourtScoreboard';
+export { StandaloneScoring } from './StandaloneScoring';
