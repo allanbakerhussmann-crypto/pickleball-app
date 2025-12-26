@@ -9,9 +9,22 @@ interface BracketViewerProps {
     matches: MatchDisplay[];
     onUpdateScore: (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute', reason?: string) => void;
     isVerified: boolean;
+    /** Optional title to display above the bracket (e.g., "Main Bracket", "Plate Bracket") */
+    bracketTitle?: string;
+    /** Type of bracket for styling differences */
+    bracketType?: 'main' | 'plate' | 'consolation';
+    /** Custom label for the finals match (e.g., "Plate Final" instead of "Finals") */
+    finalsLabel?: string;
 }
 
-export const BracketViewer: React.FC<BracketViewerProps> = ({ matches, onUpdateScore, isVerified }) => {
+export const BracketViewer: React.FC<BracketViewerProps> = ({
+    matches,
+    onUpdateScore,
+    isVerified,
+    bracketTitle,
+    bracketType = 'main',
+    finalsLabel,
+}) => {
     const { currentUser } = useAuth();
     // Group matches by round
     const rounds: { [key: number]: MatchDisplay[] } = {};
@@ -29,14 +42,23 @@ export const BracketViewer: React.FC<BracketViewerProps> = ({ matches, onUpdateS
 
     const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
 
+    // Determine color based on bracket type
+    const titleColor = bracketType === 'plate' ? 'text-amber-400' : 'text-green-400';
+
     return (
         <div className="overflow-x-auto pb-4">
+             {/* Bracket Title */}
+             {bracketTitle && (
+                 <h2 className={`text-lg font-bold mb-4 ${titleColor}`}>
+                     {bracketTitle}
+                 </h2>
+             )}
              <div className="min-w-max flex gap-8">
                  {roundKeys.map(roundNum => (
                      <div key={roundNum} className="flex flex-col w-80">
                          <h3 className="text-center text-gray-400 font-bold uppercase text-xs mb-4 tracking-wider border-b border-gray-700 pb-2">
-                             {roundNum === maxRound ? 'Finals' : 
-                              roundNum === maxRound - 1 ? 'Semi-Finals' : 
+                             {roundNum === maxRound ? (finalsLabel || 'Finals') :
+                              roundNum === maxRound - 1 ? 'Semi-Finals' :
                               `Round ${roundNum}`}
                          </h3>
                          <div className="flex flex-col justify-around flex-grow gap-6">

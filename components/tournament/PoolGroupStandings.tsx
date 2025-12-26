@@ -1,0 +1,544 @@
+/**
+ * PoolGroupStandings
+ *
+ * Displays pool play standings grouped by pool (Group A, Group B, etc.)
+ * with collapsible sections, advancement badges, and match history.
+ *
+ * @version 06.04
+ * @file components/tournament/PoolGroupStandings.tsx
+ */
+
+import React, { useState, useMemo } from 'react';
+import type { Match, Team, StandingsEntry } from '../../types';
+import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
+import { MatchHistoryIndicator } from './MatchHistoryIndicator';
+
+// ============================================
+// TYPES
+// ============================================
+
+interface PoolGroupStandingsProps {
+  matches: Match[];
+  teams: Team[];
+  poolSettings?: PoolPlayMedalsSettings;
+  getTeamPlayers?: (teamId: string) => { displayName: string }[];
+}
+
+interface PoolStandingRow {
+  teamId: string;
+  teamName: string;
+  players: string[];
+  played: number;
+  wins: number;
+  losses: number;
+  pointsFor: number;
+  pointsAgainst: number;
+  pointDifference: number;
+  rank: number;
+  isAdvancing: boolean;
+}
+
+interface PoolGroup {
+  poolName: string;
+  standings: PoolStandingRow[];
+  matches: Match[];
+  isComplete: boolean;
+}
+
+// ============================================
+// HELPERS
+// ============================================
+
+/**
+ * Extract unique pool names from matches
+ */
+function getPoolNames(matches: Match[]): string[] {
+  const poolSet = new Set<string>();
+  matches.forEach((m) => {
+    if (m.poolGroup) {
+      poolSet.add(m.poolGroup);
+    }
+  });
+  // Sort alphabetically (Pool A, Pool B, etc.)
+  return Array.from(poolSet).sort();
+}
+
+/**
+ * Calculate standings for a single pool
+ */
+function calculatePoolStandings(
+  poolMatches: Match[],
+  teams: Team[],
+  advancementCount: number
+): PoolStandingRow[] {
+  // Get all team IDs involved in this pool
+  const teamIds = new Set<string>();
+  poolMatches.forEach((m) => {
+    if (m.teamAId) teamIds.add(m.teamAId);
+    if (m.teamBId) teamIds.add(m.teamBId);
+    if (m.sideA?.id) teamIds.add(m.sideA.id);
+    if (m.sideB?.id) teamIds.add(m.sideB.id);
+  });
+
+  // Build standings map
+  const standingsMap = new Map<string, PoolStandingRow>();
+
+  teamIds.forEach((teamId) => {
+    const team = teams.find((t) => t.id === teamId);
+    standingsMap.set(teamId, {
+      teamId,
+      teamName: team?.teamName || team?.name || 'Unknown Team',
+      players: team?.players || [],
+      played: 0,
+      wins: 0,
+      losses: 0,
+      pointsFor: 0,
+      pointsAgainst: 0,
+      pointDifference: 0,
+      rank: 0,
+      isAdvancing: false,
+    });
+  });
+
+  // Process completed matches
+  poolMatches
+    .filter((m) => m.status === 'completed')
+    .forEach((match) => {
+      const teamAId = match.teamAId || match.sideA?.id;
+      const teamBId = match.teamBId || match.sideB?.id;
+      if (!teamAId || !teamBId) return;
+
+      const rowA = standingsMap.get(teamAId);
+      const rowB = standingsMap.get(teamBId);
+      if (!rowA || !rowB) return;
+
+      // Calculate total points from scores
+      let pointsA = 0;
+      let pointsB = 0;
+
+      // Handle scores array (GameScore format)
+      if (match.scores && Array.isArray(match.scores)) {
+        match.scores.forEach((game) => {
+          pointsA += game.scoreA || 0;
+          pointsB += game.scoreB || 0;
+        });
+      }
+
+      // Handle legacy scoreTeamAGames / scoreTeamBGames
+      if (match.scoreTeamAGames && Array.isArray(match.scoreTeamAGames)) {
+        pointsA += match.scoreTeamAGames.reduce((sum: number, s: number) => sum + s, 0);
+      }
+      if (match.scoreTeamBGames && Array.isArray(match.scoreTeamBGames)) {
+        pointsB += match.scoreTeamBGames.reduce((sum: number, s: number) => sum + s, 0);
+      }
+
+      // Update played
+      rowA.played += 1;
+      rowB.played += 1;
+
+      // Update points
+      rowA.pointsFor += pointsA;
+      rowA.pointsAgainst += pointsB;
+      rowB.pointsFor += pointsB;
+      rowB.pointsAgainst += pointsA;
+
+      // Determine winner
+      const winnerId = match.winnerTeamId || match.winnerId;
+      if (winnerId === teamAId) {
+        rowA.wins += 1;
+        rowB.losses += 1;
+      } else if (winnerId === teamBId) {
+        rowB.wins += 1;
+        rowA.losses += 1;
+      }
+    });
+
+  // Calculate point difference and sort
+  const standings = Array.from(standingsMap.values());
+  standings.forEach((row) => {
+    row.pointDifference = row.pointsFor - row.pointsAgainst;
+  });
+
+  // Sort by: wins (desc), point diff (desc), points for (desc)
+  standings.sort((a, b) => {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
+    return b.pointsFor - a.pointsFor;
+  });
+
+  // Assign ranks and advancement
+  standings.forEach((row, index) => {
+    row.rank = index + 1;
+    row.isAdvancing = index < advancementCount;
+  });
+
+  return standings;
+}
+
+// ============================================
+// SUB-COMPONENTS
+// ============================================
+
+interface PoolSectionProps {
+  pool: PoolGroup;
+  getTeamPlayers?: (teamId: string) => { displayName: string }[];
+  defaultExpanded?: boolean;
+}
+
+const PoolSection: React.FC<PoolSectionProps> = ({
+  pool,
+  getTeamPlayers,
+  defaultExpanded = true,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const [activeSubTab, setActiveSubTab] = useState<'standings' | 'matches'>('standings');
+
+  const completedMatches = pool.matches.filter((m) => m.status === 'completed').length;
+  const totalMatches = pool.matches.length;
+  const progressPercent = totalMatches > 0 ? (completedMatches / totalMatches) * 100 : 0;
+
+  return (
+    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-4">
+      {/* Pool Header (Collapsible) */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-900/50 hover:bg-gray-900/70 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-lg font-bold text-white">{pool.poolName}</span>
+          <span className="text-xs text-gray-500">
+            {pool.standings.length} teams
+          </span>
+          {pool.isComplete && (
+            <span className="bg-green-600/20 text-green-400 text-xs px-2 py-0.5 rounded border border-green-600/30">
+              Complete
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {/* Progress bar */}
+          <div className="w-24 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-green-500 transition-all duration-300"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <span className="text-xs text-gray-500">
+            {completedMatches}/{totalMatches}
+          </span>
+          {/* Expand/Collapse Icon */}
+          <svg
+            className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </button>
+
+      {/* Pool Content */}
+      {isExpanded && (
+        <div className="p-4">
+          {/* Sub-tabs: Standings | Matches */}
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => setActiveSubTab('standings')}
+              className={`px-3 py-1.5 text-sm rounded transition-colors ${
+                activeSubTab === 'standings'
+                  ? 'bg-green-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Standings
+            </button>
+            <button
+              onClick={() => setActiveSubTab('matches')}
+              className={`px-3 py-1.5 text-sm rounded transition-colors ${
+                activeSubTab === 'matches'
+                  ? 'bg-green-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Matches
+            </button>
+          </div>
+
+          {/* Standings Table */}
+          {activeSubTab === 'standings' && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs uppercase text-gray-500 border-b border-gray-700">
+                    <th className="py-2 px-2 text-center w-12">Rank</th>
+                    <th className="py-2 px-2 text-left">Team</th>
+                    <th className="py-2 px-2 text-center">PLD</th>
+                    <th className="py-2 px-2 text-center">W</th>
+                    <th className="py-2 px-2 text-center">L</th>
+                    <th className="py-2 px-2 text-center hidden sm:table-cell">PF</th>
+                    <th className="py-2 px-2 text-center hidden sm:table-cell">PA</th>
+                    <th className="py-2 px-2 text-center">Diff</th>
+                    <th className="py-2 px-2 text-center hidden sm:table-cell">History</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pool.standings.map((row) => {
+                    const players = getTeamPlayers
+                      ? getTeamPlayers(row.teamId).map((p) => p.displayName)
+                      : row.players;
+                    const p1 = players[0] || '-';
+                    const p2 = players[1] || '-';
+                    const pd = row.pointDifference;
+
+                    return (
+                      <tr
+                        key={row.teamId}
+                        className={`border-b border-gray-800 hover:bg-gray-700/30 transition-colors ${
+                          row.isAdvancing ? 'bg-green-900/10' : ''
+                        }`}
+                      >
+                        <td className="py-2 px-2 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            {row.isAdvancing && (
+                              <span className="bg-green-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold">
+                                Set to Advance
+                              </span>
+                            )}
+                            {!row.isAdvancing && (
+                              <span className="text-gray-500 font-mono">#{row.rank}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2 px-2">
+                          <div className="font-bold text-white truncate max-w-[120px] sm:max-w-none">
+                            {row.teamName}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {p1} {players.length > 1 && `/ ${p2}`}
+                          </div>
+                        </td>
+                        <td className="py-2 px-2 text-center text-gray-400 font-mono">
+                          {row.played}
+                        </td>
+                        <td className="py-2 px-2 text-center">
+                          <span className="bg-green-900/30 text-green-400 font-bold px-2 py-0.5 rounded">
+                            {row.wins}
+                          </span>
+                        </td>
+                        <td className="py-2 px-2 text-center text-gray-500 font-mono">
+                          {row.losses}
+                        </td>
+                        <td className="py-2 px-2 text-center text-gray-600 hidden sm:table-cell font-mono text-xs">
+                          {row.pointsFor}
+                        </td>
+                        <td className="py-2 px-2 text-center text-gray-600 hidden sm:table-cell font-mono text-xs">
+                          {row.pointsAgainst}
+                        </td>
+                        <td className="py-2 px-2 text-center">
+                          <span
+                            className={`font-bold ${
+                              pd > 0 ? 'text-green-400' : pd < 0 ? 'text-red-400' : 'text-gray-500'
+                            }`}
+                          >
+                            {pd > 0 ? `+${pd}` : pd}
+                          </span>
+                        </td>
+                        <td className="py-2 px-2 text-center hidden sm:table-cell">
+                          <MatchHistoryIndicator teamId={row.teamId} matches={pool.matches} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Matches List */}
+          {activeSubTab === 'matches' && (
+            <div className="space-y-2">
+              {pool.matches.length === 0 ? (
+                <p className="text-gray-500 text-sm italic">No matches scheduled yet.</p>
+              ) : (
+                pool.matches.map((match) => {
+                  const teamAName =
+                    match.sideA?.name ||
+                    match.teamAId ||
+                    'TBD';
+                  const teamBName =
+                    match.sideB?.name ||
+                    match.teamBId ||
+                    'TBD';
+                  const isCompleted = match.status === 'completed';
+                  const winnerId = match.winnerTeamId || match.winnerId;
+
+                  // Get scores
+                  let scoreDisplay = '-';
+                  if (isCompleted && match.scores && match.scores.length > 0) {
+                    scoreDisplay = match.scores
+                      .map((g) => `${g.scoreA}-${g.scoreB}`)
+                      .join(', ');
+                  }
+
+                  return (
+                    <div
+                      key={match.id}
+                      className={`flex items-center justify-between p-3 rounded border ${
+                        isCompleted
+                          ? 'bg-gray-900/30 border-gray-700'
+                          : 'bg-gray-800 border-gray-600'
+                      }`}
+                    >
+                      <div className="flex-1">
+                        <div
+                          className={`font-medium ${
+                            winnerId === (match.teamAId || match.sideA?.id)
+                              ? 'text-green-400'
+                              : 'text-white'
+                          }`}
+                        >
+                          {teamAName}
+                        </div>
+                        <div className="text-xs text-gray-500">vs</div>
+                        <div
+                          className={`font-medium ${
+                            winnerId === (match.teamBId || match.sideB?.id)
+                              ? 'text-green-400'
+                              : 'text-white'
+                          }`}
+                        >
+                          {teamBName}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        {isCompleted ? (
+                          <span className="text-sm text-gray-300 font-mono">{scoreDisplay}</span>
+                        ) : (
+                          <span
+                            className={`text-xs px-2 py-1 rounded ${
+                              match.status === 'in_progress'
+                                ? 'bg-yellow-600/20 text-yellow-400'
+                                : 'bg-gray-700 text-gray-400'
+                            }`}
+                          >
+                            {match.status === 'in_progress' ? 'In Progress' : 'Scheduled'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================
+// MAIN COMPONENT
+// ============================================
+
+export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
+  matches,
+  teams,
+  poolSettings,
+  getTeamPlayers,
+}) => {
+  // Determine advancement count from settings
+  const advancementCount = useMemo(() => {
+    if (!poolSettings) return 2; // Default: top 2 advance
+    switch (poolSettings.advancementRule) {
+      case 'top_1':
+        return 1;
+      case 'top_2':
+        return 2;
+      case 'top_n_plus_best':
+        return poolSettings.advancementCount || 2;
+      default:
+        return 2;
+    }
+  }, [poolSettings]);
+
+  // Group matches by pool and calculate standings
+  const poolGroups = useMemo<PoolGroup[]>(() => {
+    const poolNames = getPoolNames(matches);
+
+    return poolNames.map((poolName) => {
+      const poolMatches = matches.filter((m) => m.poolGroup === poolName);
+      const standings = calculatePoolStandings(poolMatches, teams, advancementCount);
+      const completedCount = poolMatches.filter((m) => m.status === 'completed').length;
+      const isComplete = poolMatches.length > 0 && completedCount === poolMatches.length;
+
+      return {
+        poolName,
+        standings,
+        matches: poolMatches,
+        isComplete,
+      };
+    });
+  }, [matches, teams, advancementCount]);
+
+  // Overall progress
+  const totalMatches = matches.filter((m) => m.poolGroup).length;
+  const completedMatches = matches.filter(
+    (m) => m.poolGroup && m.status === 'completed'
+  ).length;
+  const poolStageComplete = totalMatches > 0 && completedMatches === totalMatches;
+
+  if (poolGroups.length === 0) {
+    return (
+      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+        <h2 className="text-xl font-bold mb-4 text-green-400">Pool Stage</h2>
+        <p className="text-gray-400 text-sm italic">
+          No pool matches found. Generate a schedule to create pool matches.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold text-green-400">Pool Stage</h2>
+        <div className="flex items-center gap-2">
+          {poolStageComplete ? (
+            <span className="bg-green-600/20 text-green-400 text-sm px-3 py-1 rounded border border-green-600/30">
+              Pool Stage Complete
+            </span>
+          ) : (
+            <span className="text-sm text-gray-500">
+              {completedMatches} / {totalMatches} matches
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Pool advancement info */}
+      <div className="bg-gray-900/50 rounded p-3 mb-4 text-sm text-gray-400">
+        <span className="text-gray-300 font-medium">Advancement Rule:</span>{' '}
+        {poolSettings?.advancementRule === 'top_1' && 'Top 1 from each pool advances'}
+        {poolSettings?.advancementRule === 'top_2' && 'Top 2 from each pool advance'}
+        {poolSettings?.advancementRule === 'top_n_plus_best' &&
+          `Top ${advancementCount} from each pool advance`}
+        {!poolSettings && 'Top 2 from each pool advance'}
+      </div>
+
+      {/* Pool Sections */}
+      {poolGroups.map((pool) => (
+        <PoolSection
+          key={pool.poolName}
+          pool={pool}
+          getTeamPlayers={getTeamPlayers}
+          defaultExpanded={true}
+        />
+      ))}
+    </div>
+  );
+};
+
+export default PoolGroupStandings;

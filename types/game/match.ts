@@ -224,6 +224,9 @@ export interface Match {
   /** Bracket position (for elimination) */
   bracketPosition?: number;
 
+  /** Bracket type - main bracket or plate/consolation bracket */
+  bracketType?: 'main' | 'plate' | 'consolation';
+
   /** Next match ID (for brackets - winner advances here) */
   nextMatchId?: string;
 

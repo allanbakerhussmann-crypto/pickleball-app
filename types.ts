@@ -76,6 +76,11 @@ export interface UserProfile {
   organizerRequestDate?: number;
   organizerApprovedDate?: number;
   isApprovedOrganizer?: boolean;
+  // Privacy Consent (V06.04)
+  privacyPolicyConsentAt?: number;      // Timestamp when privacy policy accepted
+  termsOfServiceConsentAt?: number;     // Timestamp when ToS accepted
+  dataProcessingConsentAt?: number;     // Timestamp when data processing consented
+  consentPolicyVersion?: string;        // Version of policy agreed to (e.g., "1.0")
 }
 
 // ============================================
@@ -227,6 +232,14 @@ export interface TournamentSettings {
   };
 }
 
+/**
+ * Pool assignment for drag-drop pool editing
+ */
+export interface PoolAssignment {
+  poolName: string;
+  teamIds: string[];
+}
+
 export interface Division {
   id: string;
   tournamentId: string;
@@ -243,6 +256,8 @@ export interface Division {
   status: 'setup' | 'ready' | 'in_progress' | 'completed';
   createdAt: number;
   updatedAt: number;
+  /** Manual pool assignments (if organizer edited pools) */
+  poolAssignments?: PoolAssignment[];
 }
 
 export interface DivisionFormat {
@@ -265,6 +280,7 @@ export interface DivisionFormat {
   plateEnabled?: boolean;
   plateFormat?: 'single_elim' | 'round_robin';
   plateName?: string;
+  plateThirdPlace?: boolean;       // Include 3rd place match in plate bracket
 
   // Match settings
   bestOfGames?: 1 | 3 | 5;
@@ -290,19 +306,27 @@ export interface DivisionFormat {
 export type MainFormat = 'single_elim' | 'double_elim' | 'round_robin' | 'swiss' | 'ladder';
 
 export interface Team {
-  odTeamId: string;
+  // ID field - supports both naming conventions
+  id?: string;
+  odTeamId?: string;
+
   odAccountId?: string;
   odOrganizationId?: string;
-  tournamentId: string;
-  divisionId: string;
-  name: string;
-  playerIds: string[];
-  players?: { odUserId: string; name: string; email?: string }[];
+  tournamentId?: string;
+  divisionId?: string;
+  name?: string;
+  teamName?: string; // Alternative naming
+
+  // Player references
+  playerIds?: string[];
+  players?: { odUserId?: string; id?: string; name: string; email?: string }[];
+
   seed?: number;
   poolGroup?: string;
-  status: 'registered' | 'confirmed' | 'checked_in' | 'active' | 'eliminated' | 'withdrawn';
-  registeredAt: number;
-  registeredByUserId: string;
+  status?: 'registered' | 'confirmed' | 'checked_in' | 'active' | 'eliminated' | 'withdrawn' | 'pending_partner';
+  isLookingForPartner?: boolean;
+  registeredAt?: number;
+  registeredByUserId?: string;
   paymentStatus?: PaymentStatus;
   checkInAt?: number;
 }
@@ -311,33 +335,66 @@ export interface Match {
   id: string;
   tournamentId: string;
   divisionId: string;
-  round: number;
-  matchNumber: number;
-  stage: 'pool' | 'bracket' | 'finals' | 'consolation';
+
+  // Round info (supports both naming conventions)
+  round?: number;
+  roundNumber?: number;
+  matchNumber?: number;
+
+  // Stage info
+  stage?: string; // 'pool' | 'bracket' | 'finals' | 'Pool Play' | 'Semi-Finals' | 'Finals' | 'Round X'
   poolGroup?: string;
+
+  // Team references (supports both naming conventions)
   team1Id?: string;
   team2Id?: string;
+  teamAId?: string;  // Alternative naming used in TournamentManager
+  teamBId?: string;  // Alternative naming used in TournamentManager
+
+  // Team display info
   team1Name?: string;
   team2Name?: string;
   team1Seed?: number;
   team2Seed?: number;
+
+  // Result info
   winnerId?: string;
+  winnerTeamId?: string; // Alternative naming
   loserId?: string;
-  scores: GameScore[];
-  status: MatchStatus;
+
+  // Scores (supports both formats)
+  scores?: GameScore[];
+  scoreTeamAGames?: number[];  // Alternative score format
+  scoreTeamBGames?: number[];  // Alternative score format
+
+  // Match status
+  status: MatchStatus | 'scheduled' | 'not_started';
+
+  // Court info (supports both naming conventions)
   courtId?: string;
   courtName?: string;
+  court?: string | null; // Alternative naming used in TournamentManager
+
+  // Time info (supports both naming conventions)
   scheduledTime?: number;
+  startTime?: number | null;  // Alternative naming
+  endTime?: number | null;    // Alternative naming
   startedAt?: number;
   completedAt?: number;
-  nextMatchId?: string;
-  nextMatchSlot?: 'team1' | 'team2';
+
+  // Bracket advancement (V06.05)
+  nextMatchId?: string | null;
+  nextMatchSlot?: 'team1' | 'team2' | 'teamA' | 'teamB' | 'sideA' | 'sideB' | null;
   loserNextMatchId?: string;
   loserNextMatchSlot?: 'team1' | 'team2';
-  isBye: boolean;
+
+  // Other metadata
+  isBye?: boolean;
   bracketPosition?: number;
-  createdAt: number;
-  updatedAt: number;
+  lastUpdatedBy?: string | null;
+  lastUpdatedAt?: number;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface MatchScoreSubmission {
@@ -358,9 +415,16 @@ export interface MatchScoreSubmission {
 }
 
 export interface GameScore {
-  gameNumber: number;
-  scoreA: number;
-  scoreB: number;
+  gameNumber?: number;
+  // Score naming convention 1
+  scoreA?: number;
+  scoreB?: number;
+  // Score naming convention 2
+  team1Score?: number;
+  team2Score?: number;
+  // Score naming convention 3
+  teamAScore?: number;
+  teamBScore?: number;
 }
 
 export interface StandingsEntry {
@@ -710,6 +774,19 @@ export interface LeagueCourt {
   name: string;
   order: number;
   active: boolean;
+  surface?: string;
+  notes?: string;
+}
+
+/**
+ * Generic court definition for tournaments (V06.05)
+ * Compatible with LeagueCourt and ClubCourt
+ */
+export interface Court {
+  id: string;
+  name: string;
+  active?: boolean;
+  order?: number;
   surface?: string;
   notes?: string;
 }
@@ -1374,9 +1451,9 @@ export {
   getDefaultFormatSettings,
 } from './types/formats';
 
-// Export new match types
+// Export new match types (aliased to avoid conflicts with local definitions)
 export type {
-  GameScore,
+  GameScore as UnifiedGameScore,
   MatchStatus as UnifiedMatchStatus,
   MatchParticipant,
   Match as UnifiedMatch,

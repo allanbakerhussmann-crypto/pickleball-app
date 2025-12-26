@@ -60,6 +60,8 @@ export interface PoolStanding extends RoundRobinStanding {
   poolName: string;
   qualified: boolean;
   qualifiedAs: 'top' | 'best_remaining' | null;
+  /** Whether this participant advances to the plate/consolation bracket */
+  qualifiedForPlate?: boolean;
 }
 
 export interface PoolPlayResult {
@@ -84,11 +86,20 @@ export interface MedalBracketResult {
   rounds: number;
 }
 
+export interface PlateBracketResult {
+  plateMatches: Omit<Match, 'id' | 'createdAt' | 'updatedAt'>[];
+  plateThirdPlaceMatch: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> | null;
+  bracketSize: number;
+  rounds: number;
+}
+
 export interface PoolPlayMedalsResult {
   pools: Pool[];
   poolMatches: Omit<Match, 'id' | 'createdAt' | 'updatedAt'>[];
   // Medal bracket generated after pools complete
   generateMedalBracket: (poolStandings: PoolStanding[][]) => MedalBracketResult;
+  // Plate bracket generated after pools complete (if enabled)
+  generatePlateBracket: (poolStandings: PoolStanding[][]) => PlateBracketResult;
 }
 
 // ============================================
@@ -348,17 +359,21 @@ export function calculatePoolStandings(
 }
 
 /**
- * Determine which participants qualify for medal bracket
+ * Determine which participants qualify for medal bracket and plate bracket
  *
  * @param allPoolStandings - Standings from all pools
  * @param settings - Pool play settings
- * @returns All standings with qualified flag set
+ * @returns All standings with qualified flags set
  */
 export function determineQualifiers(
   allPoolStandings: PoolStanding[][],
   settings: PoolPlayMedalsSettings
 ): PoolStanding[][] {
   const { advancementRule, advancementCount } = settings;
+
+  // Plate settings from format (cast to access extended fields)
+  const plateEnabled = (settings as any).plateEnabled === true;
+  const advanceToPlatePerPool = (settings as any).advanceToPlatePerPool || 1;
 
   // Mark top N from each pool
   let qualifiersPerPool = 0;
@@ -374,11 +389,29 @@ export function determineQualifiers(
       break;
   }
 
-  // Mark top qualifiers
+  // Mark top qualifiers for main bracket
   for (const poolStandings of allPoolStandings) {
     for (let i = 0; i < qualifiersPerPool && i < poolStandings.length; i++) {
       poolStandings[i].qualified = true;
       poolStandings[i].qualifiedAs = 'top';
+    }
+
+    // Mark plate qualifiers (those who don't qualify for main bracket)
+    // advanceToPlatePerPool controls how many non-main-bracket finishers go to plate
+    // We take from 3rd place downward (not bottom up)
+    // e.g., if top 2 go to main and plate takes 2: 3rd and 4th go to plate
+    if (plateEnabled && poolStandings.length > qualifiersPerPool) {
+      const nonQualifiedCount = poolStandings.length - qualifiersPerPool;
+      const plateCount = Math.min(advanceToPlatePerPool, nonQualifiedCount);
+
+      // Mark from first non-qualified position downward
+      // e.g., if qualifiersPerPool=2, start at index 2 (3rd place)
+      for (let i = 0; i < plateCount; i++) {
+        const plateIndex = qualifiersPerPool + i;
+        if (plateIndex < poolStandings.length) {
+          poolStandings[plateIndex].qualifiedForPlate = true;
+        }
+      }
     }
   }
 
@@ -391,11 +424,11 @@ export function determineQualifiers(
     const remainingSlots = advancementCount - topQualifiedCount;
 
     if (remainingSlots > 0) {
-      // Collect all non-qualified participants
+      // Collect all non-qualified participants (exclude plate qualifiers from main bracket consideration)
       const nonQualified: PoolStanding[] = [];
       for (const poolStandings of allPoolStandings) {
         for (const standing of poolStandings) {
-          if (!standing.qualified) {
+          if (!standing.qualified && !standing.qualifiedForPlate) {
             nonQualified.push(standing);
           }
         }
@@ -458,6 +491,81 @@ export function getQualifiedParticipants(
     playerIds: s.participant.playerIds,
     duprIds: s.participant.duprIds,
     duprRating: s.participant.duprRating,
+  }));
+}
+
+/**
+ * Get all participants who qualified for plate/consolation bracket
+ *
+ * Uses cross-pool seeding:
+ * - If 1 per pool: 3rd Pool A vs 3rd Pool D, 3rd Pool B vs 3rd Pool C
+ * - If 2 per pool: 3rd Pool A vs 4th Pool B, etc.
+ *
+ * @param allPoolStandings - Standings with qualified flags
+ * @returns Plate-qualified participants sorted for bracket seeding
+ */
+export function getPlateParticipants(
+  allPoolStandings: PoolStanding[][]
+): PoolParticipant[] {
+  const plateQualified: PoolStanding[] = [];
+
+  for (const poolStandings of allPoolStandings) {
+    for (const standing of poolStandings) {
+      if (standing.qualifiedForPlate) {
+        plateQualified.push(standing);
+      }
+    }
+  }
+
+  if (plateQualified.length === 0) return [];
+
+  // Group by finishing rank (3rd place together, 4th place together, etc.)
+  const byRank: Map<number, PoolStanding[]> = new Map();
+  for (const standing of plateQualified) {
+    const group = byRank.get(standing.rank) || [];
+    group.push(standing);
+    byRank.set(standing.rank, group);
+  }
+
+  // Sort each rank group by pool number for cross-pool matchups
+  // Pool A vs Pool D, Pool B vs Pool C (reverse order cross)
+  for (const [, group] of byRank) {
+    group.sort((a, b) => a.poolNumber - b.poolNumber);
+  }
+
+  // Build seeded list: best finishers first, with cross-pool ordering
+  // For 4 pools with 1 per pool: A3, D3, B3, C3 (so A3 plays D3, B3 plays C3)
+  // For 4 pools with 2 per pool: A3, B4, C3, D4, B3, A4, D3, C4 (cross-seeded)
+  const seeded: PoolStanding[] = [];
+  const sortedRanks = Array.from(byRank.keys()).sort((a, b) => a - b);
+
+  for (const rank of sortedRanks) {
+    const group = byRank.get(rank)!;
+    const poolCount = group.length;
+
+    if (poolCount <= 1) {
+      seeded.push(...group);
+    } else {
+      // Cross-seed: 1st pool with last pool, 2nd pool with second-to-last, etc.
+      const half = Math.ceil(poolCount / 2);
+      for (let i = 0; i < half; i++) {
+        seeded.push(group[i]); // Pool A, B, ...
+        const crossIndex = poolCount - 1 - i;
+        if (crossIndex !== i) {
+          seeded.push(group[crossIndex]); // Pool D, C, ...
+        }
+      }
+    }
+  }
+
+  // Assign seeds based on sorted order
+  return seeded.map((s, index) => ({
+    id: s.participant.id,
+    name: s.participant.name,
+    playerIds: s.participant.playerIds,
+    duprIds: s.participant.duprIds,
+    duprRating: s.participant.duprRating,
+    seed: index + 1,
   }));
 }
 
@@ -528,6 +636,131 @@ export function generateMedalBracket(config: MedalBracketConfig): MedalBracketRe
   };
 }
 
+/**
+ * Generate plate/consolation bracket from non-qualifying participants
+ *
+ * Called after pool stage is complete. Matches are marked with bracketType: 'plate'.
+ *
+ * @param config - Medal bracket configuration (reused for plate)
+ * @param plateParticipants - Participants who qualified for plate bracket
+ * @param plateSettings - Plate-specific settings
+ * @returns Plate bracket matches including optional 3rd place match
+ */
+export function generatePlateBracket(
+  config: Omit<MedalBracketConfig, 'qualifiedParticipants'>,
+  plateParticipants: PoolParticipant[],
+  plateSettings: {
+    plateFormat?: 'single_elim' | 'round_robin';
+    plateThirdPlace?: boolean;
+    plateName?: string;
+  }
+): PlateBracketResult {
+  const { eventType, eventId, gameSettings } = config;
+  const { plateFormat = 'single_elim', plateThirdPlace = false } = plateSettings;
+
+  if (plateParticipants.length < 2) {
+    return { plateMatches: [], plateThirdPlaceMatch: null, bracketSize: 0, rounds: 0 };
+  }
+
+  // Convert to bracket participants
+  const bracketParticipants: BracketParticipant[] = plateParticipants.map(p => ({
+    id: p.id,
+    name: p.name,
+    playerIds: p.playerIds,
+    duprIds: p.duprIds,
+    duprRating: p.duprRating,
+  }));
+
+  if (plateFormat === 'round_robin') {
+    // Generate round robin for plate participants
+    const rounds = generateRoundRobinPairings(bracketParticipants);
+    const plateMatches: Omit<Match, 'id' | 'createdAt' | 'updatedAt'>[] = [];
+    let matchNumber = 1;
+
+    for (const round of rounds) {
+      for (const pairing of round.pairings) {
+        if (!pairing.sideA || !pairing.sideB) continue;
+
+        const match: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> = {
+          eventType,
+          eventId,
+          format: 'pool_play_medals',
+          gameSettings,
+          sideA: {
+            id: pairing.sideA.id,
+            name: pairing.sideA.name,
+            playerIds: pairing.sideA.playerIds,
+            duprIds: pairing.sideA.duprIds,
+            duprRating: pairing.sideA.duprRating,
+          },
+          sideB: {
+            id: pairing.sideB.id,
+            name: pairing.sideB.name,
+            playerIds: pairing.sideB.playerIds,
+            duprIds: pairing.sideB.duprIds,
+            duprRating: pairing.sideB.duprRating,
+          },
+          roundNumber: round.roundNumber,
+          matchNumber: matchNumber++,
+          stage: 'plate',
+          bracketType: 'plate',
+          status: 'scheduled',
+          scores: [],
+        };
+
+        plateMatches.push(match);
+      }
+    }
+
+    return {
+      plateMatches,
+      plateThirdPlaceMatch: null,
+      bracketSize: plateParticipants.length,
+      rounds: rounds.length,
+    };
+  }
+
+  // Default: Single elimination plate bracket
+  const bracketResult = generateEliminationBracket({
+    eventType,
+    eventId,
+    participants: bracketParticipants,
+    gameSettings,
+    formatSettings: {
+      thirdPlaceMatch: plateThirdPlace,
+      consolationBracket: false,
+    },
+    format: gameSettings.playType === 'singles' ? 'singles_elimination' : 'doubles_elimination',
+  });
+
+  // Mark all matches as plate bracket
+  const plateMatches = bracketResult.matches.map(m => ({
+    ...m,
+    format: 'pool_play_medals' as const,
+    stage: 'plate' as const,
+    bracketType: 'plate' as const,
+  }));
+
+  // Extract plate 3rd place match if present
+  let plateThirdPlaceMatch: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> | null = null;
+
+  if (plateThirdPlace) {
+    const thirdPlaceBracket = bracketResult.bracket.find(m => m.isThirdPlace);
+    if (thirdPlaceBracket) {
+      plateThirdPlaceMatch = plateMatches.find(
+        m => m.bracketPosition === thirdPlaceBracket.bracketPosition
+      ) || null;
+    }
+  }
+
+  return {
+    plateMatches,
+    plateThirdPlaceMatch,
+    bracketSize: bracketResult.bracketSize,
+    rounds: bracketResult.rounds,
+  };
+}
+
 // ============================================
 // MAIN GENERATOR
 // ============================================
@@ -546,15 +779,16 @@ export function generatePoolPlayMedals(config: PoolPlayConfig): PoolPlayMedalsRe
   // Generate pool stage
   const poolResult = generatePoolStage(config);
 
-  // Return pool data and a function to generate medal bracket later
+  // Return pool data and functions to generate brackets later
   return {
     pools: poolResult.pools,
     poolMatches: poolResult.poolMatches,
+
     generateMedalBracket: (poolStandings: PoolStanding[][]) => {
-      // Determine qualifiers
+      // Determine qualifiers (also sets plate qualifiers)
       const updatedStandings = determineQualifiers(poolStandings, config.formatSettings);
 
-      // Get qualified participants
+      // Get main bracket qualified participants
       const qualifiedParticipants = getQualifiedParticipants(updatedStandings);
 
       // Generate medal bracket
@@ -565,6 +799,33 @@ export function generatePoolPlayMedals(config: PoolPlayConfig): PoolPlayMedalsRe
         gameSettings: config.gameSettings,
         formatSettings: config.formatSettings,
       });
+    },
+
+    generatePlateBracket: (poolStandings: PoolStanding[][]) => {
+      // Determine qualifiers (sets both main and plate qualifiers)
+      const updatedStandings = determineQualifiers(poolStandings, config.formatSettings);
+
+      // Get plate bracket participants
+      const plateParticipants = getPlateParticipants(updatedStandings);
+
+      // Get plate settings from format (cast to access extended fields)
+      const formatWithPlate = config.formatSettings as any;
+
+      // Generate plate bracket
+      return generatePlateBracket(
+        {
+          eventType: config.eventType,
+          eventId: config.eventId,
+          gameSettings: config.gameSettings,
+          formatSettings: config.formatSettings,
+        },
+        plateParticipants,
+        {
+          plateFormat: formatWithPlate.plateFormat || 'single_elim',
+          plateThirdPlace: formatWithPlate.plateThirdPlace || false,
+          plateName: formatWithPlate.plateName || 'Plate',
+        }
+      );
     },
   };
 }

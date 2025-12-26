@@ -10,13 +10,14 @@ import type {
   StandingsEntry
 } from '../types';
 import { useAuth } from '../contexts/AuthContext';
-import { 
+import {
   updateDivision,
   saveTournament,
   addCourt,
   updateCourt,
   deleteCourt,
-  updateMatchScore,  
+  updateMatchScore,
+  publishScheduleTimes,
 } from '../services/firebase';
 import { TeamSetup } from './TeamSetup';
 import { CourtAllocation } from './CourtAllocation';
@@ -29,6 +30,10 @@ import { useTournamentData } from './tournament/hooks/useTournamentData';
 import { useCourtManagement } from './tournament/hooks/useCourtManagement';
 import { useMatchActions } from './tournament/hooks/useMatchActions';
 import { ScheduleBuilder } from './tournament/scheduleBuilder';
+import { TournamentSeedButton } from './tournament/TournamentSeedButton';
+import { PoolGroupStandings } from './tournament/PoolGroupStandings';
+import { PoolEditor } from './tournament/PoolEditor';
+import { generatePoolAssignments, savePoolAssignments } from '../services/firebase/poolAssignments';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -53,7 +58,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   initialWizardState,
   clearWizardState,
 }) => {
-  const { currentUser, userProfile, isOrganizer } = useAuth();
+  const { currentUser, userProfile, isOrganizer, isAppAdmin } = useAuth();
+
+  // Check if current user is the owner of THIS tournament (not just any organizer)
+  const isTournamentOwner = currentUser?.uid === tournament.createdByUserId;
+  // Can manage = owner OR app admin
+  const canManageTournament = isTournamentOwner || isAppAdmin;
   // Tournament Data (using new hook)
   const {
     divisions,
@@ -118,7 +128,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
-    'participants' | 'courts' | 'settings' | 'livecourts'
+    'participants' | 'courts' | 'settings' | 'livecourts' | 'pools'
   >('livecourts');
 
   
@@ -154,7 +164,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   /* -------- Active Division / Tabs -------- */
 
   const [activeTab, setActiveTab] = useState<
-    'details' | 'players' | 'bracket' | 'standings'
+    'details' | 'players' | 'bracket' | 'standings' | 'pool-stage' | 'final-stage'
   >('details');
 
   // Editable division settings (ratings, age, seeding)
@@ -193,6 +203,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       seedingMethod: (activeDivision.format.seedingMethod ||
         'rating') as SeedingMethod,
     });
+
+    // Set default tab based on format
+    const isPoolPlayMedals = activeDivision.format?.competitionFormat === 'pool_play_medals' ||
+      activeDivision.format?.stageMode === 'two_stage';
+    if (isPoolPlayMedals && activeTab !== 'pool-stage' && activeTab !== 'final-stage' && activeTab !== 'details' && activeTab !== 'players') {
+      setActiveTab('pool-stage');
+    }
   }, [activeDivision]);
 
   /* -------- Per-match flags for confirmation UX -------- */
@@ -581,8 +598,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
         {/* Content */}
         <div className="relative px-6 py-8 md:px-8 md:py-10">
-          {/* Top Row - View Toggle */}
-          {isOrganizer && (
+          {/* Top Row - View Toggle - Only show for tournament owner or app admin */}
+          {canManageTournament && (
             <div className="flex justify-end mb-6">
               <button
                 onClick={() => setViewMode(viewMode === 'public' ? 'admin' : 'public')}
@@ -812,6 +829,11 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       Start Tournament
                     </button>
                   )}
+                  {/* Admin Testing: Seed Button */}
+                  <TournamentSeedButton
+                    tournamentId={tournament.id}
+                    divisions={divisions}
+                  />
                 </div>
               </div>
             </div>
@@ -826,6 +848,9 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               >
                 <option value="livecourts">📺 Live Courts</option>
                 <option value="participants">👥 Participants</option>
+                {(activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
+                  <option value="pools">🎱 Edit Pools</option>
+                )}
                 <option value="courts">🏟️ Courts</option>
                 <option value="settings">⚙️ Settings</option>
               </select>
@@ -843,6 +868,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                     </svg>
                   )},
+                  // Only show Edit Pools tab for pool play formats
+                  ...((activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') ? [
+                    { id: 'pools', label: 'Edit Pools', icon: (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                      </svg>
+                    )},
+                  ] : []),
                   { id: 'courts', label: 'Courts', icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
@@ -1064,6 +1097,21 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             </div>
           )}
 
+          {/* Edit Pools Tab - for pool_play_medals format */}
+          {adminTab === 'pools' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
+            <div className="bg-gray-900 p-4 rounded border border-gray-700">
+              <PoolEditor
+                tournamentId={tournament.id}
+                divisionId={activeDivision.id}
+                teams={divisionTeams}
+                matches={divisionMatches}
+                initialAssignments={activeDivision.poolAssignments}
+                poolSize={activeDivision.format.teamsPerPool || 4}
+                getTeamDisplayName={getTeamDisplayName}
+              />
+            </div>
+          )}
+
           {adminTab === 'settings' && (
             <div className="space-y-6">
               <div className="bg-gray-900 p-4 rounded border border-gray-700">
@@ -1171,6 +1219,199 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     Used when generating pools/brackets for this division.
                   </p>
                 </div>
+
+                {/* Pool Size Setting - only for pool_play_medals format */}
+                {(activeDivision.format?.competitionFormat === 'pool_play_medals' ||
+                  activeDivision.format?.stageMode === 'two_stage') && (
+                  <div className="mb-4">
+                    <label className="block text-xs text-gray-400 mb-1">
+                      Teams Per Pool
+                    </label>
+                    <select
+                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                      value={activeDivision.format?.teamsPerPool || 4}
+                      onChange={async e => {
+                        const newPoolSize = parseInt(e.target.value, 10);
+                        try {
+                          // Import doc and updateDoc for direct Firestore update with dot notation
+                          const { doc, updateDoc } = await import('@firebase/firestore');
+                          const { db } = await import('../services/firebase/config');
+
+                          const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
+
+                          // Use dot notation for nested field update - more reliable with Firestore
+                          await updateDoc(divisionRef, {
+                            'format.teamsPerPool': newPoolSize,
+                            updatedAt: Date.now(),
+                          });
+
+                          // Regenerate pool assignments with new size
+                          const newAssignments = generatePoolAssignments({
+                            teams: divisionTeams,
+                            poolSize: newPoolSize,
+                          });
+                          await savePoolAssignments(tournament.id, activeDivision.id, newAssignments);
+                        } catch (err) {
+                          const errorMessage = err instanceof Error ? err.message : String(err);
+                          console.error('Failed to update pool size:', errorMessage, err);
+                          alert(`Failed to update pool size: ${errorMessage}`);
+                        }
+                      }}
+                      disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                    >
+                      <option value={3}>3 teams per pool</option>
+                      <option value={4}>4 teams per pool</option>
+                      <option value={5}>5 teams per pool</option>
+                      <option value={6}>6 teams per pool</option>
+                    </select>
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      {divisionTeams.length} teams ÷ {activeDivision.format?.teamsPerPool || 4} = {Math.ceil(divisionTeams.length / (activeDivision.format?.teamsPerPool || 4))} pools
+                      {divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed') && (
+                        <span className="text-yellow-500 ml-2">(Locked - matches have started)</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {/* Plate/Consolation Bracket Settings */}
+                {(activeDivision.format?.competitionFormat === 'pool_play_medals' ||
+                  activeDivision.format?.stageMode === 'two_stage') && (
+                  <div className="mb-4 p-4 bg-gray-700/30 rounded-lg border border-gray-600">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={activeDivision.format?.plateEnabled === true}
+                        onChange={async (e) => {
+                          const newValue = e.target.checked;
+                          try {
+                            const { doc, updateDoc } = await import('@firebase/firestore');
+                            const { db } = await import('../services/firebase/config');
+                            const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
+                            await updateDoc(divisionRef, {
+                              'format.plateEnabled': newValue,
+                              updatedAt: Date.now(),
+                            });
+                          } catch (err) {
+                            console.error('Failed to update plate settings:', err);
+                            alert('Failed to update plate settings');
+                          }
+                        }}
+                        className="w-4 h-4 rounded border border-gray-500 bg-gray-700 checked:bg-green-500 checked:border-green-500 focus:ring-green-500 focus:ring-offset-gray-800"
+                        disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                      />
+                      <span className="text-sm text-gray-300 font-medium">Enable Plate Bracket (for pool losers)</span>
+                    </label>
+
+                    {activeDivision.format?.plateEnabled && (
+                      <div className="mt-4 space-y-4 pl-6 border-l-2 border-gray-600">
+                        {/* Plate Name */}
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Bracket Name</label>
+                          <input
+                            type="text"
+                            placeholder="Plate"
+                            value={activeDivision.format?.plateName || 'Plate'}
+                            onChange={async (e) => {
+                              try {
+                                const { doc, updateDoc } = await import('@firebase/firestore');
+                                const { db } = await import('../services/firebase/config');
+                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
+                                await updateDoc(divisionRef, {
+                                  'format.plateName': e.target.value,
+                                  updatedAt: Date.now(),
+                                });
+                              } catch (err) {
+                                console.error('Failed to update plate name:', err);
+                              }
+                            }}
+                            className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
+                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                          />
+                        </div>
+
+                        {/* Teams advancing to plate per pool */}
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Teams to Plate (per pool)</label>
+                          <select
+                            value={activeDivision.format?.advanceToPlatePerPool || 1}
+                            onChange={async (e) => {
+                              try {
+                                const { doc, updateDoc } = await import('@firebase/firestore');
+                                const { db } = await import('../services/firebase/config');
+                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
+                                await updateDoc(divisionRef, {
+                                  'format.advanceToPlatePerPool': Number(e.target.value),
+                                  updatedAt: Date.now(),
+                                });
+                              } catch (err) {
+                                console.error('Failed to update plate advancement:', err);
+                              }
+                            }}
+                            className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
+                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                          >
+                            <option value={1}>Bottom 1 per pool → Plate</option>
+                            <option value={2}>Bottom 2 per pool → Plate</option>
+                          </select>
+                        </div>
+
+                        {/* Plate Format */}
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Plate Format</label>
+                          <select
+                            value={activeDivision.format?.plateFormat || 'single_elim'}
+                            onChange={async (e) => {
+                              try {
+                                const { doc, updateDoc } = await import('@firebase/firestore');
+                                const { db } = await import('../services/firebase/config');
+                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
+                                await updateDoc(divisionRef, {
+                                  'format.plateFormat': e.target.value,
+                                  updatedAt: Date.now(),
+                                });
+                              } catch (err) {
+                                console.error('Failed to update plate format:', err);
+                              }
+                            }}
+                            className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
+                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                          >
+                            <option value="single_elim">Single Elimination</option>
+                            <option value="round_robin">Round Robin</option>
+                          </select>
+                        </div>
+
+                        {/* 3rd Place Match in Plate */}
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={activeDivision.format?.plateThirdPlace || false}
+                            onChange={async (e) => {
+                              try {
+                                const { doc, updateDoc } = await import('@firebase/firestore');
+                                const { db } = await import('../services/firebase/config');
+                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
+                                await updateDoc(divisionRef, {
+                                  'format.plateThirdPlace': e.target.checked,
+                                  updatedAt: Date.now(),
+                                });
+                              } catch (err) {
+                                console.error('Failed to update plate 3rd place setting:', err);
+                              }
+                            }}
+                            className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500"
+                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                          />
+                          <span className="text-xs text-gray-400">Include 3rd place match in Plate bracket</span>
+                        </label>
+
+                        <p className="text-[10px] text-gray-500">
+                          Bottom finishers from each pool will compete in a separate "{activeDivision.format?.plateName || 'Plate'}" bracket
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="flex justify-end mt-4">
                   <button
@@ -1408,38 +1649,61 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           <div className="lg:col-span-2 space-y-6 min-w-0">
             {/* View Tabs / Dropdown */}
             <div>
-              {/* Mobile View Selector */}
-              <div className="md:hidden border-b border-gray-700 pb-2 mb-2">
-                <label htmlFor="view-select" className="sr-only">Select View</label>
-                <select
-                  id="view-select"
-                  value={activeTab}
-                  onChange={(e) => setActiveTab(e.target.value as any)}
-                  className="w-full bg-gray-800 text-white border border-gray-700 rounded p-2 focus:ring-2 focus:ring-green-500"
-                >
-                  <option value="details">Details</option>
-                  <option value="bracket">Bracket</option>
-                  <option value="players">Players</option>
-                  <option value="standings">Standings</option>
-                </select>
-              </div>
+              {/* Determine tabs based on format */}
+              {(() => {
+                const isPoolPlayMedals = activeDivision?.format?.competitionFormat === 'pool_play_medals' ||
+                  activeDivision?.format?.stageMode === 'two_stage';
 
-              {/* Desktop View Tabs */}
-              <div className="hidden md:flex border-b border-gray-700">
-                {['details', 'bracket', 'players', 'standings'].map(t => (
-                  <button
-                    key={t}
-                    onClick={() => setActiveTab(t as any)}
-                    className={`px-6 py-3 text-sm font-bold uppercase hover:text-gray-300 transition-colors ${
-                      activeTab === t
-                        ? 'text-green-400 border-b-2 border-green-400'
-                        : 'text-gray-500'
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
+                const tabs = isPoolPlayMedals
+                  ? [
+                      { id: 'pool-stage', label: 'Pool Stage' },
+                      { id: 'final-stage', label: 'Final Stage' },
+                      { id: 'details', label: 'Schedule' },
+                      { id: 'players', label: 'Players' },
+                    ]
+                  : [
+                      { id: 'details', label: 'Details' },
+                      { id: 'bracket', label: 'Bracket' },
+                      { id: 'players', label: 'Players' },
+                      { id: 'standings', label: 'Standings' },
+                    ];
+
+                return (
+                  <>
+                    {/* Mobile View Selector */}
+                    <div className="md:hidden border-b border-gray-700 pb-2 mb-2">
+                      <label htmlFor="view-select" className="sr-only">Select View</label>
+                      <select
+                        id="view-select"
+                        value={activeTab}
+                        onChange={(e) => setActiveTab(e.target.value as any)}
+                        className="w-full bg-gray-800 text-white border border-gray-700 rounded p-2 focus:ring-2 focus:ring-green-500"
+                      >
+                        {tabs.map(t => (
+                          <option key={t.id} value={t.id}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Desktop View Tabs */}
+                    <div className="hidden md:flex border-b border-gray-700">
+                      {tabs.map(t => (
+                        <button
+                          key={t.id}
+                          onClick={() => setActiveTab(t.id as any)}
+                          className={`px-6 py-3 text-sm font-bold uppercase hover:text-gray-300 transition-colors ${
+                            activeTab === t.id
+                              ? 'text-green-400 border-b-2 border-green-400'
+                              : 'text-gray-500'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             {activeTab === 'details' && (
@@ -1549,6 +1813,83 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 h2hLookup={h2hMatrix}
               />
             )}
+
+            {/* Pool Stage - grouped pool standings for pool_play_medals format */}
+            {activeTab === 'pool-stage' && (
+              <PoolGroupStandings
+                matches={divisionMatches}
+                teams={divisionTeams}
+                poolSettings={activeDivision?.format?.poolPlayMedalsSettings}
+                getTeamPlayers={getTeamPlayers}
+              />
+            )}
+
+            {/* Final Stage - bracket view for pool_play_medals format */}
+            {activeTab === 'final-stage' && (() => {
+              // Filter matches into main bracket and plate bracket
+              const bracketMatches = uiMatches.filter(m =>
+                (m.stage === 'medal' ||
+                m.stage === 'bracket' ||
+                m.stage === 'semifinal' ||
+                m.stage === 'quarterfinal' ||
+                m.stage === 'final' ||
+                !m.poolGroup) &&
+                (m as any).bracketType !== 'plate'
+              );
+              const plateMatches = uiMatches.filter(m =>
+                (m as any).bracketType === 'plate' ||
+                (m as any).stage === 'plate'
+              );
+
+              const plateEnabled = activeDivision?.format?.plateEnabled === true;
+              const plateName = activeDivision?.format?.plateName || 'Plate';
+              const hasMainBracket = bracketMatches.length > 0;
+              const hasPlateBracket = plateMatches.length > 0;
+
+              return (
+                <div className="space-y-8">
+                  {/* Main Bracket */}
+                  {hasMainBracket ? (
+                    <BracketViewer
+                      matches={bracketMatches}
+                      onUpdateScore={handleUpdateScore}
+                      isVerified={isVerified}
+                      bracketTitle="Main Bracket"
+                      bracketType="main"
+                      finalsLabel="Gold Medal Match"
+                    />
+                  ) : (
+                    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                      <h2 className="text-lg font-bold text-green-400 mb-2">Main Bracket</h2>
+                      <p className="text-gray-400 text-sm italic">
+                        Main bracket will be generated after pool stage completes.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Plate Bracket (if enabled) */}
+                  {plateEnabled && (
+                    hasPlateBracket ? (
+                      <BracketViewer
+                        matches={plateMatches}
+                        onUpdateScore={handleUpdateScore}
+                        isVerified={isVerified}
+                        bracketTitle={`${plateName} Bracket`}
+                        bracketType="plate"
+                        finalsLabel={`${plateName} Final`}
+                      />
+                    ) : (
+                      <div className="bg-gray-800 rounded-lg p-6 border border-amber-700/30">
+                        <h2 className="text-lg font-bold text-amber-400 mb-2">{plateName} Bracket</h2>
+                        <p className="text-gray-400 text-sm italic">
+                          {plateName} bracket will be generated after pool stage completes.
+                        </p>
+                      </div>
+                    )
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Sidebar */}
@@ -1694,10 +2035,36 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               teamAId: m.teamAId,
               teamBId: m.teamBId,
             }))}
-            onPublish={(scheduledMatches) => {
-              console.log('Publishing schedule:', scheduledMatches);
-              // TODO: Save scheduled times to matches
-              setShowScheduleBuilder(false);
+            onPublish={async (scheduledMatches) => {
+              try {
+                // Convert scheduled matches to update format
+                const updates = scheduledMatches.map(sm => {
+                  // Parse time string (e.g., "09:00") to timestamp
+                  // Use tournament date as base or today if not set
+                  const baseDate = new Date();
+                  const [hours, minutes] = sm.scheduledTime.split(':').map(Number);
+                  baseDate.setHours(hours, minutes, 0, 0);
+
+                  const startTime = baseDate.getTime();
+
+                  // Calculate end time from duration
+                  const endTime = startTime + (sm.durationMinutes * 60 * 1000);
+
+                  return {
+                    matchId: sm.matchId,
+                    courtName: sm.courtName,
+                    startTime,
+                    endTime,
+                  };
+                });
+
+                await publishScheduleTimes(tournament.id, updates);
+                console.log('Schedule published successfully:', updates.length, 'matches');
+                setShowScheduleBuilder(false);
+              } catch (error) {
+                console.error('Failed to publish schedule:', error);
+                alert('Failed to save schedule. Please try again.');
+              }
             }}
             onCancel={() => setShowScheduleBuilder(false)}
           />
