@@ -4,7 +4,12 @@
  * Manages court allocation, match assignment, and queue management.
  *
  * FILE LOCATION: components/tournament/hooks/useCourtManagement.ts
- * VERSION: V06.12 - Queue eligibility fix
+ * VERSION: V06.13 - Court-based queue sizing
+ *
+ * V06.13 Changes:
+ * - Queue size now limited by number of courts (not unlimited)
+ * - Shows matches for available courts plus 2 "on deck" buffer
+ * - Prevents queue from showing 100+ matches when only 4 courts available
  *
  * V06.12 Changes:
  * - Fixed queue eligibility filter to match CourtAllocation display logic
@@ -286,8 +291,18 @@ export const useCourtManagement = ({
       const status = m.status ?? 'scheduled';
       const isActive = status === 'completed' || status === 'in_progress';
       // Waiting = NOT completed, NOT in_progress, and no court assigned
-      return !isActive && !m.court;
+      // NOTE: court might be null, undefined, or empty string - all should be considered "no court"
+      const hasCourt = m.court && m.court.trim() !== '';
+      return !isActive && !hasCourt;
     });
+
+    // Debug: log match statuses for understanding
+    const statusCounts: Record<string, number> = {};
+    matches.forEach(m => {
+      const key = `${m.status || 'undefined'}_court:${m.court ? 'yes' : 'no'}`;
+      statusCounts[key] = (statusCounts[key] || 0) + 1;
+    });
+    console.log('[Match Status Breakdown]', statusCounts);
 
     // Filter for eligibility and score
     const eligible: Match[] = [];
@@ -355,13 +370,76 @@ export const useCourtManagement = ({
     // Sort eligible matches by score (lower = higher priority)
     eligible.sort((a, b) => (scores[a.id] || 0) - (scores[b.id] || 0));
 
+    // Debug logging - comprehensive breakdown
+    const rejectedReasons = {
+      missingTeamIds: 0,
+      selfMatch: 0,
+      teamBusy: 0,
+      playerBusy: 0,
+      nameBusy: 0,
+      insufficientRest: 0,
+    };
+
+    // Re-analyze candidates for detailed logging
+    candidates.forEach(m => {
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      const teamAName = m.sideA?.name || '';
+      const teamBName = m.sideB?.name || '';
+      const playerIdsA = m.sideA?.playerIds || [];
+      const playerIdsB = m.sideB?.playerIds || [];
+
+      if (!teamAId || !teamBId) { rejectedReasons.missingTeamIds++; return; }
+      if (teamAId === teamBId) { rejectedReasons.selfMatch++; return; }
+      if (teamAName && teamBName && teamAName.toLowerCase() === teamBName.toLowerCase()) { rejectedReasons.selfMatch++; return; }
+      if (busyTeams.has(teamAId) || busyTeams.has(teamBId)) { rejectedReasons.teamBusy++; return; }
+      if (playerIdsA.some(p => p && busyPlayers.has(p)) || playerIdsB.some(p => p && busyPlayers.has(p)) ||
+          busyPlayers.has(teamAId) || busyPlayers.has(teamBId)) { rejectedReasons.playerBusy++; return; }
+      if ((teamAName && busyTeamNames.has(teamAName.toLowerCase())) || (teamBName && busyTeamNames.has(teamBName.toLowerCase()))) {
+        rejectedReasons.nameBusy++; return;
+      }
+      const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
+      if (allPlayerIds.some(pid => !playerHasSufficientRest(pid))) { rejectedReasons.insufficientRest++; return; }
+    });
+
+    console.log('[Court Queue Debug]', {
+      totalMatches: matches.length,
+      candidates: candidates.length,
+      eligible: eligible.length,
+      busyTeamCount: busyTeams.size,
+      busyTeamNames: Array.from(busyTeamNames),
+      busyPlayerCount: busyPlayers.size,
+      rejectedReasons,
+      sampleCandidate: candidates[0] ? {
+        id: candidates[0].id,
+        teamAId: candidates[0].teamAId || candidates[0].sideA?.id,
+        teamBId: candidates[0].teamBId || candidates[0].sideB?.id,
+        sideAName: candidates[0].sideA?.name,
+        sideBName: candidates[0].sideB?.name,
+        status: candidates[0].status,
+        court: candidates[0].court,
+      } : null,
+    });
+
     return { eligible, scores };
   }, [matches, getPlayerRestTime, playerHasSufficientRest, getPoolProgress]);
 
   // Build a realistic queue where each team can only appear ONCE
+  // Queue size is limited by the number of AVAILABLE courts
   // This simulates: once a team is queued, they're blocked until that match completes
   const { queue, waitTimes } = useMemo(() => {
     const { eligible, scores } = getEligibleMatches();
+
+    // Count available courts (active courts not currently in use)
+    const activeCourts = courts.filter(c => c.active !== false);
+    const occupiedCourts = matches.filter(m =>
+      m.court && (m.status === 'in_progress' || (m.status !== 'completed' && m.court))
+    ).length;
+    const availableCourtCount = Math.max(0, activeCourts.length - occupiedCourts);
+
+    // Queue should show matches for available courts PLUS a buffer for "on deck"
+    // If all courts occupied, still show what's coming up next
+    const maxQueueSize = Math.max(activeCourts.length, availableCourtCount + 2);
 
     // Build queue by adding matches one at a time, blocking teams as we go
     const queuedTeams = new Set<string>();
@@ -370,6 +448,11 @@ export const useCourtManagement = ({
     const finalQueue: Match[] = [];
 
     for (const match of eligible) {
+      // Stop if we've reached the max queue size
+      if (finalQueue.length >= maxQueueSize) {
+        break;
+      }
+
       const teamAId = match.teamAId || match.sideA?.id;
       const teamBId = match.teamBId || match.sideB?.id;
       const teamAName = match.sideA?.name || '';
@@ -401,8 +484,19 @@ export const useCourtManagement = ({
       playerIdsB.forEach(p => { if (p) queuedPlayers.add(p); });
     }
 
+    // Debug: log queue building results
+    console.log('[Court Queue Builder]', {
+      eligibleCount: eligible.length,
+      activeCourts: activeCourts.length,
+      occupiedCourts,
+      availableCourtCount,
+      maxQueueSize,
+      finalQueueSize: finalQueue.length,
+      queuedTeamCount: queuedTeams.size,
+    });
+
     return { queue: finalQueue, waitTimes: scores };
-  }, [getEligibleMatches]);
+  }, [getEligibleMatches, courts, matches]);
 
   // ============================================
   // Court View Models
