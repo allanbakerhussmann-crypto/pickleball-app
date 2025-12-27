@@ -53,6 +53,14 @@ interface CourtAllocationProps {
   courts: Court[];
   matches: CourtMatch[];
 
+  /**
+   * SMART filtered queue - matches that are eligible to be assigned
+   * (teams not busy, sufficient rest time, etc.)
+   * If provided, this is used for the Match Queue display instead of
+   * filtering all matches by status === 'WAITING'
+   */
+  filteredQueue?: CourtMatch[];
+
   // Called when the organizer assigns a waiting match to a court
   onAssignMatchToCourt: (matchId: string, courtId: string) => void;
 
@@ -185,6 +193,7 @@ const SortableMatchItem: React.FC<SortableMatchItemProps> = ({
 export const CourtAllocation: React.FC<CourtAllocationProps> = ({
   courts,
   matches,
+  filteredQueue,
   onAssignMatchToCourt,
   onStartMatchOnCourt,
   onFinishMatchOnCourt,
@@ -209,8 +218,9 @@ export const CourtAllocation: React.FC<CourtAllocationProps> = ({
     }));
   };
 
-  // Waiting = not yet assigned to any court
-  const waitingMatches = matches.filter((m) => m.status === "WAITING");
+  // Waiting = use smart filtered queue if provided, otherwise fallback to status filter
+  // filteredQueue is the SMART queue that accounts for busy teams, rest time, etc.
+  const waitingMatches = filteredQueue ?? matches.filter((m) => m.status === "WAITING");
 
   // Drag & Drop sensors - support mouse, touch (mobile/app), and keyboard
   const sensors = useSensors(

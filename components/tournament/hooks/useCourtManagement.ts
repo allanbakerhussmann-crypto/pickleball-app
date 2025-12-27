@@ -85,15 +85,16 @@ interface UseCourtManagementReturn {
   // View models
   courtViewModels: CourtViewModel[];
   courtMatchModels: CourtMatchModel[];
-  
+  queueMatchModels: CourtMatchModel[];  // Smart-filtered queue in CourtMatchModel format
+
   // Queue
   queue: Match[];
   waitTimes: Record<string, number>;
-  
+
   // Helpers
   getBusyTeamIds: () => Set<string>;
   findActiveConflictMatch: (match: Match) => Match | undefined;
-  
+
   // Actions
   assignMatchToCourt: (matchId: string, courtName: string) => Promise<void>;
   startMatchOnCourt: (courtId: string) => Promise<void>;
@@ -472,6 +473,34 @@ export const useCourtManagement = ({
       };
     });
   }, [matches, divisions, courts]);
+
+  // ============================================
+  // Queue Match Models (smart-filtered queue in CourtMatchModel format)
+  // This is the FILTERED queue that accounts for busy teams, rest time, etc.
+  // Used by CourtAllocation to show only eligible matches
+  // ============================================
+
+  const queueMatchModels = useMemo((): CourtMatchModel[] => {
+    return queue.map(m => {
+      const division = divisions.find(d => d.id === m.divisionId);
+
+      // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+      const teamAName = m.sideA?.name || m.teamAId || 'TBD';
+      const teamBName = m.sideB?.name || m.teamBId || 'TBD';
+
+      return {
+        id: m.id,
+        division: division?.name || 'Unknown',
+        roundLabel: m.stage || `Round ${m.roundNumber || 1}`,
+        matchLabel: `Match ${m.matchNumber ?? m.id.slice(-4)}`,
+        teamAName,
+        teamBName,
+        status: 'WAITING' as const,  // Queue only contains waiting matches
+        courtId: undefined,
+        courtName: undefined,
+      };
+    });
+  }, [queue, divisions]);
 
   // ============================================
   // Conflict Detection
@@ -902,6 +931,7 @@ export const useCourtManagement = ({
   return {
     courtViewModels,
     courtMatchModels,
+    queueMatchModels,
     queue,
     waitTimes,
     getBusyTeamIds,

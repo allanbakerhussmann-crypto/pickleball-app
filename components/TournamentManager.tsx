@@ -93,6 +93,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   const {
     courtViewModels,
     courtMatchModels,
+    queueMatchModels,
     queue: rawQueue,
     waitTimes,
     assignMatchToCourt,
@@ -1924,6 +1925,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               <CourtAllocation
                 courts={courtViewModels}
                 matches={courtMatchModels}
+                filteredQueue={queueMatchModels}
                 onAssignMatchToCourt={async (matchId, courtId) => {
                   const court = courts.find(c => c.id === courtId);
                   if (!court) return;
