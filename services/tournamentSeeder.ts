@@ -5,7 +5,12 @@
  * Creates fake teams, players, and optionally generates matches.
  *
  * FILE LOCATION: services/tournamentSeeder.ts
- * VERSION: V06.05
+ * VERSION: V06.14
+ *
+ * V06.14 Changes:
+ * - Added playType option to support singles vs doubles divisions
+ * - Singles: Creates 1 player per team (e.g., "Alex (Test)")
+ * - Doubles: Creates 2 players per team (e.g., "Alex & Jordan (Test Team)")
  *
  * TESTING ONLY - Use this to populate tournaments with test data.
  */
@@ -31,6 +36,7 @@ export interface SeedOptions {
   teamCount: number; // 4, 8, or 16
   generateMatches: boolean;
   userId: string; // Admin user running the seed
+  playType?: 'singles' | 'doubles'; // Singles = 1 player per team, Doubles = 2 players per team
 }
 
 export interface SeedResult {
@@ -86,7 +92,7 @@ const generateTeamName = (player1Index: number, player2Index: number): string =>
 export const seedTournamentWithTestTeams = async (
   options: SeedOptions
 ): Promise<SeedResult> => {
-  const { tournamentId, divisionId, teamCount, generateMatches, userId } = options;
+  const { tournamentId, divisionId, teamCount, generateMatches, userId, playType = 'doubles' } = options;
 
   if (teamCount < 2 || teamCount > 32) {
     return {
@@ -99,35 +105,64 @@ export const seedTournamentWithTestTeams = async (
   const now = Date.now();
   const batch = writeBatch(db);
   const teamsCreated: Team[] = [];
+  const isSingles = playType === 'singles';
 
-  // Create teams (doubles: 2 players per team)
+  // Create teams
+  // Singles: 1 player per team (e.g., "Alex (Test)")
+  // Doubles: 2 players per team (e.g., "Alex & Jordan (Test Team)")
   for (let i = 0; i < teamCount; i++) {
-    const player1Index = i * 2;
-    const player2Index = i * 2 + 1;
-
-    const player1Id = generatePlayerId(player1Index);
-    const player2Id = generatePlayerId(player2Index);
-
     const teamRef = doc(collection(db, 'tournaments', tournamentId, 'teams'));
-    const team: Team = {
-      id: teamRef.id,
-      tournamentId,
-      divisionId,
-      players: [player1Id, player2Id],
-      teamName: generateTeamName(player1Index, player2Index),
-      createdByUserId: userId,
-      captainPlayerId: player1Id,
-      isLookingForPartner: false,
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-      // Store display names for UI
-      player1DisplayName: generatePlayerName(player1Index),
-      player2DisplayName: generatePlayerName(player2Index),
-    } as Team;
 
-    batch.set(teamRef, team);
-    teamsCreated.push(team);
+    if (isSingles) {
+      // Singles: one player per team
+      const playerIndex = i;
+      const playerId = generatePlayerId(playerIndex);
+      const playerName = generatePlayerName(playerIndex);
+
+      const team: Team = {
+        id: teamRef.id,
+        tournamentId,
+        divisionId,
+        players: [playerId],
+        teamName: playerName, // Just the player name for singles
+        createdByUserId: userId,
+        captainPlayerId: playerId,
+        isLookingForPartner: false,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+        player1DisplayName: playerName,
+      } as Team;
+
+      batch.set(teamRef, team);
+      teamsCreated.push(team);
+    } else {
+      // Doubles: two players per team
+      const player1Index = i * 2;
+      const player2Index = i * 2 + 1;
+
+      const player1Id = generatePlayerId(player1Index);
+      const player2Id = generatePlayerId(player2Index);
+
+      const team: Team = {
+        id: teamRef.id,
+        tournamentId,
+        divisionId,
+        players: [player1Id, player2Id],
+        teamName: generateTeamName(player1Index, player2Index),
+        createdByUserId: userId,
+        captainPlayerId: player1Id,
+        isLookingForPartner: false,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+        player1DisplayName: generatePlayerName(player1Index),
+        player2DisplayName: generatePlayerName(player2Index),
+      } as Team;
+
+      batch.set(teamRef, team);
+      teamsCreated.push(team);
+    }
   }
 
   await batch.commit();

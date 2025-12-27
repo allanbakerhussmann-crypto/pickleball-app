@@ -5,7 +5,12 @@
  * Creates fake teams and optionally generates matches for testing.
  *
  * FILE LOCATION: components/tournament/TournamentSeedButton.tsx
- * VERSION: V06.05
+ * VERSION: V06.14
+ *
+ * V06.14 Changes:
+ * - Now detects division type (singles/doubles) and creates appropriate teams
+ * - Singles divisions get 1 player per team
+ * - Doubles/mixed divisions get 2 players per team
  *
  * TESTING ONLY - Shows only for app_admin users.
  */
@@ -83,12 +88,17 @@ export const TournamentSeedButton: React.FC<TournamentSeedButtonProps> = ({
     setMessage(null);
 
     try {
+      // Get the selected division to determine play type
+      const selectedDivision = divisions.find(d => d.id === selectedDivisionId);
+      const playType = selectedDivision?.type === 'singles' ? 'singles' : 'doubles';
+
       const result = await seedTournamentWithTestTeams({
         tournamentId,
         divisionId: selectedDivisionId,
         teamCount,
         generateMatches,
         userId: currentUser.uid,
+        playType, // Pass the play type for correct team structure
       });
 
       setMessage({ type: 'success', text: result.message });
@@ -256,15 +266,23 @@ export const TournamentSeedButton: React.FC<TournamentSeedButtonProps> = ({
 
         {/* Info about what gets created */}
         <div className="mt-4 pt-3 border-t border-gray-700">
-          <p className="text-xs text-gray-500">
-            Creates {teamCount} test teams ({teamCount * 2} fake players)
-            {generateMatches && (
-              <span>
-                {' '}
-                and {(teamCount * (teamCount - 1)) / 2} matches
-              </span>
-            )}
-          </p>
+          {(() => {
+            const selectedDivision = divisions.find(d => d.id === selectedDivisionId);
+            const isSingles = selectedDivision?.type === 'singles';
+            const playerCount = isSingles ? teamCount : teamCount * 2;
+            const teamLabel = isSingles ? 'players' : 'teams';
+            return (
+              <p className="text-xs text-gray-500">
+                Creates {teamCount} test {teamLabel} ({playerCount} fake {isSingles ? 'entries' : 'players'})
+                {generateMatches && (
+                  <span>
+                    {' '}
+                    and {(teamCount * (teamCount - 1)) / 2} matches
+                  </span>
+                )}
+              </p>
+            );
+          })()}
         </div>
       </div>
     </div>

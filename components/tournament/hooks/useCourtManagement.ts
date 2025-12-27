@@ -381,6 +381,8 @@ export const useCourtManagement = ({
     };
 
     // Re-analyze candidates for detailed logging
+    const rejectedDetails: { matchId: string; reason: string; teamAName: string; teamBName: string }[] = [];
+
     candidates.forEach(m => {
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
@@ -389,17 +391,55 @@ export const useCourtManagement = ({
       const playerIdsA = m.sideA?.playerIds || [];
       const playerIdsB = m.sideB?.playerIds || [];
 
-      if (!teamAId || !teamBId) { rejectedReasons.missingTeamIds++; return; }
-      if (teamAId === teamBId) { rejectedReasons.selfMatch++; return; }
-      if (teamAName && teamBName && teamAName.toLowerCase() === teamBName.toLowerCase()) { rejectedReasons.selfMatch++; return; }
-      if (busyTeams.has(teamAId) || busyTeams.has(teamBId)) { rejectedReasons.teamBusy++; return; }
+      if (!teamAId || !teamBId) {
+        rejectedReasons.missingTeamIds++;
+        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'missingTeamIds', teamAName, teamBName });
+        return;
+      }
+      if (teamAId === teamBId) {
+        rejectedReasons.selfMatch++;
+        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'selfMatch (ID)', teamAName, teamBName });
+        return;
+      }
+      if (teamAName && teamBName && teamAName.toLowerCase() === teamBName.toLowerCase()) {
+        rejectedReasons.selfMatch++;
+        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'selfMatch (name)', teamAName, teamBName });
+        return;
+      }
+      if (busyTeams.has(teamAId) || busyTeams.has(teamBId)) {
+        rejectedReasons.teamBusy++;
+        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: `teamBusy: ${busyTeams.has(teamAId) ? teamAId : teamBId}`, teamAName, teamBName });
+        return;
+      }
       if (playerIdsA.some(p => p && busyPlayers.has(p)) || playerIdsB.some(p => p && busyPlayers.has(p)) ||
-          busyPlayers.has(teamAId) || busyPlayers.has(teamBId)) { rejectedReasons.playerBusy++; return; }
+          busyPlayers.has(teamAId) || busyPlayers.has(teamBId)) {
+        rejectedReasons.playerBusy++;
+        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'playerBusy', teamAName, teamBName });
+        return;
+      }
       if ((teamAName && busyTeamNames.has(teamAName.toLowerCase())) || (teamBName && busyTeamNames.has(teamBName.toLowerCase()))) {
-        rejectedReasons.nameBusy++; return;
+        rejectedReasons.nameBusy++;
+        const busyOne = busyTeamNames.has(teamAName.toLowerCase()) ? teamAName : teamBName;
+        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: `nameBusy: ${busyOne}`, teamAName, teamBName });
+        return;
       }
       const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
-      if (allPlayerIds.some(pid => !playerHasSufficientRest(pid))) { rejectedReasons.insufficientRest++; return; }
+      if (allPlayerIds.some(pid => !playerHasSufficientRest(pid))) {
+        rejectedReasons.insufficientRest++;
+        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'insufficientRest', teamAName, teamBName });
+        return;
+      }
+    });
+
+    if (rejectedDetails.length > 0) {
+      console.log('[Rejected Match Details]', rejectedDetails);
+    }
+
+    // Log ALL unique team names from candidates to compare with busy names
+    const allCandidateTeamNames = new Set<string>();
+    candidates.forEach(m => {
+      if (m.sideA?.name) allCandidateTeamNames.add(m.sideA.name.toLowerCase());
+      if (m.sideB?.name) allCandidateTeamNames.add(m.sideB.name.toLowerCase());
     });
 
     console.log('[Court Queue Debug]', {
@@ -410,15 +450,8 @@ export const useCourtManagement = ({
       busyTeamNames: Array.from(busyTeamNames),
       busyPlayerCount: busyPlayers.size,
       rejectedReasons,
-      sampleCandidate: candidates[0] ? {
-        id: candidates[0].id,
-        teamAId: candidates[0].teamAId || candidates[0].sideA?.id,
-        teamBId: candidates[0].teamBId || candidates[0].sideB?.id,
-        sideAName: candidates[0].sideA?.name,
-        sideBName: candidates[0].sideB?.name,
-        status: candidates[0].status,
-        court: candidates[0].court,
-      } : null,
+      allCandidateTeamNames: Array.from(allCandidateTeamNames),
+      freeTeamNames: Array.from(allCandidateTeamNames).filter(n => !busyTeamNames.has(n)),
     });
 
     return { eligible, scores };
