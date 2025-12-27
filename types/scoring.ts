@@ -5,7 +5,7 @@
  * Used for tournaments, leagues, meetups, and standalone games.
  *
  * FILE: types/scoring.ts
- * VERSION: V06.03
+ * VERSION: V06.04
  */
 
 // =============================================================================
@@ -40,6 +40,12 @@ export const DEFAULT_SCORING_SETTINGS: ScoringSettings = {
 // TEAM / PLAYER
 // =============================================================================
 
+/** Player positions on court (left/right from player's perspective facing net) */
+export interface PlayerPositions {
+  left: string;   // Player name on left side
+  right: string;  // Player name on right side
+}
+
 export interface ScoringTeam {
   id?: string;
   name: string;
@@ -48,6 +54,8 @@ export interface ScoringTeam {
   players?: string[];
   /** Player user IDs if logged in */
   playerIds?: string[];
+  /** Player positions on court (doubles only) */
+  playerPositions?: PlayerPositions;
 }
 
 // =============================================================================
@@ -92,6 +100,10 @@ export interface RallyEvent {
   gameNumber: number;
   /** Optional note (e.g., timeout reason) */
   note?: string;
+  /** Team A positions before this rally (for undo) */
+  teamAPositionsBefore?: PlayerPositions;
+  /** Team B positions before this rally (for undo) */
+  teamBPositionsBefore?: PlayerPositions;
 }
 
 // =============================================================================
@@ -147,6 +159,14 @@ export interface LiveScore {
 
   // Side switching
   sidesSwitched: boolean;
+
+  // Player positions
+  /** Which team serves first (selected during setup) */
+  initialServingTeam?: 'A' | 'B';
+  /** Which player is Server 1 for each team (0 = first player, 1 = second player) */
+  server1PlayerIndex?: { A: 0 | 1; B: 0 | 1 };
+  /** Positions locked after first point (cannot be changed) */
+  positionsLocked: boolean;
 
   // Timestamps
   createdAt: number;

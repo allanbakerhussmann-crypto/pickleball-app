@@ -5,7 +5,7 @@
  * Not tied to any event - just quick game scoring.
  *
  * FILE: components/scoring/StandaloneScoring.tsx
- * VERSION: V06.03
+ * VERSION: V06.04
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -13,8 +13,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import type { ScoringSettings, ScoringTeam, StandaloneGame, PlayType, PointsPerGame, BestOf } from '../../types/scoring';
 import { DEFAULT_SCORING_SETTINGS } from '../../types/scoring';
 import { createStandaloneGame, getUserStandaloneGames, deleteStandaloneGame } from '../../services/firebase/liveScores';
-import { createInitialLiveScore } from '../../services/scoring/scoringLogic';
+import { createInitialLiveScore, initializePlayerPositions } from '../../services/scoring/scoringLogic';
 import { LiveScoringInterface } from './LiveScoringInterface';
+import { CourtPositionSetup } from './CourtPositionSetup';
 import { syncLiveScoreState } from '../../services/firebase/liveScores';
 
 // =============================================================================
@@ -27,7 +28,7 @@ interface QuickStartFormProps {
 }
 
 const QuickStartForm: React.FC<QuickStartFormProps> = ({ onStart, loading }) => {
-  const { user, profile } = useAuth();
+  const { currentUser, userProfile } = useAuth();
 
   // Team setup
   const [teamAName, setTeamAName] = useState('Team A');
@@ -43,11 +44,11 @@ const QuickStartForm: React.FC<QuickStartFormProps> = ({ onStart, loading }) => 
 
   // Pre-fill user as first player
   useEffect(() => {
-    if (profile?.displayName) {
-      setTeamAPlayers([profile.displayName]);
-      setTeamAName(profile.displayName);
+    if (userProfile?.displayName) {
+      setTeamAPlayers([userProfile.displayName]);
+      setTeamAName(userProfile.displayName);
     }
-  }, [profile]);
+  }, [userProfile]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,7 +57,7 @@ const QuickStartForm: React.FC<QuickStartFormProps> = ({ onStart, loading }) => 
       name: teamAName || 'Team A',
       color: '#3B82F6', // Blue
       players: teamAPlayers.filter(Boolean),
-      playerIds: user ? [user.uid] : [],
+      playerIds: currentUser ? [currentUser.uid] : [],
     };
 
     const teamB: ScoringTeam = {
@@ -351,19 +352,27 @@ const RecentGamesList: React.FC<RecentGamesListProps> = ({ games, onSelectGame, 
 // MAIN COMPONENT
 // =============================================================================
 
+// Pending game setup data (before position setup)
+interface PendingGameSetup {
+  teamA: ScoringTeam;
+  teamB: ScoringTeam;
+  settings: ScoringSettings;
+}
+
 export const StandaloneScoring: React.FC = () => {
-  const { user } = useAuth();
+  const { currentUser } = useAuth();
 
   // State
-  const [mode, setMode] = useState<'menu' | 'scoring'>('menu');
+  const [mode, setMode] = useState<'menu' | 'setup' | 'scoring'>('menu');
   const [activeGame, setActiveGame] = useState<StandaloneGame | null>(null);
+  const [pendingSetup, setPendingSetup] = useState<PendingGameSetup | null>(null);
   const [recentGames, setRecentGames] = useState<StandaloneGame[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingRecent, setLoadingRecent] = useState(true);
 
   // Load recent games
   useEffect(() => {
-    if (!user) {
+    if (!currentUser) {
       setRecentGames([]);
       setLoadingRecent(false);
       return;
@@ -371,7 +380,7 @@ export const StandaloneScoring: React.FC = () => {
 
     const loadRecent = async () => {
       try {
-        const games = await getUserStandaloneGames(user.uid, 10);
+        const games = await getUserStandaloneGames(currentUser.uid, 10);
         setRecentGames(games);
       } catch (err) {
         console.error('Error loading recent games:', err);
@@ -381,49 +390,107 @@ export const StandaloneScoring: React.FC = () => {
     };
 
     loadRecent();
-  }, [user]);
+  }, [currentUser]);
 
-  // Start new game
+  // Start new game (goes to position setup for doubles, or directly starts for singles)
   const handleStartGame = useCallback(async (
     teamA: ScoringTeam,
     teamB: ScoringTeam,
     settings: ScoringSettings
   ) => {
-    if (!user) {
+    if (!currentUser) {
       alert('Please sign in to score games');
       return;
     }
 
+    // For doubles, go to position setup first
+    if (settings.playType === 'doubles') {
+      setPendingSetup({ teamA, teamB, settings });
+      setMode('setup');
+      return;
+    }
+
+    // For singles, start directly
+    await createAndStartGame(teamA, teamB, settings, 'A', { A: 0, B: 0 });
+  }, [currentUser]);
+
+  // Handle position setup complete (for doubles)
+  const handleSetupComplete = useCallback(async (config: {
+    teamA: ScoringTeam;
+    teamB: ScoringTeam;
+    firstServingTeam: 'A' | 'B';
+    server1Index: { A: 0 | 1; B: 0 | 1 };
+  }) => {
+    if (!pendingSetup) return;
+    await createAndStartGame(
+      config.teamA,
+      config.teamB,
+      pendingSetup.settings,
+      config.firstServingTeam,
+      config.server1Index
+    );
+    setPendingSetup(null);
+  }, [pendingSetup]);
+
+  // Cancel position setup
+  const handleCancelSetup = useCallback(() => {
+    setPendingSetup(null);
+    setMode('menu');
+  }, []);
+
+  // Create and start the actual game
+  const createAndStartGame = async (
+    teamA: ScoringTeam,
+    teamB: ScoringTeam,
+    settings: ScoringSettings,
+    firstServingTeam: 'A' | 'B',
+    server1Index: { A: 0 | 1; B: 0 | 1 }
+  ) => {
+    if (!currentUser) return;
+
     setLoading(true);
     try {
-      const gameId = await createStandaloneGame(user.uid, teamA, teamB, settings, {
+      console.log('Creating game with:', { teamA, teamB, settings, userId: currentUser.uid });
+
+      const gameId = await createStandaloneGame(currentUser.uid, teamA, teamB, settings, {
         saveToHistory: true,
         shareEnabled: false,
       });
 
-      // Create initial state
+      console.log('Game created with ID:', gameId);
+
+      // Create initial state with position data
       const initialState = createInitialLiveScore(teamA, teamB, settings, {
         eventType: 'standalone',
-        scorerId: user.uid,
+        scorerId: currentUser.uid,
       });
+
+      // Set the first serving team and server info
+      initialState.servingTeam = firstServingTeam;
+      initialState.serverNumber = 2; // First serve always starts as Server 2
+      initialState.server1PlayerIndex = server1Index;
+      initialState.initialServingTeam = firstServingTeam;
+
+      console.log('Initial state created:', initialState);
 
       setActiveGame({
         ...initialState,
         id: gameId,
         eventType: 'standalone',
-        ownerId: user.uid,
+        ownerId: currentUser.uid,
         saveToHistory: true,
         submitToDupr: false,
         shareEnabled: false,
       } as StandaloneGame);
       setMode('scoring');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error creating game:', err);
-      alert('Failed to create game');
+      console.error('Error details:', err?.message, err?.code);
+      alert(`Failed to create game: ${err?.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  };
 
   // Resume existing game
   const handleResumeGame = useCallback((game: StandaloneGame) => {
@@ -471,11 +538,11 @@ export const StandaloneScoring: React.FC = () => {
       setMode('menu');
       setActiveGame(null);
       // Reload recent games
-      if (user) {
-        getUserStandaloneGames(user.uid, 10).then(setRecentGames);
+      if (currentUser) {
+        getUserStandaloneGames(currentUser.uid, 10).then(setRecentGames);
       }
     }, 3000);
-  }, [activeGame, user]);
+  }, [activeGame, currentUser]);
 
   // Exit scoring
   const handleExitScoring = useCallback(() => {
@@ -493,7 +560,7 @@ export const StandaloneScoring: React.FC = () => {
   // ==========================================================================
 
   // Not signed in
-  if (!user) {
+  if (!currentUser) {
     return (
       <div className="min-h-[400px] flex items-center justify-center">
         <div className="text-center">
@@ -504,6 +571,19 @@ export const StandaloneScoring: React.FC = () => {
           </p>
         </div>
       </div>
+    );
+  }
+
+  // Position Setup mode (doubles only)
+  if (mode === 'setup' && pendingSetup) {
+    return (
+      <CourtPositionSetup
+        teamA={pendingSetup.teamA}
+        teamB={pendingSetup.teamB}
+        playType={pendingSetup.settings.playType}
+        onSetupComplete={handleSetupComplete}
+        onCancel={handleCancelSetup}
+      />
     );
   }
 

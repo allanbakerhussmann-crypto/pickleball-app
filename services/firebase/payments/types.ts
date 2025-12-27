@@ -578,12 +578,12 @@ export interface ClubBranding {
 // PRICING TYPES
 // ============================================
 
-export type PriceType = 'peak' | 'offpeak' | 'weekend' | 'member' | 'visitor';
+export type PriceType = 'peak' | 'offpeak' | 'weekend' | 'member' | 'visitor' | 'standard';
 
 export interface PriceBreakdownItem {
   label: string;
   amount: number;
-  type: 'base' | 'discount' | 'surcharge' | 'fee' | 'tax';
+  type?: 'base' | 'discount' | 'surcharge' | 'fee' | 'tax';
 }
 
 export interface BookingPriceResult {
@@ -596,6 +596,13 @@ export interface BookingPriceResult {
   surcharges: number;
   savings: number;
   isFree: boolean;
+  // Optional fee details
+  courtFee?: number;
+  lightingFee?: number;
+  equipmentFee?: number;
+  memberDiscount?: number;
+  visitorPremium?: number;
+  passDiscount?: number;
 }
 
 // ============================================

@@ -23,7 +23,6 @@ import {
 } from './roundRobin';
 import {
   generateEliminationBracket,
-  seedByDupr,
   type BracketParticipant,
 } from './elimination';
 
@@ -237,25 +236,41 @@ export function generatePoolStage(config: PoolPlayConfig): PoolPlayResult {
       for (const pairing of round.pairings) {
         if (!pairing.sideA || !pairing.sideB) continue; // Skip byes
 
+        // CRITICAL: Validate teams are different (prevent data corruption)
+        if (pairing.sideA.id === pairing.sideB.id) {
+          console.error(`[Pool Play] Skipping invalid pairing: same team ID on both sides: ${pairing.sideA.id}`);
+          continue;
+        }
+        if (pairing.sideA.name.toLowerCase() === pairing.sideB.name.toLowerCase()) {
+          console.error(`[Pool Play] Skipping invalid pairing: same team name on both sides: ${pairing.sideA.name}`);
+          continue;
+        }
+
+        // Build sideA - only include optional fields if defined (Firestore rejects undefined)
+        const sideA: any = {
+          id: pairing.sideA.id,
+          name: pairing.sideA.name,
+          playerIds: pairing.sideA.playerIds,
+        };
+        if (pairing.sideA.duprIds) sideA.duprIds = pairing.sideA.duprIds;
+        if (pairing.sideA.duprRating !== undefined) sideA.duprRating = pairing.sideA.duprRating;
+
+        // Build sideB - only include optional fields if defined
+        const sideB: any = {
+          id: pairing.sideB.id,
+          name: pairing.sideB.name,
+          playerIds: pairing.sideB.playerIds,
+        };
+        if (pairing.sideB.duprIds) sideB.duprIds = pairing.sideB.duprIds;
+        if (pairing.sideB.duprRating !== undefined) sideB.duprRating = pairing.sideB.duprRating;
+
         const match: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> = {
           eventType,
           eventId,
           format: 'pool_play_medals',
           gameSettings,
-          sideA: {
-            id: pairing.sideA.id,
-            name: pairing.sideA.name,
-            playerIds: pairing.sideA.playerIds,
-            duprIds: pairing.sideA.duprIds,
-            duprRating: pairing.sideA.duprRating,
-          },
-          sideB: {
-            id: pairing.sideB.id,
-            name: pairing.sideB.name,
-            playerIds: pairing.sideB.playerIds,
-            duprIds: pairing.sideB.duprIds,
-            duprRating: pairing.sideB.duprRating,
-          },
+          sideA,
+          sideB,
           roundNumber: round.roundNumber,
           matchNumber: globalMatchNumber++,
           poolGroup: pool.poolName,

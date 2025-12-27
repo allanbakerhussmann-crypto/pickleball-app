@@ -49,6 +49,12 @@ export const ROUTES = {
   ADMIN_USERS: '/admin/users',
   ADMIN_ORGANIZER_REQUESTS: '/admin/organizer-requests',
   ADMIN_TEST_PAYMENTS: '/admin/test-payments',
+  ADMIN_BREACH_MANAGEMENT: '/admin/privacy-security',
+
+  // Legal / Privacy
+  PRIVACY_POLICY: '/privacy-policy',
+  TERMS_OF_SERVICE: '/terms',
+  PRIVACY_REQUEST: '/privacy-request',
 } as const;
 
 /**

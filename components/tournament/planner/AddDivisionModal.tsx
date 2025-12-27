@@ -72,6 +72,14 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
     division?.maxRating?.toString() || ''
   );
 
+  // Age requirements
+  const [minAge, setMinAge] = useState<string>(
+    division?.minAge?.toString() || ''
+  );
+  const [maxAge, setMaxAge] = useState<string>(
+    division?.maxAge?.toString() || ''
+  );
+
   // Calculate match count
   const matchCount = useMemo(() => {
     return calculateMatchesForFormat(format, expectedPlayers, poolSize);
@@ -102,6 +110,16 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
     return 'Open';
   }, [minRating, maxRating]);
 
+  // Build age label for display
+  const ageLabel = useMemo(() => {
+    const min = minAge ? parseInt(minAge) : null;
+    const max = maxAge ? parseInt(maxAge) : null;
+    if (min && max) return `${min} - ${max}`;
+    if (min) return `${min}+`;
+    if (max) return `Under ${max + 1}`;
+    return 'All Ages';
+  }, [minAge, maxAge]);
+
   // Handle submit
   const handleSubmit = () => {
     if (!name.trim()) return;
@@ -114,6 +132,8 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
       expectedPlayers,
       minRating: minRating ? parseFloat(minRating) : undefined,
       maxRating: maxRating ? parseFloat(maxRating) : undefined,
+      minAge: minAge ? parseInt(minAge) : undefined,
+      maxAge: maxAge ? parseInt(maxAge) : undefined,
       poolSize: format === 'pool_play_medals' ? poolSize : undefined,
       poolCount: format === 'pool_play_medals' ? poolCount : undefined,
       matchCount,
@@ -226,6 +246,52 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
               {!minRating && !maxRating && (
                 <span className="text-xs text-gray-500 italic">
                   Leave empty for open division
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Age Requirements */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">
+              AGE REQUIREMENTS
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Min Age</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="100"
+                  value={minAge}
+                  onChange={(e) => setMinAge(e.target.value)}
+                  placeholder="e.g., 50"
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Max Age</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="100"
+                  value={maxAge}
+                  onChange={(e) => setMaxAge(e.target.value)}
+                  placeholder="e.g., 17"
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-xs text-gray-500">Age Group:</span>
+              <span className="px-2 py-0.5 bg-green-900/50 text-green-300 text-xs rounded">
+                {ageLabel}
+              </span>
+              {!minAge && !maxAge && (
+                <span className="text-xs text-gray-500 italic">
+                  Leave empty for all ages
                 </span>
               )}
             </div>

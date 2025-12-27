@@ -4,12 +4,16 @@
  * Displays pool play standings grouped by pool (Group A, Group B, etc.)
  * with collapsible sections, advancement badges, and match history.
  *
- * @version 06.04
+ * V06.08 Changes:
+ * - Fixed wins/losses calculation to derive winner from scores when winnerId is not set
+ * - Now correctly counts W/L even for matches completed without winnerId
+ *
+ * @version 06.08
  * @file components/tournament/PoolGroupStandings.tsx
  */
 
 import React, { useState, useMemo } from 'react';
-import type { Match, Team, StandingsEntry } from '../../types';
+import type { Match, Team } from '../../types';
 import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
 import { MatchHistoryIndicator } from './MatchHistoryIndicator';
 
@@ -85,10 +89,12 @@ function calculatePoolStandings(
 
   teamIds.forEach((teamId) => {
     const team = teams.find((t) => t.id === teamId);
+    // Extract player names from team.players array (which are objects with name property)
+    const playerNames: string[] = team?.players?.map(p => p.name) || [];
     standingsMap.set(teamId, {
       teamId,
       teamName: team?.teamName || team?.name || 'Unknown Team',
-      players: team?.players || [],
+      players: playerNames,
       played: 0,
       wins: 0,
       losses: 0,
@@ -142,8 +148,20 @@ function calculatePoolStandings(
       rowB.pointsFor += pointsB;
       rowB.pointsAgainst += pointsA;
 
-      // Determine winner
-      const winnerId = match.winnerTeamId || match.winnerId;
+      // Determine winner - use winnerId if set, otherwise calculate from scores
+      let winnerId = match.winnerTeamId || match.winnerId;
+
+      // If winnerId is not set, determine winner from scores
+      if (!winnerId && (pointsA !== 0 || pointsB !== 0)) {
+        if (pointsA > pointsB) {
+          winnerId = teamAId;
+        } else if (pointsB > pointsA) {
+          winnerId = teamBId;
+        }
+        // If pointsA === pointsB, it's a tie - winnerId stays undefined
+      }
+
+      // Update wins/losses
       if (winnerId === teamAId) {
         rowA.wins += 1;
         rowB.losses += 1;
@@ -151,6 +169,7 @@ function calculatePoolStandings(
         rowB.wins += 1;
         rowA.losses += 1;
       }
+      // If winnerId is still undefined, it's a tie - no wins/losses recorded
     });
 
   // Calculate point difference and sort
@@ -373,12 +392,20 @@ const PoolSection: React.FC<PoolSectionProps> = ({
                   const isCompleted = match.status === 'completed';
                   const winnerId = match.winnerTeamId || match.winnerId;
 
-                  // Get scores
+                  // Get scores - check both modern and legacy formats
                   let scoreDisplay = '-';
-                  if (isCompleted && match.scores && match.scores.length > 0) {
-                    scoreDisplay = match.scores
-                      .map((g) => `${g.scoreA}-${g.scoreB}`)
-                      .join(', ');
+                  if (isCompleted) {
+                    if (match.scores && match.scores.length > 0) {
+                      // Modern format: scores[] array
+                      scoreDisplay = match.scores
+                        .map((g) => `${g.scoreA}-${g.scoreB}`)
+                        .join(', ');
+                    } else if (match.scoreTeamAGames?.length && match.scoreTeamBGames?.length) {
+                      // Legacy format: scoreTeamAGames[] and scoreTeamBGames[]
+                      scoreDisplay = match.scoreTeamAGames
+                        .map((a: number, i: number) => `${a}-${match.scoreTeamBGames![i]}`)
+                        .join(', ');
+                    }
                   }
 
                   return (

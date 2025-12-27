@@ -4,7 +4,11 @@
  * Displays a team's recent match results as colored W/L boxes.
  * Similar to Challonge's match history column.
  *
- * @version 06.04
+ * V06.08 Changes:
+ * - Added score-based winner calculation fallback when winnerId is not set
+ * - Now correctly shows W/L even if match was completed without winnerId
+ *
+ * @version 06.08
  * @file components/tournament/MatchHistoryIndicator.tsx
  */
 
@@ -16,6 +20,40 @@ interface MatchHistoryIndicatorProps {
   matches: Match[];
   maxResults?: number;
 }
+
+/**
+ * Calculate winner from scores if winnerId is not set
+ */
+const calculateWinnerFromScores = (match: Match): string | null => {
+  let pointsA = 0;
+  let pointsB = 0;
+
+  // Handle scores array (GameScore format)
+  if (match.scores && Array.isArray(match.scores)) {
+    match.scores.forEach((game) => {
+      pointsA += game.scoreA || 0;
+      pointsB += game.scoreB || 0;
+    });
+  }
+
+  // Handle legacy scoreTeamAGames / scoreTeamBGames
+  if (match.scoreTeamAGames && Array.isArray(match.scoreTeamAGames)) {
+    pointsA += match.scoreTeamAGames.reduce((sum: number, s: number) => sum + s, 0);
+  }
+  if (match.scoreTeamBGames && Array.isArray(match.scoreTeamBGames)) {
+    pointsB += match.scoreTeamBGames.reduce((sum: number, s: number) => sum + s, 0);
+  }
+
+  // Determine winner from points
+  if (pointsA > pointsB) {
+    return match.teamAId || match.sideA?.id || null;
+  } else if (pointsB > pointsA) {
+    return match.teamBId || match.sideB?.id || null;
+  }
+
+  // It's a tie (equal points)
+  return null;
+};
 
 /**
  * Get match results for a team (W/L/T)
@@ -44,11 +82,16 @@ const getMatchResults = (
     .slice(0, maxResults);
 
   return teamMatches.map((match) => {
-    const isTeamA = match.teamAId === teamId || match.sideA?.id === teamId;
-    const winnerId = match.winnerTeamId || match.winnerId;
+    // Get winnerId from match, or calculate from scores if not set
+    let winnerId: string | null | undefined = match.winnerTeamId || match.winnerId;
 
+    // If winnerId is empty/falsy, calculate from scores
     if (!winnerId) {
-      // Tie or no winner recorded
+      winnerId = calculateWinnerFromScores(match);
+    }
+
+    // Still no winner means it's a tie
+    if (!winnerId) {
       return 'T';
     }
 
@@ -56,16 +99,8 @@ const getMatchResults = (
       return 'W';
     }
 
-    // Check if the winner is the opponent
-    if (isTeamA && (winnerId === match.teamBId || winnerId === match.sideB?.id)) {
-      return 'L';
-    }
-    if (!isTeamA && (winnerId === match.teamAId || winnerId === match.sideA?.id)) {
-      return 'L';
-    }
-
-    // Shouldn't reach here, but default to tie
-    return 'T';
+    // Otherwise it's a loss
+    return 'L';
   });
 };
 

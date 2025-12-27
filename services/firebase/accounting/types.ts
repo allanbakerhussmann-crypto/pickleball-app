@@ -272,9 +272,12 @@ export interface PlayerPaymentStatus {
   odUserId: string;
   displayName: string;
   divisionIds: string[];
+  divisionId?: string;  // Single division for simpler lookups
   totalOwed: number;
   totalPaid: number;
-  status: 'paid' | 'partial' | 'unpaid' | 'refunded';
+  amountDue?: number;   // Alias for totalOwed
+  amountPaid?: number;  // Alias for totalPaid
+  status: 'paid' | 'partial' | 'unpaid' | 'refunded' | 'pending';
   paymentId?: string;
   paidAt?: number;
 }

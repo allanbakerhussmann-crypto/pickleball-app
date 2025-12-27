@@ -12,11 +12,14 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { FirebaseError } from '@firebase/app';
 import { COUNTRIES, COUNTRY_REGIONS } from '../constants/locations';
 import { UserStripeConnect } from './profile/UserStripeConnect';
 import { DuprConnect } from './profile/DuprConnect';
+import { DeleteAccountModal } from './profile/DeleteAccountModal';
+import { DataExportButton } from './profile/DataExportButton';
 
 // Gender type defined locally since not exported from types
 type UserGender = 'male' | 'female' | 'other';
@@ -73,6 +76,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
 
     useEffect(() => {
         if (userProfile) {
@@ -383,7 +387,70 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                 <div className="mt-8 pt-8 border-t border-gray-700">
                     <UserStripeConnect />
                 </div>
+
+                {/* ============================================ */}
+                {/* PRIVACY & ACCOUNT SECTION */}
+                {/* ============================================ */}
+                <div className="mt-8 pt-8 border-t border-gray-700">
+                    <h3 className="text-lg font-bold text-white mb-4">Privacy & Account</h3>
+
+                    {/* Privacy Links */}
+                    <div className="flex flex-wrap gap-4 mb-6 text-sm">
+                        <Link
+                            to="/privacy-policy"
+                            className="text-green-400 hover:text-green-300 underline"
+                        >
+                            Privacy Policy
+                        </Link>
+                        <Link
+                            to="/terms"
+                            className="text-green-400 hover:text-green-300 underline"
+                        >
+                            Terms of Service
+                        </Link>
+                        <Link
+                            to="/privacy-request"
+                            className="text-green-400 hover:text-green-300 underline"
+                        >
+                            Privacy Request
+                        </Link>
+                        <a
+                            href="mailto:privacy@pickleballdirector.com"
+                            className="text-green-400 hover:text-green-300 underline"
+                        >
+                            Contact Privacy Officer
+                        </a>
+                    </div>
+
+                    {/* Data Export */}
+                    <div className="mb-6">
+                        <DataExportButton />
+                    </div>
+
+                    {/* Delete Account */}
+                    <div className="bg-red-900/10 border border-red-900/30 rounded-lg p-4">
+                        <h4 className="text-red-400 font-medium mb-2">Delete Account</h4>
+                        <p className="text-gray-400 text-sm mb-4">
+                            Permanently delete your account and all associated data.
+                            This action cannot be undone.
+                        </p>
+                        <button
+                            onClick={() => setShowDeleteModal(true)}
+                            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                        >
+                            Delete My Account
+                        </button>
+                    </div>
+                </div>
             </div>
+
+            {/* Delete Account Modal */}
+            {showDeleteModal && (
+                <DeleteAccountModal
+                    onClose={() => setShowDeleteModal(false)}
+                    userEmail={currentUser?.email || ''}
+                />
+            )}
         </div>
     );
 };

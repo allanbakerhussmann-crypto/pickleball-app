@@ -1,5 +1,20 @@
+/**
+ * MatchCard Component
+ *
+ * Displays a match with score entry capability.
+ * Validates scores against game settings (win by 2, first to 11/15/21).
+ *
+ * V06.09 Changes:
+ * - Added gameSettings to MatchDisplay for score validation
+ * - Added validateGameScore validation in handleSubmit
+ *
+ * @version 06.09
+ * @file components/MatchCard.tsx
+ */
 
 import React, { useState, useEffect } from 'react';
+import type { GameSettings } from '../types/game/gameSettings';
+import { validateGameScore } from '../services/game';
 
 /**
  * Basic structures for displaying a match.
@@ -25,6 +40,8 @@ export interface MatchDisplay {
   // Optional flags added in TournamentManager
   isWaitingOnYou?: boolean;
   canCurrentUserConfirm?: boolean;
+  /** Game settings for score validation (win by 2, first to 11/15/21, etc.) */
+  gameSettings?: GameSettings;
 }
 
 interface MatchCardProps {
@@ -84,6 +101,15 @@ export const MatchCard: React.FC<MatchCardProps> = ({
     if (Number.isNaN(s1) || Number.isNaN(s2)) {
       alert('Please enter scores for both sides.');
       return;
+    }
+
+    // Validate score against game settings (win by 2, first to 11/15/21, etc.)
+    if (match.gameSettings) {
+      const validation = validateGameScore(s1, s2, match.gameSettings);
+      if (!validation.valid) {
+        alert(`Invalid score: ${validation.error}`);
+        return;
+      }
     }
 
     onUpdateScore(match.id, s1, s2, 'submit');

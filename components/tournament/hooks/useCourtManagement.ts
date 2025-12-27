@@ -1,16 +1,58 @@
 /**
  * useCourtManagement Hook
- * 
+ *
  * Manages court allocation, match assignment, and queue management.
- * 
+ *
  * FILE LOCATION: components/tournament/hooks/useCourtManagement.ts
- * 
- * FIXED: Changed team1Name/team2Name to teamAName/teamBName to match CourtAllocation.tsx
+ * VERSION: V06.12 - Queue eligibility fix
+ *
+ * V06.12 Changes:
+ * - Fixed queue eligibility filter to match CourtAllocation display logic
+ * - Now accepts any status that's not 'completed' or 'in_progress' (not just 'scheduled')
+ * - Ensures queue shows same matches as "WAITING" in organizer view
+ *
+ * Court Allocation Rules:
+ * - Rule 1: Team/Player cannot be on multiple courts simultaneously
+ * - Rule 2: One match per court at a time
+ * - Rule 3: Complete Round N before Round N+1 (when possible)
+ * - Rule 4: Only waiting/scheduled matches in queue
+ * - Rule 5: Inactive courts excluded
+ * - Rule 6: Fair distribution - teams with fewer played matches get priority
+ * - Rule 7: Matches where a team plays itself are excluded (data corruption protection)
+ *
+ * V06.11 Changes:
+ * - CRITICAL: Added validation to prevent matches where a team plays itself
+ * - getEligibleMatches() skips matches with same team on both sides
+ * - assignMatchToCourt() blocks assignment of self-match with user alert
+ * - Logs console errors for debugging data corruption
+ *
+ * V06.10 Changes:
+ * - Added team NAME matching in addition to team ID matching
+ * - Fixes issue where teams on court still appeared in queue (pool play)
+ * - busyTeamNames Set tracks teams by name (case-insensitive)
+ * - Queue builder also tracks by team name to prevent duplicates
+ * - autoAssignFreeCourts also checks team names for conflicts
+ *
+ * V06.09 Changes:
+ * - Added fair match queue distribution algorithm (load balancing)
+ * - Queue now sorts by: 1) play count (ascending), 2) round number, 3) match number
+ * - Teams with fewer completed/in_progress matches are prioritized
+ * - Ensures all players play approximately the same number of matches at any time
+ * - Both queue calculation and autoAssignFreeCourts use the same algorithm
+ *
+ * V06.08 Changes:
+ * - Added validation to skip matches with missing team IDs
+ * - Fixed short-circuit evaluation bug that allowed double-assignments
+ * - Added PLAYER-LEVEL conflict detection (not just team IDs)
+ * - Now tracks both busyTeamIds AND busyPlayerIds to prevent a player
+ *   appearing on multiple courts even if they're in different teams
  */
 
 import { useMemo, useCallback } from 'react';
 import type { Match, Court, Division } from '../../../types';
-import { updateMatchScore } from '../../../services/firebase';
+import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment } from '../../../services/firebase';
+import { validateGameScore } from '../../../services/game/scoreValidation';
+import type { GameSettings } from '../../../types/game/gameSettings';
 
 interface UseCourtManagementProps {
   tournamentId: string;
@@ -60,6 +102,9 @@ interface UseCourtManagementReturn {
   autoAssignFreeCourts: (options?: { silent?: boolean }) => Promise<void>;
 }
 
+// Minimum rest time between matches (8 minutes)
+const REST_TIME_MINIMUM_MS = 8 * 60 * 1000;
+
 export const useCourtManagement = ({
   tournamentId,
   matches,
@@ -68,7 +113,58 @@ export const useCourtManagement = ({
 }: UseCourtManagementProps): UseCourtManagementReturn => {
 
   // ============================================
-  // Helper: Get busy team IDs (on court)
+  // Helper: Get player's rest time since last completed match
+  // Returns milliseconds since last match completion, or Infinity if never played
+  // ============================================
+
+  const getPlayerRestTime = useCallback((playerId: string): number => {
+    const completedMatches = matches.filter(m => {
+      if (m.status !== 'completed' || !m.completedAt) return false;
+      const playerIdsA = m.sideA?.playerIds || [];
+      const playerIdsB = m.sideB?.playerIds || [];
+      return playerIdsA.includes(playerId) || playerIdsB.includes(playerId);
+    });
+
+    if (completedMatches.length === 0) return Infinity;
+
+    // Find most recent match
+    const mostRecent = completedMatches.reduce((latest, m) =>
+      (m.completedAt || 0) > (latest.completedAt || 0) ? m : latest
+    );
+
+    return Date.now() - (mostRecent.completedAt || 0);
+  }, [matches]);
+
+  // ============================================
+  // Helper: Check if player has sufficient rest (8 min minimum)
+  // ============================================
+
+  const playerHasSufficientRest = useCallback((playerId: string): boolean => {
+    return getPlayerRestTime(playerId) >= REST_TIME_MINIMUM_MS;
+  }, [getPlayerRestTime]);
+
+  // ============================================
+  // Helper: Get pool progress for fair distribution
+  // Returns { poolGroup: { total, completed, completionRate } }
+  // ============================================
+
+  const getPoolProgress = useCallback((): Map<string, { total: number; completed: number; rate: number }> => {
+    const progress = new Map<string, { total: number; completed: number; rate: number }>();
+
+    matches.forEach(m => {
+      const poolGroup = m.poolGroup || 'default';
+      const current = progress.get(poolGroup) || { total: 0, completed: 0, rate: 0 };
+      current.total++;
+      if (m.status === 'completed') current.completed++;
+      current.rate = current.total > 0 ? current.completed / current.total : 0;
+      progress.set(poolGroup, current);
+    });
+
+    return progress;
+  }, [matches]);
+
+  // ============================================
+  // Helper: Get busy team IDs AND player IDs (on court)
   // ============================================
 
   const getBusyTeamIds = useCallback(() => {
@@ -76,51 +172,236 @@ export const useCourtManagement = ({
     matches.forEach(m => {
       if (!m.court) return;
       if (m.status === 'completed') return;
-      busy.add(m.teamAId);
-      busy.add(m.teamBId);
+      // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      // Only add valid (non-empty) team IDs to busy set
+      if (teamAId && teamAId.trim()) busy.add(teamAId);
+      if (teamBId && teamBId.trim()) busy.add(teamBId);
+      // ALSO add player IDs to catch player-level conflicts
+      (m.sideA?.playerIds || []).forEach(pid => { if (pid) busy.add(pid); });
+      (m.sideB?.playerIds || []).forEach(pid => { if (pid) busy.add(pid); });
     });
     return busy;
   }, [matches]);
 
   // ============================================
-  // Queue calculation
+  // DYNAMIC Queue calculation with fair distribution + rest time + pool balance
+  // Called FRESH each time a court becomes free - not cached!
   // ============================================
 
-  const { queue, waitTimes } = useMemo(() => {
-    const busy = new Set<string>();
+  const getEligibleMatches = useCallback((): { eligible: Match[]; scores: Record<string, number> } => {
+    // Track busy teams AND busy players (currently on court)
+    const busyTeams = new Set<string>();
+    const busyPlayers = new Set<string>();
+    const busyTeamNames = new Set<string>(); // Also track by NAME for pool play
+
+    // Calculate play counts per team (in_progress + completed matches)
+    const teamPlayCount = new Map<string, number>();
+
+    // Get pool progress for balance scoring
+    const poolProgress = getPoolProgress();
+
     matches.forEach(m => {
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      const teamAName = m.sideA?.name || '';
+      const teamBName = m.sideB?.name || '';
+
+      // Count matches that are in_progress or completed for fair distribution
+      const isPlayed = m.status === 'in_progress' || m.status === 'completed';
+      if (isPlayed) {
+        if (teamAId) teamPlayCount.set(teamAId, (teamPlayCount.get(teamAId) || 0) + 1);
+        if (teamBId) teamPlayCount.set(teamBId, (teamPlayCount.get(teamBId) || 0) + 1);
+      }
+
+      // Track busy teams (currently on court - either scheduled or in_progress)
       if (!m.court) return;
       if (m.status === 'completed') return;
-      busy.add(m.teamAId);
-      busy.add(m.teamBId);
+
+      // Mark team IDs as busy
+      if (teamAId && teamAId.trim()) busyTeams.add(teamAId);
+      if (teamBId && teamBId.trim()) busyTeams.add(teamBId);
+
+      // Mark team NAMES as busy (for pool play where IDs might differ across matches)
+      if (teamAName && teamAName.trim()) busyTeamNames.add(teamAName.toLowerCase());
+      if (teamBName && teamBName.trim()) busyTeamNames.add(teamBName.toLowerCase());
+
+      // Mark player IDs as busy (from sideA/sideB.playerIds)
+      (m.sideA?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
+      (m.sideB?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
+
+      // ALSO add team IDs to busyPlayers as fallback (in case playerIds is empty)
+      // This ensures team-level conflict detection even if playerIds aren't populated
+      if (teamAId) busyPlayers.add(teamAId);
+      if (teamBId) busyPlayers.add(teamBId);
     });
 
-    const candidates = matches
-      .filter(m => {
-        const status = m.status ?? 'scheduled';
-        const isWaiting = status === 'scheduled' || status === 'not_started';
-        return isWaiting && !m.court;
-      })
-      .slice()
-      .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1));
+    // Multi-factor scoring: lower score = higher priority
+    // Factors: pool progress, play count, rest time bonus, round number
+    const scoreMatch = (m: Match): number => {
+      let score = 0;
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
 
-    const resultQueue: Match[] = [];
-    const wt: Record<string, number> = {};
+      // Factor 1: Pool balance - behind pools get LOWER score (higher priority)
+      // Pool completion rate * 100 (0-100 range)
+      const poolGroup = m.poolGroup || 'default';
+      const poolInfo = poolProgress.get(poolGroup);
+      if (poolInfo) {
+        score += poolInfo.rate * 100; // Lower completion = lower score = higher priority
+      }
+
+      // Factor 2: Play count fairness - teams with fewer games get priority
+      // Range: 0-50 per team
+      const countA = teamAId ? (teamPlayCount.get(teamAId) || 0) : 0;
+      const countB = teamBId ? (teamPlayCount.get(teamBId) || 0) : 0;
+      score += Math.max(countA, countB) * 10;
+
+      // Factor 3: Rest time bonus - players with more rest get slightly lower score
+      // This is a tiebreaker, range: 0-10
+      const playerIdsA = m.sideA?.playerIds || [];
+      const playerIdsB = m.sideB?.playerIds || [];
+      const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
+      if (allPlayerIds.length > 0) {
+        const avgRestTime = allPlayerIds.reduce((sum, pid) => {
+          const rest = getPlayerRestTime(pid);
+          return sum + (rest === Infinity ? REST_TIME_MINIMUM_MS * 2 : rest);
+        }, 0) / allPlayerIds.length;
+        // More rest = lower score (inverted, capped at 10)
+        score -= Math.min(10, avgRestTime / REST_TIME_MINIMUM_MS * 5);
+      }
+
+      // Factor 4: Round number - earlier rounds first
+      score += (m.roundNumber || 1) * 5;
+
+      return score;
+    };
+
+    // Get all waiting matches
+    // Match the same logic as courtMatchModels: any match that's not completed,
+    // not in_progress, and has no court assigned is considered waiting/eligible
+    const candidates = matches.filter(m => {
+      const status = m.status ?? 'scheduled';
+      const isActive = status === 'completed' || status === 'in_progress';
+      // Waiting = NOT completed, NOT in_progress, and no court assigned
+      return !isActive && !m.court;
+    });
+
+    // Filter for eligibility and score
+    const eligible: Match[] = [];
+    const scores: Record<string, number> = {};
 
     candidates.forEach(m => {
-      const isBusy = busy.has(m.teamAId) || busy.has(m.teamBId);
-      if (!isBusy) {
-        resultQueue.push(m);
-        wt[m.id] = 0;
-        busy.add(m.teamAId);
-        busy.add(m.teamBId);
-      } else {
-        wt[m.id] = 0;
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      const teamAName = m.sideA?.name || '';
+      const teamBName = m.sideB?.name || '';
+
+      // Skip matches with missing team IDs
+      if (!teamAId || !teamBId) {
+        scores[m.id] = -1;
+        return;
       }
+
+      // CRITICAL: Skip matches where team plays itself (data corruption)
+      if (teamAId === teamBId) {
+        console.error(`[Court Allocation] Match ${m.id} has same team on both sides: ${teamAId}`);
+        scores[m.id] = -1;
+        return;
+      }
+      if (teamAName && teamBName && teamAName.toLowerCase() === teamBName.toLowerCase()) {
+        console.error(`[Court Allocation] Match ${m.id} has same team name on both sides: ${teamAName}`);
+        scores[m.id] = -1;
+        return;
+      }
+
+      // Check 1: Team/player not currently on court
+      const teamBusy = busyTeams.has(teamAId) || busyTeams.has(teamBId);
+      const playerIdsA = m.sideA?.playerIds || [];
+      const playerIdsB = m.sideB?.playerIds || [];
+
+      // Check player IDs AND team IDs (team IDs are added to busyPlayers as fallback)
+      const playerBusy = playerIdsA.some(p => p && busyPlayers.has(p)) ||
+                         playerIdsB.some(p => p && busyPlayers.has(p)) ||
+                         busyPlayers.has(teamAId) ||
+                         busyPlayers.has(teamBId);
+
+      // Check 2: Team NAME not currently on court (fallback for pool play)
+      const nameBusy =
+        (teamAName && busyTeamNames.has(teamAName.toLowerCase())) ||
+        (teamBName && busyTeamNames.has(teamBName.toLowerCase()));
+
+      if (teamBusy || playerBusy || nameBusy) {
+        scores[m.id] = scoreMatch(m) + 1000; // High penalty for conflicts
+        return;
+      }
+
+      // Check 2: All players have sufficient rest (8 min minimum)
+      const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
+      const hasInsufficientRest = allPlayerIds.some(pid => !playerHasSufficientRest(pid));
+
+      if (hasInsufficientRest) {
+        scores[m.id] = scoreMatch(m) + 500; // Penalty for insufficient rest
+        return;
+      }
+
+      // Match is eligible!
+      scores[m.id] = scoreMatch(m);
+      eligible.push(m);
     });
 
-    return { queue: resultQueue, waitTimes: wt };
-  }, [matches]);
+    // Sort eligible matches by score (lower = higher priority)
+    eligible.sort((a, b) => (scores[a.id] || 0) - (scores[b.id] || 0));
+
+    return { eligible, scores };
+  }, [matches, getPlayerRestTime, playerHasSufficientRest, getPoolProgress]);
+
+  // Build a realistic queue where each team can only appear ONCE
+  // This simulates: once a team is queued, they're blocked until that match completes
+  const { queue, waitTimes } = useMemo(() => {
+    const { eligible, scores } = getEligibleMatches();
+
+    // Build queue by adding matches one at a time, blocking teams as we go
+    const queuedTeams = new Set<string>();
+    const queuedPlayers = new Set<string>();
+    const queuedTeamNames = new Set<string>(); // Also track by name
+    const finalQueue: Match[] = [];
+
+    for (const match of eligible) {
+      const teamAId = match.teamAId || match.sideA?.id;
+      const teamBId = match.teamBId || match.sideB?.id;
+      const teamAName = match.sideA?.name || '';
+      const teamBName = match.sideB?.name || '';
+      const playerIdsA = match.sideA?.playerIds || [];
+      const playerIdsB = match.sideB?.playerIds || [];
+
+      // Check if any team or player is already queued (by ID, name, or player ID)
+      const teamAlreadyQueued =
+        (teamAId && queuedTeams.has(teamAId)) ||
+        (teamBId && queuedTeams.has(teamBId)) ||
+        (teamAName && queuedTeamNames.has(teamAName.toLowerCase())) ||
+        (teamBName && queuedTeamNames.has(teamBName.toLowerCase())) ||
+        playerIdsA.some(p => p && queuedPlayers.has(p)) ||
+        playerIdsB.some(p => p && queuedPlayers.has(p));
+
+      if (teamAlreadyQueued) {
+        // Skip this match - one of the teams is already in the queue
+        continue;
+      }
+
+      // Add to queue and mark teams/players as queued
+      finalQueue.push(match);
+      if (teamAId) queuedTeams.add(teamAId);
+      if (teamBId) queuedTeams.add(teamBId);
+      if (teamAName) queuedTeamNames.add(teamAName.toLowerCase());
+      if (teamBName) queuedTeamNames.add(teamBName.toLowerCase());
+      playerIdsA.forEach(p => { if (p) queuedPlayers.add(p); });
+      playerIdsB.forEach(p => { if (p) queuedPlayers.add(p); });
+    }
+
+    return { queue: finalQueue, waitTimes: scores };
+  }, [getEligibleMatches]);
 
   // ============================================
   // Court View Models
@@ -174,13 +455,17 @@ export const useCourtManagement = ({
         status = 'WAITING';
       }
 
+      // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+      const teamAName = m.sideA?.name || m.teamAId || 'TBD';
+      const teamBName = m.sideB?.name || m.teamBId || 'TBD';
+
       return {
         id: m.id,
         division: division?.name || 'Unknown',
         roundLabel: m.stage || `Round ${m.roundNumber || 1}`,
         matchLabel: `Match ${m.matchNumber ?? m.id.slice(-4)}`,
-        teamAName: m.teamAId || 'TBD',  // FIXED: was team1Name
-        teamBName: m.teamBId || 'TBD',  // FIXED: was team2Name
+        teamAName,
+        teamBName,
         status,
         courtId: court?.id,
         courtName: court?.name,
@@ -193,17 +478,44 @@ export const useCourtManagement = ({
   // ============================================
 
   const findActiveConflictMatch = useCallback((match: Match): Match | undefined => {
+    // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+    const matchTeamAId = match.teamAId || match.sideA?.id;
+    const matchTeamBId = match.teamBId || match.sideB?.id;
+    const matchPlayerIds = [
+      ...(match.sideA?.playerIds || []),
+      ...(match.sideB?.playerIds || []),
+    ].filter(Boolean);
+
+    // Can't detect conflicts if match has no valid team IDs AND no player IDs
+    if (!matchTeamAId && !matchTeamBId && matchPlayerIds.length === 0) {
+      console.warn(`[Conflict Check] Match ${match.id} has no team or player IDs, cannot check for conflicts`);
+      return undefined;
+    }
+
     return matches.find(m => {
       if (m.id === match.id) return false;
       if (!m.court) return false;
       if (m.status === 'completed') return false;
 
-      return (
-        m.teamAId === match.teamAId ||
-        m.teamAId === match.teamBId ||
-        m.teamBId === match.teamAId ||
-        m.teamBId === match.teamBId
+      const mTeamAId = m.teamAId || m.sideA?.id;
+      const mTeamBId = m.teamBId || m.sideB?.id;
+      const mPlayerIds = [
+        ...(m.sideA?.playerIds || []),
+        ...(m.sideB?.playerIds || []),
+      ].filter(Boolean);
+
+      // Check for team conflicts - only compare non-empty IDs
+      const teamConflict = (
+        (matchTeamAId && mTeamAId && mTeamAId === matchTeamAId) ||
+        (matchTeamAId && mTeamBId && mTeamBId === matchTeamAId) ||
+        (matchTeamBId && mTeamAId && mTeamAId === matchTeamBId) ||
+        (matchTeamBId && mTeamBId && mTeamBId === matchTeamBId)
       );
+
+      // Check for player conflicts - any player in common
+      const playerConflict = matchPlayerIds.some(pid => mPlayerIds.includes(pid));
+
+      return teamConflict || playerConflict;
     });
   }, [matches]);
 
@@ -214,6 +526,23 @@ export const useCourtManagement = ({
   const assignMatchToCourt = useCallback(async (matchId: string, courtName: string) => {
     const match = matches.find(m => m.id === matchId);
     if (!match) return;
+
+    // CRITICAL: Prevent assigning matches where a team plays itself
+    const teamAId = match.teamAId || match.sideA?.id;
+    const teamBId = match.teamBId || match.sideB?.id;
+    const teamAName = match.sideA?.name || '';
+    const teamBName = match.sideB?.name || '';
+
+    if (teamAId && teamBId && teamAId === teamBId) {
+      alert('Cannot assign this match: both teams are the same (data error). Please delete and recreate this match.');
+      console.error(`[Court Assignment] Match ${matchId} has same team ID on both sides: ${teamAId}`);
+      return;
+    }
+    if (teamAName && teamBName && teamAName.toLowerCase() === teamBName.toLowerCase()) {
+      alert('Cannot assign this match: both teams have the same name (possible data error). Please verify the match data.');
+      console.error(`[Court Assignment] Match ${matchId} has same team name on both sides: ${teamAName}`);
+      return;
+    }
 
     const conflict = findActiveConflictMatch(match);
     if (conflict) {
@@ -227,6 +556,31 @@ export const useCourtManagement = ({
       court: courtName,
       status: 'scheduled',
     });
+
+    // Notify all players in the match that they're on court
+    const playerIds = [
+      ...(match.sideA?.playerIds || []),
+      ...(match.sideB?.playerIds || []),
+    ].filter(Boolean);
+
+    if (playerIds.length > 0) {
+      // Get opponent name for context in notification
+      const sideAName = match.sideA?.name || 'Team A';
+      const sideBName = match.sideB?.name || 'Team B';
+
+      try {
+        await notifyCourtAssignment(
+          playerIds,
+          tournamentId,
+          matchId,
+          courtName,
+          `${sideAName} vs ${sideBName}`
+        );
+      } catch (error) {
+        console.error('Failed to send court assignment notifications:', error);
+        // Don't block the court assignment if notifications fail
+      }
+    }
   }, [tournamentId, matches, findActiveConflictMatch]);
 
   const startMatchOnCourt = useCallback(async (courtId: string) => {
@@ -260,11 +614,20 @@ export const useCourtManagement = ({
       return;
     }
 
-    const existingHasScores =
+    // Support both OLD (scoreTeamAGames) and NEW (scores[]) formats
+    const existingHasOldScores =
       Array.isArray(currentMatch.scoreTeamAGames) &&
       currentMatch.scoreTeamAGames.length > 0 &&
       Array.isArray(currentMatch.scoreTeamBGames) &&
       currentMatch.scoreTeamBGames.length > 0;
+
+    const existingHasNewScores =
+      Array.isArray(currentMatch.scores) &&
+      currentMatch.scores.length > 0 &&
+      currentMatch.scores[0]?.scoreA !== undefined &&
+      currentMatch.scores[0]?.scoreB !== undefined;
+
+    const existingHasScores = existingHasOldScores || existingHasNewScores;
 
     const inlineHasScores =
       typeof scoreTeamA === 'number' &&
@@ -277,35 +640,122 @@ export const useCourtManagement = ({
       return;
     }
 
-    const updates: Partial<Match> = {
-      status: 'completed',
-      endTime: Date.now(),
-      court: '',
-    };
+    // Determine winner by counting GAMES WON (not just first game score)
+    // This is critical for best-of-3 and best-of-5 matches
+    let gamesWonA = 0;
+    let gamesWonB = 0;
+    let allScores: Array<{ scoreA: number; scoreB: number }> = [];
 
-    if (!existingHasScores && inlineHasScores) {
-      const sA = scoreTeamA as number;
-      const sB = scoreTeamB as number;
-
-      updates.scoreTeamAGames = [sA];
-      updates.scoreTeamBGames = [sB];
-      updates.winnerTeamId = sA > sB ? currentMatch.teamAId : currentMatch.teamBId;
+    if (existingHasOldScores) {
+      // Legacy format: scoreTeamAGames[] and scoreTeamBGames[]
+      const scoresA = currentMatch.scoreTeamAGames!;
+      const scoresB = currentMatch.scoreTeamBGames!;
+      for (let i = 0; i < scoresA.length; i++) {
+        const scoreA = scoresA[i];
+        const scoreB = scoresB[i] ?? 0;
+        allScores.push({ scoreA, scoreB });
+        if (scoreA > scoreB) gamesWonA++;
+        else if (scoreB > scoreA) gamesWonB++;
+      }
+    } else if (existingHasNewScores) {
+      // Modern format: scores[] array
+      for (const game of currentMatch.scores!) {
+        const scoreA = game.scoreA ?? 0;
+        const scoreB = game.scoreB ?? 0;
+        allScores.push({ scoreA, scoreB });
+        if (scoreA > scoreB) gamesWonA++;
+        else if (scoreB > scoreA) gamesWonB++;
+      }
+    } else {
+      // Inline scores (single game)
+      const scoreA = scoreTeamA as number;
+      const scoreB = scoreTeamB as number;
+      allScores.push({ scoreA, scoreB });
+      if (scoreA > scoreB) gamesWonA++;
+      else if (scoreB > scoreA) gamesWonB++;
     }
 
-    await updateMatchScore(tournamentId, currentMatch.id, updates);
+    // Get game settings from division for validation
+    // Check multiple possible locations: division.format, division.gameSettings, or direct properties
+    const division = divisions.find(d => d.id === currentMatch.divisionId);
+    const fmt = division?.format;
+    const gs = (division as any)?.gameSettings;
 
-    // Auto-assign next match to this court
-    const nextMatch = matches
-      .filter(m =>
-        (m.status === 'not_started' || m.status === 'scheduled' || !m.status) &&
-        !m.court
-      )
-      .sort((a, b) => (a.roundNumber || 1) - (b.roundNumber || 1))[0];
+    const gameSettings: GameSettings = {
+      playType: (fmt as any)?.playType ?? gs?.playType ?? 'doubles',
+      pointsPerGame: fmt?.pointsPerGame ?? gs?.pointsToWin ?? gs?.pointsPerGame ?? 11,
+      winBy: fmt?.winBy ?? gs?.winBy ?? 2,
+      bestOf: fmt?.bestOfGames ?? gs?.bestOf ?? 1,
+    };
+
+    // Validate all scores against game rules
+    for (let i = 0; i < allScores.length; i++) {
+      const game = allScores[i];
+      const validation = validateGameScore(game.scoreA, game.scoreB, gameSettings);
+      if (!validation.valid) {
+        alert(`Game ${i + 1} score invalid: ${validation.error}\n\nRules: First to ${gameSettings.pointsPerGame}, win by ${gameSettings.winBy}`);
+        return;
+      }
+    }
+
+    // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+    const teamAId = currentMatch.teamAId || currentMatch.sideA?.id || '';
+    const teamBId = currentMatch.teamBId || currentMatch.sideB?.id || '';
+
+    // Winner is determined by who won more GAMES, not just first game
+    const winnerId = gamesWonA > gamesWonB ? teamAId : teamBId;
+
+    // Build scores in format expected by completeMatchWithAdvancement
+    const scoresForAdvancement = allScores.map(s => ({
+      team1Score: s.scoreA,
+      team2Score: s.scoreB,
+    }));
+
+    // Check if this is a bracket match that needs advancement
+    if (currentMatch.nextMatchId && currentMatch.nextMatchSlot) {
+      // Use completeMatchWithAdvancement for bracket matches
+      await completeMatchWithAdvancement(
+        tournamentId,
+        currentMatch.id,
+        winnerId as string,
+        scoresForAdvancement
+      );
+
+      // Clear the court assignment
+      await updateMatchScore(tournamentId, currentMatch.id, { court: '' });
+    } else {
+      // For pool play or non-bracket matches, use regular update
+      // Store BOTH legacy and modern score formats for compatibility
+      const scoresModern = allScores.map((s, i) => ({
+        gameNumber: i + 1,
+        scoreA: s.scoreA,
+        scoreB: s.scoreB,
+      }));
+
+      const updates: Partial<Match> = {
+        status: 'completed',
+        completedAt: Date.now(),
+        endTime: Date.now(),
+        court: '',
+        winnerId: winnerId,
+        winnerTeamId: winnerId,
+        scores: scoresModern,
+        scoreTeamAGames: allScores.map(s => s.scoreA),
+        scoreTeamBGames: allScores.map(s => s.scoreB),
+      };
+
+      await updateMatchScore(tournamentId, currentMatch.id, updates);
+    }
+
+    // Auto-assign next match to this court using DYNAMIC eligibility calculation
+    // This recalculates fresh considering rest time, pool balance, and current state
+    const { eligible } = getEligibleMatches();
+    const nextMatch = eligible[0]; // Best eligible match by score
 
     if (nextMatch) {
       await assignMatchToCourt(nextMatch.id, court.name);
     }
-  }, [tournamentId, courts, matches, assignMatchToCourt]);
+  }, [tournamentId, courts, matches, divisions, assignMatchToCourt, getEligibleMatches]);
 
   const handleAssignCourt = useCallback(async (matchId: string) => {
     const match = matches.find(m => m.id === matchId);
@@ -350,29 +800,64 @@ export const useCourtManagement = ({
       return;
     }
 
-    if (queue.length === 0) {
-      if (!silent) alert('No waiting matches available for auto-assignment.');
+    // Use the dynamic eligibility calculation
+    const { eligible } = getEligibleMatches();
+
+    if (eligible.length === 0) {
+      if (!silent) alert('No waiting matches available for auto-assignment (all players may need rest time or are already on court).');
       return;
     }
 
-    const busy = getBusyTeamIds();
-    const updates: Promise<any>[] = [];
-    let queueIndex = 0;
+    const updates: Promise<void>[] = [];
+    const notifications: Promise<void>[] = [];
+    const assignedMatchIds = new Set<string>();
+    const assignedPlayerIds = new Set<string>(); // Track players we've assigned
+    const assignedTeamNames = new Set<string>(); // Track team names we've assigned
 
     for (const court of freeCourts) {
-      let matchToAssign: Match | undefined;
+      // Find next eligible match that hasn't been assigned and doesn't conflict with already assigned players
+      const matchToAssign = eligible.find(m => {
+        if (assignedMatchIds.has(m.id)) return false;
 
-      while (queueIndex < queue.length && !matchToAssign) {
-        const candidate = queue[queueIndex++];
+        const teamAId = m.teamAId || m.sideA?.id;
+        const teamBId = m.teamBId || m.sideB?.id;
+        const teamAName = m.sideA?.name || '';
+        const teamBName = m.sideB?.name || '';
 
-        if (!busy.has(candidate.teamAId) && !busy.has(candidate.teamBId)) {
-          matchToAssign = candidate;
-          busy.add(candidate.teamAId);
-          busy.add(candidate.teamBId);
-        }
-      }
+        // Check if any players OR teams in this match are already assigned in this batch
+        const playerIdsA = m.sideA?.playerIds || [];
+        const playerIdsB = m.sideB?.playerIds || [];
+        const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
 
-      if (!matchToAssign) break;
+        // Check player IDs, team IDs, and team names
+        const hasConflict = allPlayerIds.some(pid => assignedPlayerIds.has(pid)) ||
+                           (teamAId && assignedPlayerIds.has(teamAId)) ||
+                           (teamBId && assignedPlayerIds.has(teamBId)) ||
+                           (teamAName && assignedTeamNames.has(teamAName.toLowerCase())) ||
+                           (teamBName && assignedTeamNames.has(teamBName.toLowerCase()));
+
+        return !hasConflict;
+      });
+
+      if (!matchToAssign) continue;
+
+      // Mark this match and its players AND teams as assigned
+      assignedMatchIds.add(matchToAssign.id);
+      const teamAId = matchToAssign.teamAId || matchToAssign.sideA?.id;
+      const teamBId = matchToAssign.teamBId || matchToAssign.sideB?.id;
+      const teamAName = matchToAssign.sideA?.name || '';
+      const teamBName = matchToAssign.sideB?.name || '';
+      const playerIdsA = matchToAssign.sideA?.playerIds || [];
+      const playerIdsB = matchToAssign.sideB?.playerIds || [];
+
+      // Add player IDs
+      [...playerIdsA, ...playerIdsB].filter(Boolean).forEach(pid => assignedPlayerIds.add(pid));
+      // Also add team IDs as fallback
+      if (teamAId) assignedPlayerIds.add(teamAId);
+      if (teamBId) assignedPlayerIds.add(teamBId);
+      // Also add team names
+      if (teamAName) assignedTeamNames.add(teamAName.toLowerCase());
+      if (teamBName) assignedTeamNames.add(teamBName.toLowerCase());
 
       updates.push(
         updateMatchScore(tournamentId, matchToAssign.id, {
@@ -380,19 +865,39 @@ export const useCourtManagement = ({
           status: 'scheduled',
         })
       );
+
+      // Queue notification for players
+      const playerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
+
+      if (playerIds.length > 0) {
+        const sideAName = matchToAssign.sideA?.name || 'Team A';
+        const sideBName = matchToAssign.sideB?.name || 'Team B';
+
+        notifications.push(
+          notifyCourtAssignment(
+            playerIds,
+            tournamentId,
+            matchToAssign.id,
+            court.name,
+            `${sideAName} vs ${sideBName}`
+          ).catch(err => console.error('Failed to send notification:', err))
+        );
+      }
     }
 
     if (updates.length === 0) {
       if (!silent) {
         alert(
-          'All waiting matches either conflict with players already on court or have already been assigned.'
+          'All waiting matches either conflict with players already on court, need rest time, or have already been assigned.'
         );
       }
       return;
     }
 
+    // Execute court assignments first, then notifications (don't wait for notifications)
     await Promise.all(updates);
-  }, [tournamentId, courts, matches, queue, getBusyTeamIds]);
+    Promise.all(notifications).catch(() => {}); // Fire and forget notifications
+  }, [tournamentId, courts, matches, getEligibleMatches]);
 
   return {
     courtViewModels,

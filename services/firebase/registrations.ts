@@ -1,21 +1,26 @@
 /**
  * Tournament Registration Management
+ *
+ * FILE LOCATION: services/firebase/registrations.ts
+ * VERSION: V06.05 - Added check-in functions
  */
 
-import { 
-  doc, 
-  getDoc, 
-  getDocs, 
+import {
+  doc,
+  getDoc,
+  getDocs,
   setDoc,
-  collection, 
-  query, 
+  updateDoc,
+  collection,
+  query,
+  where,
   limit,
 } from '@firebase/firestore';
 import { db } from './config';
 import { getUserProfile } from './users';
 import { getTournament } from './tournaments';
 import { ensureTeamExists } from './teams';
-import type { TournamentRegistration } from '../../types';
+import type { TournamentRegistration, Tournament } from '../../types';
 
 // ============================================
 // Registration CRUD
@@ -153,4 +158,117 @@ export const ensureRegistrationForUser = async (
 
   await setDoc(regRef, reg);
   return reg;
+};
+
+// ============================================
+// Tournament Check-in (V06.05)
+// ============================================
+
+/**
+ * Check in a player for a tournament
+ */
+export const checkInPlayer = async (
+  tournamentId: string,
+  playerId: string
+): Promise<{ success: boolean; message: string }> => {
+  const regId = `${playerId}_${tournamentId}`;
+  const regRef = doc(db, 'tournament_registrations', regId);
+  const regSnap = await getDoc(regRef);
+
+  if (!regSnap.exists()) {
+    return { success: false, message: 'Registration not found' };
+  }
+
+  const registration = regSnap.data() as TournamentRegistration;
+
+  if (registration.checkedIn) {
+    return { success: false, message: 'Player already checked in' };
+  }
+
+  if (registration.status !== 'completed') {
+    return { success: false, message: 'Registration not completed' };
+  }
+
+  await updateDoc(regRef, {
+    checkedIn: true,
+    checkedInAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+
+  return { success: true, message: 'Check-in successful' };
+};
+
+/**
+ * Check if player is checked in
+ */
+export const isPlayerCheckedIn = async (
+  tournamentId: string,
+  playerId: string
+): Promise<boolean> => {
+  const regId = `${playerId}_${tournamentId}`;
+  const regSnap = await getDoc(doc(db, 'tournament_registrations', regId));
+
+  if (!regSnap.exists()) return false;
+
+  const registration = regSnap.data() as TournamentRegistration;
+  return registration.checkedIn === true;
+};
+
+/**
+ * Get check-in stats for a tournament
+ */
+export const getCheckInStats = async (
+  tournamentId: string
+): Promise<{ total: number; checkedIn: number }> => {
+  const q = query(
+    collection(db, 'tournament_registrations'),
+    where('tournamentId', '==', tournamentId),
+    where('status', '==', 'completed')
+  );
+
+  const snap = await getDocs(q);
+  let checkedIn = 0;
+
+  snap.docs.forEach(d => {
+    const reg = d.data() as TournamentRegistration;
+    if (reg.checkedIn) checkedIn++;
+  });
+
+  return { total: snap.size, checkedIn };
+};
+
+/**
+ * Check if check-in is within allowed window
+ */
+export const isWithinCheckInWindow = (
+  tournament: Tournament,
+  checkInWindowMinutes: number = 60
+): boolean => {
+  if (!tournament.startDate) return false;
+
+  const now = Date.now();
+  const tournamentStart = tournament.startDate;
+
+  // Check-in opens X minutes before start
+  const checkInOpens = tournamentStart - (checkInWindowMinutes * 60 * 1000);
+
+  // Check-in closes 15 minutes after start
+  const checkInCloses = tournamentStart + (15 * 60 * 1000);
+
+  return now >= checkInOpens && now <= checkInCloses;
+};
+
+/**
+ * Get all registrations for a tournament with check-in status
+ */
+export const getTournamentRegistrations = async (
+  tournamentId: string
+): Promise<TournamentRegistration[]> => {
+  const q = query(
+    collection(db, 'tournament_registrations'),
+    where('tournamentId', '==', tournamentId)
+  );
+
+  const snap = await getDocs(q);
+  return snap.docs.map(d => d.data() as TournamentRegistration);
 };

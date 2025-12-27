@@ -5,7 +5,7 @@
  * Handles server tracking, side switching, game/match completion.
  *
  * FILE: services/scoring/scoringLogic.ts
- * VERSION: V06.03
+ * VERSION: V06.04
  */
 
 import type {
@@ -15,6 +15,7 @@ import type {
   GameScore,
   ScoringActionResult,
   ScoringTeam,
+  PlayerPositions,
 } from '../../types/scoring';
 
 // =============================================================================
@@ -110,6 +111,7 @@ export const createInitialLiveScore = (
 
     rallyHistory: [],
     sidesSwitched: false,
+    positionsLocked: false, // Positions can be edited until first rally
 
     createdAt: now,
     updatedAt: now,
@@ -270,7 +272,34 @@ export const processRally = (
   // Check if game is won
   const gameResult = isGameWon(newScoreA, newScoreB, settings);
 
-  // Create rally event
+  // Handle position swapping when serving team scores
+  let newTeamA = state.teamA;
+  let newTeamB = state.teamB;
+
+  if (settings.playType === 'doubles' && settings.sideOutScoring) {
+    // If serving team scored, they swap positions
+    if (rallyWinner === servingTeam) {
+      if (servingTeam === 'A' && state.teamA.playerPositions) {
+        newTeamA = {
+          ...state.teamA,
+          playerPositions: {
+            left: state.teamA.playerPositions.right,
+            right: state.teamA.playerPositions.left,
+          },
+        };
+      } else if (servingTeam === 'B' && state.teamB.playerPositions) {
+        newTeamB = {
+          ...state.teamB,
+          playerPositions: {
+            left: state.teamB.playerPositions.right,
+            right: state.teamB.playerPositions.left,
+          },
+        };
+      }
+    }
+  }
+
+  // Create rally event (store positions before this rally for undo)
   const event: RallyEvent = {
     id: generateId(),
     timestamp: Date.now(),
@@ -280,6 +309,8 @@ export const processRally = (
     servingTeam: newServingTeam,
     serverNumber: newServerNumber,
     gameNumber: state.currentGame,
+    teamAPositionsBefore: state.teamA.playerPositions,
+    teamBPositionsBefore: state.teamB.playerPositions,
   };
 
   // Build result
@@ -292,6 +323,9 @@ export const processRally = (
       servingTeam: newServingTeam,
       serverNumber: newServerNumber,
       sidesSwitched: newSidesSwitched,
+      teamA: newTeamA,
+      teamB: newTeamB,
+      positionsLocked: true, // Lock positions after first rally
       updatedAt: Date.now(),
     },
     shouldSwitchSides: switchSides,
@@ -395,30 +429,65 @@ export const undoLastRally = (state: LiveScore): ScoringActionResult => {
   // Find the previous event to restore state from
   if (previousEvents.length > 0) {
     const previousEvent = previousEvents[previousEvents.length - 1];
+
+    // Restore positions from before this event
+    const newState: Partial<LiveScore> = {
+      scoreA: previousEvent.scoreAfter.A,
+      scoreB: previousEvent.scoreAfter.B,
+      servingTeam: previousEvent.servingTeam,
+      serverNumber: previousEvent.serverNumber,
+      rallyHistory: previousEvents,
+      updatedAt: Date.now(),
+    };
+
+    // Restore team positions if stored
+    if (lastEvent.teamAPositionsBefore) {
+      newState.teamA = {
+        ...state.teamA,
+        playerPositions: lastEvent.teamAPositionsBefore,
+      };
+    }
+    if (lastEvent.teamBPositionsBefore) {
+      newState.teamB = {
+        ...state.teamB,
+        playerPositions: lastEvent.teamBPositionsBefore,
+      };
+    }
+
     return {
       success: true,
-      newState: {
-        scoreA: previousEvent.scoreAfter.A,
-        scoreB: previousEvent.scoreAfter.B,
-        servingTeam: previousEvent.servingTeam,
-        serverNumber: previousEvent.serverNumber,
-        rallyHistory: previousEvents,
-        updatedAt: Date.now(),
-      },
+      newState,
     };
   }
 
   // Undo to initial state
+  const initialState: Partial<LiveScore> = {
+    scoreA: 0,
+    scoreB: 0,
+    servingTeam: 'A',
+    serverNumber: 2,
+    rallyHistory: [],
+    positionsLocked: false, // Unlock positions when undoing to start
+    updatedAt: Date.now(),
+  };
+
+  // Restore initial positions if stored in the first event
+  if (lastEvent.teamAPositionsBefore) {
+    initialState.teamA = {
+      ...state.teamA,
+      playerPositions: lastEvent.teamAPositionsBefore,
+    };
+  }
+  if (lastEvent.teamBPositionsBefore) {
+    initialState.teamB = {
+      ...state.teamB,
+      playerPositions: lastEvent.teamBPositionsBefore,
+    };
+  }
+
   return {
     success: true,
-    newState: {
-      scoreA: 0,
-      scoreB: 0,
-      servingTeam: 'A',
-      serverNumber: 2,
-      rallyHistory: [],
-      updatedAt: Date.now(),
-    },
+    newState: initialState,
   };
 };
 
@@ -621,6 +690,159 @@ export const applyResult = (
 };
 
 // =============================================================================
+// PLAYER POSITION FUNCTIONS
+// =============================================================================
+
+/**
+ * Get server's court position based on score
+ * Even score (0, 2, 4, 6, 8, 10) → Server on RIGHT
+ * Odd score (1, 3, 5, 7, 9, 11) → Server on LEFT
+ */
+export const getServerPosition = (servingTeamScore: number): 'left' | 'right' => {
+  return servingTeamScore % 2 === 0 ? 'right' : 'left';
+};
+
+/**
+ * Get the name of the current server based on score and positions
+ */
+export const getCurrentServerName = (state: LiveScore): string | null => {
+  const { servingTeam, scoreA, scoreB, teamA, teamB, settings } = state;
+
+  const team = servingTeam === 'A' ? teamA : teamB;
+  const score = servingTeam === 'A' ? scoreA : scoreB;
+
+  // For singles, just return the single player name
+  if (settings.playType === 'singles') {
+    return team.players?.[0] || team.name;
+  }
+
+  // For doubles, use position to determine who is serving
+  if (!team.playerPositions) {
+    // If positions not set, fall back to players array
+    return team.players?.join(' & ') || team.name;
+  }
+
+  const position = getServerPosition(score);
+  return team.playerPositions[position];
+};
+
+/**
+ * Get receiving player's position based on serving team's score
+ * Receiver is on the same side as server (diagonal from each other)
+ */
+export const getReceiverPosition = (servingTeamScore: number): 'left' | 'right' => {
+  // Receiver is on the SAME side as server (they face each other diagonally)
+  return getServerPosition(servingTeamScore);
+};
+
+/**
+ * Get the name of the current receiver
+ */
+export const getCurrentReceiverName = (state: LiveScore): string | null => {
+  const { servingTeam, scoreA, scoreB, teamA, teamB, settings } = state;
+
+  const receivingTeam = servingTeam === 'A' ? teamB : teamA;
+  const servingScore = servingTeam === 'A' ? scoreA : scoreB;
+
+  // For singles, just return the single player name
+  if (settings.playType === 'singles') {
+    return receivingTeam.players?.[0] || receivingTeam.name;
+  }
+
+  // For doubles, receiver is on the same side as server
+  if (!receivingTeam.playerPositions) {
+    return receivingTeam.players?.join(' & ') || receivingTeam.name;
+  }
+
+  const position = getReceiverPosition(servingScore);
+  return receivingTeam.playerPositions[position];
+};
+
+/**
+ * Swap team positions (left ↔ right)
+ * Called when serving team scores a point
+ */
+export const swapTeamPositions = (team: ScoringTeam): ScoringTeam => {
+  if (!team.playerPositions) {
+    return team;
+  }
+
+  return {
+    ...team,
+    playerPositions: {
+      left: team.playerPositions.right,
+      right: team.playerPositions.left,
+    },
+  };
+};
+
+/**
+ * Initialize player positions based on players array and server selection
+ * Server 1 starts on the right (for even score = 0)
+ */
+export const initializePlayerPositions = (
+  team: ScoringTeam,
+  server1Index: 0 | 1
+): ScoringTeam => {
+  if (!team.players || team.players.length < 2) {
+    return team;
+  }
+
+  // Server 1 starts on the right (since game starts at score 0 = even)
+  const server1Name = team.players[server1Index];
+  const server2Name = team.players[1 - server1Index];
+
+  return {
+    ...team,
+    playerPositions: {
+      right: server1Name,  // Server 1 on right at start (even score)
+      left: server2Name,   // Server 2 on left at start
+    },
+  };
+};
+
+/**
+ * Check if player positions need to be swapped based on score change
+ * Positions swap when serving team scores (they switch sides)
+ */
+export const shouldSwapPositions = (
+  oldScore: number,
+  newScore: number,
+  rallyWinner: 'A' | 'B',
+  servingTeam: 'A' | 'B'
+): boolean => {
+  // Only swap when serving team scored (newScore > oldScore and rallyWinner === servingTeam)
+  return rallyWinner === servingTeam && newScore > oldScore;
+};
+
+/**
+ * Get detailed server info including position
+ */
+export const getServerInfo = (
+  state: LiveScore
+): {
+  team: 'A' | 'B';
+  teamName: string;
+  playerName: string | null;
+  position: 'left' | 'right';
+  serverNumber: 1 | 2;
+} => {
+  const { servingTeam, serverNumber, teamA, teamB, scoreA, scoreB } = state;
+
+  const team = servingTeam === 'A' ? teamA : teamB;
+  const score = servingTeam === 'A' ? scoreA : scoreB;
+  const position = getServerPosition(score);
+
+  return {
+    team: servingTeam,
+    teamName: team.name,
+    playerName: team.playerPositions?.[position] || null,
+    position,
+    serverNumber,
+  };
+};
+
+// =============================================================================
 // EXPORTS
 // =============================================================================
 
@@ -641,6 +863,15 @@ export default {
   isMatchWon,
   shouldSwitchSides,
   getSwitchSidesScore,
+  // Position functions
+  getServerPosition,
+  getCurrentServerName,
+  getReceiverPosition,
+  getCurrentReceiverName,
+  swapTeamPositions,
+  initializePlayerPositions,
+  shouldSwapPositions,
+  getServerInfo,
   TEAM_COLORS,
   DEFAULT_TEAM_NAMES,
 };

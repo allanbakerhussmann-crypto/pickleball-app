@@ -180,14 +180,15 @@ export const AdminUsersPage: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                                 <th className="px-6 py-3">User</th>
                                 <th className="px-6 py-3">Email</th>
                                 <th className="px-6 py-3">Roles</th>
+                                <th className="px-6 py-3">Consent</th>
                                 <th className="px-6 py-3 text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-400 italic">Loading users...</td></tr>
+                                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400 italic">Loading users...</td></tr>
                             ) : filteredUsers.length === 0 ? (
-                                <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-500 italic">No users found.</td></tr>
+                                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500 italic">No users found.</td></tr>
                             ) : filteredUsers.map(u => {
                                 const roles = u.roles || [];
                                 const isPlayer = roles.includes('player');
@@ -228,6 +229,27 @@ export const AdminUsersPage: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                                                     </span>
                                                 )}
                                             </div>
+                                        </td>
+                                        <td className="px-6 py-4 align-top">
+                                            {u.privacyPolicyConsentAt ? (
+                                                <div className="group relative">
+                                                    <span className="text-green-500 text-lg cursor-help" title="Consent recorded">✓</span>
+                                                    <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-300 whitespace-nowrap z-10 shadow-lg">
+                                                        <div><strong>Privacy Policy:</strong> {new Date(u.privacyPolicyConsentAt).toLocaleDateString()}</div>
+                                                        {u.termsOfServiceConsentAt && (
+                                                            <div><strong>Terms:</strong> {new Date(u.termsOfServiceConsentAt).toLocaleDateString()}</div>
+                                                        )}
+                                                        {u.dataProcessingConsentAt && (
+                                                            <div><strong>Data Processing:</strong> {new Date(u.dataProcessingConsentAt).toLocaleDateString()}</div>
+                                                        )}
+                                                        {u.consentPolicyVersion && (
+                                                            <div><strong>Version:</strong> {u.consentPolicyVersion}</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <span className="text-gray-500 text-xs" title="No consent recorded (legacy user)">—</span>
+                                            )}
                                         </td>
                                         <td className="px-6 py-4 text-right align-top">
                                             {isProcessing ? (

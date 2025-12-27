@@ -193,7 +193,7 @@ export const getOpenTeamsForDivision = async (
 };
 
 export const getTeamsForDivision = async (
-  tournamentId: string, 
+  tournamentId: string,
   divisionId: string
 ): Promise<Team[]> => {
   const q = query(
@@ -202,6 +202,32 @@ export const getTeamsForDivision = async (
   );
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() } as Team));
+};
+
+/**
+ * Get count of active (non-withdrawn) teams for a division
+ * Used for capacity enforcement
+ */
+export const getActiveTeamCountForDivision = async (
+  tournamentId: string,
+  divisionId: string
+): Promise<number> => {
+  const teams = await getTeamsForDivision(tournamentId, divisionId);
+  // Count only teams that are not withdrawn
+  return teams.filter(t => t.status !== 'withdrawn').length;
+};
+
+/**
+ * Check if a division has capacity for more teams
+ */
+export const isDivisionFull = async (
+  tournamentId: string,
+  divisionId: string,
+  maxTeams?: number
+): Promise<boolean> => {
+  if (!maxTeams) return false; // No limit set
+  const count = await getActiveTeamCountForDivision(tournamentId, divisionId);
+  return count >= maxTeams;
 };
 
 // ============================================

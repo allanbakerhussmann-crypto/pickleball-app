@@ -8,10 +8,11 @@
  */
 
 import React, { useState } from 'react';
-import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { Header } from '../Header';
 import { BottomNav } from '../BottomNav';
 import { LoginModal } from '../auth/LoginModal';
+import { CookieConsentBanner } from '../shared/CookieConsentBanner';
 import { useAuth } from '../../contexts/AuthContext';
 import { ROUTES, getRoute } from '../../router/routes';
 import { ensureRegistrationForUser } from '../../services/firebase';
@@ -201,14 +202,38 @@ export const AppLayout: React.FC = () => {
         </div>
       </main>
 
-      <BottomNav 
-        activeView={getActiveView()} 
-        onNavigate={handleNavigate} 
+      <BottomNav
+        activeView={getActiveView()}
+        onNavigate={handleNavigate}
       />
+
+      {/* Footer with Privacy Links */}
+      <footer className="hidden md:block bg-gray-900 border-t border-gray-800 py-4 px-6">
+        <div className="container mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-sm text-gray-500">
+          <p>&copy; {new Date().getFullYear()} Pickleball Director. All rights reserved.</p>
+          <div className="flex items-center gap-4">
+            <Link to={ROUTES.PRIVACY_POLICY} className="hover:text-gray-300 transition-colors">
+              Privacy Policy
+            </Link>
+            <Link to={ROUTES.TERMS_OF_SERVICE} className="hover:text-gray-300 transition-colors">
+              Terms of Service
+            </Link>
+            <a
+              href="mailto:privacy@pickleballdirector.com"
+              className="hover:text-gray-300 transition-colors"
+            >
+              Contact
+            </a>
+          </div>
+        </div>
+      </footer>
 
       {isLoginModalOpen && (
         <LoginModal onClose={() => setLoginModalOpen(false)} />
       )}
+
+      {/* Cookie/Storage Consent Banner */}
+      <CookieConsentBanner />
     </div>
   );
 };

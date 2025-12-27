@@ -20,6 +20,21 @@
  */
 
 import type { CompetitionFormat, PoolPlayMedalsSettings } from './types/formats';
+import type { MatchParticipant, PlayType } from './types/game';
+
+// ============================================
+// TOURNAMENT FORMAT TYPES (V06.06)
+// ============================================
+
+export type SeedingMethod = 'dupr' | 'manual' | 'random';
+
+export type TieBreaker =
+  | 'wins'
+  | 'head_to_head'
+  | 'point_diff'
+  | 'points_scored'
+  | 'points_against'
+  | 'games_won';
 
 // ============================================
 // USER & PROFILE TYPES
@@ -41,6 +56,7 @@ export interface UserProfile {
   phone?: string;
   bio?: string;
   photoURL?: string;
+  photoData?: string;  // Base64 photo data for display
   coverPhotoURL?: string;
   region?: string;
   country?: string;
@@ -81,6 +97,45 @@ export interface UserProfile {
   termsOfServiceConsentAt?: number;     // Timestamp when ToS accepted
   dataProcessingConsentAt?: number;     // Timestamp when data processing consented
   consentPolicyVersion?: string;        // Version of policy agreed to (e.g., "1.0")
+  // Personal info for eligibility checks
+  birthDate?: string;
+  gender?: 'male' | 'female' | 'other' | 'prefer_not_to_say';
+  // Direct rating fields (duplicated from duprProfile for convenience)
+  duprDoublesRating?: number;
+  duprSinglesRating?: number;
+  ratingDoubles?: number;
+  ratingSingles?: number;
+}
+
+// ============================================
+// NOTIFICATION TYPES (V06.07)
+// ============================================
+
+export type NotificationType =
+  | 'court_assignment'    // Assigned to a court, ready to play
+  | 'match_result'        // Match completed
+  | 'registration'        // Registration confirmed, cancelled, etc.
+  | 'partner_invite'      // Partner invite received
+  | 'challenge'           // Ladder challenge received
+  | 'general';            // General notification
+
+export interface Notification {
+  id: string;
+  userId: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  read: boolean;
+  createdAt: number;
+  /** Additional data for navigation/context */
+  data?: {
+    tournamentId?: string;
+    leagueId?: string;
+    meetupId?: string;
+    matchId?: string;
+    courtName?: string;
+    inviteId?: string;
+  };
 }
 
 // ============================================
@@ -113,6 +168,10 @@ export interface Club {
   stripePayoutsEnabled?: boolean;
   bookingSettings?: ClubBookingSettings;
   courts?: ClubCourt[];
+  // Additional fields for ClubDetailPage
+  members?: string[];
+  admins?: string[];
+  createdByUserId?: string;
   // DUPR Integration
   duprClubId?: string;
 }
@@ -129,6 +188,38 @@ export interface ClubMember {
   status: 'active' | 'suspended' | 'pending';
 }
 
+export interface ClubJoinRequest {
+  id: string;
+  clubId: string;
+  userId: string;
+  userName: string;
+  userEmail?: string;
+  status: 'pending' | 'approved' | 'declined';
+  message?: string;
+  createdAt: number;
+  reviewedAt?: number;
+  reviewedBy?: string;
+}
+
+// Court-related types for club management
+export type CourtGrade = 'standard' | 'premium' | 'elite';
+export type CourtSurface = 'concrete' | 'asphalt' | 'wood' | 'sport_court' | 'turf' | 'other';
+export type CourtLocation = 'indoor' | 'outdoor' | 'covered';
+export type CourtStatus = 'active' | 'inactive' | 'maintenance';
+
+export interface CourtGradeConfig {
+  id: CourtGrade;
+  name: string;
+  description: string;
+  icon: string;
+  basePrice: number;
+  peakPrice: number;
+  weekendPrice: number;
+  memberPricing: 'free' | 'discounted' | 'same' | 'full';
+  memberDiscountPercent: number;
+  visitorPremiumPercent: number;
+}
+
 export interface ClubCourt {
   id: string;
   name: string;
@@ -138,17 +229,106 @@ export interface ClubCourt {
   hourlyRate?: number;
   peakHourlyRate?: number;
   order?: number;
+  // Extended properties for ManageCourts
+  description?: string;
+  grade?: CourtGrade;
+  location?: CourtLocation;
+  surfaceType?: CourtSurface;
+  status?: CourtStatus;
+  useCustomPricing?: boolean;
+  customBasePrice?: number;
+  customPeakPrice?: number;
+  customWeekendPrice?: number;
+  features?: {
+    hasLights?: boolean;
+    hasCover?: boolean;
+    hasAC?: boolean;
+    hasSeating?: boolean;
+    climateControlled?: boolean;
+    ballMachineAvailable?: boolean;
+    livestreamCapable?: boolean;
+  };
+  additionalFees?: {
+    lighting?: {
+      enabled: boolean;
+      amount: number;
+      appliesAfter?: string;
+    };
+    equipment?: {
+      enabled: boolean;
+      amount: number;
+      description?: string;
+    };
+    ballMachine?: {
+      enabled: boolean;
+      amount: number;
+    };
+  };
+  /** Court-specific lighting add-on */
+  lighting?: {
+    enabled?: boolean;
+    feePerHour?: number;
+    autoIncludedInPeak?: boolean;
+  };
+  /** Court-specific equipment add-on */
+  equipment?: {
+    enabled?: boolean;
+    feePerHour?: number;
+    description?: string;
+  };
+  active?: boolean;
 }
 
 export interface ClubBookingSettings {
   enabled: boolean;
-  advanceBookingDays: number;
-  minBookingMinutes: number;
-  maxBookingMinutes: number;
-  cancellationMinutes: number;
-  peakHours?: { start: string; end: string; days: number[] };
+  advanceBookingDays?: number;
+  minBookingMinutes?: number;
+  maxBookingMinutes?: number;
+  cancellationMinutes?: number;
+  peakHours?: { startTime?: string; endTime?: string; days?: number[]; enabled?: boolean };
   blockedTimes?: { dayOfWeek: number; start: string; end: string; reason?: string }[];
+  // Extended properties for ManageCourts
+  currency?: string;
+  slotDurationMinutes?: number;
+  openTime?: string;
+  closeTime?: string;
+  weekendPricingEnabled?: boolean;
+  courtGrades?: Record<CourtGrade, CourtGradeConfig>;
+  useCustomGradeNames?: boolean;
+  visitors?: {
+    allowVisitors?: boolean;
+    visitorFeeEnabled?: boolean;
+    visitorFee?: number;
+    visitorFeeType?: 'per_day' | 'per_booking';
+    visitorCourtPricing?: 'same' | 'premium' | 'custom';
+    visitorPremiumPercent?: number;
+    visitorCustomPrice?: number;
+    requireMemberSignIn?: boolean;
+  };
+  maxAdvanceBookingDays?: number;
+  maxBookingsPerMemberPerDay?: number;
+  cancellationMinutesBeforeSlot?: number;
+  paymentMethods?: {
+    acceptPayAsYouGo?: boolean;
+    acceptWallet?: boolean;
+    walletTopUpAmounts?: number[];
+    allowCustomTopUp?: boolean;
+    acceptAnnualPass?: boolean;
+    annualPassPrice?: number;
+    annualPassBenefit?: 'unlimited' | 'discounted' | 'priority';
+    annualPassPriorityDays?: number;
+    annualPassDiscountPercent?: number;
+    passFeeToCustomer?: boolean;
+  };
+  stripeAccountId?: string;
 }
+
+// Type aliases for pricing service compatibility
+export type ClubBookingSettingsEnhanced = ClubBookingSettings;
+export type ClubCourtEnhanced = ClubCourt;
+export type PeakHoursConfig = ClubBookingSettings['peakHours'];
+export type VisitorSettings = ClubBookingSettings['visitors'];
+export type PaymentMethodsConfig = ClubBookingSettings['paymentMethods'];
 
 export interface CourtBooking {
   id: string;
@@ -171,6 +351,9 @@ export interface CourtBooking {
   notes?: string;
   createdAt: number;
   updatedAt: number;
+  // Alternative booking user fields for CourtBookingCalendar
+  bookedByUserId?: string;
+  bookedByName?: string;
 }
 
 // ============================================
@@ -178,7 +361,7 @@ export interface CourtBooking {
 // ============================================
 
 export type EventType = 'singles' | 'doubles' | 'mixed_doubles';
-export type GenderCategory = 'open' | 'mens' | 'womens' | 'mixed';
+export type GenderCategory = 'open' | 'mens' | 'womens' | 'mixed' | 'men' | 'women';
 export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'bye';
 export type PaymentStatus = 'pending' | 'processing' | 'paid' | 'failed' | 'refunded';
 
@@ -210,6 +393,8 @@ export interface Tournament {
   stripeProductId?: string;
   stripePriceId?: string;
   divisions?: Division[];
+  /** Admin test mode - allows organizers to score any match and test features */
+  testMode?: boolean;
 }
 
 export interface TournamentSettings {
@@ -250,6 +435,11 @@ export interface Division {
   skillMax?: number;
   ageMin?: number;
   ageMax?: number;
+  // Alias fields for eligibility checks (same as skillMin/skillMax/ageMin/ageMax)
+  minRating?: number;
+  maxRating?: number;
+  minAge?: number;
+  maxAge?: number;
   maxTeams?: number;
   entryFee?: number;
   format: DivisionFormat;
@@ -320,10 +510,11 @@ export interface Team {
   // Player references
   playerIds?: string[];
   players?: { odUserId?: string; id?: string; name: string; email?: string }[];
+  captainPlayerId?: string;  // Team captain user ID
 
   seed?: number;
   poolGroup?: string;
-  status?: 'registered' | 'confirmed' | 'checked_in' | 'active' | 'eliminated' | 'withdrawn' | 'pending_partner';
+  status?: 'registered' | 'confirmed' | 'checked_in' | 'active' | 'eliminated' | 'withdrawn' | 'pending_partner' | 'cancelled';
   isLookingForPartner?: boolean;
   registeredAt?: number;
   registeredByUserId?: string;
@@ -331,58 +522,95 @@ export interface Team {
   checkInAt?: number;
 }
 
+/**
+ * Match Interface (V06.07)
+ *
+ * IMPORTANT: Use the unified format for all new code:
+ * - sideA/sideB for participants (NOT teamAId/teamBId)
+ * - scores[] for game scores (NOT scoreTeamAGames/scoreTeamBGames)
+ * - winnerId for winner (NOT winnerTeamId)
+ *
+ * See types/game/match.ts for the canonical Match interface.
+ */
 export interface Match {
   id: string;
-  tournamentId: string;
-  divisionId: string;
+  tournamentId?: string;
+  divisionId?: string;
 
-  // Round info (supports both naming conventions)
+  // Event context (V06.07 unified format)
+  eventType?: 'tournament' | 'league' | 'meetup';
+  eventId?: string;
+  format?: string;  // CompetitionFormat
+
+  // PARTICIPANTS - Use sideA/sideB
+  sideA?: MatchParticipant;
+  sideB?: MatchParticipant;
+
+  // Game settings
+  gameSettings?: {
+    playType?: 'singles' | 'doubles' | 'mixed' | 'open';
+    pointsPerGame?: 11 | 15 | 21;
+    winBy?: 1 | 2;
+    bestOf?: 1 | 3 | 5;
+    capAt?: number;
+  };
+
+  // Round info
   round?: number;
   roundNumber?: number;
   matchNumber?: number;
 
   // Stage info
-  stage?: string; // 'pool' | 'bracket' | 'finals' | 'Pool Play' | 'Semi-Finals' | 'Finals' | 'Round X'
+  stage?: string;
   poolGroup?: string;
+  bracketType?: 'main' | 'plate' | 'consolation';
 
-  // Team references (supports both naming conventions)
+  // @deprecated Use sideA.id / sideB.id instead
   team1Id?: string;
+  /** @deprecated Use sideA.id instead */
   team2Id?: string;
-  teamAId?: string;  // Alternative naming used in TournamentManager
-  teamBId?: string;  // Alternative naming used in TournamentManager
+  /** @deprecated Use sideA.id instead */
+  teamAId?: string;
+  /** @deprecated Use sideB.id instead */
+  teamBId?: string;
 
-  // Team display info
+  // @deprecated Use sideA.name / sideB.name instead
   team1Name?: string;
+  /** @deprecated Use sideB.name instead */
   team2Name?: string;
   team1Seed?: number;
   team2Seed?: number;
 
-  // Result info
+  // RESULT - Use winnerId
   winnerId?: string;
-  winnerTeamId?: string; // Alternative naming
+  /** @deprecated Use winnerId instead */
+  winnerTeamId?: string;
   loserId?: string;
 
-  // Scores (supports both formats)
+  // SCORES - Use scores[]
   scores?: GameScore[];
-  scoreTeamAGames?: number[];  // Alternative score format
-  scoreTeamBGames?: number[];  // Alternative score format
+  /** @deprecated Use scores[] instead */
+  scoreTeamAGames?: number[];
+  /** @deprecated Use scores[] instead */
+  scoreTeamBGames?: number[];
 
   // Match status
   status: MatchStatus | 'scheduled' | 'not_started';
 
-  // Court info (supports both naming conventions)
+  // Court info
   courtId?: string;
   courtName?: string;
-  court?: string | null; // Alternative naming used in TournamentManager
+  court?: string | null;
+  courtNumber?: number;
 
-  // Time info (supports both naming conventions)
+  // Time info
   scheduledTime?: number;
-  startTime?: number | null;  // Alternative naming
-  endTime?: number | null;    // Alternative naming
+  startTime?: number | null;
+  endTime?: number | null;
   startedAt?: number;
   completedAt?: number;
 
-  // Bracket advancement (V06.05)
+  // Bracket advancement
   nextMatchId?: string | null;
   nextMatchSlot?: 'team1' | 'team2' | 'teamA' | 'teamB' | 'sideA' | 'sideB' | null;
   loserNextMatchId?: string;
@@ -391,6 +619,7 @@ export interface Match {
   // Other metadata
   isBye?: boolean;
   bracketPosition?: number;
+  testData?: boolean;
   lastUpdatedBy?: string | null;
   lastUpdatedAt?: number;
   createdAt?: number;
@@ -425,6 +654,8 @@ export interface GameScore {
   // Score naming convention 3
   teamAScore?: number;
   teamBScore?: number;
+  // Timestamp when this game was completed (V06.06)
+  completedAt?: number;
 }
 
 export interface StandingsEntry {
@@ -436,10 +667,14 @@ export interface StandingsEntry {
   teamName: string;
   played: number;
   won: number;
+  wins?: number;  // Alias for won
   lost: number;
+  losses?: number;  // Alias for lost
   pointsFor: number;
   pointsAgainst: number;
   pointDifferential: number;
+  pointDifference?: number;  // Alias for pointDifferential
+  points?: number;  // Alias for leaguePoints
   leaguePoints: number;
 }
 
@@ -454,6 +689,7 @@ export interface Meetup {
   title: string;
   description: string;
   date: number;
+  when?: string;  // Display-friendly date/time string
   endDate?: number;
   location: string;
   venueDetails?: string;
@@ -475,6 +711,9 @@ export interface Meetup {
   competitionSettings?: MeetupCompetitionSettings;
   region?: string;
   duprClubId?: string;
+  // Map coordinates
+  lat?: number;
+  lng?: number;
 }
 
 export type MeetupCompetitionType = 
@@ -1291,6 +1530,36 @@ export interface LeagueChallenge {
 }
 
 // ============================================
+// TOURNAMENT REGISTRATION
+// ============================================
+
+export interface TournamentRegistration {
+  id: string;
+  tournamentId: string;
+  playerId: string;
+  status: 'draft' | 'in_progress' | 'pending_payment' | 'completed' | 'cancelled';
+  waiverAccepted: boolean;
+  selectedEventIds: string[];  // Division IDs the player registered for
+  partnerDetails?: Record<string, {
+    partnerId?: string;
+    partnerUserId?: string;  // Alias for partnerId
+    partnerName?: string;
+    mode?: 'invite' | 'join_open' | 'create_open' | 'open_team';
+    teamId?: string;
+    openTeamId?: string;  // ID of open team to join
+  }>;
+  paymentStatus?: 'pending' | 'paid' | 'refunded' | 'waived';
+  paymentIntentId?: string;
+  amountDue?: number;
+  amountPaid?: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  checkedInAt?: number;
+  checkedInBy?: string;
+}
+
+// ============================================
 // LEAGUE REGISTRATION
 // ============================================
 
@@ -1319,21 +1588,39 @@ export interface LeagueRegistration {
 // COMPETITION TYPES (LEGACY)
 // ============================================
 
-export type CompetitionType = 'casual' | 'round_robin' | 'ladder' | 'tournament' | 'box_league';
+export type CompetitionType = 'casual' | 'round_robin' | 'ladder' | 'tournament' | 'box_league' | 'team_league';
+
+// Visibility type for events and clubs
+export type Visibility = 'public' | 'private' | 'club_only';
+
+// Team league board configuration (for CreateCompetition)
+export interface TeamLeagueBoardConfig {
+  id: string;
+  name: string;
+  format: 'singles' | 'doubles';
+}
 export type CompetitionStatus = 'draft' | 'registration_open' | 'in_progress' | 'completed' | 'cancelled';
 
 export interface CompetitionDivision {
   id: string;
   name: string;
+  type?: EventType;  // singles, doubles, mixed_doubles
   skillLevelMin?: number;
   skillLevelMax?: number;
+  minRating?: number;  // Alias for skillLevelMin
+  maxRating?: number;  // Alias for skillLevelMax
   ageMin?: number;
   ageMax?: number;
+  minAge?: number;  // Alias for ageMin
+  maxAge?: number;  // Alias for ageMax
   gender?: 'open' | 'mens' | 'womens' | 'mixed';
 }
 
 export interface CompetitionEntry {
+  id?: string;
   odUserId: string;
+  playerId?: string;  // Alias for odUserId
+  teamId?: string;    // For team-based competitions
   odAccountId?: string;
   odOrganizationId?: string;
   odUserName: string;
@@ -1571,6 +1858,10 @@ export interface PlannerDivision {
   // DUPR rating requirements
   minRating?: number;  // e.g., 3.0
   maxRating?: number;  // e.g., 4.5
+
+  // Age requirements
+  minAge?: number;     // e.g., 50 for 50+ division
+  maxAge?: number;     // e.g., 17 for junior division
 
   // Pool settings (for pool_play_medals format)
   poolSize?: number;

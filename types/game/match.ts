@@ -236,6 +236,9 @@ export interface Match {
   /** Pool group identifier */
   poolGroup?: string;
 
+  /** Stage of competition (pool, bracket, plate, finals) */
+  stage?: 'pool' | 'bracket' | 'plate' | 'finals' | 'third_place';
+
   /** Challenge ID (for ladder format) */
   challengeId?: string;
 

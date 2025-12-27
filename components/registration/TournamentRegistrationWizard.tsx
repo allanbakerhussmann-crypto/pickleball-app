@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import type { Tournament, TournamentRegistration, UserProfile, Division, Team } from '../../types';
 import {
     getRegistration,
@@ -6,9 +6,11 @@ import {
     finalizeRegistration,
     subscribeToDivisions,
     getUserTeamsForTournament,
-    withdrawPlayerFromDivision
+    withdrawPlayerFromDivision,
+    getActiveTeamCountForDivision
 } from '../../services/firebase';
 import { DoublesPartnerStep } from './DoublesPartnerStep';
+import { calculateTournamentEntryPrice } from '../../services/firebase/pricing';
 
 interface WizardProps {
     tournament: Tournament;
@@ -67,12 +69,58 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
     const [divisions, setDivisions] = useState<Division[]>([]);
     const [partnerDetails, setPartnerDetails] = useState<TournamentRegistration['partnerDetails']>({});
     const [existingTeamsByDivision, setExistingTeamsByDivision] = useState<Record<string, Team>>({});
+    const [divisionTeamCounts, setDivisionTeamCounts] = useState<Record<string, number>>({});
     const [error, setError] = useState<string | null>(null);
-    
+
     // Modal state for confirmation
     const [withdrawConfirmationId, setWithdrawConfirmationId] = useState<string | null>(null);
 
     const isWaiverOnly = mode === 'waiver_only' && !!initialDivisionId;
+
+    // Calculate total fees for selected divisions
+    const feeBreakdown = useMemo(() => {
+        if (!regData || !divisions.length) return { totalFee: 0, items: [], hasFees: false };
+
+        const items: Array<{ divisionId: string; divisionName: string; fee: number }> = [];
+        let totalFee = 0;
+
+        for (const divId of regData.selectedEventIds) {
+            const div = divisions.find(d => d.id === divId);
+            if (!div) continue;
+
+            // Skip if already registered (existing team)
+            if (existingTeamsByDivision[divId]) continue;
+
+            const pricing = calculateTournamentEntryPrice({
+                tournament: {
+                    id: tournament.id,
+                    name: tournament.name,
+                    entryFee: tournament.entryFee,
+                },
+                division: div.entryFee ? {
+                    id: div.id,
+                    name: div.name,
+                    entryFee: div.entryFee,
+                } : undefined,
+                isMember: false, // TODO: Check club membership
+                registrationDate: new Date(),
+            });
+
+            if (!pricing.isFree) {
+                items.push({
+                    divisionId: div.id,
+                    divisionName: div.name,
+                    fee: pricing.finalPrice,
+                });
+                totalFee += pricing.finalPrice;
+            }
+        }
+
+        return { totalFee, items, hasFees: totalFee > 0 };
+    }, [regData?.selectedEventIds, divisions, tournament, existingTeamsByDivision]);
+
+    // Check if payment is required
+    const requiresPayment = feeBreakdown.hasFees && tournament.stripeConnectedAccountId;
 
     useEffect(() => {
         const unsub = subscribeToDivisions(tournament.id, setDivisions);
@@ -108,6 +156,21 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
         initReg();
         return () => unsub();
     }, [tournament.id, userProfile.id, initialDivisionId]);
+
+    // Load team counts for capacity checking
+    useEffect(() => {
+        const loadTeamCounts = async () => {
+            if (divisions.length === 0) return;
+            const counts: Record<string, number> = {};
+            await Promise.all(
+                divisions.map(async (div) => {
+                    counts[div.id] = await getActiveTeamCountForDivision(tournament.id, div.id);
+                })
+            );
+            setDivisionTeamCounts(counts);
+        };
+        loadTeamCounts();
+    }, [tournament.id, divisions]);
 
     const handleSave = async (updates: Partial<TournamentRegistration>) => {
         if (!regData) return;
@@ -281,6 +344,13 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                         const isSelected = regData.selectedEventIds.includes(div.id);
                                         const team = existingTeamsByDivision[div.id];
                                         const hasExistingTeam = !!team;
+
+                                        // Capacity checking
+                                        const teamCount = divisionTeamCounts[div.id] ?? 0;
+                                        const maxTeams = div.maxTeams;
+                                        const isFull = maxTeams ? teamCount >= maxTeams : false;
+                                        const isAtCapacity = isFull && !hasExistingTeam && !isSelected;
+
                                         if (isWaiverOnly && div.id !== initialDivisionId) return null;
                                         return (
                                             <div
@@ -288,25 +358,38 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                 onClick={() => {
                                                     if (isWaiverOnly) return;
                                                     if (!eligible) return;
+                                                    if (isAtCapacity) return; // Prevent selecting full divisions
                                                     if (hasExistingTeam) return; // Prevent deselecting if they have a team, must use withdraw button
                                                     const current = regData.selectedEventIds;
                                                     const next = current.includes(div.id) ? current.filter(x => x !== div.id) : [...current, div.id];
                                                     handleSave({ selectedEventIds: next });
                                                 }}
-                                                className={`p-4 rounded border flex justify-between items-center transition-all ${!eligible ? 'bg-gray-800 border-gray-700 opacity-60 cursor-not-allowed' : isSelected ? 'bg-green-900/40 border-green-500 cursor-pointer shadow-[0_0_10px_rgba(34,197,94,0.1)]' : 'bg-gray-700 border-gray-600 hover:bg-gray-600 cursor-pointer'}`}
+                                                className={`p-4 rounded border flex justify-between items-center transition-all ${!eligible || isAtCapacity ? 'bg-gray-800 border-gray-700 opacity-60 cursor-not-allowed' : isSelected ? 'bg-green-900/40 border-green-500 cursor-pointer shadow-[0_0_10px_rgba(34,197,94,0.1)]' : 'bg-gray-700 border-gray-600 hover:bg-gray-600 cursor-pointer'}`}
                                             >
                                                 <div>
                                                     <div className={`font-bold ${isSelected ? 'text-green-400' : 'text-white'}`}>{div.name}</div>
-                                                    <div className="text-xs text-gray-400 mt-1 flex gap-2">
+                                                    <div className="text-xs text-gray-400 mt-1 flex flex-wrap gap-2">
                                                         <span className="capitalize">{div.type}</span>
                                                         <span>•</span>
                                                         <span className="capitalize">{div.gender}</span>
                                                         {div.minRating && <span>• {div.minRating}+ Rating</span>}
                                                         {div.minAge && <span>• Age {div.minAge}+</span>}
+                                                        {maxTeams && (
+                                                            <span className={isFull ? 'text-red-400' : 'text-gray-400'}>
+                                                                • {teamCount}/{maxTeams} teams
+                                                            </span>
+                                                        )}
+                                                        {(div.entryFee || tournament.entryFee > 0) && (
+                                                            <span className="text-green-400">
+                                                                • ${((div.entryFee || tournament.entryFee) / 100).toFixed(0)}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 </div>
 
-                                                {!eligible ? (
+                                                {isAtCapacity ? (
+                                                    <div className="text-xs font-bold text-orange-400 border border-orange-900 bg-orange-900/20 px-2 py-1 rounded whitespace-nowrap">Division Full</div>
+                                                ) : !eligible ? (
                                                     <div className="text-xs font-bold text-red-400 border border-red-900 bg-red-900/20 px-2 py-1 rounded whitespace-nowrap">{reason}</div>
                                                 ) : hasExistingTeam ? (
                                                     <div className="text-xs font-bold text-gray-300 border border-gray-600 bg-gray-900 px-2 py-1 rounded whitespace-nowrap flex items-center gap-2">
@@ -369,6 +452,35 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                             <div className="space-y-4">
                                 <h3 className="text-white font-bold">Liability Waiver</h3>
                                 <p className="text-gray-300">By registering, I acknowledge the risks blah blah (waiver text omitted for brevity).</p>
+
+                                {/* Fee Summary */}
+                                {feeBreakdown.hasFees && (
+                                    <div className="bg-gray-900 rounded-lg p-4 border border-gray-700 mt-4">
+                                        <h4 className="text-white font-semibold mb-3">Entry Fees</h4>
+                                        <div className="space-y-2">
+                                            {feeBreakdown.items.map(item => (
+                                                <div key={item.divisionId} className="flex justify-between text-sm">
+                                                    <span className="text-gray-400">{item.divisionName}</span>
+                                                    <span className="text-white">${(item.fee / 100).toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                            <div className="border-t border-gray-700 pt-2 mt-2 flex justify-between font-bold">
+                                                <span className="text-white">Total</span>
+                                                <span className="text-green-400">${(feeBreakdown.totalFee / 100).toFixed(2)} NZD</span>
+                                            </div>
+                                        </div>
+                                        {requiresPayment && (
+                                            <p className="text-xs text-gray-500 mt-3">
+                                                Payment will be collected via Stripe after registration.
+                                            </p>
+                                        )}
+                                        {feeBreakdown.hasFees && !tournament.stripeConnectedAccountId && (
+                                            <p className="text-xs text-yellow-500 mt-3">
+                                                Payment will be collected by the organizer separately.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
 
                                 {error && <div className="text-red-400 font-semibold">{error}</div>}
 

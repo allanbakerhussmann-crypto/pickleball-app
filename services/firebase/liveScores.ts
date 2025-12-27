@@ -88,10 +88,10 @@ export const createStandaloneGame = async (
   const id = docRef.id;
   const now = Date.now();
 
-  // Generate short share code
+  // Generate short share code (use null instead of undefined for Firestore)
   const shareCode = options?.shareEnabled
     ? generateShareCode()
-    : undefined;
+    : null;
 
   const game: StandaloneGame = {
     id,
@@ -487,10 +487,20 @@ export const completeLiveScore = async (
 export const canUserScore = (
   userId: string,
   liveScore: LiveScore,
-  userRoles?: EventScoringRole[]
+  userRoles?: EventScoringRole[],
+  options?: {
+    testMode?: boolean;
+    isAppAdmin?: boolean;
+    isOrganizer?: boolean;
+  }
 ): boolean => {
+  // App admins and organizers can always score in test mode
+  if (options?.testMode && (options?.isAppAdmin || options?.isOrganizer)) {
+    return true;
+  }
+
   // Organizer can always score
-  // This would need to be checked separately with event data
+  if (options?.isOrganizer) return true;
 
   // Assigned scorer for this match
   if (liveScore.scorerId === userId) return true;

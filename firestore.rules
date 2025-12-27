@@ -34,11 +34,17 @@ service cloud.firestore {
     }
     
     function isLeagueAdmin(leagueId) {
-      return isAuthenticated() && 
+      return isAuthenticated() &&
         exists(/databases/$(database)/documents/leagues/$(leagueId)) &&
         request.auth.uid == get(/databases/$(database)/documents/leagues/$(leagueId)).data.createdByUserId;
     }
-    
+
+    function isAppAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAppAdmin == true;
+    }
+
     // ============================================
     // PLATFORM SETTINGS (Admin only)
     // ============================================
@@ -453,6 +459,76 @@ service cloud.firestore {
       allow read: if isAuthenticated() && resource.data.odUserId == request.auth.uid;
       allow create: if isAuthenticated() && request.resource.data.odUserId == request.auth.uid;
       allow update, delete: if false; // Admin actions via Cloud Functions
+    }
+
+    // ============================================
+    // LIVE SCORING COLLECTIONS (NEW V06.03)
+    // ============================================
+
+    // Live Scores - Real-time match scoring for events
+    match /liveScores/{scoreId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      // Owner, scorer, or event organizer can update
+      allow update: if isAuthenticated() && (
+        resource.data.scorerId == request.auth.uid ||
+        (resource.data.teamA.playerIds != null && request.auth.uid in resource.data.teamA.playerIds) ||
+        (resource.data.teamB.playerIds != null && request.auth.uid in resource.data.teamB.playerIds)
+      );
+      allow delete: if isAuthenticated() && resource.data.scorerId == request.auth.uid;
+    }
+
+    // Standalone Games - Personal game scoring not tied to events
+    match /standaloneGames/{gameId} {
+      allow read: if isAuthenticated();
+      // Owner can create and manage their games
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // Scoreboard Configs - Event scoreboard display settings
+    match /scoreboardConfigs/{configId} {
+      allow read: if isAuthenticated();
+      // Event organizers can manage scoreboard configs
+      allow create, update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+
+    // ============================================
+    // PRIVACY & SECURITY COLLECTIONS (V06.04)
+    // ============================================
+
+    // Security Breaches - Admin only
+    match /security_breaches/{breachId} {
+      allow read: if isAppAdmin();
+      allow create: if isAppAdmin();
+      allow update: if isAppAdmin();
+      allow delete: if false; // Never delete breach records
+    }
+
+    // Privacy Requests - Admin can read/write, users can create and read their own
+    match /privacy_requests/{requestId} {
+      // Admins can read all, users can read their own
+      allow read: if isAppAdmin() ||
+        (isAuthenticated() && resource.data.userId == request.auth.uid);
+      // Anyone can create a privacy request
+      allow create: if true;
+      // Only admins can update
+      allow update: if isAppAdmin();
+      allow delete: if false; // Keep records for compliance
+    }
+
+    // Data Retention Logs - Admin only
+    match /data_retention_logs/{logId} {
+      allow read: if isAppAdmin();
+      allow write: if false; // Only Cloud Functions write these
+    }
+
+    // Retention Policies - Admin only
+    match /retention_policies/{policyId} {
+      allow read: if isAppAdmin();
+      allow write: if isAppAdmin();
     }
   }
 }

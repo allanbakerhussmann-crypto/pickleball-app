@@ -5,7 +5,7 @@
  * Tap team color to record rally winner. Handles side-out scoring.
  *
  * FILE: components/scoring/LiveScoringInterface.tsx
- * VERSION: V06.03
+ * VERSION: V06.04
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
@@ -22,6 +22,7 @@ import {
   formatMatchScore,
   applyResult,
 } from '../../services/scoring/scoringLogic';
+import { CourtVisualization } from './CourtVisualization';
 
 // =============================================================================
 // PROPS
@@ -38,6 +39,8 @@ interface LiveScoringInterfaceProps {
   fullscreen?: boolean;
   /** Show debug info */
   debug?: boolean;
+  /** Test mode - flags scores for cleanup */
+  testMode?: boolean;
 }
 
 // =============================================================================
@@ -50,6 +53,7 @@ export const LiveScoringInterface: React.FC<LiveScoringInterfaceProps> = ({
   onMatchComplete,
   fullscreen = false,
   debug = false,
+  testMode = false,
 }) => {
   // State
   const [state, setState] = useState<LiveScore>(initialState);
@@ -175,7 +179,13 @@ export const LiveScoringInterface: React.FC<LiveScoringInterfaceProps> = ({
   // ==========================================================================
 
   return (
-    <div className={`bg-gray-900 text-white ${fullscreen ? 'fixed inset-0 z-50' : 'min-h-screen'} flex flex-col`}>
+    <div className={`bg-gray-900 text-white ${fullscreen ? 'fixed inset-0 z-50' : 'min-h-screen'} flex flex-col ${testMode ? 'ring-4 ring-yellow-500 ring-inset' : ''}`}>
+      {/* Test Mode Banner */}
+      {testMode && (
+        <div className="bg-yellow-600 text-black px-4 py-1 text-center text-sm font-medium">
+          🧪 TEST MODE - Scores will be flagged for cleanup
+        </div>
+      )}
       {/* Header */}
       <div className="bg-gray-800 px-4 py-3 flex items-center justify-between border-b border-gray-700">
         <div className="flex items-center gap-3">
@@ -213,6 +223,13 @@ export const LiveScoringInterface: React.FC<LiveScoringInterfaceProps> = ({
       <div className="py-6 bg-gray-800/50">
         {getScoreDisplay()}
       </div>
+
+      {/* Court Visualization (show player positions) */}
+      {settings.playType === 'doubles' && (teamA.playerPositions || teamB.playerPositions) && (
+        <div className="px-4 pb-2">
+          <CourtVisualization state={state} compact={true} showLegend={false} />
+        </div>
+      )}
 
       {/* Court Tap Area */}
       <div className="flex-1 flex">

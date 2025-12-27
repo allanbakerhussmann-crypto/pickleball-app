@@ -11,7 +11,6 @@ import React, { useState, useEffect } from 'react';
 import { RouterProvider } from 'react-router-dom';
 import { router } from './router';
 import { isFirebaseConfigured } from './services/firebase';
-import { PickleballDirectorLogo } from './components/icons/PickleballDirectorLogo';
 
 const App: React.FC = () => {
   // ==========================================

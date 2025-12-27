@@ -18,11 +18,18 @@ import {
 import { getAuth, createUserProfile, getUserProfile, updateUserProfileDoc } from '../services/firebase';
 import type { UserProfile, UserRole } from '../types';
 
+// Consent data passed during signup
+export interface SignupConsent {
+  privacyPolicy: boolean;
+  termsOfService: boolean;
+  dataProcessing: boolean;
+}
+
 interface AuthContextType {
   currentUser: User | null;
   userProfile: UserProfile | null;
   loading: boolean;
-  signup: (email: string, pass: string, role: UserRole, name: string) => Promise<User | null>;
+  signup: (email: string, pass: string, role: UserRole, name: string, consent: SignupConsent) => Promise<User | null>;
   login: (email: string, pass: string) => Promise<User | null>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -118,7 +125,7 @@ useEffect(() => {
   // Helper to improve email link clickability on mobile (especially iOS)
   const getActionCodeSettings = () => undefined;
 
-  const signup = useCallback(async (email: string, pass: string, role: UserRole, name: string) => {
+  const signup = useCallback(async (email: string, pass: string, role: UserRole, name: string, consent: SignupConsent) => {
       const auth = getAuth();
       // 1. Create Auth User
       const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
@@ -128,12 +135,21 @@ useEffect(() => {
       // Admin roles should be granted via Cloud Functions by existing admins
       const roles: UserRole[] = role === 'organizer' ? ['player', 'organizer'] : ['player'];
 
-      // 3. Create Firestore Profile
+      // 3. Create Firestore Profile with consent tracking
+      const now = Date.now();
       const newProfile: UserProfile = {
           id: user.uid,
+          odUserId: user.uid,
           email: email,
           displayName: name,
-          roles: roles
+          roles: roles,
+          createdAt: now,
+          updatedAt: now,
+          // Store consent timestamps for Privacy Act 2020 compliance
+          privacyPolicyConsentAt: consent.privacyPolicy ? now : undefined,
+          termsOfServiceConsentAt: consent.termsOfService ? now : undefined,
+          dataProcessingConsentAt: consent.dataProcessing ? now : undefined,
+          consentPolicyVersion: '1.0',
       };
       await createUserProfile(user.uid, newProfile);
 

@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
 import { isFirebaseConfigured } from '../../services/firebase';
@@ -48,7 +49,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
   const [name, setName] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [roleChoice, setRoleChoice] = useState<UserRole>('player');
-  
+  const [agreeToTerms, setAgreeToTerms] = useState(false);
+  const [agreeToDataProcessing, setAgreeToDataProcessing] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [isConfigError, setIsConfigError] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -72,6 +75,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
         setError('Passwords do not match.');
         return;
       }
+      if (!agreeToTerms) {
+        setError('You must agree to the Privacy Policy and Terms of Service.');
+        return;
+      }
+      if (!agreeToDataProcessing) {
+        setError('You must consent to data processing to create an account.');
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -88,7 +99,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
       if (isLoginView) {
         await login(email, password);
       } else {
-        await signup(email, password, roleChoice, name);
+        // Pass consent data to signup for Privacy Act 2020 compliance
+        await signup(email, password, roleChoice, name, {
+          privacyPolicy: agreeToTerms,
+          termsOfService: agreeToTerms,
+          dataProcessing: agreeToDataProcessing,
+        });
       }
       onClose();
     } catch (err: any) {
@@ -238,10 +254,54 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
                   </button>
                 </div>
                 <p className="text-xs text-gray-500 mt-1">
-                  {roleChoice === 'player' 
-                    ? 'Join tournaments and track your stats.' 
+                  {roleChoice === 'player'
+                    ? 'Join tournaments and track your stats.'
                     : 'Create and manage your own tournaments.'}
                 </p>
+              </div>
+
+              {/* Privacy Consent Checkboxes */}
+              <div className="pt-4 space-y-3 border-t border-gray-700">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={agreeToTerms}
+                    onChange={(e) => setAgreeToTerms(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded border-gray-600 text-green-500 focus:ring-green-500 bg-gray-700"
+                  />
+                  <span className="text-sm text-gray-300">
+                    I agree to the{' '}
+                    <Link
+                      to="/privacy-policy"
+                      target="_blank"
+                      className="text-green-400 hover:text-green-300 underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Privacy Policy
+                    </Link>
+                    {' '}and{' '}
+                    <Link
+                      to="/terms"
+                      target="_blank"
+                      className="text-green-400 hover:text-green-300 underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Terms of Service
+                    </Link>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={agreeToDataProcessing}
+                    onChange={(e) => setAgreeToDataProcessing(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded border-gray-600 text-green-500 focus:ring-green-500 bg-gray-700"
+                  />
+                  <span className="text-sm text-gray-300">
+                    I consent to my data being processed by third-party services (Firebase, Stripe, DUPR) located in the USA
+                  </span>
+                </label>
               </div>
             </>
           )}

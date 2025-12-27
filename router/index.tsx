@@ -49,6 +49,12 @@ import WatchScorePage from '../pages/WatchScorePage';
 import ScoreboardPage from '../pages/ScoreboardPage';
 import ScoringDashboardPage from '../pages/ScoringDashboardPage';
 
+// Legal / Privacy Pages (V06.04)
+import PrivacyPolicyPage from '../pages/PrivacyPolicyPage';
+import TermsOfServicePage from '../pages/TermsOfServicePage';
+import PrivacyRequestPage from '../pages/PrivacyRequestPage';
+import BreachManagementPage from '../pages/admin/BreachManagementPage';
+
 // ============================================
 // Router Configuration - Using HashRouter
 // URLs will be like: /#/tournaments, /#/clubs/123
@@ -222,7 +228,15 @@ export const router = createHashRouter([
           </ProtectedRoute>
         ),
       },
-      
+      {
+        path: 'admin/privacy-security',
+        element: (
+          <ProtectedRoute requireAdmin>
+            <BreachManagementPage />
+          </ProtectedRoute>
+        ),
+      },
+
       // ==========================================
       // DEBUG TOOLS (Admin Only)
       // ==========================================
@@ -325,6 +339,22 @@ export const router = createHashRouter([
       {
         path: 'scoreboard/:eventId',
         element: <ScoreboardPage />,
+      },
+
+      // ==========================================
+      // LEGAL / PRIVACY (V06.04)
+      // ==========================================
+      {
+        path: 'privacy-policy',
+        element: <PrivacyPolicyPage />,
+      },
+      {
+        path: 'terms',
+        element: <TermsOfServicePage />,
+      },
+      {
+        path: 'privacy-request',
+        element: <PrivacyRequestPage />,
       },
     ],
   },

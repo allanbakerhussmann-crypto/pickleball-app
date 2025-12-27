@@ -1,14 +1,12 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import type { 
-  Tournament, 
-  Division, 
-  Team, 
-  Match, 
-  Court, 
-  UserProfile, 
-  SeedingMethod, 
-  StandingsEntry
+import React, { useState, useEffect, useMemo } from 'react';
+import type {
+  Tournament,
+  Division,
+  Match,
+  SeedingMethod,
+  StandingsEntry,
 } from '../types';
+import type { GameSettings } from '../types/game/gameSettings';
 import { useAuth } from '../contexts/AuthContext';
 import {
   updateDivision,
@@ -33,7 +31,12 @@ import { ScheduleBuilder } from './tournament/scheduleBuilder';
 import { TournamentSeedButton } from './tournament/TournamentSeedButton';
 import { PoolGroupStandings } from './tournament/PoolGroupStandings';
 import { PoolEditor } from './tournament/PoolEditor';
+import { PoolDrawPreview } from './tournament/PoolDrawPreview';
 import { generatePoolAssignments, savePoolAssignments } from '../services/firebase/poolAssignments';
+import { TestModeWrapper } from './tournament/TestModeWrapper';
+import { TestModePanel } from './tournament/TestModePanel';
+import { PlayerMatchCard } from './tournament/PlayerMatchCard';
+import { clearTestData, quickScoreMatch, simulatePoolCompletion, deleteCorruptedSelfMatches } from '../services/firebase/matches';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -45,10 +48,7 @@ interface TournamentManagerProps {
 }
 
 
-const validateScoreForDivision = (score1: number, score2: number, division: Division): string | null => {
-  if (score1 < 0 || score2 < 0) return 'Scores cannot be negative.';
-  return null;
-};
+// Score validation now handled in MatchCard via gameSettings
 
 export const TournamentManager: React.FC<TournamentManagerProps> = ({
   tournament,
@@ -61,7 +61,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   const { currentUser, userProfile, isOrganizer, isAppAdmin } = useAuth();
 
   // Check if current user is the owner of THIS tournament (not just any organizer)
-  const isTournamentOwner = currentUser?.uid === tournament.createdByUserId;
+  const isTournamentOwner = currentUser?.uid === tournament.organizerId;
   // Can manage = owner OR app admin
   const canManageTournament = isTournamentOwner || isAppAdmin;
   // Tournament Data (using new hook)
@@ -87,7 +87,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     const {
     tournamentPhase,
     tournamentPhaseLabel,
-    tournamentPhaseClass,
     handleStartTournament,
   } = useTournamentPhase({ matches });
   // Court Management (using new hook)
@@ -96,8 +95,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     courtMatchModels,
     queue: rawQueue,
     waitTimes,
-    getBusyTeamIds,
-    findActiveConflictMatch,
     assignMatchToCourt,
     startMatchOnCourt,
     finishMatchOnCourt,
@@ -159,7 +156,19 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
  
     // Tournament Phase (using new hook)
 
-  const [autoAllocateCourts, setAutoAllocateCourts] = useState(false);
+  // Persist auto-allocation setting per tournament in localStorage
+  const [autoAllocateCourts, setAutoAllocateCourts] = useState(() => {
+    if (typeof window === 'undefined' || !tournament?.id) return false;
+    const saved = localStorage.getItem(`autoAllocate_${tournament.id}`);
+    return saved === 'true';
+  });
+
+  // Save auto-allocation setting when it changes
+  useEffect(() => {
+    if (tournament?.id) {
+      localStorage.setItem(`autoAllocate_${tournament.id}`, String(autoAllocateCourts));
+    }
+  }, [autoAllocateCourts, tournament?.id]);
   const [showScheduleBuilder, setShowScheduleBuilder] = useState(false);
   /* -------- Active Division / Tabs -------- */
 
@@ -179,7 +188,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     maxRating: '',
     minAge: '',
     maxAge: '',
-    seedingMethod: 'rating',
+    seedingMethod: 'dupr',
   });
 
   /* -------- Tournament phase derived from matches -------- */
@@ -189,19 +198,19 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     if (!activeDivision) return;
     setDivisionSettings({
       minRating:
-        activeDivision.minRating != null
-          ? activeDivision.minRating.toString()
+        activeDivision.skillMin != null
+          ? activeDivision.skillMin.toString()
           : '',
       maxRating:
-        activeDivision.maxRating != null
-          ? activeDivision.maxRating.toString()
+        activeDivision.skillMax != null
+          ? activeDivision.skillMax.toString()
           : '',
       minAge:
-        activeDivision.minAge != null ? activeDivision.minAge.toString() : '',
+        activeDivision.ageMin != null ? activeDivision.ageMin.toString() : '',
       maxAge:
-        activeDivision.maxAge != null ? activeDivision.maxAge.toString() : '',
+        activeDivision.ageMax != null ? activeDivision.ageMax.toString() : '',
       seedingMethod: (activeDivision.format.seedingMethod ||
-        'rating') as SeedingMethod,
+        'dupr') as SeedingMethod,
     });
 
     // Set default tab based on format
@@ -221,27 +230,41 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     > = {};
 
     divisionMatches.forEach(m => {
-      const teamA = teams.find(t => t.id === m.teamAId);
-      const teamB = teams.find(t => t.id === m.teamBId);
+      // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      const teamA = teams.find(t => t.id === teamAId);
+      const teamB = teams.find(t => t.id === teamBId);
 
-      const teamAPlayers = teamA?.players || [];
-      const teamBPlayers = teamB?.players || [];
+      // Get player IDs from team - players can be objects or strings
+      const getPlayerIds = (team: typeof teamA): string[] => {
+        if (!team?.players) return [];
+        return team.players.map(p =>
+          typeof p === 'string' ? p : (p.id || p.odUserId || '')
+        ).filter(Boolean);
+      };
+      const teamAPlayerIds = getPlayerIds(teamA);
+      const teamBPlayerIds = getPlayerIds(teamB);
 
       const isUserOnMatch =
-        !!userProfile &&
-        (teamAPlayers.includes(userProfile.id) ||
-          teamBPlayers.includes(userProfile.id));
+        !!userProfile?.id &&
+        (teamAPlayerIds.includes(userProfile.id) ||
+          teamBPlayerIds.includes(userProfile.id));
+
+      // Note: 'pending_confirmation' is not in MatchStatus - check for 'scheduled' with score
+      const hasScores = (m.scoreTeamAGames?.length ?? 0) > 0 || (m.scores?.length ?? 0) > 0;
+      const isPendingConfirm = m.status === 'scheduled' && hasScores;
 
       const isWaitingOnYou =
-        m.status === 'pending_confirmation' &&
+        !!isPendingConfirm &&
         !!currentUser &&
         isUserOnMatch &&
         !!m.lastUpdatedBy &&
         m.lastUpdatedBy !== currentUser.uid;
 
       const isOrganiserUser =
-        !!userProfile &&
-        (userProfile.roles.includes('organizer') || userProfile.roles.includes('admin'));
+        !!userProfile?.roles &&
+        (userProfile.roles.includes('organizer') || userProfile.roles.includes('app_admin'));
 
       const canCurrentUserConfirm =
         !!currentUser &&
@@ -261,84 +284,197 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   /* -------- UI match mapping (used by Schedule + BracketViewer) -------- */
 
+  // Helper to build gameSettings from division format
+  const buildGameSettings = (division: Division | undefined): GameSettings | undefined => {
+    if (!division?.format) return undefined;
+    // Map EventType to PlayType (singles, doubles, mixed_doubles -> singles, doubles, mixed)
+    const mapEventTypeToPlayType = (eventType?: string): 'singles' | 'doubles' | 'mixed' | 'open' => {
+      if (eventType === 'singles') return 'singles';
+      if (eventType === 'mixed_doubles') return 'mixed';
+      return 'doubles'; // default for doubles and unknown types
+    };
+    return {
+      playType: mapEventTypeToPlayType(division.type),
+      pointsPerGame: (division.format.pointsPerGame || 11) as 11 | 15 | 21,
+      winBy: (division.format.winBy || 2) as 1 | 2,
+      bestOf: (division.format.bestOfGames || 1) as 1 | 3 | 5,
+      capAt: undefined, // Division format doesn't have cap, leave undefined
+    };
+  };
+
   const uiMatches = useMemo(
     () =>
       divisionMatches.map(m => {
-        const teamAPlayers = getTeamPlayers(m.teamAId);
-        const teamBPlayers = getTeamPlayers(m.teamBId);
+        // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+        const teamAId = m.teamAId || m.sideA?.id || '';
+        const teamBId = m.teamBId || m.sideB?.id || '';
+        const teamAPlayers = teamAId ? getTeamPlayers(teamAId) : [];
+        const teamBPlayers = teamBId ? getTeamPlayers(teamBId) : [];
         const flags = matchFlags[m.id] || {};
+
+        // Extract scores - support both old (scoreTeamAGames) and new (scores[]) formats
+        let score1 = null;
+        let score2 = null;
+        if (m.scoreTeamAGames && m.scoreTeamAGames.length > 0) {
+          // Old format
+          score1 = m.scoreTeamAGames[0] ?? null;
+          score2 = m.scoreTeamBGames?.[0] ?? null;
+        } else if (m.scores && m.scores.length > 0) {
+          // New format - scores is array of { scoreA, scoreB }
+          score1 = m.scores[0]?.scoreA ?? null;
+          score2 = m.scores[0]?.scoreB ?? null;
+        }
+
+        const gameSettings = buildGameSettings(activeDivision);
 
         return {
           id: m.id,
           team1: {
-            id: m.teamAId,
-            name: getTeamDisplayName(m.teamAId),
-            players: teamAPlayers.map(p => ({ name: p.displayName })),
+            id: teamAId,
+            name: m.sideA?.name || (teamAId ? getTeamDisplayName(teamAId) : 'TBD'),
+            players: teamAPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
           },
           team2: {
-            id: m.teamBId,
-            name: getTeamDisplayName(m.teamBId),
-            players: teamBPlayers.map(p => ({ name: p.displayName })),
+            id: teamBId,
+            name: m.sideB?.name || (teamBId ? getTeamDisplayName(teamBId) : 'TBD'),
+            players: teamBPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
           },
-          score1: m.scoreTeamAGames[0] ?? null,
-          score2: m.scoreTeamBGames[0] ?? null,
+          score1,
+          score2,
           status: m.status || 'not_started',
           roundNumber: m.roundNumber || 1,
           court: m.court,
           courtName: m.court,
+          poolGroup: m.poolGroup,  // Include pool group for pool stage display
+          stage: m.stage,  // Include stage (pool, bracket, plate)
+          gameSettings,  // Pass game settings for score validation
           ...flags,
         };
       }),
-    [divisionMatches, getTeamDisplayName, getTeamPlayers, matchFlags]
+    [divisionMatches, getTeamDisplayName, getTeamPlayers, matchFlags, activeDivision]
   );
+
+  // Find current user's active match (assigned to court but not completed)
+  const currentUserMatch = useMemo(() => {
+    if (!currentUser?.uid) return null;
+
+    // Find matches where current user is a participant and match is active
+    return divisionMatches.find(m => {
+      const isParticipant =
+        m.sideA?.playerIds?.includes(currentUser.uid) ||
+        m.sideB?.playerIds?.includes(currentUser.uid);
+
+      // Active statuses: scheduled or in_progress
+      const isActive =
+        m.status === 'scheduled' ||
+        m.status === 'in_progress';
+
+      // Prioritize matches assigned to a court
+      const isOnCourt = !!m.court;
+
+      return isParticipant && isActive && isOnCourt;
+    }) || divisionMatches.find(m => {
+      // Fallback: any active match for the user (not yet on court)
+      const isParticipant =
+        m.sideA?.playerIds?.includes(currentUser.uid) ||
+        m.sideB?.playerIds?.includes(currentUser.uid);
+
+      const isActive =
+        m.status === 'scheduled' ||
+        m.status === 'in_progress';
+
+      return isParticipant && isActive;
+    }) || null;
+  }, [divisionMatches, currentUser?.uid]);
 
   const queue = useMemo(
     () =>
-      rawQueue.map(m => ({
-        id: m.id,
-        team1: {
-          id: m.teamAId,
-          name: getTeamDisplayName(m.teamAId),
-          players: getTeamPlayers(m.teamAId).map(p => ({
-            name: p.displayName,
-          })),
-        },
-        team2: {
-          id: m.teamBId,
-          name: getTeamDisplayName(m.teamBId),
-          players: getTeamPlayers(m.teamBId).map(p => ({
-            name: p.displayName,
-          })),
-        },
-        score1: m.scoreTeamAGames[0] ?? null,
-        score2: m.scoreTeamBGames[0] ?? null,
-        status: m.status || 'not_started',
-        roundNumber: m.roundNumber || 1,
-        court: m.court,
-        courtName: m.court,
-        stage: m.stage,
-      })),
+      rawQueue.map(m => {
+        // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+        const teamAId = m.teamAId || m.sideA?.id || '';
+        const teamBId = m.teamBId || m.sideB?.id || '';
+
+        // Extract scores - support both old and new formats
+        let score1 = null;
+        let score2 = null;
+        if (m.scoreTeamAGames && m.scoreTeamAGames.length > 0) {
+          score1 = m.scoreTeamAGames[0] ?? null;
+          score2 = m.scoreTeamBGames?.[0] ?? null;
+        } else if (m.scores && m.scores.length > 0) {
+          score1 = m.scores[0]?.scoreA ?? null;
+          score2 = m.scores[0]?.scoreB ?? null;
+        }
+
+        return {
+          id: m.id,
+          team1: {
+            id: teamAId,
+            name: m.sideA?.name || (teamAId ? getTeamDisplayName(teamAId) : 'TBD'),
+            players: (teamAId ? getTeamPlayers(teamAId) : []).map(p => ({
+              name: p.displayName || p.email || 'Unknown',
+            })),
+          },
+          team2: {
+            id: teamBId,
+            name: m.sideB?.name || (teamBId ? getTeamDisplayName(teamBId) : 'TBD'),
+            players: (teamBId ? getTeamPlayers(teamBId) : []).map(p => ({
+              name: p.displayName || p.email || 'Unknown',
+            })),
+          },
+          score1,
+          score2,
+          status: m.status || 'not_started',
+          roundNumber: m.roundNumber || 1,
+          court: m.court,
+          courtName: m.court,
+          stage: m.stage,
+          poolGroup: m.poolGroup,
+        };
+      }),
     [rawQueue, getTeamDisplayName, getTeamPlayers]
   );
+
+  // Auto-assign courts when auto-allocation mode is enabled
+  useEffect(() => {
+    if (autoAllocateCourts && rawQueue.length > 0) {
+      // Check if there are free courts and waiting matches
+      const freeCourts = courtViewModels.filter(c => c.status === 'AVAILABLE');
+      if (freeCourts.length > 0) {
+        autoAssignFreeCourts({ silent: true });
+      }
+    }
+  }, [autoAllocateCourts, rawQueue, courtViewModels, autoAssignFreeCourts]);
 
   /* -------- My matches (for current user in this division) -------- */
 
   const myDivisionMatches = useMemo(() => {
     if (!currentUser || !activeDivision) return [] as Match[];
 
+    // Find teams where current user is a player
+    const isUserInTeam = (team: typeof teams[0]): boolean => {
+      // Check playerIds array
+      if (team.playerIds?.includes(currentUser.uid)) return true;
+      // Check players object array
+      if (team.players?.some(p =>
+        (typeof p === 'string' && p === currentUser.uid) ||
+        (typeof p === 'object' && (p.id === currentUser.uid || p.odUserId === currentUser.uid))
+      )) return true;
+      return false;
+    };
+
     const myTeamIds = teams
-      .filter(
-        t =>
-          t.divisionId === activeDivision.id &&
-          t.players.includes(currentUser.uid)
-      )
-      .map(t => t.id);
+      .filter(t => t.divisionId === activeDivision.id && isUserInTeam(t))
+      .map(t => t.id)
+      .filter((id): id is string => !!id);
 
     if (myTeamIds.length === 0) return [] as Match[];
 
-    return divisionMatches.filter(
-      m => myTeamIds.includes(m.teamAId) || myTeamIds.includes(m.teamBId)
-    );
+    return divisionMatches.filter(m => {
+      // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      return (teamAId && myTeamIds.includes(teamAId)) || (teamBId && myTeamIds.includes(teamBId));
+    });
   }, [currentUser, activeDivision, teams, divisionMatches]);
 
   const myCurrentMatch = useMemo(
@@ -359,7 +495,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     () =>
       myCurrentMatch ||
       myNextMatch ||
-      myDivisionMatches.find(m => m.status === 'pending_confirmation'),
+      // Look for matches with scores but not yet completed (awaiting confirmation)
+      myDivisionMatches.find(m =>
+        m.status === 'scheduled' && (m.scoreTeamAGames?.length || m.scores?.length)
+      ),
     [myCurrentMatch, myNextMatch, myDivisionMatches]
   );
 
@@ -368,26 +507,40 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
     const match = myMatchToShow;
 
-    const teamA = teams.find(t => t.id === match.teamAId);
-    const teamB = teams.find(t => t.id === match.teamBId);
+    // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
+    const teamAId = match.teamAId || match.sideA?.id || '';
+    const teamBId = match.teamBId || match.sideB?.id || '';
+    const teamA = teams.find(t => t.id === teamAId);
 
-    const isOnTeamA = teamA?.players?.includes(currentUser.uid);
+    // Check if user is on team A using playerIds or players array
+    const isOnTeamA = teamA?.playerIds?.includes(currentUser.uid) ||
+      teamA?.players?.some(p =>
+        (typeof p === 'string' && p === currentUser.uid) ||
+        (typeof p === 'object' && (p.id === currentUser.uid || p.odUserId === currentUser.uid))
+      );
 
     const mySideName = isOnTeamA
-      ? getTeamDisplayName(match.teamAId)
-      : getTeamDisplayName(match.teamBId);
+      ? (teamAId ? getTeamDisplayName(teamAId) : 'My Team')
+      : (teamBId ? getTeamDisplayName(teamBId) : 'My Team');
 
     const opponentName = isOnTeamA
-      ? getTeamDisplayName(match.teamBId)
-      : getTeamDisplayName(match.teamAId);
+      ? (teamBId ? getTeamDisplayName(teamBId) : 'Opponent')
+      : (teamAId ? getTeamDisplayName(teamAId) : 'Opponent');
 
+    // Determine status label based on match state
     let statusLabel = '';
-    if (match.status === 'in_progress') statusLabel = 'In Progress';
-    else if (!match.status || match.status === 'scheduled' || match.status === 'not_started')
-      statusLabel = 'Up Next';
-    else if (match.status === 'pending_confirmation')
-      statusLabel = 'Awaiting Score Confirmation';
-    else if (match.status === 'disputed') statusLabel = 'Disputed Score';
+    if (match.status === 'in_progress') {
+      statusLabel = 'In Progress';
+    } else if (!match.status || match.status === 'scheduled') {
+      // Check if there are scores (awaiting confirmation)
+      if (match.scoreTeamAGames?.length || match.scores?.length) {
+        statusLabel = 'Awaiting Score Confirmation';
+      } else {
+        statusLabel = 'Up Next';
+      }
+    } else if (match.status === 'completed') {
+      statusLabel = 'Completed';
+    }
 
     return {
       mySideName,
@@ -406,29 +559,47 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     const h2h: Record<string, Record<string, number>> = {};
 
     divisionTeams.forEach(t => {
-      stats[t.id] = {
-        teamId: t.id,
-        teamName: getTeamDisplayName(t.id),
+      const teamId = t.id || '';
+      if (!teamId) return;
+      stats[teamId] = {
+        odTeamId: teamId,
+        teamName: getTeamDisplayName(teamId),
         played: 0,
-        wins: 0,
-        losses: 0,
+        won: 0,
+        lost: 0,
         pointsFor: 0,
         pointsAgainst: 0,
-        pointDifference: 0,
+        pointDifferential: 0,
+        leaguePoints: 0,
       };
-      h2h[t.id] = {};
+      h2h[teamId] = {};
     });
 
     divisionMatches.forEach(m => {
-      if (
-        m.status === 'completed' &&
-        m.scoreTeamAGames.length > 0 &&
-        m.scoreTeamBGames.length > 0
-      ) {
-        const sA = m.scoreTeamAGames.reduce((a, b) => a + b, 0);
-        const sB = m.scoreTeamBGames.reduce((a, b) => a + b, 0);
-        const tA = stats[m.teamAId];
-        const tB = stats[m.teamBId];
+      // Support both OLD (teamAId/teamBId, scoreTeamAGames) and NEW (sideA/sideB, scores[]) structures
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+
+      // Extract scores from old or new format
+      let sA = 0;
+      let sB = 0;
+      let hasScores = false;
+
+      if (m.scoreTeamAGames && m.scoreTeamAGames.length > 0 && m.scoreTeamBGames && m.scoreTeamBGames.length > 0) {
+        // OLD format
+        sA = m.scoreTeamAGames.reduce((a: number, b: number) => a + b, 0);
+        sB = m.scoreTeamBGames.reduce((a: number, b: number) => a + b, 0);
+        hasScores = true;
+      } else if (m.scores && m.scores.length > 0) {
+        // NEW format - sum all games
+        sA = m.scores.reduce((sum: number, g: { scoreA?: number; scoreB?: number }) => sum + (g.scoreA || 0), 0);
+        sB = m.scores.reduce((sum: number, g: { scoreA?: number; scoreB?: number }) => sum + (g.scoreB || 0), 0);
+        hasScores = true;
+      }
+
+      if (m.status === 'completed' && hasScores && teamAId && teamBId) {
+        const tA = stats[teamAId];
+        const tB = stats[teamBId];
 
         if (tA && tB) {
           tA.played++;
@@ -439,22 +610,22 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           tB.pointsAgainst += sA;
 
           if (sA > sB) {
-            tA.wins++;
-            tB.losses++;
-            h2h[m.teamAId][m.teamBId] =
-              (h2h[m.teamAId][m.teamBId] || 0) + 1;
+            tA.won++;
+            tB.lost++;
+            h2h[teamAId][teamBId] =
+              (h2h[teamAId][teamBId] || 0) + 1;
           } else if (sB > sA) {
-            tB.wins++;
-            tA.losses++;
-            h2h[m.teamBId][m.teamAId] =
-              (h2h[m.teamBId][m.teamAId] || 0) + 1;
+            tB.won++;
+            tA.lost++;
+            h2h[teamBId][teamAId] =
+              (h2h[teamBId][teamAId] || 0) + 1;
           }
         }
       }
     });
 
     Object.values(stats).forEach(
-      s => (s.pointDifference = s.pointsFor - s.pointsAgainst)
+      s => (s.pointDifferential = s.pointsFor - s.pointsAgainst)
     );
     return { standings: Object.values(stats), h2hMatrix: h2h };
   }, [divisionTeams, divisionMatches, getTeamDisplayName]);
@@ -473,28 +644,28 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   const handleSaveDivisionSettings = async () => {
     if (!activeDivision) return;
 
-    const minRating =
+    const skillMin =
       divisionSettings.minRating.trim() !== ''
         ? parseFloat(divisionSettings.minRating)
-        : null;
-    const maxRating =
+        : undefined;
+    const skillMax =
       divisionSettings.maxRating.trim() !== ''
         ? parseFloat(divisionSettings.maxRating)
-        : null;
-    const minAge =
+        : undefined;
+    const ageMin =
       divisionSettings.minAge.trim() !== ''
         ? parseInt(divisionSettings.minAge, 10)
-        : null;
-    const maxAge =
+        : undefined;
+    const ageMax =
       divisionSettings.maxAge.trim() !== ''
         ? parseInt(divisionSettings.maxAge, 10)
-        : null;
+        : undefined;
 
     await updateDivision(tournament.id, activeDivision.id, {
-      minRating,
-      maxRating,
-      minAge,
-      maxAge,
+      skillMin,
+      skillMax,
+      ageMin,
+      ageMax,
       format: {
         ...activeDivision.format,
         seedingMethod: divisionSettings.seedingMethod,
@@ -525,12 +696,24 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       return;
     }
 
-    const teamA = teams.find(t => t.id === match.teamAId);
-    const teamB = teams.find(t => t.id === match.teamBId);
+    // Support both old (teamAId) and new (sideA) formats
+    const teamAId = match.teamAId || match.sideA?.id;
+    const teamBId = match.teamBId || match.sideB?.id;
+    const teamA = teams.find(t => t.id === teamAId);
+    const teamB = teams.find(t => t.id === teamBId);
 
-    const isOnTeam =
-      teamA?.players?.includes(currentUser.uid) ||
-      teamB?.players?.includes(currentUser.uid);
+    // Check if user is on either team (supporting both playerIds and players arrays)
+    const isUserOnTeam = (team: typeof teamA): boolean => {
+      if (!team) return false;
+      if (team.playerIds?.includes(currentUser.uid)) return true;
+      if (team.players?.some(p =>
+        (typeof p === 'string' && p === currentUser.uid) ||
+        (typeof p === 'object' && (p.id === currentUser.uid || p.odUserId === currentUser.uid))
+      )) return true;
+      return false;
+    };
+
+    const isOnTeam = isUserOnTeam(teamA) || isUserOnTeam(teamB);
 
     if (!isOnTeam && !isOrganizer) {
       alert('Only players in this match (or organisers) can start the match.');
@@ -551,7 +734,32 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   if (!activeDivision)
     return <div className="p-8 text-center">Loading...</div>;
 
+  // Test mode handlers
+  const handleClearTestData = async (): Promise<number> => {
+    if (!activeDivision) return 0;
+    return clearTestData(tournament.id, activeDivision.id);
+  };
+
+  const handleQuickScore = async (matchId: string, scoreA: number, scoreB: number): Promise<void> => {
+    await quickScoreMatch(tournament.id, matchId, scoreA, scoreB, true);
+  };
+
+  const handleSimulatePool = async (poolName: string): Promise<void> => {
+    if (!activeDivision) return;
+    await simulatePoolCompletion(tournament.id, activeDivision.id, poolName);
+  };
+
+  const handleExitTestMode = async () => {
+    await onUpdateTournament({ ...tournament, testMode: false });
+  };
+
+  const isTestModeActive = tournament.testMode === true && isAppAdmin;
+
   return (
+    <TestModeWrapper
+      isTestMode={isTestModeActive}
+      onExitTestMode={handleExitTestMode}
+    >
     <div className="animate-fade-in relative">
       {showRegistrationWizard && userProfile && (
         <TournamentRegistrationWizard
@@ -560,7 +768,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           onClose={() => setShowRegistrationWizard(false)}
           onComplete={() => {
             setShowRegistrationWizard(false);
-            setHasCompletedRegistration(true);
+            // hasCompletedRegistration is automatically updated via useTournamentData hook
           }}
           mode={wizardProps.mode}
           initialDivisionId={wizardProps.initialDivisionId}
@@ -829,10 +1037,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       Start Tournament
                     </button>
                   )}
-                  {/* Admin Testing: Seed Button */}
+                  {/* Admin Testing: Seed Button (only in test mode) */}
                   <TournamentSeedButton
                     tournamentId={tournament.id}
                     divisions={divisions}
+                    testMode={isTestModeActive}
+                    requireTestMode={true}
                   />
                 </div>
               </div>
@@ -909,6 +1119,20 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           {/* Tab Content */}
           <div className="bg-gray-800/50 rounded-2xl border border-white/5 p-6">
 
+          {/* Test Mode Panel - shown when test mode is active */}
+          {isTestModeActive && activeDivision && (
+            <TestModePanel
+              tournamentId={tournament.id}
+              divisionId={activeDivision.id}
+              matches={divisionMatches}
+              teams={divisionTeams}
+              onClearTestData={handleClearTestData}
+              onQuickScore={handleQuickScore}
+              onSimulatePool={handleSimulatePool}
+              onDeleteCorruptedMatches={() => deleteCorruptedSelfMatches(tournament.id, activeDivision.id)}
+            />
+          )}
+
           {adminTab === 'participants' && (
             <div className="space-y-6">
               <TeamSetup
@@ -920,20 +1144,58 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 onGenerateSchedule={handleGenerateSchedule}
                 scheduleGenerated={divisionMatches.length > 0}
                 isVerified={isVerified}
+                playHasStarted={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
               />
+
+              {/* Pool Draw Preview - shown for pool_play_medals before schedule generation */}
+              {(activeDivision?.format?.competitionFormat === 'pool_play_medals' ||
+                activeDivision?.format?.stageMode === 'two_stage') &&
+                divisionTeams.length >= 4 &&
+                divisionMatches.length === 0 && (
+                <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                  <PoolDrawPreview
+                    teams={divisionTeams}
+                    poolSize={activeDivision.format?.teamsPerPool || 4}
+                    poolAssignments={activeDivision.poolAssignments}
+                    poolSettings={activeDivision.format?.poolPlayMedalsSettings}
+                    getTeamDisplayName={getTeamDisplayName}
+                    showDetails={true}
+                    showAdvancement={true}
+                    onEditPools={() => setAdminTab('pools')}
+                  />
+                </div>
+              )}
 
               <div className="bg-gray-900 p-4 rounded border border-gray-700">
                 <h4 className="text-white font-bold mb-2">Schedule Actions</h4>
-                <div className="flex gap-4">
-                  {activeDivision.format.stageMode === 'two_stage' && (
-                    <button
-                      onClick={() => handleGenerateFinals(standings)}
-                      disabled={divisionMatches.length === 0}
-                      className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded font-bold disabled:bg-gray-700"
-                    >
-                      Generate Finals from Pools
-                    </button>
-                  )}
+                <div className="flex flex-wrap gap-4">
+                  {activeDivision.format.stageMode === 'two_stage' && (() => {
+                    // Check if all pool matches are completed
+                    const poolMatches = divisionMatches.filter(m =>
+                      m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
+                    );
+                    const completedPoolMatches = poolMatches.filter(m => m.status === 'completed');
+                    const allPoolsComplete = poolMatches.length > 0 && completedPoolMatches.length === poolMatches.length;
+                    const remainingPoolMatches = poolMatches.length - completedPoolMatches.length;
+
+                    return (
+                      <div className="flex flex-col gap-1">
+                        <button
+                          onClick={() => handleGenerateFinals(standings)}
+                          disabled={divisionMatches.length === 0 || !allPoolsComplete}
+                          className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded font-bold disabled:bg-gray-700 disabled:cursor-not-allowed"
+                          title={!allPoolsComplete ? `Complete all pool matches first (${remainingPoolMatches} remaining)` : undefined}
+                        >
+                          Generate Finals from Pools
+                        </button>
+                        {!allPoolsComplete && poolMatches.length > 0 && (
+                          <p className="text-xs text-amber-400">
+                            Complete {remainingPoolMatches} remaining pool match{remainingPoolMatches !== 1 ? 'es' : ''} first
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <button
                     onClick={() => setShowScheduleBuilder(true)}
                     disabled={matches.length === 0}
@@ -961,12 +1223,15 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
                   <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                     {attentionMatches.map(m => {
-                      const teamAName = getTeamDisplayName(m.teamAId);
-                      const teamBName = getTeamDisplayName(m.teamBId);
-                      const label =
-                        m.status === 'pending_confirmation'
-                          ? 'Pending confirmation'
-                          : 'Disputed';
+                      const teamAId = m.teamAId || m.sideA?.id || '';
+                      const teamBId = m.teamBId || m.sideB?.id || '';
+                      const teamAName = teamAId ? getTeamDisplayName(teamAId) : 'TBD';
+                      const teamBName = teamBId ? getTeamDisplayName(teamBId) : 'TBD';
+                      // Check if match needs attention: has scores but not completed
+                      const hasScores = (m.scoreTeamAGames?.length ?? 0) > 0 || (m.scores?.length ?? 0) > 0;
+                      const label = hasScores && m.status !== 'completed'
+                        ? 'Pending confirmation'
+                        : 'Needs attention';
 
                       return (
                         <div
@@ -987,7 +1252,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                           <div className="flex flex-col items-end gap-1">
                             <span
                               className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                                m.status === 'disputed'
+                                m.status === 'cancelled'
                                   ? 'bg-red-600 text-white'
                                   : 'bg-amber-400 text-gray-900'
                               }`}
@@ -1413,6 +1678,37 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   </div>
                 )}
 
+                {/* Test Mode Toggle (App Admin Only) */}
+                {isAppAdmin && (
+                  <div className="mb-4 p-4 bg-yellow-900/30 border-2 border-yellow-600/50 rounded-lg">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={tournament.testMode === true}
+                        onChange={async (e) => {
+                          const newValue = e.target.checked;
+                          if (newValue) {
+                            // Show confirmation dialog
+                            if (!confirm('Enable Test Mode?\n\nYou will be able to score any match and test features.\nChanges affect real data but can be cleared with the "Clear Test Data" button.')) {
+                              return;
+                            }
+                          }
+                          await onUpdateTournament({ ...tournament, testMode: newValue });
+                        }}
+                        className="w-5 h-5 rounded border border-yellow-500 bg-gray-700 checked:bg-yellow-500 checked:border-yellow-500 focus:ring-yellow-500"
+                      />
+                      <div>
+                        <span className="text-yellow-300 font-bold text-lg flex items-center gap-2">
+                          <span>🧪</span> Test Mode
+                        </span>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          Score any match, simulate completions, test features. Changes are flagged for cleanup.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                )}
+
                 <div className="flex justify-end mt-4">
                   <button
                     onClick={handleSaveDivisionSettings}
@@ -1538,7 +1834,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                     </svg>
                     <span className="text-white font-semibold">
-                      {courtMatchModels.filter(m => m.status === 'in_progress').length}
+                      {courtMatchModels.filter(m => m.status === 'IN_PROGRESS').length}
                     </span>
                     <span className="text-gray-400">in progress</span>
                   </div>
@@ -1556,7 +1852,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <span className="text-white font-semibold">
-                      {courts.filter(c => c.active && !courtMatchModels.some(m => m.court === c.name && m.status === 'in_progress')).length}
+                      {courts.filter(c => c.active && !courtMatchModels.some(m => m.courtName === c.name && m.status === 'IN_PROGRESS')).length}
                     </span>
                     <span className="text-gray-400">courts free</span>
                   </div>
@@ -1647,6 +1943,15 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         /* PUBLIC VIEW */
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-6 min-w-0">
+            {/* Player's Current Match Card */}
+            {currentUser && currentUserMatch && (
+              <PlayerMatchCard
+                match={currentUserMatch}
+                tournamentId={tournament.id}
+                currentUserId={currentUser.uid}
+              />
+            )}
+
             {/* View Tabs / Dropdown */}
             <div>
               {/* Determine tabs based on format */}
@@ -1753,7 +2058,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     </thead>
                     <tbody>
                       {divisionTeams.map(team => {
-                        const players = getTeamPlayers(team.id);
+                        const teamId = team.id || '';
+                        const players = teamId ? getTeamPlayers(teamId) : [];
                         return (
                           <tr
                             key={team.id}
@@ -1795,13 +2101,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             {activeTab === 'standings' && (
               <Standings
                 standings={standings.map(s => {
-                  const teamPlayers = getTeamPlayers(s.teamId);
+                  const teamPlayers = s.odTeamId ? getTeamPlayers(s.odTeamId) : [];
                   return {
                     ...s,
                     team: {
-                      id: s.teamId,
+                      id: s.odTeamId,
                       name: s.teamName,
-                      players: teamPlayers.map(p => p.displayName),
+                      players: teamPlayers.map(p => p.displayName || p.email || 'Unknown'),
                     },
                   };
                 })}
@@ -1941,7 +2247,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   </div>
                 )}
 
-                {myMatchSummary.match.status === 'pending_confirmation' && (
+                {/* Show pending confirmation message when there are scores but not completed */}
+                {myMatchSummary.match.status === 'scheduled' &&
+                  ((myMatchSummary.match.scoreTeamAGames?.length ?? 0) > 0 ||
+                   (myMatchSummary.match.scores?.length ?? 0) > 0) && (
                   <div className="text-[11px] text-yellow-300 mt-2">
                     Scores pending confirmation.
                   </div>
@@ -2013,28 +2322,32 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               matchCount: matches.filter(m => m.divisionId === d.id).length,
             }))}
             courts={courts.map(c => ({
-              courtId: c.id,
+              courtId: c.id || '',
               courtName: c.name,
               dayId: 'day-1',
-              available: c.active,
+              available: c.active ?? true,
               startTime: '09:00',
               endTime: '17:00',
             }))}
-            registrations={teams.map(t => ({
-              divisionId: t.divisionId,
-              teamId: t.id,
-              teamName: t.teamName || `Team ${t.id.slice(0, 4)}`,
-              playerIds: t.playerIds,
-            }))}
-            matchups={matches.map((m, idx) => ({
-              divisionId: m.divisionId,
-              matchId: m.id,
-              stage: (m.stage === 'pool' ? 'pool' : m.stage === 'final' || m.stage === 'semifinal' || m.stage === 'quarterfinal' ? 'medal' : 'bracket') as 'pool' | 'bracket' | 'medal',
-              roundNumber: m.roundNumber,
-              matchNumber: idx + 1,
-              teamAId: m.teamAId,
-              teamBId: m.teamBId,
-            }))}
+            registrations={teams
+              .filter(t => t.id && t.divisionId) // Only include teams with valid IDs
+              .map(t => ({
+                divisionId: t.divisionId!,
+                teamId: t.id!,
+                teamName: t.teamName || `Team ${t.id!.slice(0, 4)}`,
+                playerIds: t.playerIds || [],
+              }))}
+            matchups={matches
+              .filter(m => m.divisionId && (m.teamAId || m.sideA?.id) && (m.teamBId || m.sideB?.id)) // Only include valid matches
+              .map((m, idx) => ({
+                divisionId: m.divisionId!,
+                matchId: m.id,
+                stage: (m.stage === 'pool' ? 'pool' : m.stage === 'final' || m.stage === 'semifinal' || m.stage === 'quarterfinal' ? 'medal' : 'bracket') as 'pool' | 'bracket' | 'medal',
+                roundNumber: m.roundNumber ?? 1,
+                matchNumber: idx + 1,
+                teamAId: m.teamAId || m.sideA?.id || '',
+                teamBId: m.teamBId || m.sideB?.id || '',
+              }))}
             onPublish={async (scheduledMatches) => {
               try {
                 // Convert scheduled matches to update format
@@ -2071,5 +2384,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         </div>
       )}
     </div>
+    </TestModeWrapper>
   );
 };

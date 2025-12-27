@@ -1,4 +1,14 @@
-/* ---- START TeamSetup.tsx ---- */
+/**
+ * TeamSetup Component
+ *
+ * Allows adding/removing teams and generating schedule.
+ *
+ * V06.09 Changes:
+ * - Added playHasStarted prop to disable regenerating schedule
+ *
+ * @version 06.09
+ * @file components/TeamSetup.tsx
+ */
 import React, { useState } from 'react';
 import type { Team, Division, UserProfile } from '../types';
 
@@ -11,6 +21,8 @@ interface TeamSetupProps {
   onGenerateSchedule: () => Promise<void>;
   scheduleGenerated: boolean;
   isVerified: boolean;
+  /** True if any match has started (in_progress or completed) */
+  playHasStarted?: boolean;
 }
 
 const generateId = () => Date.now().toString();
@@ -23,7 +35,8 @@ export const TeamSetup: React.FC<TeamSetupProps> = ({
   onDeleteTeam,
   onGenerateSchedule,
   scheduleGenerated,
-  isVerified
+  isVerified,
+  playHasStarted = false,
 }) => {
   const [p1Name, setP1Name] = useState('');
   const [p2Name, setP2Name] = useState('');
@@ -90,9 +103,20 @@ export const TeamSetup: React.FC<TeamSetupProps> = ({
         {teams.length === 0 && <div className="text-gray-500 text-center italic">No teams yet.</div>}
       </div>
 
-      <button onClick={onGenerateSchedule} disabled={teams.length < 2} className="w-full bg-blue-600 text-white font-bold py-3 rounded hover:bg-blue-500 disabled:bg-gray-700">
+      {/* Disable regeneration once play has started */}
+      <button
+        onClick={onGenerateSchedule}
+        disabled={teams.length < 2 || playHasStarted}
+        className="w-full bg-blue-600 text-white font-bold py-3 rounded hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed"
+        title={playHasStarted ? 'Cannot regenerate schedule after play has started' : undefined}
+      >
         {scheduleGenerated ? 'Regenerate Schedule' : 'Generate Schedule'}
       </button>
+      {playHasStarted && scheduleGenerated && (
+        <p className="text-amber-400 text-xs text-center mt-2">
+          Schedule cannot be regenerated after matches have started
+        </p>
+      )}
     </div>
   );
 };

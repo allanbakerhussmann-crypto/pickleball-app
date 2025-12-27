@@ -41,6 +41,18 @@ export {
 } from './admin';
 
 // ============================================
+// PRIVACY FUNCTIONS
+// ============================================
+
+export {
+  privacy_notifyBreachAffectedUsers,
+  privacy_logBreach,
+  privacy_scheduledDataCleanup,
+  privacy_runDataCleanup,
+  privacy_processRequest,
+} from './privacy';
+
+// ============================================
 // TEAM FUNCTIONS (if you have them)
 // ============================================
 

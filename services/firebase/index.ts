@@ -22,6 +22,29 @@ export {
   isFirebaseConfigured,
 } from './config';
 
+// Re-export Firestore primitives for components that need direct access
+export {
+  collection,
+  query,
+  where,
+  getDocs,
+  getDoc,
+  doc,
+  deleteDoc,
+  writeBatch,
+  setDoc,
+  updateDoc,
+  addDoc,
+  arrayUnion,
+  arrayRemove,
+  increment,
+  serverTimestamp,
+  onSnapshot,
+  orderBy,
+  limit,
+  Timestamp,
+} from '@firebase/firestore';
+
 // ============================================
 // Re-export all modules for backwards compatibility
 // ============================================
@@ -65,6 +88,9 @@ export {
   withdrawPlayerFromDivision,
   getOpenTeamsForDivision,
   getTeamsForDivision,
+  // Capacity enforcement (V06.05)
+  getActiveTeamCountForDivision,
+  isDivisionFull,
   subscribeToUserPartnerInvites,
   respondToPartnerInvite,
   getPendingInvitesForDivision,
@@ -79,6 +105,17 @@ export {
   generatePoolsSchedule,
   generateBracketSchedule,
   generateFinalsFromPools,
+  // Pool Play Medals schedule generation (V06.06)
+  generatePoolPlaySchedule,
+  generateFinalsFromPoolStandings,
+  // Match completion with bracket advancement (V06.05)
+  completeMatchWithAdvancement,
+  getMatch,
+  processMatchBye,
+  // Schedule publishing (V06.05)
+  publishScheduleTimes,
+  // Data cleanup utilities
+  deleteCorruptedSelfMatches,
 } from './matches';
 
 // Courts
@@ -96,6 +133,12 @@ export {
   getAllRegistrations,
   finalizeRegistration,
   ensureRegistrationForUser,
+  // Check-in functions (V06.05)
+  checkInPlayer,
+  isPlayerCheckedIn,
+  getCheckInStats,
+  isWithinCheckInWindow,
+  getTournamentRegistrations,
 } from './registrations';
 
 // Clubs
@@ -380,3 +423,146 @@ export {
   canUserScore,
   getActiveMatchesCount,
 } from './liveScores';
+
+// ============================================
+// PRIVACY & COMPLIANCE (NEW V06.04)
+// ============================================
+
+// Account Deletion
+export {
+  deleteUserData,
+  deleteAccount,
+  exportUserData,
+  type DeletionResult,
+} from './accountDeletion';
+
+// Breach Logging
+export {
+  logBreach,
+  updateBreachStatus,
+  addBreachAction,
+  markUsersNotified,
+  getBreachById,
+  getAllBreaches,
+  getNotifiableBreaches,
+  getBreachesAffectingUser,
+  assessNotificationRequirement,
+  formatBreachForReport,
+  type BreachRecord,
+  type BreachSeverity,
+  type BreachCategory,
+  type BreachStatus,
+  type LogBreachInput,
+} from './breachLogging';
+
+// Data Retention
+export {
+  getRetentionPolicies,
+  getRetentionPolicyByType,
+  getDataRetentionLogs,
+  runDataCleanup,
+  calculateRetentionDate,
+  isEligibleForCleanup,
+  getUsersMarkedForDeletion,
+  getUserDataSummary,
+  formatRetentionPeriod,
+  DEFAULT_RETENTION_POLICIES,
+  type RetentionPolicy,
+  type DataRetentionLog,
+  type CleanupResult,
+} from './dataRetention';
+
+// Privacy Requests
+export {
+  createPrivacyRequest,
+  getPrivacyRequest,
+  getAllPrivacyRequests,
+  getPendingPrivacyRequestsCount,
+  getUserPrivacyRequests,
+  updatePrivacyRequestStatus,
+  addPrivacyRequestNotes,
+  getRequestTypeLabel,
+  getStatusColor,
+  calculateResponseDeadline,
+  isRequestOverdue,
+  type PrivacyRequest,
+  type PrivacyRequestType,
+  type PrivacyRequestStatus,
+  type CreatePrivacyRequestInput,
+} from './privacyRequests';
+
+// ============================================
+// NOTIFICATIONS (NEW V06.07)
+// ============================================
+export {
+  createNotification,
+  createNotificationBatch,
+  subscribeToNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  notifyCourtAssignment,
+  notifyMatchResult,
+} from './notifications';
+
+// ============================================
+// COMPETITION STUBS (Placeholder functions for CompetitionManager)
+// ============================================
+
+import type { Competition, CompetitionEntry, Match, StandingsEntry } from '../../types';
+
+// Stub functions for competition management - to be implemented
+export const getCompetition = async (_competitionId: string): Promise<Competition | null> => {
+  console.warn('getCompetition: Not implemented');
+  return null;
+};
+
+export const updateCompetition = async (_competitionId: string, _data: Partial<Competition>): Promise<void> => {
+  console.warn('updateCompetition: Not implemented');
+};
+
+export const subscribeToCompetitionMatches = (
+  _competitionId: string,
+  callback: (matches: Match[]) => void
+): (() => void) => {
+  console.warn('subscribeToCompetitionMatches: Not implemented');
+  callback([]);
+  return () => {};
+};
+
+export const subscribeToCompetitionEntries = (
+  _competitionId: string,
+  callback: (entries: CompetitionEntry[]) => void
+): (() => void) => {
+  console.warn('subscribeToCompetitionEntries: Not implemented');
+  callback([]);
+  return () => {};
+};
+
+export const subscribeToStandings = (
+  _competitionId: string,
+  callback: (standings: StandingsEntry[]) => void
+): (() => void) => {
+  console.warn('subscribeToStandings: Not implemented');
+  callback([]);
+  return () => {};
+};
+
+export const createCompetitionEntry = async (_competitionId: string, _entry: Partial<CompetitionEntry>): Promise<string> => {
+  console.warn('createCompetitionEntry: Not implemented');
+  return '';
+};
+
+export const getCompetitionEntry = async (_competitionId: string, _entryId: string): Promise<CompetitionEntry | null> => {
+  console.warn('getCompetitionEntry: Not implemented');
+  return null;
+};
+
+export const createCompetition = async (_data: Partial<Competition>): Promise<string> => {
+  console.warn('createCompetition: Not implemented');
+  return '';
+};
+
+export const listCompetitions = async (): Promise<Competition[]> => {
+  console.warn('listCompetitions: Not implemented');
+  return [];
+};
