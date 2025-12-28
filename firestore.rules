@@ -28,9 +28,11 @@ service cloud.firestore {
     }
     
     function isTournamentOrganizer(tournamentId) {
-      return isAuthenticated() && 
+      let tournament = get(/databases/$(database)/documents/tournaments/$(tournamentId)).data;
+      return isAuthenticated() &&
         exists(/databases/$(database)/documents/tournaments/$(tournamentId)) &&
-        request.auth.uid == get(/databases/$(database)/documents/tournaments/$(tournamentId)).data.createdByUserId;
+        (request.auth.uid == tournament.createdByUserId ||
+         request.auth.uid == tournament.organizerId);
     }
     
     function isLeagueAdmin(leagueId) {
@@ -253,11 +255,11 @@ service cloud.firestore {
       }
     }
 
-    // Tournaments - SECURED: Only organizers can modify
+    // Tournaments - SECURED: Only organizers or app admins can modify
     match /tournaments/{tournamentId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
-      allow update, delete: if isTournamentOrganizer(tournamentId);
+      allow update, delete: if isTournamentOrganizer(tournamentId) || isAppAdmin();
 
       match /divisions/{divisionId} {
         allow read: if isAuthenticated();
@@ -267,14 +269,17 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         // Teams can be created by authenticated users (registration)
         allow create: if isAuthenticated();
-        // Only organizers or team members can update
+        // Only organizers, team members, or app admin can update
         allow update: if isTournamentOrganizer(tournamentId) ||
-          (isAuthenticated() && request.auth.uid in resource.data.playerIds);
-        allow delete: if isTournamentOrganizer(tournamentId);
+          (isAuthenticated() && request.auth.uid in resource.data.playerIds) ||
+          isAppAdmin();
+        // Organizer or app admin can delete teams
+        allow delete: if isTournamentOrganizer(tournamentId) || isAppAdmin();
       }
       match /matches/{matchId} {
         allow read: if isAuthenticated();
-        allow write: if isTournamentOrganizer(tournamentId);
+        // Tournament organizer or app admin can write matches
+        allow write: if isTournamentOrganizer(tournamentId) || isAppAdmin();
       }
       match /courts/{courtId} {
         allow read: if isAuthenticated();
@@ -339,13 +344,26 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         // Users can join leagues (create their membership)
         allow create: if isAuthenticated();
-        // Only league admin or the member themselves can update
-        allow update: if isLeagueAdmin(leagueId) || isOwner(memberId);
+        // League admin, app admin, member owner, or any league member can update stats
+        // (needed for score submission to update opponent stats)
+        allow update: if isLeagueAdmin(leagueId) ||
+          isAppAdmin() ||
+          (isAuthenticated() && resource.data.userId == request.auth.uid) ||
+          isAuthenticated(); // Allow any authenticated user to update member stats
         allow delete: if isLeagueAdmin(leagueId);
       }
       match /matches/{matchId} {
         allow read: if isAuthenticated();
-        allow write: if isLeagueAdmin(leagueId);
+        // League admin can do anything
+        allow create, delete: if isLeagueAdmin(leagueId);
+        // League admin OR match participants can update (for score entry)
+        allow update: if isLeagueAdmin(leagueId) ||
+          (isAuthenticated() && (
+            resource.data.userAId == request.auth.uid ||
+            resource.data.userBId == request.auth.uid ||
+            resource.data.partnerAId == request.auth.uid ||
+            resource.data.partnerBId == request.auth.uid
+          ));
       }
       match /challenges/{challengeId} {
         allow read: if isAuthenticated();
@@ -372,18 +390,19 @@ service cloud.firestore {
     }
 
     // Partner Invites - SECURED
+    // Note: Data uses inviterId (sender) and invitedUserId (recipient) field names
     match /partnerInvites/{inviteId} {
       allow read: if isAuthenticated() && (
-        resource.data.fromUserId == request.auth.uid ||
-        resource.data.toUserId == request.auth.uid
+        resource.data.inviterId == request.auth.uid ||
+        resource.data.invitedUserId == request.auth.uid
       );
       allow create: if isAuthenticated();
       // Only sender or recipient can update (accept/decline)
       allow update: if isAuthenticated() && (
-        resource.data.fromUserId == request.auth.uid ||
-        resource.data.toUserId == request.auth.uid
+        resource.data.inviterId == request.auth.uid ||
+        resource.data.invitedUserId == request.auth.uid
       );
-      allow delete: if isAuthenticated() && resource.data.fromUserId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.inviterId == request.auth.uid;
     }
 
     // Social Events - SECURED

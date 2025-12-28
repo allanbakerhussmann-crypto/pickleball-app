@@ -55,14 +55,26 @@ interface PoolGroup {
 
 /**
  * Extract unique pool names from matches
+ * Also handles legacy matches with stage='Pool Play' but no poolGroup
  */
 function getPoolNames(matches: Match[]): string[] {
   const poolSet = new Set<string>();
-  matches.forEach((m) => {
+  let hasLegacyPoolMatches = false;
+
+  (matches || []).forEach((m) => {
     if (m.poolGroup) {
       poolSet.add(m.poolGroup);
+    } else if (m.stage === 'Pool Play' || m.stage === 'pool') {
+      // Legacy match without poolGroup - mark for default pool
+      hasLegacyPoolMatches = true;
     }
   });
+
+  // If we have legacy pool matches without poolGroup, add a default pool
+  if (hasLegacyPoolMatches && poolSet.size === 0) {
+    poolSet.add('Pool A');
+  }
+
   // Sort alphabetically (Pool A, Pool B, etc.)
   return Array.from(poolSet).sort();
 }
@@ -77,7 +89,7 @@ function calculatePoolStandings(
 ): PoolStandingRow[] {
   // Get all team IDs involved in this pool
   const teamIds = new Set<string>();
-  poolMatches.forEach((m) => {
+  (poolMatches || []).forEach((m) => {
     if (m.teamAId) teamIds.add(m.teamAId);
     if (m.teamBId) teamIds.add(m.teamBId);
     if (m.sideA?.id) teamIds.add(m.sideA.id);
@@ -88,7 +100,7 @@ function calculatePoolStandings(
   const standingsMap = new Map<string, PoolStandingRow>();
 
   teamIds.forEach((teamId) => {
-    const team = teams.find((t) => t.id === teamId);
+    const team = (teams || []).find((t) => t.id === teamId);
     // Extract player names from team.players array (which are objects with name property)
     const playerNames: string[] = team?.players?.map(p => p.name) || [];
     standingsMap.set(teamId, {
@@ -107,7 +119,7 @@ function calculatePoolStandings(
   });
 
   // Process completed matches
-  poolMatches
+  (poolMatches || [])
     .filter((m) => m.status === 'completed')
     .forEach((match) => {
       const teamAId = match.teamAId || match.sideA?.id;
@@ -124,7 +136,7 @@ function calculatePoolStandings(
 
       // Handle scores array (GameScore format)
       if (match.scores && Array.isArray(match.scores)) {
-        match.scores.forEach((game) => {
+        (match.scores || []).forEach((game) => {
           pointsA += game.scoreA || 0;
           pointsB += game.scoreB || 0;
         });
@@ -212,8 +224,8 @@ const PoolSection: React.FC<PoolSectionProps> = ({
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [activeSubTab, setActiveSubTab] = useState<'standings' | 'matches'>('standings');
 
-  const completedMatches = pool.matches.filter((m) => m.status === 'completed').length;
-  const totalMatches = pool.matches.length;
+  const completedMatches = (pool.matches || []).filter((m) => m.status === 'completed').length;
+  const totalMatches = (pool.matches || []).length;
   const progressPercent = totalMatches > 0 ? (completedMatches / totalMatches) * 100 : 0;
 
   return (
@@ -302,7 +314,7 @@ const PoolSection: React.FC<PoolSectionProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {pool.standings.map((row) => {
+                  {(pool.standings || []).map((row) => {
                     const players = getTeamPlayers
                       ? getTeamPlayers(row.teamId).map((p) => p.displayName)
                       : row.players;
@@ -377,10 +389,10 @@ const PoolSection: React.FC<PoolSectionProps> = ({
           {/* Matches List */}
           {activeSubTab === 'matches' && (
             <div className="space-y-2">
-              {pool.matches.length === 0 ? (
+              {(pool.matches || []).length === 0 ? (
                 <p className="text-gray-500 text-sm italic">No matches scheduled yet.</p>
               ) : (
-                pool.matches.map((match) => {
+                (pool.matches || []).map((match) => {
                   const teamAName =
                     match.sideA?.name ||
                     match.teamAId ||
@@ -395,15 +407,15 @@ const PoolSection: React.FC<PoolSectionProps> = ({
                   // Get scores - check both modern and legacy formats
                   let scoreDisplay = '-';
                   if (isCompleted) {
-                    if (match.scores && match.scores.length > 0) {
+                    if (match.scores && (match.scores || []).length > 0) {
                       // Modern format: scores[] array
-                      scoreDisplay = match.scores
+                      scoreDisplay = (match.scores || [])
                         .map((g) => `${g.scoreA}-${g.scoreB}`)
                         .join(', ');
-                    } else if (match.scoreTeamAGames?.length && match.scoreTeamBGames?.length) {
+                    } else if ((match.scoreTeamAGames || []).length && (match.scoreTeamBGames || []).length) {
                       // Legacy format: scoreTeamAGames[] and scoreTeamBGames[]
-                      scoreDisplay = match.scoreTeamAGames
-                        .map((a: number, i: number) => `${a}-${match.scoreTeamBGames![i]}`)
+                      scoreDisplay = (match.scoreTeamAGames || [])
+                        .map((a: number, i: number) => `${a}-${(match.scoreTeamBGames || [])[i]}`)
                         .join(', ');
                     }
                   }
@@ -495,9 +507,18 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
     const poolNames = getPoolNames(matches);
 
     return poolNames.map((poolName) => {
-      const poolMatches = matches.filter((m) => m.poolGroup === poolName);
+      // Filter matches for this pool
+      // Include matches with matching poolGroup OR legacy matches (stage='Pool Play'/'pool' without poolGroup)
+      const poolMatches = (matches || []).filter((m) => {
+        if (m.poolGroup === poolName) return true;
+        // For legacy matches without poolGroup, assign to 'Pool A' (the default)
+        if (!m.poolGroup && (m.stage === 'Pool Play' || m.stage === 'pool') && poolName === 'Pool A') {
+          return true;
+        }
+        return false;
+      });
       const standings = calculatePoolStandings(poolMatches, teams, advancementCount);
-      const completedCount = poolMatches.filter((m) => m.status === 'completed').length;
+      const completedCount = (poolMatches || []).filter((m) => m.status === 'completed').length;
       const isComplete = poolMatches.length > 0 && completedCount === poolMatches.length;
 
       return {
@@ -509,10 +530,11 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
     });
   }, [matches, teams, advancementCount]);
 
-  // Overall progress
-  const totalMatches = matches.filter((m) => m.poolGroup).length;
-  const completedMatches = matches.filter(
-    (m) => m.poolGroup && m.status === 'completed'
+  // Overall progress - include both modern (poolGroup) and legacy (stage='Pool Play'/'pool') matches
+  const isPoolMatch = (m: Match) => m.poolGroup || m.stage === 'Pool Play' || m.stage === 'pool';
+  const totalMatches = (matches || []).filter(isPoolMatch).length;
+  const completedMatches = (matches || []).filter(
+    (m) => isPoolMatch(m) && m.status === 'completed'
   ).length;
   const poolStageComplete = totalMatches > 0 && completedMatches === totalMatches;
 

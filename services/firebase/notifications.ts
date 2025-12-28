@@ -190,3 +190,31 @@ export const notifyMatchResult = async (
     },
   });
 };
+
+/**
+ * Create a score confirmation notification for league matches
+ * Notifies the opponent that a score has been submitted and needs confirmation
+ */
+export const notifyScoreConfirmation = async (
+  opponentUserIds: string[],
+  leagueId: string,
+  matchId: string,
+  submitterName: string,
+  scoreDisplay: string,
+  leagueName?: string
+): Promise<void> => {
+  const title = 'Confirm Match Score';
+  const message = leagueName
+    ? `${submitterName} submitted a score (${scoreDisplay}) for your ${leagueName} match. Please confirm or dispute.`
+    : `${submitterName} submitted a score (${scoreDisplay}) for your match. Please confirm or dispute.`;
+
+  await createNotificationBatch(opponentUserIds, {
+    type: 'score_confirmation',
+    title,
+    message,
+    data: {
+      leagueId,
+      matchId,
+    },
+  });
+};

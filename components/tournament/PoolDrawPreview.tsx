@@ -114,8 +114,8 @@ const PoolCard: React.FC<PoolCardProps> = ({
   showDetails,
   getTeamDisplayName,
 }) => {
-  const poolTeams = teamIds
-    .map(id => teams.find(t => t.id === id))
+  const poolTeams = (teamIds || [])
+    .map(id => (teams || []).find(t => t.id === id))
     .filter((t): t is Team => t !== undefined);
 
   return (

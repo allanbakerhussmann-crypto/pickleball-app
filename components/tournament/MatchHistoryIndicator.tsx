@@ -30,7 +30,7 @@ const calculateWinnerFromScores = (match: Match): string | null => {
 
   // Handle scores array (GameScore format)
   if (match.scores && Array.isArray(match.scores)) {
-    match.scores.forEach((game) => {
+    (match.scores || []).forEach((game) => {
       pointsA += game.scoreA || 0;
       pointsB += game.scoreB || 0;
     });
@@ -38,10 +38,10 @@ const calculateWinnerFromScores = (match: Match): string | null => {
 
   // Handle legacy scoreTeamAGames / scoreTeamBGames
   if (match.scoreTeamAGames && Array.isArray(match.scoreTeamAGames)) {
-    pointsA += match.scoreTeamAGames.reduce((sum: number, s: number) => sum + s, 0);
+    pointsA += (match.scoreTeamAGames || []).reduce((sum: number, s: number) => sum + s, 0);
   }
   if (match.scoreTeamBGames && Array.isArray(match.scoreTeamBGames)) {
-    pointsB += match.scoreTeamBGames.reduce((sum: number, s: number) => sum + s, 0);
+    pointsB += (match.scoreTeamBGames || []).reduce((sum: number, s: number) => sum + s, 0);
   }
 
   // Determine winner from points
@@ -64,7 +64,7 @@ const getMatchResults = (
   maxResults: number
 ): ('W' | 'L' | 'T')[] => {
   // Filter to completed matches involving this team
-  const teamMatches = matches
+  const teamMatches = (matches || [])
     .filter((m) => {
       const isInMatch =
         m.teamAId === teamId ||

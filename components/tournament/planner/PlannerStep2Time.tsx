@@ -7,14 +7,33 @@
  * VERSION: V06.00
  */
 
-import React, { useMemo } from 'react';
-import type { TournamentDay } from '../../../types';
-import { createDefaultTournamentDay } from '../../../types';
+import React, { useMemo, useState, useEffect } from 'react';
+import type { TournamentDay, TournamentPaymentMode, BankDetails } from '../../../types';
 
 interface PlannerStep2TimeProps {
   days: TournamentDay[];
   courts: number;
   onChange: (days: TournamentDay[]) => void;
+  // Registration & Payment
+  registrationOpens?: number;
+  registrationDeadline?: number;
+  isFreeEvent?: boolean;
+  entryFee?: number;
+  paymentMode?: TournamentPaymentMode;
+  adminFee?: number;
+  bankDetails?: BankDetails;
+  showBankDetails?: boolean;
+  hasStripeConnected?: boolean;
+  onRegistrationChange?: (updates: {
+    registrationOpens?: number;
+    registrationDeadline?: number;
+    isFreeEvent?: boolean;
+    entryFee?: number;
+    paymentMode?: TournamentPaymentMode;
+    adminFee?: number;
+    bankDetails?: BankDetails;
+    showBankDetails?: boolean;
+  }) => void;
 }
 
 // Generate time options from 6 AM to 10 PM in 30-minute increments
@@ -61,6 +80,17 @@ export const PlannerStep2Time: React.FC<PlannerStep2TimeProps> = ({
   days,
   courts,
   onChange,
+  registrationOpens,
+  registrationDeadline,
+  // Legacy props kept for backwards compatibility but not used in new UI
+  isFreeEvent: _isFreeEvent,
+  entryFee: _entryFee,
+  paymentMode = 'free',
+  adminFee,
+  bankDetails,
+  showBankDetails,
+  hasStripeConnected,
+  onRegistrationChange,
 }) => {
   // Calculate totals
   const { totalHours, totalCourtHours } = useMemo(() => {
@@ -70,6 +100,20 @@ export const PlannerStep2Time: React.FC<PlannerStep2TimeProps> = ({
       totalCourtHours: totalHours * courts,
     };
   }, [days, courts]);
+
+  // Local state for admin fee input to allow free typing
+  const [adminFeeInput, setAdminFeeInput] = useState(() =>
+    adminFee ? (adminFee / 100).toString() : ''
+  );
+
+  // Sync local state when prop changes externally
+  useEffect(() => {
+    const propValue = adminFee ? (adminFee / 100).toString() : '';
+    // Only update if significantly different (not just formatting)
+    if (parseFloat(adminFeeInput || '0') !== (adminFee || 0) / 100) {
+      setAdminFeeInput(propValue);
+    }
+  }, [adminFee]);
 
   // Add a new day
   const handleAddDay = () => {
@@ -218,6 +262,303 @@ export const PlannerStep2Time: React.FC<PlannerStep2TimeProps> = ({
           Add Another Day
         </button>
       </div>
+
+      {/* Registration Window */}
+      {onRegistrationChange && (
+        <div className="bg-gray-700 rounded-lg p-4 mb-6 border border-gray-600">
+          <h3 className="text-lg font-medium text-white mb-4 flex items-center gap-2">
+            <span>📋</span> Registration Window
+          </h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-4">
+            {/* Registration Opens */}
+            <div>
+              <label className="block text-xs text-gray-400 mb-2">OPENS</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <input
+                    type="date"
+                    value={registrationOpens ? new Date(registrationOpens).toISOString().split('T')[0] : ''}
+                    onChange={(e) => {
+                      if (!e.target.value) {
+                        onRegistrationChange({ registrationOpens: undefined });
+                        return;
+                      }
+                      const currentTime = registrationOpens ? new Date(registrationOpens) : new Date();
+                      const [year, month, day] = e.target.value.split('-').map(Number);
+                      currentTime.setFullYear(year, month - 1, day);
+                      onRegistrationChange({ registrationOpens: currentTime.getTime() });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <select
+                    value={registrationOpens ? `${new Date(registrationOpens).getHours().toString().padStart(2, '0')}:${new Date(registrationOpens).getMinutes().toString().padStart(2, '0')}` : '09:00'}
+                    onChange={(e) => {
+                      const [hours, minutes] = e.target.value.split(':').map(Number);
+                      const date = registrationOpens ? new Date(registrationOpens) : new Date();
+                      date.setHours(hours, minutes, 0, 0);
+                      onRegistrationChange({ registrationOpens: date.getTime() });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  >
+                    {TIME_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">When players can start registering</p>
+            </div>
+
+            {/* Registration Closes */}
+            <div>
+              <label className="block text-xs text-gray-400 mb-2">CLOSES</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <input
+                    type="date"
+                    value={registrationDeadline ? new Date(registrationDeadline).toISOString().split('T')[0] : ''}
+                    onChange={(e) => {
+                      if (!e.target.value) {
+                        onRegistrationChange({ registrationDeadline: undefined });
+                        return;
+                      }
+                      const currentTime = registrationDeadline ? new Date(registrationDeadline) : new Date();
+                      const [year, month, day] = e.target.value.split('-').map(Number);
+                      currentTime.setFullYear(year, month - 1, day);
+                      onRegistrationChange({ registrationDeadline: currentTime.getTime() });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <select
+                    value={registrationDeadline ? `${new Date(registrationDeadline).getHours().toString().padStart(2, '0')}:${new Date(registrationDeadline).getMinutes().toString().padStart(2, '0')}` : '17:00'}
+                    onChange={(e) => {
+                      const [hours, minutes] = e.target.value.split(':').map(Number);
+                      const date = registrationDeadline ? new Date(registrationDeadline) : new Date();
+                      date.setHours(hours, minutes, 0, 0);
+                      onRegistrationChange({ registrationDeadline: date.getTime() });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  >
+                    {TIME_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Last day to register</p>
+            </div>
+          </div>
+
+          {/* Payment Mode Selection */}
+          <div className="border-t border-gray-600 pt-4 mt-4">
+            <h4 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+              <span>💳</span> Payment Options
+            </h4>
+
+            <div className="space-y-3">
+              {/* Free Tournament Option */}
+              <button
+                type="button"
+                onClick={() => onRegistrationChange?.({ paymentMode: 'free', isFreeEvent: true, adminFee: 0, showBankDetails: false })}
+                className={`w-full flex items-center gap-3 p-4 rounded-lg border text-left transition-colors ${
+                  paymentMode === 'free'
+                    ? 'bg-green-900/20 border-green-600'
+                    : 'bg-gray-700 border-gray-600 hover:border-gray-500'
+                }`}
+              >
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                  paymentMode === 'free' ? 'border-green-500' : 'border-gray-500'
+                }`}>
+                  {paymentMode === 'free' && <div className="w-2.5 h-2.5 rounded-full bg-green-500"/>}
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-white">Free Tournament</div>
+                  <div className="text-sm text-gray-400">No payment required to register</div>
+                </div>
+              </button>
+
+              {/* Paid Tournament Option */}
+              <button
+                type="button"
+                onClick={() => hasStripeConnected && onRegistrationChange?.({ paymentMode: 'paid', isFreeEvent: false })}
+                disabled={!hasStripeConnected}
+                className={`w-full flex items-start gap-3 p-4 rounded-lg border text-left transition-colors ${
+                  !hasStripeConnected
+                    ? 'opacity-60 cursor-not-allowed bg-gray-700 border-gray-600'
+                    : paymentMode === 'paid'
+                      ? 'bg-blue-900/20 border-blue-600'
+                      : 'bg-gray-700 border-gray-600 hover:border-gray-500'
+                }`}
+              >
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                  paymentMode === 'paid' ? 'border-blue-500' : 'border-gray-500'
+                }`}>
+                  {paymentMode === 'paid' && <div className="w-2.5 h-2.5 rounded-full bg-blue-500"/>}
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold text-white flex items-center gap-2">
+                    Paid Tournament
+                    {!hasStripeConnected && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-600/30 text-yellow-300">Setup Required</span>
+                    )}
+                  </div>
+                  <div className="text-sm text-gray-400 mt-1">
+                    Players choose how to pay:
+                  </div>
+                  <ul className="text-sm text-gray-400 mt-2 space-y-1">
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-400">•</span>
+                      <span><strong className="text-gray-300">Bank Transfer</strong> - Base fee only, you approve manually</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-purple-400">•</span>
+                      <span><strong className="text-gray-300">Pay via Stripe</strong> - Base fee + 1.5% platform + Stripe fees, instant confirmation</span>
+                    </li>
+                  </ul>
+                </div>
+              </button>
+
+              {!hasStripeConnected && (
+                <div className="bg-yellow-900/20 border border-yellow-600/50 p-3 rounded-lg">
+                  <p className="text-yellow-400 text-sm">
+                    <strong>Setup required:</strong> Connect your Stripe account to enable paid tournaments.
+                    Go to Settings → Stripe to set up.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Paid Tournament Settings (shown when paid is selected) */}
+            {paymentMode === 'paid' && (
+              <div className="mt-4 space-y-4">
+                {/* Admin Fee Input */}
+                <div className="bg-gray-700/50 p-4 rounded-lg">
+                  <label className="block text-xs text-gray-400 mb-1">
+                    ADMIN FEE (Optional - tournament-level fee)
+                  </label>
+                  <div className="relative w-48">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={adminFeeInput}
+                      onChange={(e) => {
+                        // Allow only numbers and one decimal point
+                        const value = e.target.value;
+                        if (value === '' || /^\d*\.?\d{0,2}$/.test(value)) {
+                          setAdminFeeInput(value);
+                        }
+                      }}
+                      onBlur={() => {
+                        // Convert to cents and save on blur
+                        const dollars = parseFloat(adminFeeInput || '0');
+                        const cents = Math.round(dollars * 100);
+                        onRegistrationChange?.({ adminFee: cents });
+                        // Format the display value
+                        if (adminFeeInput && dollars > 0) {
+                          setAdminFeeInput(dollars.toFixed(2));
+                        }
+                      }}
+                      className="w-full px-3 py-2 pl-8 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    This fee is added to all registrations. Set division-specific fees in Step 4.
+                  </p>
+                </div>
+
+                {/* Bank Details Section */}
+                <div className="bg-gray-700/50 p-4 rounded-lg">
+                  <label className="flex items-center gap-3 cursor-pointer mb-4">
+                    <input
+                      type="checkbox"
+                      checked={showBankDetails || false}
+                      onChange={(e) => onRegistrationChange?.({ showBankDetails: e.target.checked })}
+                      className="w-5 h-5 rounded bg-gray-800 border-gray-500 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-white">Show my bank details to players for transfers</span>
+                  </label>
+
+                  {showBankDetails && (
+                    <div className="space-y-3 pt-2 border-t border-gray-600">
+                      <p className="text-xs text-gray-400 mt-2">
+                        These details will be shown to players who select bank transfer.
+                      </p>
+                      <div className="grid grid-cols-1 gap-3">
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Bank Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g., ANZ, Westpac, ASB, BNZ, Kiwibank"
+                            value={bankDetails?.bankName || ''}
+                            onChange={(e) => onRegistrationChange?.({
+                              bankDetails: { ...bankDetails, bankName: e.target.value }
+                            })}
+                            className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Account Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g., Pickleball Club Inc"
+                            value={bankDetails?.accountName || ''}
+                            onChange={(e) => onRegistrationChange?.({
+                              bankDetails: { ...bankDetails, accountName: e.target.value }
+                            })}
+                            className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Account Number</label>
+                          <input
+                            type="text"
+                            placeholder="e.g., 12-3456-0123456-00"
+                            value={bankDetails?.accountNumber || ''}
+                            onChange={(e) => onRegistrationChange?.({
+                              bankDetails: { ...bankDetails, accountNumber: e.target.value }
+                            })}
+                            className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500 text-sm"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">NZ format: XX-XXXX-XXXXXXX-XX</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Reference Instructions</label>
+                        <input
+                          type="text"
+                          placeholder="e.g., Use your name as reference"
+                          value={bankDetails?.reference || ''}
+                          onChange={(e) => onRegistrationChange?.({
+                            bankDetails: { ...bankDetails, reference: e.target.value }
+                          })}
+                          className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg text-white focus:outline-none focus:border-blue-500 text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {!showBankDetails && (
+                    <p className="text-xs text-gray-500">
+                      If unchecked, you'll need to share your bank details with players directly (email, WhatsApp, etc.)
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Total Stats */}
       <div className="bg-gray-700 rounded-lg p-4 mb-6">

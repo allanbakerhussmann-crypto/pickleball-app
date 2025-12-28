@@ -153,8 +153,8 @@ const DroppablePool: React.FC<{
   onDeletePool?: (poolName: string) => void;
   canDelete?: boolean;
 }> = ({ poolName, teamIds, teams, isOver, isLocked, getTeamDisplayName, onDeletePool, canDelete }) => {
-  const poolTeams = teamIds
-    .map(id => teams.find(t => t.id === id))
+  const poolTeams = (teamIds || [])
+    .map(id => (teams || []).find(t => t.id === id))
     .filter((t): t is Team => t !== undefined);
 
   return (

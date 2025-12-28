@@ -172,7 +172,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
               <div className={`flex items-center justify-between p-2.5 rounded-lg border transition-colors ${t1Winner ? 'bg-green-900/20 border-green-500/30 shadow-inner' : 'bg-gray-900/50 border-gray-700/50'}`}>
                   <div className="min-w-0 flex-1 pr-2">
                       <div className={`font-bold text-sm truncate ${t1Winner ? 'text-green-400' : 'text-gray-200'}`}>{match.team1.name}</div>
-                      <div className="text-[10px] text-gray-500 truncate mt-0.5 font-medium">{match.team1.players.map(p => p.name).join(' / ')}</div>
+                      <div className="text-[10px] text-gray-500 truncate mt-0.5 font-medium">{(match.team1?.players || []).map(p => p.name).join(' / ')}</div>
                   </div>
                   <div className="flex-shrink-0">
                       {showEditableInputs ? (
@@ -195,7 +195,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({
               <div className={`flex items-center justify-between p-2.5 rounded-lg border transition-colors ${t2Winner ? 'bg-green-900/20 border-green-500/30 shadow-inner' : 'bg-gray-900/50 border-gray-700/50'}`}>
                   <div className="min-w-0 flex-1 pr-2">
                       <div className={`font-bold text-sm truncate ${t2Winner ? 'text-green-400' : 'text-gray-200'}`}>{match.team2.name}</div>
-                      <div className="text-[10px] text-gray-500 truncate mt-0.5 font-medium">{match.team2.players.map(p => p.name).join(' / ')}</div>
+                      <div className="text-[10px] text-gray-500 truncate mt-0.5 font-medium">{(match.team2?.players || []).map(p => p.name).join(' / ')}</div>
                   </div>
                   <div className="flex-shrink-0">
                       {showEditableInputs ? (

@@ -20,6 +20,7 @@ import {
   createDefaultTournamentDay,
 } from '../../../types';
 import { calculateTournamentCapacity } from '../../../services/plannerCalculations';
+import { useAuth } from '../../../contexts/AuthContext';
 
 import { PlannerStep1Courts } from './PlannerStep1Courts';
 import { PlannerStep2Time } from './PlannerStep2Time';
@@ -43,6 +44,10 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
   onComplete,
   onCancel,
 }) => {
+  // Get user profile for Stripe status
+  const { userProfile } = useAuth();
+  const hasStripeConnected = !!(userProfile?.stripeConnectedAccountId && userProfile?.stripeChargesEnabled);
+
   // Current step (1-5)
   const [step, setStep] = useState(1);
 
@@ -119,6 +124,24 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
     []
   );
 
+  // Handle day time changes (when dragging extends the day)
+  const handleDayTimeChange = useCallback(
+    (dayId: string, newStartTime?: string, newEndTime?: string) => {
+      setSettings((prev) => {
+        const updatedDays = prev.days.map((day) => {
+          if (day.id !== dayId) return day;
+          return {
+            ...day,
+            ...(newStartTime && { startTime: newStartTime }),
+            ...(newEndTime && { endTime: newEndTime }),
+          };
+        });
+        return { ...prev, days: updatedDays };
+      });
+    },
+    []
+  );
+
   // Render current step
   const renderStep = () => {
     switch (step) {
@@ -144,6 +167,17 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
                 endTime: lastDay?.endTime || '17:00',
               });
             }}
+            // Registration & Payment props
+            registrationOpens={settings.registrationOpens}
+            registrationDeadline={settings.registrationDeadline}
+            isFreeEvent={settings.isFreeEvent}
+            entryFee={settings.entryFee}
+            paymentMode={settings.paymentMode}
+            adminFee={settings.adminFee}
+            bankDetails={settings.bankDetails}
+            showBankDetails={settings.showBankDetails}
+            hasStripeConnected={hasStripeConnected}
+            onRegistrationChange={(updates) => updateSettings(updates)}
           />
         );
       case 3:
@@ -172,6 +206,7 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
           <PlannerStep4Divisions
             divisions={settings.divisions}
             capacity={capacity}
+            paymentMode={settings.paymentMode}
             onChange={(divisions) => updateSettings({ divisions })}
           />
         );
@@ -181,6 +216,7 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
             settings={settings}
             capacity={capacity}
             onDivisionMove={handleDivisionMove}
+            onDayTimeChange={handleDayTimeChange}
           />
         );
       default:

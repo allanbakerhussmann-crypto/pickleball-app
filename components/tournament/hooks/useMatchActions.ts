@@ -124,17 +124,35 @@ export const useMatchActions = ({
 
       if (isPoolPlayMedals) {
         // Use the NEW pool play generator with proper Match structure
+        // Extract pool size from DivisionFormat.teamsPerPool, falling back to calculation from numberOfPools
+        const divFormat = activeDivision.format as any;
+        const teamsPerPool = divFormat?.teamsPerPool ||
+          (divFormat?.numberOfPools ? Math.ceil(divisionTeams.length / divFormat.numberOfPools) : 4);
+        // Ensure poolSize is a valid value (3-6)
+        const validPoolSize = Math.max(3, Math.min(6, teamsPerPool)) as 3 | 4 | 5 | 6;
+
         const poolSettings: PoolPlayMedalsSettings = (activeDivision.format as any)?.poolPlayMedalsSettings || {
-          poolSize: (activeDivision.format as any)?.numberOfPools
-            ? Math.ceil(divisionTeams.length / (activeDivision.format as any).numberOfPools)
-            : 4,
-          advancementRule: 'top_2',
-          bronzeMatch: 'yes',
+          poolSize: validPoolSize,
+          advancementRule: divFormat?.advanceToMainPerPool === 1 ? 'top_1' : 'top_2',
+          bronzeMatch: divFormat?.hasBronzeMatch !== false ? 'yes' : 'no',
           tiebreakers: ['wins', 'head_to_head', 'point_diff', 'points_scored'],
         };
 
-        const gameSettings: GameSettings | undefined = (activeDivision.format as any)?.gameSettings;
+        // Build GameSettings from DivisionFormat fields
+        // Note: Don't include scoreCap if undefined - Firestore rejects undefined values
+        const gameSettings: GameSettings | undefined = divFormat?.bestOfGames ? {
+          bestOf: divFormat.bestOfGames as 1 | 3 | 5,
+          pointsToWin: (divFormat.pointsPerGame || 11) as 11 | 15 | 21,
+          winBy: (divFormat.winBy || 2) as 1 | 2,
+        } : undefined;
         const poolAssignments: PoolAssignment[] | undefined = activeDivision.poolAssignments;
+
+        console.log('[handleGenerateSchedule] Pool Play Medals detected', {
+          teamsCount: divisionTeams.length,
+          poolSettings,
+          gameSettings,
+          hasPoolAssignments: !!poolAssignments?.length,
+        });
 
         const result = await generatePoolPlaySchedule(
           tournamentId,
@@ -185,7 +203,8 @@ export const useMatchActions = ({
       alert('Schedule Generated!');
     } catch (err) {
       console.error('Failed to generate schedule', err);
-      alert('Failed to generate schedule. Please try again.');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      alert(`Failed to generate schedule: ${errorMessage}`);
     }
   }, [tournamentId, activeDivision, divisionTeams, playersCache]);
 

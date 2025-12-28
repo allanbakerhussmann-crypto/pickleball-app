@@ -71,9 +71,18 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
     const [existingTeamsByDivision, setExistingTeamsByDivision] = useState<Record<string, Team>>({});
     const [divisionTeamCounts, setDivisionTeamCounts] = useState<Record<string, number>>({});
     const [error, setError] = useState<string | null>(null);
+    const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'stripe' | 'manual'>('stripe');
 
     // Modal state for confirmation
     const [withdrawConfirmationId, setWithdrawConfirmationId] = useState<string | null>(null);
+
+    // Payment method determines processing fee
+    const isFreeEvent = tournament.isFreeEvent || tournament.paymentMode === 'free' || tournament.entryFee === 0;
+
+    // Calculate platform fee (1.5%) and Stripe fee (~2.9% + $0.30)
+    const PLATFORM_FEE_PERCENT = 0.015;  // 1.5%
+    const STRIPE_FEE_PERCENT = 0.029;    // 2.9%
+    const STRIPE_FIXED_FEE = 30;         // $0.30 in cents
 
     const isWaiverOnly = mode === 'waiver_only' && !!initialDivisionId;
 
@@ -272,11 +281,12 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
 
         setLoading(true);
         try {
-            const payload: TournamentRegistration = {
+            const payload = {
                 ...(regData as TournamentRegistration),
                 partnerDetails: isWaiverOnly ? (regData.partnerDetails || {}) : (partnerDetails || {}),
+                paymentMethod: isFreeEvent ? undefined : selectedPaymentMethod,
             };
-            await finalizeRegistration(payload, tournament, userProfile);
+            await finalizeRegistration(payload);
             setLoading(false);
             onComplete();
         } catch (e: any) {
@@ -453,8 +463,8 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                 <h3 className="text-white font-bold">Liability Waiver</h3>
                                 <p className="text-gray-300">By registering, I acknowledge the risks blah blah (waiver text omitted for brevity).</p>
 
-                                {/* Fee Summary */}
-                                {feeBreakdown.hasFees && (
+                                {/* Fee Summary & Payment Method Choice */}
+                                {feeBreakdown.hasFees && !isFreeEvent && (
                                     <div className="bg-gray-900 rounded-lg p-4 border border-gray-700 mt-4">
                                         <h4 className="text-white font-semibold mb-3">Entry Fees</h4>
                                         <div className="space-y-2">
@@ -464,21 +474,123 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                                                     <span className="text-white">${(item.fee / 100).toFixed(2)}</span>
                                                 </div>
                                             ))}
-                                            <div className="border-t border-gray-700 pt-2 mt-2 flex justify-between font-bold">
-                                                <span className="text-white">Total</span>
-                                                <span className="text-green-400">${(feeBreakdown.totalFee / 100).toFixed(2)} NZD</span>
+                                        </div>
+
+                                        {/* Payment Method Selection */}
+                                        <div className="mt-4 pt-4 border-t border-gray-700">
+                                            <h5 className="text-sm font-medium text-gray-300 mb-3">How would you like to pay?</h5>
+                                            <div className="space-y-3">
+                                                {/* Bank Transfer / EFT Option */}
+                                                <label
+                                                    className={`block p-3 rounded-lg border cursor-pointer transition-all ${
+                                                        selectedPaymentMethod === 'manual'
+                                                            ? 'border-blue-500 bg-blue-900/20'
+                                                            : 'border-gray-600 bg-gray-800 hover:border-gray-500'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-start gap-3">
+                                                        <input
+                                                            type="radio"
+                                                            name="paymentMethod"
+                                                            checked={selectedPaymentMethod === 'manual'}
+                                                            onChange={() => setSelectedPaymentMethod('manual')}
+                                                            className="mt-1 w-4 h-4 text-blue-600"
+                                                        />
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="font-medium text-white">Bank Transfer / EFT</span>
+                                                                <span className="text-blue-400 font-bold">
+                                                                    ${(feeBreakdown.totalFee / 100).toFixed(2)}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-xs text-gray-400 mt-1">
+                                                                No processing fees - pay via direct deposit
+                                                            </div>
+                                                            <div className="text-xs text-amber-500 mt-1">⏳ Pending until organizer confirms payment</div>
+                                                        </div>
+                                                    </div>
+                                                </label>
+
+                                                {/* Show bank details when manual is selected and organizer provided them */}
+                                                {selectedPaymentMethod === 'manual' && tournament.showBankDetails && tournament.bankDetails && (
+                                                    <div className="ml-7 p-3 bg-gray-800 rounded-lg border border-gray-700">
+                                                        <h6 className="text-xs font-medium text-gray-400 uppercase mb-2">Bank Details</h6>
+                                                        <div className="space-y-1 text-sm">
+                                                            {tournament.bankDetails.bankName && (
+                                                                <div className="flex justify-between">
+                                                                    <span className="text-gray-500">Bank</span>
+                                                                    <span className="text-white">{tournament.bankDetails.bankName}</span>
+                                                                </div>
+                                                            )}
+                                                            {tournament.bankDetails.accountName && (
+                                                                <div className="flex justify-between">
+                                                                    <span className="text-gray-500">Account Name</span>
+                                                                    <span className="text-white">{tournament.bankDetails.accountName}</span>
+                                                                </div>
+                                                            )}
+                                                            {tournament.bankDetails.accountNumber && (
+                                                                <div className="flex justify-between">
+                                                                    <span className="text-gray-500">Account Number</span>
+                                                                    <span className="text-white font-mono">{tournament.bankDetails.accountNumber}</span>
+                                                                </div>
+                                                            )}
+                                                            {tournament.bankDetails.reference && (
+                                                                <div className="mt-2 pt-2 border-t border-gray-700">
+                                                                    <span className="text-gray-500 text-xs">Reference:</span>
+                                                                    <p className="text-amber-400 text-xs mt-1">{tournament.bankDetails.reference}</p>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-xs text-gray-500 mt-3">
+                                                            Please use your name as reference so the organizer can match your payment.
+                                                        </p>
+                                                    </div>
+                                                )}
+
+                                                {/* Show message when manual selected but no bank details */}
+                                                {selectedPaymentMethod === 'manual' && !tournament.showBankDetails && (
+                                                    <div className="ml-7 p-3 bg-gray-800 rounded-lg border border-gray-700">
+                                                        <p className="text-sm text-gray-400">
+                                                            The organizer will contact you with payment instructions after registration.
+                                                        </p>
+                                                    </div>
+                                                )}
+
+                                                {/* Online Payment Option (Stripe) */}
+                                                <label
+                                                    className={`block p-3 rounded-lg border cursor-pointer transition-all ${
+                                                        selectedPaymentMethod === 'stripe'
+                                                            ? 'border-green-500 bg-green-900/20'
+                                                            : 'border-gray-600 bg-gray-800 hover:border-gray-500'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-start gap-3">
+                                                        <input
+                                                            type="radio"
+                                                            name="paymentMethod"
+                                                            checked={selectedPaymentMethod === 'stripe'}
+                                                            onChange={() => setSelectedPaymentMethod('stripe')}
+                                                            className="mt-1 w-4 h-4 text-green-600"
+                                                        />
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="font-medium text-white">Pay via Stripe</span>
+                                                                    <span className="px-1.5 py-0.5 bg-green-900/50 text-green-400 text-[10px] rounded font-medium">INSTANT</span>
+                                                                </div>
+                                                                <span className="text-green-400 font-bold">
+                                                                    ${((feeBreakdown.totalFee + Math.round(feeBreakdown.totalFee * PLATFORM_FEE_PERCENT) + Math.round(feeBreakdown.totalFee * STRIPE_FEE_PERCENT) + STRIPE_FIXED_FEE) / 100).toFixed(2)}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-xs text-gray-400 mt-1">
+                                                                ${(feeBreakdown.totalFee / 100).toFixed(2)} + ${((Math.round(feeBreakdown.totalFee * PLATFORM_FEE_PERCENT) + Math.round(feeBreakdown.totalFee * STRIPE_FEE_PERCENT) + STRIPE_FIXED_FEE) / 100).toFixed(2)} processing
+                                                            </div>
+                                                            <div className="text-xs text-green-500 mt-1">✓ Instant confirmation - start playing immediately</div>
+                                                        </div>
+                                                    </div>
+                                                </label>
                                             </div>
                                         </div>
-                                        {requiresPayment && (
-                                            <p className="text-xs text-gray-500 mt-3">
-                                                Payment will be collected via Stripe after registration.
-                                            </p>
-                                        )}
-                                        {feeBreakdown.hasFees && !tournament.stripeConnectedAccountId && (
-                                            <p className="text-xs text-yellow-500 mt-3">
-                                                Payment will be collected by the organizer separately.
-                                            </p>
-                                        )}
                                     </div>
                                 )}
 

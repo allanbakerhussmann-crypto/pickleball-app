@@ -1,13 +1,14 @@
 /**
- * MeetupDetail Component (Extended with Scoring & Tabs)
- * 
+ * MeetupDetail Component (Extended with Scoring, Results & Tabs)
+ *
  * Shows meetup details with tabbed interface:
  * - Details: Event info, pricing, competition format
  * - Attendees: Who's attending and their payment status
  * - Scoring: Match entry and standings (for competitive meetups)
- * 
+ * - Results: Final standings and podium (after competition)
+ *
  * FILE LOCATION: components/meetups/MeetupDetail.tsx
- * VERSION: V05.17 - Added Scoring Tab
+ * VERSION: V06.16 - Added Results Tab
  */
 
 import React, { useEffect, useState, useMemo } from 'react';
@@ -25,6 +26,13 @@ import {
   redirectToCheckout,
 } from '../../services/stripe';
 import { MeetupScoring } from './MeetupScoring';
+import { MeetupResults } from './MeetupResults';
+import {
+  subscribeToMeetupMatches,
+  subscribeToMeetupStandings,
+  type MeetupMatch,
+  type MeetupStanding,
+} from '../../services/firebase/meetupMatches';
 import type { MeetupRSVP } from '../../types';
 
 // ============================================
@@ -104,7 +112,7 @@ interface ExtendedMeetupRSVP extends MeetupRSVP {
   paidAt?: number;
 }
 
-type MeetupTab = 'details' | 'attendees' | 'scoring';
+type MeetupTab = 'details' | 'attendees' | 'scoring' | 'results';
 
 // ============================================
 // CONSTANTS
@@ -143,6 +151,10 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
   // Tab state
   const [activeTab, setActiveTab] = useState<MeetupTab>('details');
 
+  // Results data (for Results tab)
+  const [matches, setMatches] = useState<MeetupMatch[]>([]);
+  const [standings, setStandings] = useState<MeetupStanding[]>([]);
+
   // ============================================
   // DATA LOADING
   // ============================================
@@ -165,6 +177,19 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
 
   useEffect(() => {
     loadData();
+  }, [meetupId]);
+
+  // Subscribe to matches and standings for Results tab
+  useEffect(() => {
+    if (!meetupId) return;
+
+    const unsubMatches = subscribeToMeetupMatches(meetupId, setMatches);
+    const unsubStandings = subscribeToMeetupStandings(meetupId, setStandings);
+
+    return () => {
+      unsubMatches();
+      unsubStandings();
+    };
   }, [meetupId]);
 
   // Check URL for payment success
@@ -208,6 +233,13 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
     if (meetup.competition.type === 'casual') return false;
     return meetup.competition.managedInApp === true;
   }, [meetup?.competition]);
+
+  // Check if results tab should be shown (competition completed or has matches)
+  const showResultsTab = useMemo(() => {
+    if (!showScoringTab) return false;
+    // Show if there are any completed matches or standings
+    return matches.some(m => m.status === 'completed') || standings.length > 0;
+  }, [showScoringTab, matches, standings]);
 
   // ============================================
   // FORMAT HELPERS
@@ -469,6 +501,18 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
               🏆 Scoring
             </button>
           )}
+          {showResultsTab && (
+            <button
+              onClick={() => setActiveTab('results')}
+              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'results'
+                  ? 'text-green-400 border-b-2 border-green-400 bg-gray-900/30'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              📊 Results
+            </button>
+          )}
         </div>
 
         {/* Tab Content */}
@@ -713,6 +757,16 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
               competitionSettings={meetup.competition.settings || {}}
               attendees={rsvps.filter(r => r.status === 'going')}
               isOrganizer={isCreator}
+            />
+          )}
+
+          {/* ========== RESULTS TAB ========== */}
+          {activeTab === 'results' && showResultsTab && meetup.competition && (
+            <MeetupResults
+              standings={standings}
+              matches={matches}
+              competitionType={meetup.competition.type}
+              meetupTitle={meetup.title}
             />
           )}
         </div>

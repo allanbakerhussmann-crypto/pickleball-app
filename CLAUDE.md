@@ -668,3 +668,93 @@ Use Test Mode (`TestModePanel.tsx`) to:
 3. **Missing Player IDs**: Some matches may have empty `playerIds`
    - System falls back to team ID matching
    - Team IDs added to busyPlayers set as backup
+
+---
+
+## DUPR Integration Status
+
+### Overview
+
+DUPR (Dynamic Universal Pickleball Rating) integration enables automatic match submission for rating updates.
+
+**Documentation**: https://dupr.gitbook.io/dupr-raas
+
+### Current Status: AWAITING API CREDENTIALS
+
+**Test Club ID**: `6915688914` (configured in UAT)
+
+**Blocker**: Need valid `clientKey` and `clientSecret` from DUPR. Email sent to `tech@mydupr.com` (Haresh) requesting credentials.
+
+### What's Implemented (Ready to Use)
+
+| Feature | Status | File |
+|---------|--------|------|
+| SSO "Login with DUPR" | ✅ Working | `components/profile/DuprConnect.tsx` |
+| Profile linking/unlinking | ✅ Working | `components/profile/DuprConnect.tsx` |
+| Rating display | ✅ Working | Shows doubles/singles ratings with reliability % |
+| DUPR service with RaaS API | ✅ Ready | `services/dupr/index.ts` |
+| Match submission helper | ✅ Ready | `services/dupr/matchSubmission.ts` |
+| DuprSubmitButton component | ✅ Ready | `components/shared/DuprSubmitButton.tsx` |
+| Match DUPR status tracking | ✅ Ready | `services/firebase/matches.ts` |
+| League DUPR settings | ✅ Ready | `settings.duprSettings` on League |
+
+### What's Blocked (Needs API Keys)
+
+| Feature | Blocker |
+|---------|---------|
+| Match submission to DUPR | 403 Forbidden - invalid credentials |
+| Token generation | Needs valid clientKey:clientSecret |
+
+### API Configuration
+
+**File**: `services/dupr/index.ts`
+
+```typescript
+// Current placeholder credentials (NEED TO REPLACE)
+uat: {
+  baseUrl: 'https://uat.mydupr.com/api',
+  loginUrl: 'https://uat.dupr.gg/login-external-app',
+  clientId: '4970118010',
+  clientKey: 'REPLACE_WITH_REAL_KEY',    // From DUPR
+  clientSecret: 'REPLACE_WITH_REAL_SECRET', // From DUPR
+}
+```
+
+### Once Credentials Are Received
+
+1. Update `services/dupr/index.ts` with real `clientKey` and `clientSecret`
+2. Test token generation: Should get valid bearer token
+3. Test match submission: Complete a league match, click "Submit to DUPR"
+4. Verify in DUPR UAT dashboard that match appears
+
+### Authentication Flow (RaaS API)
+
+```
+1. Base64 encode: clientKey:clientSecret
+2. POST to /token with x-authorization header
+3. Receive bearer token (valid 1 hour, cached 55 min)
+4. Use bearer token for /result/submit and other API calls
+```
+
+### Match Submission Requirements
+
+- Match must be `status: 'completed'`
+- At least one team must score 6+ points
+- All players must have DUPR IDs linked (via SSO login)
+- Players do NOT need to join the DUPR club - just have linked accounts
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `services/dupr/index.ts` | Core DUPR service, API calls, token management |
+| `services/dupr/matchSubmission.ts` | Convert app matches to DUPR format |
+| `components/shared/DuprSubmitButton.tsx` | UI button for manual submission |
+| `components/profile/DuprConnect.tsx` | SSO login iframe component |
+
+### Future Enhancements (After API Working)
+
+1. **Auto-submission**: Automatically submit on match completion (league setting)
+2. **Bulk submission**: Submit multiple matches at once
+3. **Rating sync**: Periodic refresh of player ratings from DUPR
+4. **Move credentials to .env**: `VITE_DUPR_CLIENT_KEY`, `VITE_DUPR_CLIENT_SECRET`

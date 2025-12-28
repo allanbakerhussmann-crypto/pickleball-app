@@ -118,13 +118,18 @@ export const useCourtManagement = ({
   divisions,
 }: UseCourtManagementProps): UseCourtManagementReturn => {
 
+  // Safeguard: ensure arrays are never undefined
+  const safeMatches = matches || [];
+  const safeCourts = courts || [];
+  const safeDivisions = divisions || [];
+
   // ============================================
   // Helper: Get player's rest time since last completed match
   // Returns milliseconds since last match completion, or Infinity if never played
   // ============================================
 
   const getPlayerRestTime = useCallback((playerId: string): number => {
-    const completedMatches = matches.filter(m => {
+    const completedMatches = safeMatches.filter(m => {
       if (m.status !== 'completed' || !m.completedAt) return false;
       const playerIdsA = m.sideA?.playerIds || [];
       const playerIdsB = m.sideB?.playerIds || [];
@@ -139,7 +144,7 @@ export const useCourtManagement = ({
     );
 
     return Date.now() - (mostRecent.completedAt || 0);
-  }, [matches]);
+  }, [safeMatches]);
 
   // ============================================
   // Helper: Check if player has sufficient rest (8 min minimum)
@@ -157,7 +162,7 @@ export const useCourtManagement = ({
   const getPoolProgress = useCallback((): Map<string, { total: number; completed: number; rate: number }> => {
     const progress = new Map<string, { total: number; completed: number; rate: number }>();
 
-    matches.forEach(m => {
+    safeMatches.forEach(m => {
       const poolGroup = m.poolGroup || 'default';
       const current = progress.get(poolGroup) || { total: 0, completed: 0, rate: 0 };
       current.total++;
@@ -167,7 +172,7 @@ export const useCourtManagement = ({
     });
 
     return progress;
-  }, [matches]);
+  }, [safeMatches]);
 
   // ============================================
   // Helper: Get busy team IDs AND player IDs (on court)
@@ -175,7 +180,7 @@ export const useCourtManagement = ({
 
   const getBusyTeamIds = useCallback(() => {
     const busy = new Set<string>();
-    matches.forEach(m => {
+    safeMatches.forEach(m => {
       if (!m.court) return;
       if (m.status === 'completed') return;
       // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
@@ -189,7 +194,7 @@ export const useCourtManagement = ({
       (m.sideB?.playerIds || []).forEach(pid => { if (pid) busy.add(pid); });
     });
     return busy;
-  }, [matches]);
+  }, [safeMatches]);
 
   // ============================================
   // DYNAMIC Queue calculation with fair distribution + rest time + pool balance
@@ -202,13 +207,13 @@ export const useCourtManagement = ({
     const busyPlayers = new Set<string>();
     const busyTeamNames = new Set<string>(); // Also track by NAME for pool play
 
-    // Calculate play counts per team (in_progress + completed matches)
+    // Calculate play counts per team (in_progress + completed safeMatches)
     const teamPlayCount = new Map<string, number>();
 
     // Get pool progress for balance scoring
     const poolProgress = getPoolProgress();
 
-    matches.forEach(m => {
+    safeMatches.forEach(m => {
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
       const teamAName = m.sideA?.name || '';
@@ -229,7 +234,7 @@ export const useCourtManagement = ({
       if (teamAId && teamAId.trim()) busyTeams.add(teamAId);
       if (teamBId && teamBId.trim()) busyTeams.add(teamBId);
 
-      // Mark team NAMES as busy (for pool play where IDs might differ across matches)
+      // Mark team NAMES as busy (for pool play where IDs might differ across safeMatches)
       if (teamAName && teamAName.trim()) busyTeamNames.add(teamAName.toLowerCase());
       if (teamBName && teamBName.trim()) busyTeamNames.add(teamBName.toLowerCase());
 
@@ -287,7 +292,7 @@ export const useCourtManagement = ({
     // Get all waiting matches
     // Match the same logic as courtMatchModels: any match that's not completed,
     // not in_progress, and has no court assigned is considered waiting/eligible
-    const candidates = matches.filter(m => {
+    const candidates = safeMatches.filter(m => {
       const status = m.status ?? 'scheduled';
       const isActive = status === 'completed' || status === 'in_progress';
       // Waiting = NOT completed, NOT in_progress, and no court assigned
@@ -298,7 +303,7 @@ export const useCourtManagement = ({
 
     // Debug: log match statuses for understanding
     const statusCounts: Record<string, number> = {};
-    matches.forEach(m => {
+    safeMatches.forEach(m => {
       const key = `${m.status || 'undefined'}_court:${m.court ? 'yes' : 'no'}`;
       statusCounts[key] = (statusCounts[key] || 0) + 1;
     });
@@ -443,7 +448,7 @@ export const useCourtManagement = ({
     });
 
     console.log('[Court Queue Debug]', {
-      totalMatches: matches.length,
+      totalMatches: safeMatches.length,
       candidates: candidates.length,
       eligible: eligible.length,
       busyTeamCount: busyTeams.size,
@@ -455,7 +460,7 @@ export const useCourtManagement = ({
     });
 
     return { eligible, scores };
-  }, [matches, getPlayerRestTime, playerHasSufficientRest, getPoolProgress]);
+  }, [safeMatches, getPlayerRestTime, playerHasSufficientRest, getPoolProgress]);
 
   // Build a realistic queue where each team can only appear ONCE
   // Queue size is limited by the number of AVAILABLE courts
@@ -464,8 +469,8 @@ export const useCourtManagement = ({
     const { eligible, scores } = getEligibleMatches();
 
     // Count available courts (active courts not currently in use)
-    const activeCourts = courts.filter(c => c.active !== false);
-    const occupiedCourts = matches.filter(m =>
+    const activeCourts = safeCourts.filter(c => c.active !== false);
+    const occupiedCourts = safeMatches.filter(m =>
       m.court && (m.status === 'in_progress' || (m.status !== 'completed' && m.court))
     ).length;
     const availableCourtCount = Math.max(0, activeCourts.length - occupiedCourts);
@@ -529,15 +534,15 @@ export const useCourtManagement = ({
     });
 
     return { queue: finalQueue, waitTimes: scores };
-  }, [getEligibleMatches, courts, matches]);
+  }, [getEligibleMatches, courts, safeMatches]);
 
   // ============================================
   // Court View Models
   // ============================================
 
   const courtViewModels = useMemo((): CourtViewModel[] => {
-    return courts.map(court => {
-      const currentMatch = matches.find(
+    return safeCourts.map(court => {
+      const currentMatch = safeMatches.find(
         m => m.court === court.name && m.status !== 'completed'
       );
 
@@ -560,16 +565,16 @@ export const useCourtManagement = ({
         currentMatchId: currentMatch?.id,
       };
     });
-  }, [courts, matches]);
+  }, [safeCourts, safeMatches]);
 
   // ============================================
   // Match View Models for Courts
   // ============================================
 
   const courtMatchModels = useMemo((): CourtMatchModel[] => {
-    return matches.map(m => {
-      const division = divisions.find(d => d.id === m.divisionId);
-      const court = courts.find(c => c.name === m.court);
+    return safeMatches.map(m => {
+      const division = safeDivisions.find(d => d.id === m.divisionId);
+      const court = safeCourts.find(c => c.name === m.court);
 
       let status: CourtMatchModel['status'];
 
@@ -599,7 +604,7 @@ export const useCourtManagement = ({
         courtName: court?.name,
       };
     });
-  }, [matches, divisions, courts]);
+  }, [safeMatches, safeDivisions, safeCourts]);
 
   // ============================================
   // Queue Match Models (smart-filtered queue in CourtMatchModel format)
@@ -608,8 +613,8 @@ export const useCourtManagement = ({
   // ============================================
 
   const queueMatchModels = useMemo((): CourtMatchModel[] => {
-    return queue.map(m => {
-      const division = divisions.find(d => d.id === m.divisionId);
+    return (queue || []).map(m => {
+      const division = safeDivisions.find(d => d.id === m.divisionId);
 
       // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
       const teamAName = m.sideA?.name || m.teamAId || 'TBD';
@@ -627,7 +632,7 @@ export const useCourtManagement = ({
         courtName: undefined,
       };
     });
-  }, [queue, divisions]);
+  }, [queue, safeDivisions]);
 
   // ============================================
   // Conflict Detection
@@ -648,7 +653,7 @@ export const useCourtManagement = ({
       return undefined;
     }
 
-    return matches.find(m => {
+    return safeMatches.find(m => {
       if (m.id === match.id) return false;
       if (!m.court) return false;
       if (m.status === 'completed') return false;
@@ -673,14 +678,14 @@ export const useCourtManagement = ({
 
       return teamConflict || playerConflict;
     });
-  }, [matches]);
+  }, [safeMatches]);
 
   // ============================================
   // Court Actions
   // ============================================
 
   const assignMatchToCourt = useCallback(async (matchId: string, courtName: string) => {
-    const match = matches.find(m => m.id === matchId);
+    const match = safeMatches.find(m => m.id === matchId);
     if (!match) return;
 
     // CRITICAL: Prevent assigning matches where a team plays itself
@@ -737,13 +742,13 @@ export const useCourtManagement = ({
         // Don't block the court assignment if notifications fail
       }
     }
-  }, [tournamentId, matches, findActiveConflictMatch]);
+  }, [tournamentId, safeMatches, findActiveConflictMatch]);
 
   const startMatchOnCourt = useCallback(async (courtId: string) => {
-    const court = courts.find(c => c.id === courtId);
+    const court = safeCourts.find(c => c.id === courtId);
     if (!court) return;
 
-    const match = matches.find(
+    const match = safeMatches.find(
       m => m.court === court.name && m.status !== 'completed'
     );
     if (!match) return;
@@ -752,17 +757,17 @@ export const useCourtManagement = ({
       status: 'in_progress',
       startTime: Date.now(),
     });
-  }, [tournamentId, courts, matches]);
+  }, [tournamentId, safeCourts, safeMatches]);
 
   const finishMatchOnCourt = useCallback(async (
     courtId: string,
     scoreTeamA?: number,
     scoreTeamB?: number
   ) => {
-    const court = courts.find(c => c.id === courtId);
+    const court = safeCourts.find(c => c.id === courtId);
     if (!court) return;
 
-    const currentMatch = matches.find(
+    const currentMatch = safeMatches.find(
       m => m.court === court.name && m.status !== 'completed'
     );
     if (!currentMatch) {
@@ -833,7 +838,7 @@ export const useCourtManagement = ({
 
     // Get game settings from division for validation
     // Check multiple possible locations: division.format, division.gameSettings, or direct properties
-    const division = divisions.find(d => d.id === currentMatch.divisionId);
+    const division = safeDivisions.find(d => d.id === currentMatch.divisionId);
     const fmt = division?.format;
     const gs = (division as any)?.gameSettings;
 
@@ -880,7 +885,7 @@ export const useCourtManagement = ({
       // Clear the court assignment
       await updateMatchScore(tournamentId, currentMatch.id, { court: '' });
     } else {
-      // For pool play or non-bracket matches, use regular update
+      // For pool play or non-bracket safeMatches, use regular update
       // Store BOTH legacy and modern score formats for compatibility
       const scoresModern = allScores.map((s, i) => ({
         gameNumber: i + 1,
@@ -911,10 +916,10 @@ export const useCourtManagement = ({
     if (nextMatch) {
       await assignMatchToCourt(nextMatch.id, court.name);
     }
-  }, [tournamentId, courts, matches, divisions, assignMatchToCourt, getEligibleMatches]);
+  }, [tournamentId, safeCourts, safeMatches, safeDivisions, assignMatchToCourt, getEligibleMatches]);
 
   const handleAssignCourt = useCallback(async (matchId: string) => {
-    const match = matches.find(m => m.id === matchId);
+    const match = safeMatches.find(m => m.id === matchId);
     if (!match) return;
 
     const conflict = findActiveConflictMatch(match);
@@ -925,10 +930,10 @@ export const useCourtManagement = ({
       return;
     }
 
-    const freeCourt = courts.find(
+    const freeCourt = safeCourts.find(
       c =>
         c.active &&
-        !matches.some(m => m.status !== 'completed' && m.court === c.name)
+        !safeMatches.some(m => m.status !== 'completed' && m.court === c.name)
     );
     if (!freeCourt) {
       alert('No active courts available.');
@@ -940,15 +945,15 @@ export const useCourtManagement = ({
       court: freeCourt.name,
       startTime: Date.now(),
     });
-  }, [tournamentId, matches, courts, findActiveConflictMatch]);
+  }, [tournamentId, safeMatches, safeCourts, findActiveConflictMatch]);
 
   const autoAssignFreeCourts = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
 
-    const freeCourts = courts.filter(
+    const freeCourts = safeCourts.filter(
       c =>
         c.active !== false &&
-        !matches.some(m => m.court === c.name && m.status !== 'completed')
+        !safeMatches.some(m => m.court === c.name && m.status !== 'completed')
     );
 
     if (freeCourts.length === 0) {
@@ -1053,7 +1058,7 @@ export const useCourtManagement = ({
     // Execute court assignments first, then notifications (don't wait for notifications)
     await Promise.all(updates);
     Promise.all(notifications).catch(() => {}); // Fire and forget notifications
-  }, [tournamentId, courts, matches, getEligibleMatches]);
+  }, [tournamentId, safeCourts, safeMatches, getEligibleMatches]);
 
   return {
     courtViewModels,

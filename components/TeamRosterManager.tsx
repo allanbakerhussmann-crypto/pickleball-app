@@ -80,7 +80,7 @@ export const TeamRosterManager: React.FC<TeamRosterManagerProps> = ({ team, isCa
             return;
         }
         
-        const updatedPlayers = roster.players.filter(id => id !== userId);
+        const updatedPlayers = (roster.players || []).filter(id => id !== userId);
         const updatedRoster = { ...roster, players: updatedPlayers };
         
         setRoster(updatedRoster);

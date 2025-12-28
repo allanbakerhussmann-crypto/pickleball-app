@@ -20,24 +20,27 @@
 // ============================================
 
 // UAT (Testing) Configuration - Switch to production after approval
+// Based on DUPR RaaS documentation: https://dupr.gitbook.io/dupr-raas
 const DUPR_CONFIG = {
   // Set to 'production' after DUPR approves your integration
   environment: 'uat' as 'uat' | 'production',
-  
+
   // Test Club ID for UAT testing
   testClubId: '6915688914',
-  
+
   uat: {
-    baseUrl: 'https://api.uat.dupr.gg',
-    // DUPR uses iframe login, NOT OAuth redirect
+    // DUPR RaaS API base URL for UAT
+    baseUrl: 'https://uat.mydupr.com/api',
+    // DUPR uses iframe login for SSO
     loginUrl: 'https://uat.dupr.gg/login-external-app',
     clientId: '4970118010',
     clientKey: 'test-ck-6181132e-cedf-45a6-fcb0-f88dda516175',
     clientSecret: 'test-cs-a27a555efe6348cff86532526db5cc5d',
   },
-  
+
   production: {
-    baseUrl: 'https://api.dupr.gg',
+    // DUPR RaaS API base URL for Production
+    baseUrl: 'https://prod.mydupr.com/api',
     loginUrl: 'https://dashboard.dupr.com/login-external-app',
     clientId: '', // Will be provided after UAT approval
     clientKey: '', // Will be provided after UAT approval
@@ -45,9 +48,65 @@ const DUPR_CONFIG = {
   },
 };
 
+// Cache for API token (valid for 1 hour)
+let cachedToken: { token: string; expiresAt: number } | null = null;
+
 // Get current environment config
 export const getConfig = () => {
   return DUPR_CONFIG[DUPR_CONFIG.environment];
+};
+
+/**
+ * Get API token for DUPR RaaS API calls
+ *
+ * Per DUPR documentation:
+ * 1. Base64 encode clientKey:clientSecret
+ * 2. POST to /token with x-authorization header
+ * 3. Token is valid for 1 hour
+ */
+export async function getApiToken(): Promise<string> {
+  // Return cached token if still valid (with 5 min buffer)
+  if (cachedToken && cachedToken.expiresAt > Date.now() + 5 * 60 * 1000) {
+    return cachedToken.token;
+  }
+
+  const config = getConfig();
+
+  // Base64 encode clientKey:clientSecret
+  const credentials = btoa(`${config.clientKey}:${config.clientSecret}`);
+
+  const response = await fetch(`${config.baseUrl}/token`, {
+    method: 'POST',
+    headers: {
+      'x-authorization': credentials,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    console.error('[DUPR] Token generation failed:', {
+      status: response.status,
+      error: errorText,
+    });
+    throw new Error(`Failed to get DUPR API token: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const token = data.token || data.accessToken || data.result?.token;
+
+  if (!token) {
+    throw new Error('No token returned from DUPR API');
+  }
+
+  // Cache token for 55 minutes (tokens valid for 1 hour)
+  cachedToken = {
+    token,
+    expiresAt: Date.now() + 55 * 60 * 1000,
+  };
+
+  console.log('[DUPR] API token generated successfully');
+  return token;
 };
 
 // ============================================
@@ -402,27 +461,35 @@ export async function verifyClubPermission(
 // ============================================
 
 /**
- * Submit a match to DUPR
- * 
- * Requirements:
+ * Submit a match to DUPR using RaaS API
+ *
+ * Per DUPR documentation:
+ * - Uses token-based authentication (get token first, then use Bearer token)
  * - All players must have DUPR IDs
  * - At least one team must score 6+ points
+ *
+ * @param _accessToken - User's DUPR access token (from SSO login) - kept for backwards compatibility
+ * @param match - Match data to submit
  */
 export async function submitMatchToDupr(
-  accessToken: string,
+  _accessToken: string,
   match: DuprMatchSubmission
 ): Promise<DuprMatchResult> {
   const config = getConfig();
-  
+
   // Validate minimum score requirement
   const hasMinimumScore = match.games.some(
     game => game.team1Score >= 6 || game.team2Score >= 6
   );
-  
+
   if (!hasMinimumScore) {
     throw new Error('At least one team must score 6 or more points');
   }
-  
+
+  // Get API token using client credentials
+  const apiToken = await getApiToken();
+
+  // Build request body per DUPR RaaS API spec
   const body = {
     matchType: match.matchType,
     matchDate: match.matchDate,
@@ -439,55 +506,85 @@ export async function submitMatchToDupr(
     },
     games: match.games,
   };
-  
-  const response = await fetch(`${config.baseUrl}/match/v1.0/submit`, {
+
+  console.log('[DUPR] Submitting match:', {
+    url: `${config.baseUrl}/result/submit`,
+    matchType: match.matchType,
+    team1Player1: match.team1.player1.duprId,
+    team2Player1: match.team2.player1.duprId,
+    gamesCount: match.games.length,
+  });
+
+  // DUPR RaaS API endpoint for match submission
+  const response = await fetch(`${config.baseUrl}/result/submit`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${accessToken}`,
+      'Authorization': `Bearer ${apiToken}`,
       'Content-Type': 'application/json',
-      'x-client-id': config.clientId,
-      'x-client-key': config.clientKey,
     },
     body: JSON.stringify(body),
   });
-  
+
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || 'Failed to submit match to DUPR');
+    const errorText = await response.text().catch(() => '');
+    let errorMessage = 'Failed to submit match to DUPR';
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.message || errorJson.error || errorMessage;
+    } catch {
+      if (errorText) {
+        errorMessage = `DUPR API Error (${response.status}): ${errorText.substring(0, 200)}`;
+      } else {
+        errorMessage = `DUPR API Error: ${response.status} ${response.statusText}`;
+      }
+    }
+    console.error('[DUPR] Submit failed:', {
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url,
+      error: errorText.substring(0, 500),
+    });
+    throw new Error(errorMessage);
   }
-  
+
   const data = await response.json();
   const result = data.result || data;
-  
+
+  console.log('[DUPR] Match submitted successfully:', result);
+
   return {
-    matchId: result.id,
-    status: result.status,
-    createdAt: result.createdAt,
+    matchId: result.id || result.matchId,
+    status: result.status || 'PENDING',
+    createdAt: result.createdAt || new Date().toISOString(),
   };
 }
 
 /**
- * Delete a match from DUPR
+ * Delete a match from DUPR using RaaS API
  */
 export async function deleteMatchFromDupr(
-  accessToken: string,
+  _accessToken: string,
   duprMatchId: string
 ): Promise<void> {
   const config = getConfig();
-  
-  const response = await fetch(`${config.baseUrl}/match/v1.0/${duprMatchId}`, {
+
+  // Get API token using client credentials
+  const apiToken = await getApiToken();
+
+  // DUPR RaaS API endpoint for match deletion
+  const response = await fetch(`${config.baseUrl}/result/${duprMatchId}`, {
     method: 'DELETE',
     headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'x-client-id': config.clientId,
-      'x-client-key': config.clientKey,
+      'Authorization': `Bearer ${apiToken}`,
     },
   });
-  
+
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.message || 'Failed to delete match from DUPR');
   }
+
+  console.log('[DUPR] Match deleted successfully:', duprMatchId);
 }
 
 // ============================================
@@ -521,28 +618,29 @@ export function getDuprRatingColor(rating: number | undefined): string {
 export const duprService = {
   // Config
   getConfig,
-  
+  getApiToken,
+
   // SSO (iframe method)
   getDuprLoginIframeUrl,
   parseDuprLoginEvent,
-  
+
   // User
   getDuprUserProfile,
   getDuprBasicInfo,
   lookupDuprPlayer,
-  
+
   // Entitlements
   hasEntitlement,
   canJoinDuprEvent,
-  
+
   // Clubs
   getUserClubPermissions,
   verifyClubPermission,
-  
+
   // Matches
   submitMatchToDupr,
   deleteMatchFromDupr,
-  
+
   // Helpers
   formatDuprRating,
   getDuprRatingColor,

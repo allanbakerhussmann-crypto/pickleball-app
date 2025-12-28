@@ -1,18 +1,20 @@
 /**
  * MeetupScoring Component (with DUPR Integration)
- * 
+ *
  * Main scoring interface for competitive meetups.
  * Shows matches list, standings table, and allows score entry.
  * Includes DUPR match submission for eligible matches.
- * 
+ * Supports multiple competition formats with match generation.
+ *
  * FILE LOCATION: components/meetups/MeetupScoring.tsx
- * VERSION: V05.17 - Added DUPR Integration
+ * VERSION: V06.16 - Added all format generators & standings persistence
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   subscribeToMeetupMatches,
+  subscribeToMeetupStandings,
   createMeetupMatch,
   submitMeetupMatchScore,
   confirmMeetupMatchScore,
@@ -20,13 +22,18 @@ import {
   resolveMeetupMatchDispute,
   deleteMeetupMatch,
   generateRoundRobinMatches,
+  generateSingleEliminationMatches,
   clearMeetupMatches,
+  clearMeetupStandings,
+  initializeMeetupStandings,
   isDuprEligible,
   markMatchDuprSubmitted,
   markMatchDuprFailed,
   getDuprMatchStats,
   type MeetupMatch,
+  type MeetupStanding,
   type GameScore,
+  type EliminationAttendee,
 } from '../../services/firebase/meetupMatches';
 import {
   submitMatchToDupr,
@@ -106,6 +113,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
 
   // State
   const [matches, setMatches] = useState<MeetupMatch[]>([]);
+  const [firestoreStandings, setFirestoreStandings] = useState<MeetupStanding[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<ScoringTab>('matches');
 
@@ -169,32 +177,60 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
   const userHasDuprToken = !!(userProfile as any)?.duprAccessToken;
 
   // ============================================
-  // LOAD MATCHES (Real-time)
+  // LOAD MATCHES & STANDINGS (Real-time)
   // ============================================
 
   useEffect(() => {
     if (!meetupId) return;
 
-    const unsubscribe = subscribeToMeetupMatches(meetupId, (matchList) => {
+    const unsubMatches = subscribeToMeetupMatches(meetupId, (matchList) => {
       setMatches(matchList);
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    const unsubStandings = subscribeToMeetupStandings(meetupId, (standingsList) => {
+      setFirestoreStandings(standingsList);
+    });
+
+    return () => {
+      unsubMatches();
+      unsubStandings();
+    };
   }, [meetupId]);
 
   // ============================================
-  // CALCULATE STANDINGS
+  // STANDINGS (prefer Firestore, fallback to computed)
   // ============================================
 
   const standings = useMemo(() => {
+    // Use Firestore standings if available
+    if (firestoreStandings.length > 0) {
+      return firestoreStandings.map((s) => ({
+        odUserId: s.odUserId,
+        name: s.name,
+        duprId: s.duprId,
+        played: s.played || 0,
+        wins: s.wins || 0,
+        losses: s.losses || 0,
+        draws: s.draws || 0,
+        points: s.points || 0,
+        gamesWon: s.gamesWon || 0,
+        gamesLost: s.gamesLost || 0,
+        gameDiff: s.gameDiff || (s.gamesWon || 0) - (s.gamesLost || 0),
+        pointsFor: s.pointsFor || 0,
+        pointsAgainst: s.pointsAgainst || 0,
+        pointDiff: s.pointDiff || (s.pointsFor || 0) - (s.pointsAgainst || 0),
+      }));
+    }
+
+    // Fallback: compute from matches (for backwards compatibility)
     const standingsMap: Record<string, PlayerStanding> = {};
 
     // Initialize all confirmed attendees
     confirmedAttendees.forEach((attendee) => {
       const odUserId = getAttendeeId(attendee);
       if (!odUserId) return;
-      
+
       standingsMap[odUserId] = {
         odUserId,
         name: getAttendeeName(attendee),
@@ -279,7 +315,7 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
         if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff;
         return b.pointDiff - a.pointDiff;
       });
-  }, [matches, confirmedAttendees, pointsPerWin, pointsPerDraw, pointsPerLoss]);
+  }, [matches, confirmedAttendees, firestoreStandings, pointsPerWin, pointsPerDraw, pointsPerLoss]);
 
   // ============================================
   // HELPERS
@@ -390,17 +426,49 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
     try {
       if (matches.length > 0) {
         await clearMeetupMatches(meetupId);
+        await clearMeetupStandings(meetupId);
       }
-      await generateRoundRobinMatches(
-        meetupId,
-        confirmedAttendees.map((a) => ({ 
-          odUserId: getAttendeeId(a), 
-          odUserName: getAttendeeName(a),
-          duprId: getAttendeeDuprId(a),
-        }))
-      );
+      const attendeeData = confirmedAttendees.map((a) => ({
+        odUserId: getAttendeeId(a),
+        odUserName: getAttendeeName(a),
+        duprId: getAttendeeDuprId(a),
+      }));
+      await initializeMeetupStandings(meetupId, attendeeData);
+      await generateRoundRobinMatches(meetupId, attendeeData);
     } catch (err: any) {
       alert('Failed to generate matches: ' + err.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleGenerateSingleElimination = async () => {
+    if (confirmedAttendees.length < 2) {
+      alert('Need at least 2 players to generate bracket');
+      return;
+    }
+
+    const confirmMsg = matches.length > 0
+      ? 'This will clear existing matches and generate a new bracket. Continue?'
+      : `Generate single elimination bracket for ${confirmedAttendees.length} players?`;
+
+    if (!confirm(confirmMsg)) return;
+
+    setGenerating(true);
+    try {
+      if (matches.length > 0) {
+        await clearMeetupMatches(meetupId);
+        await clearMeetupStandings(meetupId);
+      }
+      const attendeeData: EliminationAttendee[] = confirmedAttendees.map((a) => ({
+        odUserId: getAttendeeId(a),
+        odUserName: getAttendeeName(a),
+        duprId: getAttendeeDuprId(a),
+        duprRating: (a as any).duprRating,
+      }));
+      await generateSingleEliminationMatches(meetupId, attendeeData);
+    } catch (err: any) {
+      alert('Failed to generate bracket: ' + err.message);
     } finally {
       setGenerating(false);
     }
@@ -741,6 +809,8 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
               >
                 + Add Match
               </button>
+
+              {/* Round Robin */}
               {competitionType === 'round_robin' && (
                 <button
                   onClick={handleGenerateRoundRobin}
@@ -748,6 +818,64 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium"
                 >
                   {generating ? 'Generating...' : '🔄 Generate Round Robin'}
+                </button>
+              )}
+
+              {/* Single Elimination */}
+              {competitionType === 'single_elimination' && (
+                <button
+                  onClick={handleGenerateSingleElimination}
+                  disabled={generating}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium"
+                >
+                  {generating ? 'Generating...' : '🏆 Generate Bracket'}
+                </button>
+              )}
+
+              {/* Double Elimination - placeholder, uses same generator for now */}
+              {competitionType === 'double_elimination' && (
+                <button
+                  onClick={handleGenerateSingleElimination}
+                  disabled={generating}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium"
+                >
+                  {generating ? 'Generating...' : '🏆 Generate Bracket'}
+                </button>
+              )}
+
+              {/* Swiss */}
+              {competitionType === 'swiss' && (
+                <button
+                  onClick={handleGenerateRoundRobin}
+                  disabled={generating}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium"
+                  title="Swiss pairing coming soon - using round robin for now"
+                >
+                  {generating ? 'Generating...' : '🔀 Generate Swiss Round'}
+                </button>
+              )}
+
+              {/* Ladder */}
+              {competitionType === 'ladder' && (
+                <button
+                  onClick={handleGenerateRoundRobin}
+                  disabled={generating}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium"
+                  title="Ladder format coming soon"
+                >
+                  {generating ? 'Generating...' : '📊 Initialize Ladder'}
+                </button>
+              )}
+
+              {/* King of Court */}
+              {competitionType === 'king_of_court' && (
+                <button
+                  onClick={handleGenerateRoundRobin}
+                  disabled={generating}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium"
+                  title="King of Court format coming soon"
+                >
+                  {generating ? 'Generating...' : '👑 Start King of Court'}
                 </button>
               )}
             </div>

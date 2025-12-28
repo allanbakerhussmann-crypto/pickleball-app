@@ -118,7 +118,7 @@ const mapCompetitionToTournamentFormat = (format: CompetitionFormat): Partial<Di
 };
 
 export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTournament, onCancel, onCreateClub, userId }) => {
-  const { isAppAdmin } = useAuth();
+  const { isAppAdmin, userProfile } = useAuth();
   // Step: 0 = mode selection, 'planner' = planner flow, 1 = basic info, 2 = divisions
   const [step, setStep] = useState<number | 'planner'>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -137,6 +137,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     status: 'draft',
     registrationMode: 'organiser_provided',
     createdByUserId: userId,
+    organizerId: userId,
+    organizerName: userProfile?.displayName || '',
     clubId: '' // Required
   });
 
@@ -211,12 +213,12 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       tournamentId: '', // Set on save
       name: plannerDiv.name,
       type: plannerDiv.playType === 'singles' ? 'singles' : 'doubles',
-      gender: 'open', // Default, can be edited
+      gender: plannerDiv.gender || 'open',
       // Transfer DUPR ratings from planner
       minRating: plannerDiv.minRating ?? null,
       maxRating: plannerDiv.maxRating ?? null,
-      minAge: null,
-      maxAge: null,
+      minAge: plannerDiv.minAge ?? null,
+      maxAge: plannerDiv.maxAge ?? null,
       registrationOpen: true,
       format: divFormat,
       createdByUserId: userId,
@@ -224,6 +226,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       updatedAt: Date.now(),
       // Store expected players for reference
       maxTeams: plannerDiv.expectedPlayers,
+      // Entry fee for this division (in cents)
+      entryFee: plannerDiv.entryFee,
     };
   };
 
@@ -260,6 +264,16 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       endTime: settings.endTime,
       // Store the full days array for multi-day tournaments
       tournamentDays: tournamentDays,
+      // Registration & Payment from planner
+      registrationOpens: settings.registrationOpens,
+      registrationDeadline: settings.registrationDeadline,
+      // Payment mode and fees
+      paymentMode: settings.paymentMode || 'free',
+      isFreeEvent: settings.paymentMode === 'free' || settings.isFreeEvent,
+      entryFee: settings.adminFee || settings.entryFee || 0, // Admin fee becomes tournament-level fee
+      // Only include bankDetails if defined (Firestore rejects undefined values)
+      ...(settings.bankDetails && { bankDetails: settings.bankDetails }),
+      ...(settings.showBankDetails !== undefined && { showBankDetails: settings.showBankDetails }),
       // Store timing settings as custom field
       plannerSettings: {
         matchPreset: settings.matchPreset,
@@ -608,12 +622,82 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
                   <div>
                       <label className="block text-sm font-medium text-gray-400 mb-1">Description</label>
-                      <textarea 
-                        className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none h-24" 
+                      <textarea
+                        className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none h-24"
                         placeholder="Tell players about your event..."
-                        value={formData.description} 
+                        value={formData.description}
                         onChange={e => setFormData({...formData, description: e.target.value})}
                       />
+                  </div>
+
+                  {/* Registration Window */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                          <label className="block text-sm font-medium text-gray-400 mb-1">Registration Opens</label>
+                          <input
+                            type="datetime-local"
+                            className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                            value={formData.registrationOpens ? new Date(formData.registrationOpens).toISOString().slice(0, 16) : ''}
+                            onChange={e => setFormData({...formData, registrationOpens: e.target.value ? new Date(e.target.value).getTime() : undefined})}
+                          />
+                          <p className="text-xs text-gray-500 mt-1">When players can start registering</p>
+                      </div>
+                      <div>
+                          <label className="block text-sm font-medium text-gray-400 mb-1">Registration Closes</label>
+                          <input
+                            type="datetime-local"
+                            className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                            value={formData.registrationDeadline ? new Date(formData.registrationDeadline).toISOString().slice(0, 16) : ''}
+                            onChange={e => setFormData({...formData, registrationDeadline: e.target.value ? new Date(e.target.value).getTime() : undefined})}
+                          />
+                          <p className="text-xs text-gray-500 mt-1">Last day to register</p>
+                      </div>
+                  </div>
+
+                  {/* Payment Options */}
+                  <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600">
+                      <h4 className="text-sm font-medium text-gray-300 mb-3">Payment Options</h4>
+
+                      {/* Free Event Toggle */}
+                      <label className="flex items-center gap-3 cursor-pointer mb-4">
+                          <input
+                            type="checkbox"
+                            checked={formData.isFreeEvent || false}
+                            onChange={e => setFormData({...formData, isFreeEvent: e.target.checked, entryFee: e.target.checked ? 0 : formData.entryFee})}
+                            className="w-5 h-5 rounded bg-gray-900 border-gray-600 text-green-600 focus:ring-green-500"
+                          />
+                          <span className="text-white">Free event (no entry fee)</span>
+                      </label>
+
+                      {/* Entry Fee (only if not free) */}
+                      {!formData.isFreeEvent && (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-400 mb-1">Entry Fee (per registration)</label>
+                            <div className="relative">
+                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                placeholder="25.00"
+                                className="w-full bg-gray-900 text-white p-3 pl-8 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                value={formData.entryFee || ''}
+                                onChange={e => setFormData({...formData, entryFee: parseFloat(e.target.value) || 0})}
+                              />
+                            </div>
+                            <p className="text-xs text-gray-500 mt-2">
+                              Players can pay via credit card (Stripe) or cash/direct deposit. You'll receive ${formData.entryFee?.toFixed(2) || '0.00'} per registration.
+                            </p>
+                        </div>
+                      )}
+                  </div>
+
+                  {/* Draft Mode Notice */}
+                  <div className="flex items-center gap-2 p-3 bg-blue-900/30 rounded-lg border border-blue-700/50">
+                      <span className="text-blue-400">ℹ️</span>
+                      <p className="text-sm text-blue-300">
+                        Tournament will be created as <strong>Draft</strong>. Publish when ready to make it visible to players.
+                      </p>
                   </div>
 
                    <div className="flex justify-between items-center pt-4">

@@ -713,42 +713,279 @@ export const subscribeToLeagueMatches = (
 
 /**
  * Submit match result
+ * @param isOrganizer - If true, auto-finalize the match (skip confirmation) and update stats
  */
 export const submitLeagueMatchResult = async (
   leagueId: string,
   matchId: string,
   scores: GameScore[],
   winnerMemberId: string,
-  submittedByUserId: string
+  submittedByUserId: string,
+  isOrganizer: boolean = false
 ): Promise<void> => {
-  await updateDoc(doc(db, 'leagues', leagueId, 'matches', matchId), {
-    scores,
-    winnerMemberId,
-    status: 'pending_confirmation',
-    submittedByUserId,
-    playedAt: Date.now(),
-  });
+  const now = Date.now();
+
+  // If organizer submits, auto-finalize the match
+  if (isOrganizer) {
+    // First get the match to find both member IDs
+    const matchDoc = await getDoc(doc(db, 'leagues', leagueId, 'matches', matchId));
+    const matchData = matchDoc.data() as LeagueMatch | undefined;
+
+    await updateDoc(doc(db, 'leagues', leagueId, 'matches', matchId), {
+      scores,
+      winnerMemberId,
+      status: 'completed',
+      submittedByUserId,
+      confirmedByUserId: submittedByUserId,
+      playedAt: now,
+      completedAt: now,
+    });
+
+    // Increment matches played
+    await updateDoc(doc(db, 'leagues', leagueId), {
+      matchesPlayed: increment(1),
+      updatedAt: now,
+    });
+
+    // Update member stats for both players
+    if (matchData) {
+      const memberAId = matchData.memberAId;
+      const memberBId = matchData.memberBId;
+      const loserMemberId = winnerMemberId === memberAId ? memberBId : memberAId;
+
+      // Calculate games won/lost and points from scores
+      let gamesWonA = 0, gamesWonB = 0, pointsForA = 0, pointsForB = 0;
+      scores.forEach(game => {
+        pointsForA += game.scoreA;
+        pointsForB += game.scoreB;
+        if (game.scoreA > game.scoreB) gamesWonA++;
+        else if (game.scoreB > game.scoreA) gamesWonB++;
+      });
+
+      const isAWinner = winnerMemberId === memberAId;
+
+      // Helper to update member stats (ensures stats object exists)
+      const updateMemberStatsAfterMatch = async (
+        memberId: string,
+        isWinner: boolean,
+        gamesWon: number,
+        gamesLost: number,
+        pointsFor: number,
+        pointsAgainst: number
+      ) => {
+        const memberRef = doc(db, 'leagues', leagueId, 'members', memberId);
+        const memberDoc = await getDoc(memberRef);
+        const memberData = memberDoc.data();
+
+        // Get current stats or initialize empty
+        const currentStats = memberData?.stats || {
+          played: 0, wins: 0, losses: 0, draws: 0, forfeits: 0, points: 0,
+          gamesWon: 0, gamesLost: 0, pointsFor: 0, pointsAgainst: 0,
+          currentStreak: 0, bestWinStreak: 0, recentForm: [],
+        };
+
+        // Calculate new stats
+        const newPlayed = (currentStats.played || 0) + 1;
+        const newWins = (currentStats.wins || 0) + (isWinner ? 1 : 0);
+        const newLosses = (currentStats.losses || 0) + (isWinner ? 0 : 1);
+        const newGamesWon = (currentStats.gamesWon || 0) + gamesWon;
+        const newGamesLost = (currentStats.gamesLost || 0) + gamesLost;
+        const newPointsFor = (currentStats.pointsFor || 0) + pointsFor;
+        const newPointsAgainst = (currentStats.pointsAgainst || 0) + pointsAgainst;
+        const newPoints = (currentStats.points || 0) + (isWinner ? 3 : 0);
+
+        // Update streak
+        let newStreak = currentStats.currentStreak || 0;
+        if (isWinner) {
+          newStreak = newStreak >= 0 ? newStreak + 1 : 1;
+        } else {
+          newStreak = newStreak <= 0 ? newStreak - 1 : -1;
+        }
+        const newBestStreak = Math.max(currentStats.bestWinStreak || 0, newStreak > 0 ? newStreak : 0);
+
+        // Update recent form (last 5)
+        const newForm = [...(currentStats.recentForm || []), isWinner ? 'W' : 'L'].slice(-5);
+
+        await updateDoc(memberRef, {
+          stats: {
+            played: newPlayed,
+            wins: newWins,
+            losses: newLosses,
+            draws: currentStats.draws || 0,
+            forfeits: currentStats.forfeits || 0,
+            points: newPoints,
+            gamesWon: newGamesWon,
+            gamesLost: newGamesLost,
+            pointsFor: newPointsFor,
+            pointsAgainst: newPointsAgainst,
+            currentStreak: newStreak,
+            bestWinStreak: newBestStreak,
+            recentForm: newForm,
+          },
+          lastActiveAt: now,
+        });
+      };
+
+      // Update winner stats
+      await updateMemberStatsAfterMatch(
+        winnerMemberId,
+        true,
+        isAWinner ? gamesWonA : gamesWonB,
+        isAWinner ? gamesWonB : gamesWonA,
+        isAWinner ? pointsForA : pointsForB,
+        isAWinner ? pointsForB : pointsForA
+      );
+
+      // Update loser stats
+      await updateMemberStatsAfterMatch(
+        loserMemberId,
+        false,
+        isAWinner ? gamesWonB : gamesWonA,
+        isAWinner ? gamesWonA : gamesWonB,
+        isAWinner ? pointsForB : pointsForA,
+        isAWinner ? pointsForA : pointsForB
+      );
+    }
+  } else {
+    // Normal flow: require confirmation from opponent
+    await updateDoc(doc(db, 'leagues', leagueId, 'matches', matchId), {
+      scores,
+      winnerMemberId,
+      status: 'pending_confirmation',
+      submittedByUserId,
+      playedAt: now,
+    });
+  }
 };
 
 /**
  * Confirm match result
+ * Also updates member stats for both players
  */
 export const confirmLeagueMatchResult = async (
   leagueId: string,
   matchId: string,
   confirmedByUserId: string
 ): Promise<void> => {
+  const now = Date.now();
+
+  // Get match data to find both members and scores
+  const matchDoc = await getDoc(doc(db, 'leagues', leagueId, 'matches', matchId));
+  const matchData = matchDoc.data() as LeagueMatch | undefined;
+
   await updateDoc(doc(db, 'leagues', leagueId, 'matches', matchId), {
     status: 'completed',
     confirmedByUserId,
-    completedAt: Date.now(),
+    completedAt: now,
   });
-  
+
   // Increment matches played
   await updateDoc(doc(db, 'leagues', leagueId), {
     matchesPlayed: increment(1),
-    updatedAt: Date.now(),
+    updatedAt: now,
   });
+
+  // Update member stats for both players
+  if (matchData && matchData.winnerMemberId && matchData.scores) {
+    const memberAId = matchData.memberAId;
+    const memberBId = matchData.memberBId;
+    const winnerMemberId = matchData.winnerMemberId;
+    const loserMemberId = winnerMemberId === memberAId ? memberBId : memberAId;
+    const scores = matchData.scores;
+
+    // Calculate games won/lost and points from scores
+    let gamesWonA = 0, gamesWonB = 0, pointsForA = 0, pointsForB = 0;
+    scores.forEach(game => {
+      pointsForA += game.scoreA;
+      pointsForB += game.scoreB;
+      if (game.scoreA > game.scoreB) gamesWonA++;
+      else if (game.scoreB > game.scoreA) gamesWonB++;
+    });
+
+    const isAWinner = winnerMemberId === memberAId;
+
+    // Helper to update member stats (ensures stats object exists)
+    const updateMemberStatsAfterMatch = async (
+      memberId: string,
+      isWinner: boolean,
+      gamesWon: number,
+      gamesLost: number,
+      pointsFor: number,
+      pointsAgainst: number
+    ) => {
+      const memberRef = doc(db, 'leagues', leagueId, 'members', memberId);
+      const memberDoc2 = await getDoc(memberRef);
+      const memberData = memberDoc2.data();
+
+      // Get current stats or initialize empty
+      const currentStats = memberData?.stats || {
+        played: 0, wins: 0, losses: 0, draws: 0, forfeits: 0, points: 0,
+        gamesWon: 0, gamesLost: 0, pointsFor: 0, pointsAgainst: 0,
+        currentStreak: 0, bestWinStreak: 0, recentForm: [],
+      };
+
+      // Calculate new stats
+      const newPlayed = (currentStats.played || 0) + 1;
+      const newWins = (currentStats.wins || 0) + (isWinner ? 1 : 0);
+      const newLosses = (currentStats.losses || 0) + (isWinner ? 0 : 1);
+      const newGamesWon = (currentStats.gamesWon || 0) + gamesWon;
+      const newGamesLost = (currentStats.gamesLost || 0) + gamesLost;
+      const newPointsFor = (currentStats.pointsFor || 0) + pointsFor;
+      const newPointsAgainst = (currentStats.pointsAgainst || 0) + pointsAgainst;
+      const newPoints = (currentStats.points || 0) + (isWinner ? 3 : 0);
+
+      // Update streak
+      let newStreak = currentStats.currentStreak || 0;
+      if (isWinner) {
+        newStreak = newStreak >= 0 ? newStreak + 1 : 1;
+      } else {
+        newStreak = newStreak <= 0 ? newStreak - 1 : -1;
+      }
+      const newBestStreak = Math.max(currentStats.bestWinStreak || 0, newStreak > 0 ? newStreak : 0);
+
+      // Update recent form (last 5)
+      const newForm = [...(currentStats.recentForm || []), isWinner ? 'W' : 'L'].slice(-5);
+
+      await updateDoc(memberRef, {
+        stats: {
+          played: newPlayed,
+          wins: newWins,
+          losses: newLosses,
+          draws: currentStats.draws || 0,
+          forfeits: currentStats.forfeits || 0,
+          points: newPoints,
+          gamesWon: newGamesWon,
+          gamesLost: newGamesLost,
+          pointsFor: newPointsFor,
+          pointsAgainst: newPointsAgainst,
+          currentStreak: newStreak,
+          bestWinStreak: newBestStreak,
+          recentForm: newForm,
+        },
+        lastActiveAt: now,
+      });
+    };
+
+    // Update winner stats
+    await updateMemberStatsAfterMatch(
+      winnerMemberId,
+      true,
+      isAWinner ? gamesWonA : gamesWonB,
+      isAWinner ? gamesWonB : gamesWonA,
+      isAWinner ? pointsForA : pointsForB,
+      isAWinner ? pointsForB : pointsForA
+    );
+
+    // Update loser stats
+    await updateMemberStatsAfterMatch(
+      loserMemberId,
+      false,
+      isAWinner ? gamesWonB : gamesWonA,
+      isAWinner ? gamesWonA : gamesWonB,
+      isAWinner ? pointsForB : pointsForA,
+      isAWinner ? pointsForA : pointsForB
+    );
+  }
 };
 
 /**

@@ -452,11 +452,25 @@ export const generatePoolPlaySchedule = async (
   const matchIds: string[] = [];
   const now = Date.now();
 
+  // Helper to remove undefined values (Firestore rejects undefined)
+  const removeUndefined = (obj: Record<string, unknown>): Record<string, unknown> => {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value === undefined) continue;
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        result[key] = removeUndefined(value as Record<string, unknown>);
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  };
+
   for (const matchData of poolResult.poolMatches) {
     const matchRef = doc(collection(db, 'tournaments', tournamentId, 'matches'));
     matchIds.push(matchRef.id);
 
-    const match: Match = {
+    const match = {
       ...matchData,
       id: matchRef.id,
       tournamentId,
@@ -464,9 +478,11 @@ export const generatePoolPlaySchedule = async (
       stage: 'pool',
       createdAt: now,
       updatedAt: now,
-    } as Match;
+    };
 
-    batch.set(matchRef, match);
+    // Clean undefined values before saving to Firestore
+    const cleanedMatch = removeUndefined(match as Record<string, unknown>);
+    batch.set(matchRef, cleanedMatch);
   }
 
   await batch.commit();
@@ -760,27 +776,42 @@ export const clearTestData = async (
 
   // Get matches from subcollection
   const matchesRef = collection(db, 'tournaments', tournamentId, 'matches');
-  const snapshot = await import('@firebase/firestore').then(({ getDocs, query, where }) =>
-    getDocs(query(matchesRef, where('divisionId', '==', divisionId), where('testData', '==', true)))
+  const { getDocs, query, where } = await import('@firebase/firestore');
+
+  // Query for matches with testData: true (legacy) OR isTestData: true (new format)
+  const divisionMatchesSnapshot = await getDocs(
+    query(matchesRef, where('divisionId', '==', divisionId))
   );
 
-  if (snapshot.empty) return 0;
+  if (divisionMatchesSnapshot.empty) return 0;
+
+  // Filter for test data matches (check both field names)
+  const testMatches = divisionMatchesSnapshot.docs.filter(docSnap => {
+    const data = docSnap.data();
+    return data.testData === true || data.isTestData === true;
+  });
+
+  if (testMatches.length === 0) return 0;
 
   const batch = writeBatch(db);
   const now = Date.now();
 
-  snapshot.docs.forEach(docSnap => {
+  testMatches.forEach(docSnap => {
     batch.update(docSnap.ref, {
       scores: [],
+      scoreTeamAGames: [],
+      scoreTeamBGames: [],
       status: 'scheduled',
       winnerId: null,
+      winnerTeamId: null,
       testData: null,
+      isTestData: null,
       updatedAt: now,
     });
   });
 
   await batch.commit();
-  return snapshot.size;
+  return testMatches.length;
 };
 
 /**
@@ -875,6 +906,70 @@ export const quickScoreMatch = async (
 /**
  * Simulate completing all matches in a pool with random scores
  */
+// ============================================
+// DUPR Submission Status (V06.15)
+// ============================================
+
+export interface DuprStatusUpdate {
+  duprSubmitted: boolean;
+  duprMatchId?: string | null;
+  duprSubmittedAt?: number | null;
+  duprSubmittedBy?: string | null;
+  duprError?: string | null;
+}
+
+/**
+ * Update a match with DUPR submission status.
+ * Works for both tournament matches and league matches.
+ *
+ * @param matchId - Match document ID
+ * @param collectionPath - Firestore collection path (e.g., 'leagues/123/matches' or 'tournaments/456/matches')
+ * @param status - DUPR submission status to update
+ */
+export const updateMatchDuprStatus = async (
+  matchId: string,
+  collectionPath: string,
+  status: DuprStatusUpdate
+): Promise<void> => {
+  const matchRef = doc(db, collectionPath, matchId);
+  const now = Date.now();
+
+  await updateDoc(matchRef, {
+    ...status,
+    updatedAt: now,
+  });
+};
+
+/**
+ * Update a league match with DUPR submission status.
+ *
+ * @param leagueId - League ID
+ * @param matchId - Match document ID
+ * @param status - DUPR submission status to update
+ */
+export const updateLeagueMatchDuprStatus = async (
+  leagueId: string,
+  matchId: string,
+  status: DuprStatusUpdate
+): Promise<void> => {
+  await updateMatchDuprStatus(matchId, `leagues/${leagueId}/matches`, status);
+};
+
+/**
+ * Update a tournament match with DUPR submission status.
+ *
+ * @param tournamentId - Tournament ID
+ * @param matchId - Match document ID
+ * @param status - DUPR submission status to update
+ */
+export const updateTournamentMatchDuprStatus = async (
+  tournamentId: string,
+  matchId: string,
+  status: DuprStatusUpdate
+): Promise<void> => {
+  await updateMatchDuprStatus(matchId, `tournaments/${tournamentId}/matches`, status);
+};
+
 export const simulatePoolCompletion = async (
   tournamentId: string,
   divisionId: string,

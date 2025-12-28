@@ -230,12 +230,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       { isWaitingOnYou?: boolean; canCurrentUserConfirm?: boolean }
     > = {};
 
-    divisionMatches.forEach(m => {
+    (divisionMatches || []).forEach(m => {
       // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
-      const teamA = teams.find(t => t.id === teamAId);
-      const teamB = teams.find(t => t.id === teamBId);
+      const teamA = (teams || []).find(t => t.id === teamAId);
+      const teamB = (teams || []).find(t => t.id === teamBId);
 
       // Get player IDs from team - players can be objects or strings
       const getPlayerIds = (team: typeof teamA): string[] => {
@@ -305,7 +305,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const uiMatches = useMemo(
     () =>
-      divisionMatches.map(m => {
+      (divisionMatches || []).map(m => {
         // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
         const teamAId = m.teamAId || m.sideA?.id || '';
         const teamBId = m.teamBId || m.sideB?.id || '';
@@ -357,10 +357,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   // Find current user's active match (assigned to court but not completed)
   const currentUserMatch = useMemo(() => {
-    if (!currentUser?.uid) return null;
+    if (!currentUser?.uid || !divisionMatches) return null;
 
     // Find matches where current user is a participant and match is active
-    return divisionMatches.find(m => {
+    return (divisionMatches || []).find(m => {
       const isParticipant =
         m.sideA?.playerIds?.includes(currentUser.uid) ||
         m.sideB?.playerIds?.includes(currentUser.uid);
@@ -374,7 +374,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       const isOnCourt = !!m.court;
 
       return isParticipant && isActive && isOnCourt;
-    }) || divisionMatches.find(m => {
+    }) || (divisionMatches || []).find(m => {
       // Fallback: any active match for the user (not yet on court)
       const isParticipant =
         m.sideA?.playerIds?.includes(currentUser.uid) ||
@@ -390,7 +390,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const queue = useMemo(
     () =>
-      rawQueue.map(m => {
+      (rawQueue || []).map(m => {
         // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
         const teamAId = m.teamAId || m.sideA?.id || '';
         const teamBId = m.teamBId || m.sideB?.id || '';
@@ -437,9 +437,9 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   // Auto-assign courts when auto-allocation mode is enabled
   useEffect(() => {
-    if (autoAllocateCourts && rawQueue.length > 0) {
+    if (autoAllocateCourts && (rawQueue || []).length > 0) {
       // Check if there are free courts and waiting matches
-      const freeCourts = courtViewModels.filter(c => c.status === 'AVAILABLE');
+      const freeCourts = (courtViewModels || []).filter(c => c.status === 'AVAILABLE');
       if (freeCourts.length > 0) {
         autoAssignFreeCourts({ silent: true });
       }
@@ -449,7 +449,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   /* -------- My matches (for current user in this division) -------- */
 
   const myDivisionMatches = useMemo(() => {
-    if (!currentUser || !activeDivision) return [] as Match[];
+    if (!currentUser || !activeDivision || !divisionMatches) return [] as Match[];
 
     // Find teams where current user is a player
     const isUserInTeam = (team: typeof teams[0]): boolean => {
@@ -463,14 +463,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       return false;
     };
 
-    const myTeamIds = teams
+    const myTeamIds = (teams || [])
       .filter(t => t.divisionId === activeDivision.id && isUserInTeam(t))
       .map(t => t.id)
       .filter((id): id is string => !!id);
 
     if (myTeamIds.length === 0) return [] as Match[];
 
-    return divisionMatches.filter(m => {
+    return (divisionMatches || []).filter(m => {
       // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
@@ -479,12 +479,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   }, [currentUser, activeDivision, teams, divisionMatches]);
 
   const myCurrentMatch = useMemo(
-    () => myDivisionMatches.find(m => m.status === 'in_progress'),
+    () => (myDivisionMatches || []).find(m => m.status === 'in_progress'),
     [myDivisionMatches]
   );
 
   const myNextMatch = useMemo(() => {
-    const waiting = myDivisionMatches.filter(m => {
+    const waiting = (myDivisionMatches || []).filter(m => {
       const status = m.status ?? 'scheduled';
       return status === 'scheduled' || status === 'not_started';
     });
@@ -497,7 +497,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       myCurrentMatch ||
       myNextMatch ||
       // Look for matches with scores but not yet completed (awaiting confirmation)
-      myDivisionMatches.find(m =>
+      (myDivisionMatches || []).find(m =>
         m.status === 'scheduled' && (m.scoreTeamAGames?.length || m.scores?.length)
       ),
     [myCurrentMatch, myNextMatch, myDivisionMatches]
@@ -511,7 +511,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
     const teamAId = match.teamAId || match.sideA?.id || '';
     const teamBId = match.teamBId || match.sideB?.id || '';
-    const teamA = teams.find(t => t.id === teamAId);
+    const teamA = (teams || []).find(t => t.id === teamAId);
 
     // Check if user is on team A using playerIds or players array
     const isOnTeamA = teamA?.playerIds?.includes(currentUser.uid) ||
@@ -559,7 +559,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     const stats: Record<string, StandingsEntry> = {};
     const h2h: Record<string, Record<string, number>> = {};
 
-    divisionTeams.forEach(t => {
+    (divisionTeams || []).forEach(t => {
       const teamId = t.id || '';
       if (!teamId) return;
       stats[teamId] = {
@@ -576,7 +576,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       h2h[teamId] = {};
     });
 
-    divisionMatches.forEach(m => {
+    (divisionMatches || []).forEach(m => {
       // Support both OLD (teamAId/teamBId, scoreTeamAGames) and NEW (sideA/sideB, scores[]) structures
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
@@ -682,14 +682,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const handleAddCourt = async () => {
     if (!newCourtName) return;
-    await addCourt(tournament.id, newCourtName, courts.length + 1);
+    await addCourt(tournament.id, newCourtName, (courts || []).length + 1);
     setNewCourtName('');
   };
   
   /* -------- Player Start Match (from sidebar) -------- */
 
   const handlePlayerStartMatch = async (matchId: string) => {
-    const match = matches.find(m => m.id === matchId);
+    const match = (matches || []).find(m => m.id === matchId);
     if (!match) return;
 
     if (!currentUser) {
@@ -700,8 +700,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     // Support both old (teamAId) and new (sideA) formats
     const teamAId = match.teamAId || match.sideA?.id;
     const teamBId = match.teamBId || match.sideB?.id;
-    const teamA = teams.find(t => t.id === teamAId);
-    const teamB = teams.find(t => t.id === teamBId);
+    const teamA = (teams || []).find(t => t.id === teamAId);
+    const teamB = (teams || []).find(t => t.id === teamBId);
 
     // Check if user is on either team (supporting both playerIds and players arrays)
     const isUserOnTeam = (team: typeof teamA): boolean => {
@@ -754,7 +754,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     await onUpdateTournament({ ...tournament, testMode: false });
   };
 
-  const isTestModeActive = tournament.testMode === true && isAppAdmin;
+  const isTestModeActive = tournament.testMode === true && (isAppAdmin || isTournamentOwner);
 
   return (
     <TestModeWrapper
@@ -882,7 +882,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 </svg>
               </div>
               <div>
-                <div className="text-2xl font-bold text-white">{courts.filter(c => c.active).length}</div>
+                <div className="text-2xl font-bold text-white">{(courts || []).filter(c => c.active).length}</div>
                 <div className="text-xs text-gray-400 uppercase tracking-wide">Courts</div>
               </div>
             </div>
@@ -918,7 +918,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   {tournamentPhaseLabel}
                 </div>
                 <div className="text-xs text-gray-400">
-                  {matches.filter(m => m.status === 'in_progress').length} active
+                  {(matches || []).filter(m => m.status === 'in_progress').length} active
                 </div>
               </div>
             </div>
@@ -937,8 +937,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             onChange={(e) => setActiveDivisionId(e.target.value)}
             className="w-full bg-gray-800/80 text-white border border-white/10 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            {divisions.map((div) => {
-              const teamCount = teams.filter(t => t.divisionId === div.id).length;
+            {(divisions || []).map((div) => {
+              const teamCount = (teams || []).filter(t => t.divisionId === div.id).length;
               return (
                 <option key={div.id} value={div.id}>
                   {div.name} ({teamCount} teams)
@@ -950,10 +950,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
         {/* Desktop Tabs */}
         <div className="hidden md:flex overflow-x-auto gap-2 pb-2">
-          {divisions.map(div => {
-            const teamCount = teams.filter(t => t.divisionId === div.id).length;
+          {(divisions || []).map(div => {
+            const teamCount = (teams || []).filter(t => t.divisionId === div.id).length;
             const isActive = activeDivisionId === div.id;
-            const hasAttention = attentionMatches.some(m => m.divisionId === div.id);
+            const hasAttention = (attentionMatches || []).some(m => m.divisionId === div.id);
 
             return (
               <button
@@ -1006,7 +1006,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     {activeDivision.name}
                   </h2>
                   <p className="text-sm text-gray-400 mt-0.5">
-                    {activeDivision.type === 'doubles' ? 'Doubles' : 'Singles'} • {divisionTeams.length} team{divisionTeams.length !== 1 ? 's' : ''} • {divisionMatches.length} match{divisionMatches.length !== 1 ? 'es' : ''}
+                    {activeDivision.type === 'doubles' ? 'Doubles' : 'Singles'} • {(divisionTeams || []).length} team{(divisionTeams || []).length !== 1 ? 's' : ''} • {(divisionMatches || []).length} match{(divisionMatches || []).length !== 1 ? 'es' : ''}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1125,8 +1125,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             <TestModePanel
               tournamentId={tournament.id}
               divisionId={activeDivision.id}
-              matches={divisionMatches}
-              teams={divisionTeams}
+              matches={divisionMatches || []}
+              teams={divisionTeams || []}
               onClearTestData={handleClearTestData}
               onQuickScore={handleQuickScore}
               onSimulatePool={handleSimulatePool}
@@ -1143,16 +1143,22 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 onAddTeam={handleAddTeam}
                 onDeleteTeam={handleRemoveTeam}
                 onGenerateSchedule={handleGenerateSchedule}
-                scheduleGenerated={divisionMatches.length > 0}
+                scheduleGenerated={(divisionMatches || []).length > 0}
                 isVerified={isVerified}
-                playHasStarted={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                playHasStarted={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
+                tournamentId={tournament.id}
+                entryFee={tournament.entryFee || 0}
+                currentUserId={currentUser?.uid}
+                canManage={canManageTournament}
+                testMode={isTestModeActive}
+                divisionName={activeDivision?.name}
               />
 
               {/* Pool Draw Preview - shown for pool_play_medals before schedule generation */}
               {(activeDivision?.format?.competitionFormat === 'pool_play_medals' ||
                 activeDivision?.format?.stageMode === 'two_stage') &&
-                divisionTeams.length >= 4 &&
-                divisionMatches.length === 0 && (
+                (divisionTeams || []).length >= 4 &&
+                (divisionMatches || []).length === 0 && (
                 <div className="bg-gray-900 p-4 rounded border border-gray-700">
                   <PoolDrawPreview
                     teams={divisionTeams}
@@ -1172,7 +1178,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 <div className="flex flex-wrap gap-4">
                   {activeDivision.format.stageMode === 'two_stage' && (() => {
                     // Check if all pool matches are completed
-                    const poolMatches = divisionMatches.filter(m =>
+                    const poolMatches = (divisionMatches || []).filter(m =>
                       m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
                     );
                     const completedPoolMatches = poolMatches.filter(m => m.status === 'completed');
@@ -1183,7 +1189,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <div className="flex flex-col gap-1">
                         <button
                           onClick={() => handleGenerateFinals(standings)}
-                          disabled={divisionMatches.length === 0 || !allPoolsComplete}
+                          disabled={(divisionMatches || []).length === 0 || !allPoolsComplete}
                           className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded font-bold disabled:bg-gray-700 disabled:cursor-not-allowed"
                           title={!allPoolsComplete ? `Complete all pool matches first (${remainingPoolMatches} remaining)` : undefined}
                         >
@@ -1209,7 +1215,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               </div>
 
               {/* Matches that need organiser attention */}
-              {attentionMatches.length > 0 && (
+              {(attentionMatches || []).length > 0 && (
                 <div className="bg-gray-900 p-4 rounded border border-red-700/70">
                   <h4 className="text-white font-bold mb-3">
                     Matches Needing Attention
@@ -1223,7 +1229,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   </p>
 
                   <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                    {attentionMatches.map(m => {
+                    {(attentionMatches || []).map(m => {
                       const teamAId = m.teamAId || m.sideA?.id || '';
                       const teamBId = m.teamBId || m.sideB?.id || '';
                       const teamAName = teamAId ? getTeamDisplayName(teamAId) : 'TBD';
@@ -1295,7 +1301,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               </div>
 
               <div className="grid gap-2">
-                {courts.map(c => (
+                {(courts || []).map(c => (
                   <div
                     key={c.id}
                     className="flex justify-between items-center bg-gray-900 p-3 rounded"
@@ -1337,11 +1343,11 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 <h4 className="text-white font-bold mb-2">
                   Pending Match Queue
                 </h4>
-                {queue.length === 0 ? (
+                {(queue || []).length === 0 ? (
                   <p className="text-gray-500">No pending matches.</p>
                 ) : (
                   <div className="bg-gray-900 rounded overflow-hidden">
-                    {queue.map((m, i) => (
+                    {(queue || []).map((m, i) => (
                       <div
                         key={m.id}
                         className="flex justify-between p-2 border-b border-gray-800 hover:bg-gray-800"
@@ -1369,8 +1375,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               <PoolEditor
                 tournamentId={tournament.id}
                 divisionId={activeDivision.id}
-                teams={divisionTeams}
-                matches={divisionMatches}
+                teams={divisionTeams || []}
+                matches={divisionMatches || []}
                 initialAssignments={activeDivision.poolAssignments}
                 poolSize={activeDivision.format.teamsPerPool || 4}
                 getTeamDisplayName={getTeamDisplayName}
@@ -1523,7 +1529,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                           alert(`Failed to update pool size: ${errorMessage}`);
                         }
                       }}
-                      disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                      disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
                     >
                       <option value={3}>3 teams per pool</option>
                       <option value={4}>4 teams per pool</option>
@@ -1531,8 +1537,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <option value={6}>6 teams per pool</option>
                     </select>
                     <p className="text-[10px] text-gray-500 mt-1">
-                      {divisionTeams.length} teams ÷ {activeDivision.format?.teamsPerPool || 4} = {Math.ceil(divisionTeams.length / (activeDivision.format?.teamsPerPool || 4))} pools
-                      {divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed') && (
+                      {(divisionTeams || []).length} teams ÷ {activeDivision.format?.teamsPerPool || 4} = {Math.ceil((divisionTeams || []).length / (activeDivision.format?.teamsPerPool || 4))} pools
+                      {(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed') && (
                         <span className="text-yellow-500 ml-2">(Locked - matches have started)</span>
                       )}
                     </p>
@@ -1563,7 +1569,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                           }
                         }}
                         className="w-4 h-4 rounded border border-gray-500 bg-gray-700 checked:bg-green-500 checked:border-green-500 focus:ring-green-500 focus:ring-offset-gray-800"
-                        disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                        disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
                       />
                       <span className="text-sm text-gray-300 font-medium">Enable Plate Bracket (for pool losers)</span>
                     </label>
@@ -1591,7 +1597,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                               }
                             }}
                             className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
-                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
                           />
                         </div>
 
@@ -1614,7 +1620,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                               }
                             }}
                             className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
-                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
                           >
                             <option value={1}>Bottom 1 per pool → Plate</option>
                             <option value={2}>Bottom 2 per pool → Plate</option>
@@ -1640,7 +1646,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                               }
                             }}
                             className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
-                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
                           >
                             <option value="single_elim">Single Elimination</option>
                             <option value="round_robin">Round Robin</option>
@@ -1666,7 +1672,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                               }
                             }}
                             className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500"
-                            disabled={divisionMatches.some(m => m.status === 'in_progress' || m.status === 'completed')}
+                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
                           />
                           <span className="text-xs text-gray-400">Include 3rd place match in Plate bracket</span>
                         </label>
@@ -1835,7 +1841,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                     </svg>
                     <span className="text-white font-semibold">
-                      {courtMatchModels.filter(m => m.status === 'IN_PROGRESS').length}
+                      {(courtMatchModels || []).filter(m => m.status === 'IN_PROGRESS').length}
                     </span>
                     <span className="text-gray-400">in progress</span>
                   </div>
@@ -1844,7 +1850,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <span className="text-white font-semibold">{queue.length}</span>
+                    <span className="text-white font-semibold">{(queue || []).length}</span>
                     <span className="text-gray-400">waiting</span>
                   </div>
 
@@ -1853,7 +1859,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <span className="text-white font-semibold">
-                      {courts.filter(c => c.active && !courtMatchModels.some(m => m.courtName === c.name && m.status === 'IN_PROGRESS')).length}
+                      {(courts || []).filter(c => c.active && !(courtMatchModels || []).some(m => m.courtName === c.name && m.status === 'IN_PROGRESS')).length}
                     </span>
                     <span className="text-gray-400">courts free</span>
                   </div>
@@ -1927,7 +1933,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 matches={courtMatchModels}
                 filteredQueue={queueMatchModels}
                 onAssignMatchToCourt={async (matchId, courtId) => {
-                  const court = courts.find(c => c.id === courtId);
+                  const court = (courts || []).find(c => c.id === courtId);
                   if (!court) return;
                   await assignMatchToCourt(matchId, court.name);
                 }}
@@ -2038,7 +2044,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   Players / Teams
                 </h2>
 
-                {divisionTeams.length === 0 ? (
+                {(divisionTeams || []).length === 0 ? (
                   <p className="text-gray-400 text-sm italic">
                     No teams registered yet for this division.
                   </p>
@@ -2059,7 +2065,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       </tr>
                     </thead>
                     <tbody>
-                      {divisionTeams.map(team => {
+                      {(divisionTeams || []).map(team => {
                         const teamId = team.id || '';
                         const players = teamId ? getTeamPlayers(teamId) : [];
                         return (
@@ -2102,7 +2108,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
             {activeTab === 'standings' && (
               <Standings
-                standings={standings.map(s => {
+                standings={(standings || []).map(s => {
                   const teamPlayers = s.odTeamId ? getTeamPlayers(s.odTeamId) : [];
                   return {
                     ...s,
@@ -2125,8 +2131,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             {/* Pool Stage - grouped pool standings for pool_play_medals format */}
             {activeTab === 'pool-stage' && (
               <PoolGroupStandings
-                matches={divisionMatches}
-                teams={divisionTeams}
+                matches={divisionMatches || []}
+                teams={divisionTeams || []}
                 poolSettings={activeDivision?.format?.poolPlayMedalsSettings}
                 getTeamPlayers={getTeamPlayers}
               />
@@ -2135,7 +2141,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             {/* Final Stage - bracket view for pool_play_medals format */}
             {activeTab === 'final-stage' && (() => {
               // Filter matches into main bracket and plate bracket
-              const bracketMatches = uiMatches.filter(m =>
+              const bracketMatches = (uiMatches || []).filter(m =>
                 (m.stage === 'medal' ||
                 m.stage === 'bracket' ||
                 m.stage === 'semifinal' ||
@@ -2144,7 +2150,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 !m.poolGroup) &&
                 (m as any).bracketType !== 'plate'
               );
-              const plateMatches = uiMatches.filter(m =>
+              const plateMatches = (uiMatches || []).filter(m =>
                 (m as any).bracketType === 'plate' ||
                 (m as any).stage === 'plate'
               );
@@ -2318,12 +2324,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               endTime: '17:00',
               label: 'Tournament Day',
             }]}
-            divisions={divisions.map(d => ({
+            divisions={(divisions || []).map(d => ({
               id: d.id,
               name: d.name,
-              matchCount: matches.filter(m => m.divisionId === d.id).length,
+              matchCount: (matches || []).filter(m => m.divisionId === d.id).length,
             }))}
-            courts={courts.map(c => ({
+            courts={(courts || []).map(c => ({
               courtId: c.id || '',
               courtName: c.name,
               dayId: 'day-1',
@@ -2331,7 +2337,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               startTime: '09:00',
               endTime: '17:00',
             }))}
-            registrations={teams
+            registrations={(teams || [])
               .filter(t => t.id && t.divisionId) // Only include teams with valid IDs
               .map(t => ({
                 divisionId: t.divisionId!,
@@ -2339,7 +2345,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 teamName: t.teamName || `Team ${t.id!.slice(0, 4)}`,
                 playerIds: t.playerIds || [],
               }))}
-            matchups={matches
+            matchups={(matches || [])
               .filter(m => m.divisionId && (m.teamAId || m.sideA?.id) && (m.teamBId || m.sideB?.id)) // Only include valid matches
               .map((m, idx) => ({
                 divisionId: m.divisionId!,

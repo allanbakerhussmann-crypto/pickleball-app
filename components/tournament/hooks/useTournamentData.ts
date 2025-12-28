@@ -184,16 +184,16 @@ export const useTournamentData = ({
     const team = teams.find(t => t.id === teamId);
     if (!team) return 'TBD';
     if (team.teamName) return team.teamName;
-    const names = team.players
+    const names = (team.players || [])
       .map(pid => playersCache[pid]?.displayName || 'Unknown')
       .join(' / ');
-    return names;
+    return names || 'TBD';
   }, [teams, playersCache]);
 
   const getTeamPlayers = useCallback((teamId: string): UserProfile[] => {
     const team = teams.find(t => t.id === teamId);
     if (!team) return [];
-    return team.players
+    return (team.players || [])
       .map(pid => playersCache[pid])
       .filter(Boolean) as UserProfile[];
   }, [teams, playersCache]);

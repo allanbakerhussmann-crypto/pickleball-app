@@ -88,7 +88,7 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
 
   // Sort and filter members
   const sortedMembers = useMemo(() => {
-    let filtered = members.filter(m => m.status === 'active');
+    let filtered = (members || []).filter(m => m.status === 'active');
     
     // Search filter
     if (searchTerm) {

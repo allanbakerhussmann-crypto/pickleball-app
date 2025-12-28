@@ -59,9 +59,10 @@ export const finalizeRegistration = async (
   payload: Partial<TournamentRegistration> & {
     tournamentId: string;
     playerId: string;
+    paymentMethod?: 'stripe' | 'manual';
   }
 ): Promise<{ teamsCreated: number }> => {
-  const { tournamentId, playerId, selectedEventIds = [], partnerDetails = {} } = payload;
+  const { tournamentId, playerId, selectedEventIds = [], partnerDetails = {}, paymentMethod } = payload;
 
   const tournament = await getTournament(tournamentId);
   if (!tournament) throw new Error('Tournament not found');
@@ -74,16 +75,21 @@ export const finalizeRegistration = async (
 
   let teamsCreated = 0;
 
+  // Determine payment status based on method and fee
+  const isFreeEvent = tournament.isFreeEvent || tournament.entryFee === 0;
+  const paymentStatus = isFreeEvent ? 'paid' : (paymentMethod === 'stripe' ? 'processing' : 'pending');
+
   for (const divisionId of selectedEventIds) {
     const partnerInfo = partnerDetails[divisionId];
-    
+
     if (partnerInfo?.partnerId) {
       const result = await ensureTeamExists(
         tournamentId,
         divisionId,
         [playerId, partnerInfo.partnerId],
         null,
-        playerId
+        playerId,
+        { paymentStatus, paymentMethod: isFreeEvent ? undefined : paymentMethod }
       );
       if (!result.existed) teamsCreated++;
     } else {
@@ -93,7 +99,7 @@ export const finalizeRegistration = async (
         [playerId],
         null,
         playerId,
-        { status: 'pending_partner' }
+        { status: 'pending_partner', paymentStatus, paymentMethod: isFreeEvent ? undefined : paymentMethod }
       );
       if (!result.existed) teamsCreated++;
     }

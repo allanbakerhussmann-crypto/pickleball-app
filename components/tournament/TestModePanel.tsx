@@ -47,13 +47,13 @@ export const TestModePanel: React.FC<TestModePanelProps> = ({
   const [isDeletingCorrupted, setIsDeletingCorrupted] = useState(false);
 
   // Get scheduled matches that can be scored
-  const scheduledMatches = matches.filter(m =>
+  const scheduledMatches = (matches || []).filter(m =>
     m.status === 'scheduled' || m.status === 'in_progress'
   );
 
   // Get unique pool names
   const poolNames = Array.from(new Set(
-    matches
+    (matches || [])
       .filter(m => m.poolGroup)
       .map(m => m.poolGroup!)
   )).sort();
@@ -88,7 +88,7 @@ export const TestModePanel: React.FC<TestModePanelProps> = ({
 
   const getTeamName = (teamId: string | undefined): string => {
     if (!teamId) return 'TBD';
-    const team = teams.find(t => t.id === teamId);
+    const team = (teams || []).find(t => t.id === teamId);
     return team?.teamName || `Team ${teamId.slice(0, 4)}`;
   };
 

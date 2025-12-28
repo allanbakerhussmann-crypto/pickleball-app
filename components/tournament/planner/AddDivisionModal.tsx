@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import type { PlannerDivision } from '../../../types';
+import type { PlannerDivision, TournamentPaymentMode, GenderCategory } from '../../../types';
 import type { CompetitionFormat } from '../../../types/formats';
 import { generateDivisionId, calculateMatchesForFormat } from '../../../services/plannerCalculations';
 
@@ -19,6 +19,8 @@ interface AddDivisionModalProps {
   onAdd: (division: PlannerDivision) => void;
   /** Called to close modal */
   onClose: () => void;
+  /** Payment mode - controls visibility of fee field */
+  paymentMode?: TournamentPaymentMode;
 }
 
 const FORMATS: { value: CompetitionFormat; label: string; icon: string; description: string }[] = [
@@ -48,6 +50,7 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
   division,
   onAdd,
   onClose,
+  paymentMode,
 }) => {
   const isEditing = !!division;
 
@@ -55,6 +58,9 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
   const [name, setName] = useState(division?.name || '');
   const [playType, setPlayType] = useState<'singles' | 'doubles'>(
     division?.playType || 'doubles'
+  );
+  const [gender, setGender] = useState<GenderCategory>(
+    division?.gender || 'open'
   );
   const [format, setFormat] = useState<CompetitionFormat>(
     division?.format || 'pool_play_medals'
@@ -78,6 +84,11 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
   );
   const [maxAge, setMaxAge] = useState<string>(
     division?.maxAge?.toString() || ''
+  );
+
+  // Entry fee (in dollars for display, stored in cents)
+  const [entryFee, setEntryFee] = useState<string>(
+    division?.entryFee ? (division.entryFee / 100).toFixed(2) : ''
   );
 
   // Calculate match count
@@ -128,6 +139,7 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
       id: division?.id || generateDivisionId(),
       name: name.trim(),
       playType,
+      gender,
       format,
       expectedPlayers,
       minRating: minRating ? parseFloat(minRating) : undefined,
@@ -137,6 +149,7 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
       poolSize: format === 'pool_play_medals' ? poolSize : undefined,
       poolCount: format === 'pool_play_medals' ? poolCount : undefined,
       matchCount,
+      entryFee: entryFee ? Math.round(parseFloat(entryFee) * 100) : undefined,
     };
 
     onAdd(newDivision);
@@ -201,6 +214,55 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
               >
                 <span className="text-2xl mb-1 block">👥</span>
                 <span className="text-white font-medium">Doubles</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Gender */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">
+              GENDER
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              <button
+                onClick={() => setGender('men')}
+                className={`p-3 rounded-lg text-center transition-all ${
+                  gender === 'men'
+                    ? 'bg-blue-600 ring-2 ring-blue-400'
+                    : 'bg-gray-700 hover:bg-gray-600'
+                }`}
+              >
+                <span className="text-white text-sm font-medium">Men</span>
+              </button>
+              <button
+                onClick={() => setGender('women')}
+                className={`p-3 rounded-lg text-center transition-all ${
+                  gender === 'women'
+                    ? 'bg-blue-600 ring-2 ring-blue-400'
+                    : 'bg-gray-700 hover:bg-gray-600'
+                }`}
+              >
+                <span className="text-white text-sm font-medium">Women</span>
+              </button>
+              <button
+                onClick={() => setGender('mixed')}
+                className={`p-3 rounded-lg text-center transition-all ${
+                  gender === 'mixed'
+                    ? 'bg-blue-600 ring-2 ring-blue-400'
+                    : 'bg-gray-700 hover:bg-gray-600'
+                }`}
+              >
+                <span className="text-white text-sm font-medium">Mixed</span>
+              </button>
+              <button
+                onClick={() => setGender('open')}
+                className={`p-3 rounded-lg text-center transition-all ${
+                  gender === 'open'
+                    ? 'bg-blue-600 ring-2 ring-blue-400'
+                    : 'bg-gray-700 hover:bg-gray-600'
+                }`}
+              >
+                <span className="text-white text-sm font-medium">Open</span>
               </button>
             </div>
           </div>
@@ -296,6 +358,30 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
               )}
             </div>
           </div>
+
+          {/* Entry Fee (only shown if tournament is paid) */}
+          {paymentMode === 'paid' && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">
+                DIVISION ENTRY FEE
+              </label>
+              <div className="relative w-48">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={entryFee}
+                  onChange={(e) => setEntryFee(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full px-3 py-2 pl-8 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Fee for this division. Leave empty or $0 for free entry to this division.
+              </p>
+            </div>
+          )}
 
           {/* Format */}
           <div>

@@ -1,10 +1,11 @@
 /**
  * Meetup Matches Service
- * 
+ *
  * Firebase functions for managing meetup matches and scoring.
- * 
+ * Includes match generation for all formats and standings persistence.
+ *
  * FILE LOCATION: services/firebase/meetupMatches.ts
- * VERSION: V05.17
+ * VERSION: V06.16
  */
 
 import {
@@ -15,9 +16,11 @@ import {
   deleteDoc,
   getDoc,
   getDocs,
+  setDoc,
   query,
   orderBy,
   onSnapshot,
+  increment,
 } from '@firebase/firestore';
 import { db } from './index';
 
@@ -356,6 +359,17 @@ export async function submitMeetupMatchScore(
       completedAt: now,
       updatedAt: now,
     });
+
+    // Update standings
+    const completedMatch: MeetupMatch = {
+      ...match,
+      games: input.games,
+      winnerId: result.winnerId,
+      winnerName: result.winnerName,
+      isDraw: result.isDraw,
+      status: 'completed',
+    };
+    await updateMeetupStandings(meetupId, completedMatch);
   } else {
     // Player submission - requires opponent confirmation
     await updateDoc(matchRef, {
@@ -412,6 +426,13 @@ export async function confirmMeetupMatchScore(
     completedAt: now,
     updatedAt: now,
   });
+
+  // Update standings with the confirmed match
+  const completedMatch: MeetupMatch = {
+    ...match,
+    status: 'completed',
+  };
+  await updateMeetupStandings(meetupId, completedMatch);
 }
 
 /**
@@ -495,6 +516,17 @@ export async function resolveMeetupMatchDispute(
     completedAt: now,
     updatedAt: now,
   });
+
+  // Update standings with the resolved match
+  const completedMatch: MeetupMatch = {
+    ...match,
+    games,
+    winnerId: result.winnerId,
+    winnerName: result.winnerName,
+    isDraw: result.isDraw,
+    status: 'completed',
+  };
+  await updateMeetupStandings(meetupId, completedMatch);
 }
 
 /**
@@ -692,7 +724,7 @@ export function getDuprMatchStats(matches: MeetupMatch[]): {
   const completed = matches.filter(m => m.status === 'completed');
   const eligible = completed.filter(m => isDuprEligible(m).eligible);
   const submitted = matches.filter(m => m.duprSubmitted);
-  
+
   return {
     total: matches.length,
     completed: completed.length,
@@ -700,4 +732,497 @@ export function getDuprMatchStats(matches: MeetupMatch[]): {
     submitted: submitted.length,
     pending: eligible.length - submitted.length,
   };
+}
+
+// ============================================
+// STANDINGS TYPES & PERSISTENCE
+// ============================================
+
+export interface MeetupStanding {
+  odUserId: string;
+  name: string;
+  duprId?: string;
+  rank: number;
+  played: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  gamesWon: number;
+  gamesLost: number;
+  gameDiff: number;
+  pointsFor: number;
+  pointsAgainst: number;
+  pointDiff: number;
+  points: number; // Standings points (e.g., 2 per win, 1 per draw)
+  updatedAt: number;
+}
+
+export interface StandingsSettings {
+  pointsPerWin?: number;
+  pointsPerDraw?: number;
+  pointsPerLoss?: number;
+}
+
+/**
+ * Initialize standings for all confirmed attendees
+ */
+export async function initializeMeetupStandings(
+  meetupId: string,
+  attendees: { odUserId: string; odUserName: string; duprId?: string }[]
+): Promise<void> {
+  const standingsRef = collection(db, 'meetups', meetupId, 'standings');
+  const now = Date.now();
+
+  const promises = attendees.map((attendee, index) =>
+    setDoc(doc(standingsRef, attendee.odUserId), {
+      odUserId: attendee.odUserId,
+      name: attendee.odUserName,
+      duprId: attendee.duprId || null,
+      rank: index + 1,
+      played: 0,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      gamesWon: 0,
+      gamesLost: 0,
+      gameDiff: 0,
+      pointsFor: 0,
+      pointsAgainst: 0,
+      pointDiff: 0,
+      points: 0,
+      updatedAt: now,
+    })
+  );
+
+  await Promise.all(promises);
+}
+
+/**
+ * Update standings after a match is completed
+ */
+export async function updateMeetupStandings(
+  meetupId: string,
+  match: MeetupMatch,
+  settings: StandingsSettings = {}
+): Promise<void> {
+  const pointsPerWin = settings.pointsPerWin ?? 2;
+  const pointsPerDraw = settings.pointsPerDraw ?? 1;
+  const pointsPerLoss = settings.pointsPerLoss ?? 0;
+
+  const standingsRef = collection(db, 'meetups', meetupId, 'standings');
+  const now = Date.now();
+
+  // Calculate game stats
+  let p1GamesWon = 0;
+  let p2GamesWon = 0;
+  let p1PointsFor = 0;
+  let p2PointsFor = 0;
+
+  match.games.forEach((game) => {
+    if (game.player1 > game.player2) p1GamesWon++;
+    else if (game.player2 > game.player1) p2GamesWon++;
+    p1PointsFor += game.player1;
+    p2PointsFor += game.player2;
+  });
+
+  // Determine points based on result
+  let p1Points = 0;
+  let p2Points = 0;
+  let p1WinInc = 0;
+  let p2WinInc = 0;
+  let p1LossInc = 0;
+  let p2LossInc = 0;
+  let p1DrawInc = 0;
+  let p2DrawInc = 0;
+
+  if (match.isDraw) {
+    p1Points = pointsPerDraw;
+    p2Points = pointsPerDraw;
+    p1DrawInc = 1;
+    p2DrawInc = 1;
+  } else if (match.winnerId === match.player1Id) {
+    p1Points = pointsPerWin;
+    p2Points = pointsPerLoss;
+    p1WinInc = 1;
+    p2LossInc = 1;
+  } else if (match.winnerId === match.player2Id) {
+    p1Points = pointsPerLoss;
+    p2Points = pointsPerWin;
+    p1LossInc = 1;
+    p2WinInc = 1;
+  }
+
+  // Update player 1 standings
+  const p1Ref = doc(standingsRef, match.player1Id);
+  await updateDoc(p1Ref, {
+    played: increment(1),
+    wins: increment(p1WinInc),
+    losses: increment(p1LossInc),
+    draws: increment(p1DrawInc),
+    gamesWon: increment(p1GamesWon),
+    gamesLost: increment(p2GamesWon),
+    pointsFor: increment(p1PointsFor),
+    pointsAgainst: increment(p2PointsFor),
+    points: increment(p1Points),
+    updatedAt: now,
+  }).catch(async () => {
+    // If doc doesn't exist, create it
+    await setDoc(p1Ref, {
+      odUserId: match.player1Id,
+      name: match.player1Name,
+      duprId: match.player1DuprId || null,
+      rank: 0,
+      played: 1,
+      wins: p1WinInc,
+      losses: p1LossInc,
+      draws: p1DrawInc,
+      gamesWon: p1GamesWon,
+      gamesLost: p2GamesWon,
+      gameDiff: p1GamesWon - p2GamesWon,
+      pointsFor: p1PointsFor,
+      pointsAgainst: p2PointsFor,
+      pointDiff: p1PointsFor - p2PointsFor,
+      points: p1Points,
+      updatedAt: now,
+    });
+  });
+
+  // Update player 2 standings
+  const p2Ref = doc(standingsRef, match.player2Id);
+  await updateDoc(p2Ref, {
+    played: increment(1),
+    wins: increment(p2WinInc),
+    losses: increment(p2LossInc),
+    draws: increment(p2DrawInc),
+    gamesWon: increment(p2GamesWon),
+    gamesLost: increment(p1GamesWon),
+    pointsFor: increment(p2PointsFor),
+    pointsAgainst: increment(p1PointsFor),
+    points: increment(p2Points),
+    updatedAt: now,
+  }).catch(async () => {
+    // If doc doesn't exist, create it
+    await setDoc(p2Ref, {
+      odUserId: match.player2Id,
+      name: match.player2Name,
+      duprId: match.player2DuprId || null,
+      rank: 0,
+      played: 1,
+      wins: p2WinInc,
+      losses: p2LossInc,
+      draws: p2DrawInc,
+      gamesWon: p2GamesWon,
+      gamesLost: p1GamesWon,
+      gameDiff: p2GamesWon - p1GamesWon,
+      pointsFor: p2PointsFor,
+      pointsAgainst: p1PointsFor,
+      pointDiff: p2PointsFor - p1PointsFor,
+      points: p2Points,
+      updatedAt: now,
+    });
+  });
+}
+
+/**
+ * Get standings for a meetup
+ */
+export async function getMeetupStandings(meetupId: string): Promise<MeetupStanding[]> {
+  const standingsRef = collection(db, 'meetups', meetupId, 'standings');
+  const snapshot = await getDocs(standingsRef);
+
+  const standings = snapshot.docs.map((doc) => ({
+    ...doc.data(),
+    gameDiff: (doc.data().gamesWon || 0) - (doc.data().gamesLost || 0),
+    pointDiff: (doc.data().pointsFor || 0) - (doc.data().pointsAgainst || 0),
+  })) as MeetupStanding[];
+
+  // Sort by points, then wins, then game diff, then point diff
+  standings.sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff;
+    return b.pointDiff - a.pointDiff;
+  });
+
+  // Assign ranks
+  standings.forEach((s, index) => {
+    s.rank = index + 1;
+  });
+
+  return standings;
+}
+
+/**
+ * Subscribe to standings for real-time updates
+ */
+export function subscribeToMeetupStandings(
+  meetupId: string,
+  callback: (standings: MeetupStanding[]) => void
+): () => void {
+  const standingsRef = collection(db, 'meetups', meetupId, 'standings');
+
+  return onSnapshot(standingsRef, (snapshot) => {
+    const standings = snapshot.docs.map((doc) => ({
+      ...doc.data(),
+      gameDiff: (doc.data().gamesWon || 0) - (doc.data().gamesLost || 0),
+      pointDiff: (doc.data().pointsFor || 0) - (doc.data().pointsAgainst || 0),
+    })) as MeetupStanding[];
+
+    // Sort by points, then wins, then game diff, then point diff
+    standings.sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff;
+      return b.pointDiff - a.pointDiff;
+    });
+
+    // Assign ranks
+    standings.forEach((s, index) => {
+      s.rank = index + 1;
+    });
+
+    callback(standings);
+  });
+}
+
+/**
+ * Clear all standings for a meetup
+ */
+export async function clearMeetupStandings(meetupId: string): Promise<void> {
+  const standingsRef = collection(db, 'meetups', meetupId, 'standings');
+  const snapshot = await getDocs(standingsRef);
+
+  const promises = snapshot.docs.map((doc) => deleteDoc(doc.ref));
+  await Promise.all(promises);
+}
+
+// ============================================
+// ELIMINATION BRACKET GENERATION
+// ============================================
+
+export interface EliminationAttendee {
+  odUserId: string;
+  odUserName: string;
+  duprId?: string;
+  duprRating?: number;
+}
+
+/**
+ * Calculate bracket size (power of 2)
+ */
+function calculateBracketSize(numParticipants: number): number {
+  if (numParticipants <= 2) return 2;
+  return Math.pow(2, Math.ceil(Math.log2(numParticipants)));
+}
+
+/**
+ * Generate seed positions for bracket placement
+ * Places top seeds to meet as late as possible
+ */
+function generateSeedPositions(bracketSize: number): number[] {
+  if (bracketSize === 2) return [1, 2];
+
+  const halfSize = bracketSize / 2;
+  const topHalf = generateSeedPositions(halfSize);
+  const bottomHalf = topHalf.map(seed => bracketSize + 1 - seed);
+
+  const result: number[] = [];
+  for (let i = 0; i < halfSize; i++) {
+    result.push(topHalf[i], bottomHalf[i]);
+  }
+
+  return result;
+}
+
+/**
+ * Seed attendees by DUPR rating (highest first)
+ */
+function seedByDupr(attendees: EliminationAttendee[]): EliminationAttendee[] {
+  const withRating = attendees.filter(a => a.duprRating != null);
+  const withoutRating = attendees.filter(a => a.duprRating == null);
+
+  withRating.sort((a, b) => (b.duprRating ?? 0) - (a.duprRating ?? 0));
+
+  return [...withRating, ...withoutRating];
+}
+
+/**
+ * Generate single elimination bracket matches
+ */
+export async function generateSingleEliminationMatches(
+  meetupId: string,
+  attendees: EliminationAttendee[]
+): Promise<{ matchIds: string[]; rounds: number; bracketSize: number }> {
+  if (attendees.length < 2) {
+    throw new Error('Need at least 2 players to generate bracket');
+  }
+
+  // Seed by DUPR rating
+  const seededAttendees = seedByDupr([...attendees]);
+
+  // Calculate bracket structure
+  const bracketSize = calculateBracketSize(attendees.length);
+  const numRounds = Math.log2(bracketSize);
+  const seedPositions = generateSeedPositions(bracketSize);
+
+  // Place attendees in bracket positions (null for byes)
+  const placement: (EliminationAttendee | null)[] = new Array(bracketSize).fill(null);
+  seedPositions.forEach((seed, index) => {
+    if (seed <= seededAttendees.length) {
+      placement[index] = seededAttendees[seed - 1];
+    }
+  });
+
+  const matchIds: string[] = [];
+
+  // Track match IDs by round and position for linking
+  const matchIdsByRoundPos: Map<string, string> = new Map();
+
+  // Generate first round matches
+  const firstRoundMatches = bracketSize / 2;
+
+  for (let i = 0; i < firstRoundMatches; i++) {
+    const player1 = placement[i * 2];
+    const player2 = placement[i * 2 + 1];
+
+    // Skip pure bye matches (both null - shouldn't happen)
+    // For single bye, still create match but mark status appropriately
+    const isBye = !player1 || !player2;
+
+    const matchId = await createMeetupMatch({
+      meetupId,
+      matchType: 'SINGLES',
+      player1Id: player1?.odUserId || 'BYE',
+      player1Name: player1?.odUserName || 'BYE',
+      player1DuprId: player1?.duprId,
+      player2Id: player2?.odUserId || 'BYE',
+      player2Name: player2?.odUserName || 'BYE',
+      player2DuprId: player2?.duprId,
+      round: 1,
+    });
+
+    matchIds.push(matchId);
+    matchIdsByRoundPos.set(`1-${i}`, matchId);
+
+    // Auto-complete bye matches
+    if (isBye) {
+      const winnerId = player1 ? player1.odUserId : player2?.odUserId;
+      const winnerName = player1 ? player1.odUserName : player2?.odUserName;
+
+      if (winnerId && winnerName) {
+        const matchRef = doc(db, 'meetups', meetupId, 'matches', matchId);
+        await updateDoc(matchRef, {
+          winnerId,
+          winnerName,
+          status: 'completed',
+          completedAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    }
+  }
+
+  // Generate subsequent rounds (placeholders)
+  let prevRoundMatches = firstRoundMatches;
+  for (let round = 2; round <= numRounds; round++) {
+    const thisRoundMatches = prevRoundMatches / 2;
+
+    for (let i = 0; i < thisRoundMatches; i++) {
+      const matchId = await createMeetupMatch({
+        meetupId,
+        matchType: 'SINGLES',
+        player1Id: 'TBD',
+        player1Name: 'TBD',
+        player2Id: 'TBD',
+        player2Name: 'TBD',
+        round,
+      });
+
+      matchIds.push(matchId);
+      matchIdsByRoundPos.set(`${round}-${i}`, matchId);
+    }
+
+    prevRoundMatches = thisRoundMatches;
+  }
+
+  return { matchIds, rounds: numRounds, bracketSize };
+}
+
+/**
+ * Get round name for display
+ */
+export function getEliminationRoundName(roundNumber: number, totalRounds: number): string {
+  const roundsFromEnd = totalRounds - roundNumber;
+
+  switch (roundsFromEnd) {
+    case 0:
+      return 'Finals';
+    case 1:
+      return 'Semi-Finals';
+    case 2:
+      return 'Quarter-Finals';
+    default:
+      return `Round ${roundNumber}`;
+  }
+}
+
+/**
+ * Advance winner to next round in elimination bracket
+ */
+export async function advanceEliminationWinner(
+  meetupId: string,
+  completedMatch: MeetupMatch,
+  allMatches: MeetupMatch[]
+): Promise<void> {
+  if (!completedMatch.winnerId || !completedMatch.round) return;
+
+  // Find the next round match
+  const currentRound = completedMatch.round;
+  const nextRound = currentRound + 1;
+
+  // Find matches in next round
+  const nextRoundMatches = allMatches
+    .filter(m => m.round === nextRound)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+  if (nextRoundMatches.length === 0) return;
+
+  // Find which position this match feeds into
+  // Matches in current round are paired: 0,1 -> 0; 2,3 -> 1; etc.
+  const currentRoundMatches = allMatches
+    .filter(m => m.round === currentRound)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+  const matchIndex = currentRoundMatches.findIndex(m => m.id === completedMatch.id);
+  if (matchIndex === -1) return;
+
+  const nextMatchIndex = Math.floor(matchIndex / 2);
+  const slot = matchIndex % 2 === 0 ? 'player1' : 'player2';
+
+  const nextMatch = nextRoundMatches[nextMatchIndex];
+  if (!nextMatch) return;
+
+  // Get winner info
+  const winnerIsPlayer1 = completedMatch.winnerId === completedMatch.player1Id;
+  const winnerId = completedMatch.winnerId;
+  const winnerName = winnerIsPlayer1 ? completedMatch.player1Name : completedMatch.player2Name;
+  const winnerDuprId = winnerIsPlayer1 ? completedMatch.player1DuprId : completedMatch.player2DuprId;
+
+  // Update next match
+  const matchRef = doc(db, 'meetups', meetupId, 'matches', nextMatch.id);
+  const updateData: any = {
+    updatedAt: Date.now(),
+  };
+
+  if (slot === 'player1') {
+    updateData.player1Id = winnerId;
+    updateData.player1Name = winnerName;
+    updateData.player1DuprId = winnerDuprId || null;
+  } else {
+    updateData.player2Id = winnerId;
+    updateData.player2Name = winnerName;
+    updateData.player2DuprId = winnerDuprId || null;
+  }
+
+  await updateDoc(matchRef, updateData);
 }

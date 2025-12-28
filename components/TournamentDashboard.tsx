@@ -26,7 +26,7 @@ export const TournamentDashboard: React.FC<TournamentDashboardProps> = ({
   // Extract unique clubs from available tournaments
   const availableClubs = useMemo(() => {
       const clubsMap = new Map<string, string>(); // id -> name
-      tournaments.forEach(t => {
+      (tournaments || []).forEach(t => {
           if (t.clubId && t.clubName) {
               clubsMap.set(t.clubId, t.clubName);
           }
@@ -35,7 +35,7 @@ export const TournamentDashboard: React.FC<TournamentDashboardProps> = ({
   }, [tournaments]);
 
   const displayedTournaments = useMemo(() => {
-      let filtered = tournaments;
+      let filtered = tournaments || [];
 
       if (activeTab === 'managing') {
           filtered = filtered.filter(t => t.createdByUserId === currentUser?.uid);
@@ -114,9 +114,14 @@ export const TournamentDashboard: React.FC<TournamentDashboardProps> = ({
                         {/* Status Badge */}
                         <div className="absolute top-3 right-3 z-10">
                              <span className={`px-2.5 py-1 rounded-md uppercase text-[10px] font-bold tracking-wider shadow-sm backdrop-blur-md ${
-                                t.status === 'completed' ? 'bg-gray-900/80 text-gray-300' :
-                                t.status === 'in_progress' ? 'bg-green-500 text-white' :
-                                'bg-blue-600 text-white'
+                                t.status === 'draft' ? 'bg-blue-600 text-white' :
+                                t.status === 'published' ? 'bg-purple-600 text-white' :
+                                t.status === 'registration_open' ? 'bg-green-500 text-white' :
+                                t.status === 'registration_closed' ? 'bg-yellow-500 text-black' :
+                                t.status === 'in_progress' ? 'bg-orange-500 text-white' :
+                                t.status === 'completed' ? 'bg-gray-600 text-gray-300' :
+                                t.status === 'cancelled' ? 'bg-red-600 text-white' :
+                                'bg-gray-500 text-white'
                             }`}>
                                 {t.status.replace('_', ' ')}
                             </span>
@@ -166,7 +171,16 @@ export const TournamentDashboard: React.FC<TournamentDashboardProps> = ({
                             </div>
                             
                             {/* Colorful bottom accent strip */}
-                            <div className={`absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r ${t.status === 'in_progress' ? 'from-green-500 to-emerald-600' : t.status === 'completed' ? 'from-gray-600 to-gray-700' : 'from-blue-500 to-indigo-600'}`}></div>
+                            <div className={`absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r ${
+                                t.status === 'draft' ? 'from-blue-500 to-blue-600' :
+                                t.status === 'published' ? 'from-purple-500 to-purple-600' :
+                                t.status === 'registration_open' ? 'from-green-500 to-emerald-600' :
+                                t.status === 'registration_closed' ? 'from-yellow-500 to-yellow-600' :
+                                t.status === 'in_progress' ? 'from-orange-500 to-orange-600' :
+                                t.status === 'completed' ? 'from-gray-600 to-gray-700' :
+                                t.status === 'cancelled' ? 'from-red-500 to-red-600' :
+                                'from-gray-500 to-gray-600'
+                            }`}></div>
                         </div>
                     </div>
                 ))

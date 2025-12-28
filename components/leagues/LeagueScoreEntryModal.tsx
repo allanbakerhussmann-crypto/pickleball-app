@@ -14,6 +14,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   submitLeagueMatchResult,
   confirmMatchScore,
+  notifyScoreConfirmation,
   DEFAULT_VERIFICATION_SETTINGS,
 } from '../../services/firebase';
 import type { LeagueMatch, GameScore, ScoreVerificationSettings } from '../../types';
@@ -28,11 +29,13 @@ import {
 
 interface LeagueScoreEntryModalProps {
   leagueId: string;
+  leagueName?: string;
   match: LeagueMatch;
   bestOf: 1 | 3 | 5;
   pointsPerGame: 11 | 15 | 21;
   winBy: 1 | 2;
   verificationSettings?: ScoreVerificationSettings;
+  isOrganizer?: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -48,11 +51,13 @@ interface GameInput {
 
 export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   leagueId,
+  leagueName,
   match,
   bestOf,
   pointsPerGame,
   winBy,
   verificationSettings = DEFAULT_VERIFICATION_SETTINGS,
+  isOrganizer = false,
   onClose,
   onSuccess,
 }) => {
@@ -98,12 +103,15 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     !isDisputed &&
     verificationSettings.allowDisputes;
 
+  // Check if user can submit scores (participants or organizers)
+  const canSubmitScore = isParticipant || isOrganizer;
+
   // Initialize games from existing scores or empty
   useEffect(() => {
     if (match.scores && match.scores.length > 0) {
       setGames(match.scores.map(s => ({
-        scoreA: s.scoreA.toString(),
-        scoreB: s.scoreB.toString(),
+        scoreA: (s.scoreA ?? 0).toString(),
+        scoreB: (s.scoreB ?? 0).toString(),
       })));
     } else {
       // Initialize with one empty game
@@ -119,7 +127,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     if (isNaN(scoreA) || isNaN(scoreB)) {
       return { valid: false, error: 'Please enter valid scores' };
     }
-    
+
     if (scoreA < 0 || scoreB < 0) {
       return { valid: false, error: 'Scores cannot be negative' };
     }
@@ -128,24 +136,49 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     const minScore = Math.min(scoreA, scoreB);
     const target = pointsPerGame;
 
-    // Check if someone won
+    // Check for tie
+    if (scoreA === scoreB) {
+      return { valid: false, error: 'Games cannot end in a tie' };
+    }
+
+    // Check if someone won (reached target)
     if (maxScore < target) {
       return { valid: false, error: `Game must be won by reaching ${target} points` };
     }
 
-    // Check win by requirement
+    // Validate win-by requirement
     if (winBy === 2) {
-      if (maxScore === target && minScore > target - 2) {
+      // Must win by 2 points
+      if (maxScore - minScore < 2) {
         return { valid: false, error: `Must win by ${winBy} points` };
       }
-      if (maxScore > target && maxScore - minScore < 2) {
-        return { valid: false, error: `Must win by ${winBy} points` };
-      }
-    }
 
-    // Check for tie
-    if (scoreA === scoreB) {
-      return { valid: false, error: 'Games cannot end in a tie' };
+      // If winner scored exactly the target, loser must have scored at most target-2
+      // e.g., 11-9 is valid, 11-10 is not (would need to go to 12-10)
+      if (maxScore === target && minScore > target - 2) {
+        return { valid: false, error: `Must win by ${winBy} points (score would be ${target}-${target - 2} or less)` };
+      }
+
+      // If winner scored more than target, it must be a deuce situation
+      // e.g., 12-10, 13-11, 14-12 are valid (deuce scenarios)
+      // but 15-9 is invalid (game would have ended at 11-9)
+      if (maxScore > target) {
+        // In deuce, winner is exactly 2 points ahead and loser must have at least target-1
+        // Valid: 12-10, 13-11, 14-12... (loser >= target-1, diff = 2)
+        // Invalid: 15-9 (loser < target-1)
+        if (minScore < target - 1) {
+          return { valid: false, error: `Invalid score - game would have ended at ${target}-${minScore}` };
+        }
+        // In extended play, winner must be exactly 2 ahead
+        if (maxScore - minScore !== 2) {
+          return { valid: false, error: `In deuce, winner must be exactly 2 points ahead` };
+        }
+      }
+    } else {
+      // Win by 1: winner just needs to reach target
+      if (maxScore > target) {
+        return { valid: false, error: `Invalid score - game ends at ${target} points (win by 1)` };
+      }
     }
 
     return { valid: true };
@@ -248,16 +281,44 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
           scoreB: parseInt(g.scoreB),
         }));
 
-      const { winnerId } = calculateWinner();
+      const { winnerId, gamesA, gamesB } = calculateWinner();
 
-      // submitLeagueMatchResult(leagueId, matchId, scores, winnerMemberId, submittedByUserId)
+      // Submit match result - if organizer, auto-finalize
       await submitLeagueMatchResult(
-        leagueId, 
-        match.id, 
-        scores, 
-        winnerId!, 
-        currentUser.uid
+        leagueId,
+        match.id,
+        scores,
+        winnerId!,
+        currentUser.uid,
+        isOrganizer  // Auto-finalize if organizer submits
       );
+
+      // Send notification to opponent to confirm the score (skip if organizer auto-finalized)
+      if (!isOrganizer) {
+        const submitterName = isPlayerA ? match.memberAName : match.memberBName;
+        const opponentUserId = isPlayerA ? match.userBId : match.userAId;
+        const scoreDisplay = `${gamesA}-${gamesB}`;
+
+        // Collect all opponent user IDs (for doubles, include partner)
+        const opponentUserIds = [opponentUserId];
+        if (isPlayerA && match.partnerBId) {
+          opponentUserIds.push(match.partnerBId);
+        } else if (isPlayerB && match.partnerAId) {
+          opponentUserIds.push(match.partnerAId);
+        }
+
+        // Send notification (fire and forget - don't block on this)
+        notifyScoreConfirmation(
+          opponentUserIds,
+          leagueId,
+          match.id,
+          submitterName,
+          scoreDisplay,
+          leagueName
+        ).catch(err => {
+          console.warn('Failed to send score confirmation notification:', err);
+        });
+      }
 
       onSuccess();
     } catch (e: any) {
@@ -365,7 +426,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
           )}
 
           {/* Score Entry */}
-          {!showDispute && (
+          {!showDisputeModal && (
             <>
               <div className="text-sm text-gray-400 text-center mb-2">
                 Best of {bestOf} • First to {winThreshold} games • Games to {pointsPerGame}
@@ -499,7 +560,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             {!hasScore && (
               <button
                 onClick={handleSubmit}
-                disabled={loading || !isParticipant}
+                disabled={loading || !canSubmitScore}
                 className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
               >
                 {loading ? 'Submitting...' : 'Submit Score'}

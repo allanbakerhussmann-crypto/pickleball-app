@@ -24,16 +24,27 @@ import type { Tournament, Division } from '../../types';
 
 export const saveTournament = async (tournament: Tournament, divisions?: Division[]) => {
   const now = Date.now();
-  const tournamentRef = tournament.id 
-    ? doc(db, 'tournaments', tournament.id) 
+  const tournamentRef = tournament.id
+    ? doc(db, 'tournaments', tournament.id)
     : doc(collection(db, 'tournaments'));
-  
-  const tournamentData = {
+
+  // Remove undefined values (Firestore rejects undefined)
+  const cleanData = (obj: Record<string, any>): Record<string, any> => {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  };
+
+  const tournamentData = cleanData({
     ...tournament,
     id: tournamentRef.id,
     updatedAt: now,
     createdAt: tournament.createdAt || now
-  };
+  });
 
   await setDoc(tournamentRef, tournamentData);
 
@@ -41,7 +52,7 @@ export const saveTournament = async (tournament: Tournament, divisions?: Divisio
     const batch = writeBatch(db);
     divisions.forEach(div => {
       const divRef = doc(db, 'tournaments', tournamentRef.id, 'divisions', div.id);
-      batch.set(divRef, { ...div, updatedAt: now });
+      batch.set(divRef, cleanData({ ...div, updatedAt: now }));
     });
     await batch.commit();
   }

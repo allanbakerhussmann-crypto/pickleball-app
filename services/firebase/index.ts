@@ -94,6 +94,9 @@ export {
   subscribeToUserPartnerInvites,
   respondToPartnerInvite,
   getPendingInvitesForDivision,
+  // Payment management (V06.08)
+  markTeamAsPaid,
+  updateTeamPaymentStatus,
 } from './teams';
 
 // Matches
@@ -502,6 +505,7 @@ export {
   markAllNotificationsAsRead,
   notifyCourtAssignment,
   notifyMatchResult,
+  notifyScoreConfirmation,
 } from './notifications';
 
 // ============================================

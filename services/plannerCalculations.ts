@@ -402,7 +402,8 @@ export function calculateTournamentCapacity(
   const courtMinutesAvailable = courtHoursAvailable * 60;
 
   // Schedule divisions across days
-  // For now, we'll schedule sequentially across all days
+  // If division has user-specified times (from drag & drop), use those
+  // Otherwise, schedule sequentially
   let currentDayIndex = 0;
   let currentTimeInDay = parseTime(tournamentDays[0].startTime);
 
@@ -421,6 +422,29 @@ export function calculateTournamentCapacity(
     const medalTimeMinutes = Math.ceil(stats.medalMatches / courts) * medalSlotDuration;
     const divisionMinutes = poolTimeMinutes + medalTimeMinutes;
 
+    // Check if user has manually positioned this division (drag & drop)
+    if (division.estimatedStartTime && division.assignedDayId) {
+      // Use user-specified times
+      const userDayIndex = tournamentDays.findIndex(d => d.id === division.assignedDayId);
+      const dayIndex = userDayIndex >= 0 ? userDayIndex : currentDayIndex;
+      const divStartMinutes = parseTime(division.estimatedStartTime);
+      const divEndMinutes = divStartMinutes + divisionMinutes;
+
+      // Update day usage
+      dayBreakdown[dayIndex].courtHoursUsed += divisionMinutes / 60 * courts;
+
+      return {
+        divisionId: division.id,
+        name: division.name,
+        matches: stats.matchCount,
+        minutes: divisionMinutes,
+        startTime: division.estimatedStartTime,
+        endTime: formatTime(divEndMinutes),
+        dayId: tournamentDays[dayIndex].id,
+      };
+    }
+
+    // No user override - schedule sequentially
     const currentDay = tournamentDays[currentDayIndex];
     const dayEndMinutes = parseTime(currentDay.endTime);
 

@@ -30,11 +30,11 @@ export const BracketViewer: React.FC<BracketViewerProps> = ({
     const rounds: { [key: number]: MatchDisplay[] } = {};
     let maxRound = 0;
 
-    matches.forEach(m => {
+    (matches || []).forEach(m => {
         // Logic to determine round if not explicit:
         // For now, we assume round numbers are assigned correctly or we default to 1
         // In a real bracket generation, round numbers are critical.
-        const round = (m as any).roundNumber || 1; 
+        const round = (m as any).roundNumber || 1;
         if (!rounds[round]) rounds[round] = [];
         rounds[round].push(m);
         if (round > maxRound) maxRound = round;
@@ -62,10 +62,10 @@ export const BracketViewer: React.FC<BracketViewerProps> = ({
                               `Round ${roundNum}`}
                          </h3>
                          <div className="flex flex-col justify-around flex-grow gap-6">
-                             {rounds[roundNum].map((match, idx) => {
+                             {(rounds[roundNum] || []).map((match, idx) => {
                                  const isPlayerInThisMatch = !!currentUser && (
-                                     match.team1.players.some(p => p.name === currentUser.displayName) ||
-                                     match.team2.players.some(p => p.name === currentUser.displayName)
+                                     (match.team1?.players || []).some(p => p.name === currentUser.displayName) ||
+                                     (match.team2?.players || []).some(p => p.name === currentUser.displayName)
                                  );
                                  return (
                                      <div key={match.id} className="relative">
@@ -73,8 +73,8 @@ export const BracketViewer: React.FC<BracketViewerProps> = ({
                                          {roundNum < maxRound && (
                                              <div className="absolute right-[-32px] top-1/2 w-8 h-[1px] bg-gray-700"></div>
                                          )}
-                                         <MatchCard 
-                                            match={match} 
+                                         <MatchCard
+                                            match={match}
                                             matchNumber={idx + 1} // Just visual index
                                             onUpdateScore={onUpdateScore}
                                             isVerified={isVerified}

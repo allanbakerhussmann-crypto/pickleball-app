@@ -32,11 +32,11 @@ export const Schedule: React.FC<ScheduleProps> = ({
   // Active Matches on Courts
   const matchesOnCourt = useMemo(() => {
     const active: Array<{ court: Court; match: MatchDisplay | null }> = [];
-    courts
+    (courts || [])
       .filter(c => c.active)
       .forEach(c => {
         // Any non-completed match assigned to this court (waiting or playing)
-        const matchOnCourt = matches.find(
+        const matchOnCourt = (matches || []).find(
           m =>
             m.status !== 'completed' &&
             (m as any).court === c.name
@@ -54,8 +54,8 @@ export const Schedule: React.FC<ScheduleProps> = ({
 
   // Court statistics for wait time estimation
   const courtStats = useMemo(() => {
-    const activeCourts = courts.filter(c => c.active);
-    const inProgress = matchesOnCourt.filter(({ match }) => match?.status === 'in_progress').length;
+    const activeCourts = (courts || []).filter(c => c.active);
+    const inProgress = (matchesOnCourt || []).filter(({ match }) => match?.status === 'in_progress').length;
     const freeCourts = activeCourts.length - inProgress;
     return { total: activeCourts.length, inProgress, free: freeCourts };
   }, [courts, matchesOnCourt]);
@@ -65,14 +65,14 @@ export const Schedule: React.FC<ScheduleProps> = ({
     if (!currentUser) return null;
 
     // Check if user is in an active match on court
-    const activeOnCourt = matches.find(m => {
+    const activeOnCourt = (matches || []).find(m => {
       const status = m.status ?? 'scheduled';
       return (
         status === 'in_progress' &&
         (m as any).court &&
         (
-          m.team1.players.some(p => p.name === currentUser.displayName) ||
-          m.team2.players.some(p => p.name === currentUser.displayName)
+          (m.team1?.players || []).some(p => p.name === currentUser.displayName) ||
+          (m.team2?.players || []).some(p => p.name === currentUser.displayName)
         )
       );
     });
@@ -88,7 +88,7 @@ export const Schedule: React.FC<ScheduleProps> = ({
     }
 
     // 1) Match assigned to a court for this player, but NOT started yet
-    const assignedWaiting = matches.find(m => {
+    const assignedWaiting = (matches || []).find(m => {
       const status = m.status ?? 'scheduled';
       const isWaiting =
         status === 'scheduled' || status === 'not_started';
@@ -97,8 +97,8 @@ export const Schedule: React.FC<ScheduleProps> = ({
         isWaiting &&
         (m as any).court &&
         (
-          m.team1.players.some(p => p.name === currentUser.displayName) ||
-          m.team2.players.some(p => p.name === currentUser.displayName)
+          (m.team1?.players || []).some(p => p.name === currentUser.displayName) ||
+          (m.team2?.players || []).some(p => p.name === currentUser.displayName)
         )
       );
     });
@@ -117,8 +117,8 @@ export const Schedule: React.FC<ScheduleProps> = ({
     // 2) Otherwise, are they in the queue (no court yet)?
     const queueIndex = queue.findIndex(
       m =>
-        m.team1.players.some(p => p.name === currentUser.displayName) ||
-        m.team2.players.some(p => p.name === currentUser.displayName)
+        (m.team1?.players || []).some(p => p.name === currentUser.displayName) ||
+        (m.team2?.players || []).some(p => p.name === currentUser.displayName)
     );
 
     if (queueIndex >= 0) {
@@ -145,8 +145,8 @@ export const Schedule: React.FC<ScheduleProps> = ({
   const isUserMatch = (match: MatchDisplay) => {
     if (!currentUser) return false;
     return (
-      match.team1.players.some(p => p.name === currentUser.displayName) ||
-      match.team2.players.some(p => p.name === currentUser.displayName)
+      (match.team1?.players || []).some(p => p.name === currentUser.displayName) ||
+      (match.team2?.players || []).some(p => p.name === currentUser.displayName)
     );
   };
 
@@ -242,23 +242,23 @@ export const Schedule: React.FC<ScheduleProps> = ({
               <div className="flex items-center justify-between">
                 <div className="text-center flex-1">
                   <div className="text-white font-bold text-lg">
-                    {myNextMatch.match.team1.players.some(p => p.name === currentUser?.displayName)
+                    {(myNextMatch.match.team1?.players || []).some(p => p.name === currentUser?.displayName)
                       ? 'You'
-                      : myNextMatch.match.team1.name}
+                      : myNextMatch.match.team1?.name || 'TBD'}
                   </div>
-                  {myNextMatch.match.team1.players.some(p => p.name === currentUser?.displayName) && (
-                    <div className="text-xs text-gray-400">{myNextMatch.match.team1.name}</div>
+                  {(myNextMatch.match.team1?.players || []).some(p => p.name === currentUser?.displayName) && (
+                    <div className="text-xs text-gray-400">{myNextMatch.match.team1?.name || 'TBD'}</div>
                   )}
                 </div>
                 <div className="px-6 text-gray-500 text-sm font-medium">vs</div>
                 <div className="text-center flex-1">
                   <div className="text-white font-bold text-lg">
-                    {myNextMatch.match.team2.players.some(p => p.name === currentUser?.displayName)
+                    {(myNextMatch.match.team2?.players || []).some(p => p.name === currentUser?.displayName)
                       ? 'You'
-                      : myNextMatch.match.team2.name}
+                      : myNextMatch.match.team2?.name || 'TBD'}
                   </div>
-                  {myNextMatch.match.team2.players.some(p => p.name === currentUser?.displayName) && (
-                    <div className="text-xs text-gray-400">{myNextMatch.match.team2.name}</div>
+                  {(myNextMatch.match.team2?.players || []).some(p => p.name === currentUser?.displayName) && (
+                    <div className="text-xs text-gray-400">{myNextMatch.match.team2?.name || 'TBD'}</div>
                   )}
                 </div>
               </div>
@@ -307,7 +307,7 @@ export const Schedule: React.FC<ScheduleProps> = ({
               <h3 className="text-xs font-bold text-gray-500 uppercase">
                 On Court Now
               </h3>
-              {matchesOnCourt.map(({ court, match }) => (
+              {(matchesOnCourt || []).map(({ court, match }) => (
                 <div
                   key={court.id}
                   className={`p-3 rounded-lg border shadow-sm transition-all relative overflow-hidden ${
@@ -358,12 +358,12 @@ export const Schedule: React.FC<ScheduleProps> = ({
               <h3 className="text-xs font-bold text-gray-500 uppercase">
                 Up Next
               </h3>
-              {queue.length === 0 ? (
+              {(queue || []).length === 0 ? (
                 <div className="text-gray-500 text-sm italic bg-gray-900/50 p-4 rounded border border-dashed border-gray-700 text-center">
                   Queue is empty
                 </div>
               ) : (
-                queue.slice(0, 5).map((m, idx) => {
+                (queue || []).slice(0, 5).map((m, idx) => {
                   const isMyMatch = isUserMatch(m);
                   return (
                     <div
@@ -416,19 +416,19 @@ export const Schedule: React.FC<ScheduleProps> = ({
       {/* Match List */}
       <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
         <h2 className="text-2xl font-bold mb-4 text-green-400">Match List</h2>
-        {matches.length === 0 ? (
+        {(matches || []).length === 0 ? (
           <div className="text-center text-gray-400 italic py-10">
             <p>Generate a schedule after adding teams.</p>
           </div>
         ) : (
                     <div className="space-y-3">
-            {matches.map((match, index) => {
+            {(matches || []).map((match, index) => {
               // Is the logged-in user a player in this match?
               const isPlayerInThisMatch =
                 !!currentUser &&
                 (
-                  match.team1.players.some(p => p.name === currentUser.displayName) ||
-                  match.team2.players.some(p => p.name === currentUser.displayName)
+                  (match.team1?.players || []).some(p => p.name === currentUser.displayName) ||
+                  (match.team2?.players || []).some(p => p.name === currentUser.displayName)
                 );
 
               return (

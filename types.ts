@@ -114,6 +114,7 @@ export interface UserProfile {
 export type NotificationType =
   | 'court_assignment'    // Assigned to a court, ready to play
   | 'match_result'        // Match completed
+  | 'score_confirmation'  // Opponent submitted score, needs confirmation
   | 'registration'        // Registration confirmed, cancelled, etc.
   | 'partner_invite'      // Partner invite received
   | 'challenge'           // Ladder challenge received
@@ -372,7 +373,8 @@ export interface Tournament {
   bannerUrl?: string;
   startDate: number;
   endDate: number;
-  registrationDeadline: number;
+  registrationOpens?: number;    // When registration becomes available
+  registrationDeadline: number;  // When registration closes
   location: string;
   venue?: string;
   status: 'draft' | 'published' | 'registration_open' | 'registration_closed' | 'in_progress' | 'completed' | 'cancelled';
@@ -384,6 +386,10 @@ export interface Tournament {
   maxParticipants?: number;
   currentParticipants: number;
   entryFee: number;
+  isFreeEvent?: boolean;         // If true, no payment required
+  paymentMode?: TournamentPaymentMode;  // 'free' | 'paid' (paid = transfer + stripe)
+  bankDetails?: BankDetails;     // Optional bank details for transfer payments
+  showBankDetails?: boolean;     // Whether to show bank details in-app
   prizePool?: number;
   rules?: string;
   createdAt: number;
@@ -448,6 +454,13 @@ export interface Division {
   updatedAt: number;
   /** Manual pool assignments (if organizer edited pools) */
   poolAssignments?: PoolAssignment[];
+
+  /** Day assignment for multi-day tournaments */
+  tournamentDayId?: string;
+  /** Scheduled start time for this division (e.g., "09:00") */
+  scheduledStartTime?: string;
+  /** Scheduled end time for this division (e.g., "14:30") */
+  scheduledEndTime?: string;
 }
 
 export interface DivisionFormat {
@@ -519,6 +532,10 @@ export interface Team {
   registeredAt?: number;
   registeredByUserId?: string;
   paymentStatus?: PaymentStatus;
+  paymentMethod?: 'stripe' | 'manual';  // How player chose to pay
+  paidAt?: number;                       // When payment was confirmed
+  paidAmount?: number;                   // Amount paid (with or without fees)
+  stripePaymentId?: string;              // Stripe payment intent ID if applicable
   checkInAt?: number;
 }
 
@@ -793,6 +810,24 @@ export interface LeagueMatchFormat {
  * - stripe: Collect payment via Stripe Connect
  */
 export type PaymentMode = 'free' | 'external' | 'stripe';
+
+/**
+ * Tournament payment mode - simplified to just free or paid
+ * 'paid' means both transfer AND Stripe options are available to players
+ */
+export type TournamentPaymentMode = 'free' | 'paid';
+
+/**
+ * Bank details for EFT/transfer payments
+ * Organizer can optionally provide these to show in-app
+ */
+export interface BankDetails {
+  bankName?: string;
+  accountName?: string;
+  accountNumber?: string;
+  branchCode?: string;    // Branch/routing number
+  reference?: string;     // e.g., "Use your name as reference"
+}
 
 /**
  * Pricing settings for paid leagues
@@ -1852,6 +1887,7 @@ export interface PlannerDivision {
   id: string;
   name: string;
   playType: 'singles' | 'doubles';
+  gender?: GenderCategory;  // 'open' | 'men' | 'women' | 'mixed'
   format: CompetitionFormat;
   expectedPlayers: number;
 
@@ -1865,6 +1901,9 @@ export interface PlannerDivision {
 
   // Pool settings (for pool_play_medals format)
   poolSize?: number;
+
+  // Entry fee for this division (in cents)
+  entryFee?: number;
 
   // Calculated fields (set by planner)
   poolCount?: number;
@@ -1899,6 +1938,16 @@ export interface TournamentPlannerSettings {
 
   // Step 4: Divisions
   divisions: PlannerDivision[];
+
+  // Registration & Payment (Step 2)
+  registrationOpens?: number;    // When registration becomes available
+  registrationDeadline?: number; // When registration closes
+  isFreeEvent?: boolean;         // If true, no payment required (legacy)
+  entryFee?: number;             // Legacy - use adminFee instead
+  paymentMode?: TournamentPaymentMode;  // 'free' | 'paid' (paid = transfer + stripe)
+  adminFee?: number;             // Tournament-level admin fee (in cents)
+  bankDetails?: BankDetails;     // Optional bank details for transfer payments
+  showBankDetails?: boolean;     // Whether to show bank details in-app (vs. share manually)
 }
 
 /**

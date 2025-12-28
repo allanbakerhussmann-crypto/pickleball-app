@@ -270,6 +270,14 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     setDuprSettings(d => ({ ...d, ratingType: basic.type === 'singles' ? 'singles' : 'doubles' }));
   }, [basic.type]);
 
+  // Auto-populate duprClubId from selected club (if club has one)
+  useEffect(() => {
+    const selectedClub = clubs.find(c => c.id === basic.clubId);
+    if (selectedClub?.duprClubId) {
+      setDuprSettings(d => ({ ...d, duprClubId: selectedClub.duprClubId }));
+    }
+  }, [basic.clubId, clubs]);
+
   // Sync legacy format when new unified format changes
   useEffect(() => {
     const legacyFormat = mapFormatToLegacy(selectedFormat);

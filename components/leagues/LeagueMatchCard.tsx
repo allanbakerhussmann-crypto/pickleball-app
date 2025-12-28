@@ -1,11 +1,11 @@
 /**
- * LeagueMatchCard Component V05.44
+ * LeagueMatchCard Component V06.15
  *
  * Displays a league match with status, scores, and action buttons.
- * Now includes verification badges and confirm/dispute actions.
+ * Now includes verification badges, confirm/dispute actions, and DUPR submission.
  *
  * FILE LOCATION: components/leagues/LeagueMatchCard.tsx
- * VERSION: V05.44
+ * VERSION: V06.15 - Added DUPR submit button integration
  */
 
 import React from 'react';
@@ -14,6 +14,7 @@ import {
   ScoreVerificationBadge,
   ScoreVerificationIcon,
 } from './verification';
+import { DuprSubmitButton } from '../shared/DuprSubmitButton';
 
 // ============================================
 // TYPES
@@ -22,6 +23,7 @@ import {
 interface LeagueMatchCardProps {
   match: LeagueMatch;
   currentUserId?: string;
+  isOrganizer?: boolean;
   onEnterScore?: (match: LeagueMatch) => void;
   onViewDetails?: (match: LeagueMatch) => void;
   onConfirmScore?: (match: LeagueMatch) => void;
@@ -30,6 +32,12 @@ interface LeagueMatchCardProps {
   showRound?: boolean;
   compact?: boolean;
   verificationSettings?: ScoreVerificationSettings;
+  // DUPR integration props
+  leagueId?: string;
+  duprClubId?: string;
+  leagueName?: string;
+  onDuprSubmit?: (match: LeagueMatch, duprMatchId: string) => void;
+  showDuprButton?: boolean;
 }
 
 // ============================================
@@ -39,12 +47,14 @@ interface LeagueMatchCardProps {
 const calculateGameScores = (scores: GameScore[]): { gamesA: number; gamesB: number } => {
   let gamesA = 0;
   let gamesB = 0;
-  
+
   for (const score of scores) {
-    if (score.scoreA > score.scoreB) gamesA++;
-    else if (score.scoreB > score.scoreA) gamesB++;
+    const a = score.scoreA ?? 0;
+    const b = score.scoreB ?? 0;
+    if (a > b) gamesA++;
+    else if (b > a) gamesB++;
   }
-  
+
   return { gamesA, gamesB };
 };
 
@@ -105,6 +115,7 @@ const getMatchTypeLabel = (matchType: string): string => {
 export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   match,
   currentUserId,
+  isOrganizer = false,
   onEnterScore,
   onViewDetails,
   onConfirmScore,
@@ -113,6 +124,11 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   showRound = false,
   compact = false,
   verificationSettings,
+  leagueId,
+  duprClubId,
+  leagueName,
+  onDuprSubmit,
+  showDuprButton = true,
 }) => {
   // Calculate game scores
   const { gamesA, gamesB } = match.scores?.length > 0
@@ -149,8 +165,8 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
     match.submittedByUserId !== currentUserId &&
     isParticipant;
 
-  // Can enter/edit score
-  const canEnterScore = isParticipant &&
+  // Can enter/edit score (participants and organizers)
+  const canEnterScore = (isParticipant || isOrganizer) &&
     (match.status === 'scheduled' || match.status === 'pending_confirmation' || match.status === 'disputed');
 
   // Status badge (use verification status if available)
@@ -409,13 +425,27 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
         </div>
       )}
 
-      {/* Completed/Finalized timestamp */}
+      {/* Completed/Finalized timestamp and DUPR submission */}
       {(match.status === 'completed' || verificationStatus === 'final') && (match.completedAt || match.verification?.finalizedAt) && (
-        <div className="bg-gray-900/30 px-4 py-2 border-t border-gray-700 text-xs text-gray-500 text-center">
-          {match.verification?.autoFinalized
-            ? `Auto-finalized ${formatDate(match.verification.finalizedAt!)}`
-            : `Finalized ${formatDate(match.verification?.finalizedAt || match.completedAt!)}`
-          }
+        <div className="bg-gray-900/30 px-4 py-2 border-t border-gray-700 flex items-center justify-between">
+          <span className="text-xs text-gray-500">
+            {match.verification?.autoFinalized
+              ? `Auto-finalized ${formatDate(match.verification.finalizedAt!)}`
+              : `Finalized ${formatDate(match.verification?.finalizedAt || match.completedAt!)}`
+            }
+          </span>
+
+          {/* DUPR Submit Button */}
+          {showDuprButton && (
+            <DuprSubmitButton
+              match={match}
+              leagueId={leagueId}
+              eventName={leagueName}
+              clubId={duprClubId}
+              compact
+              onSubmitted={(duprMatchId) => onDuprSubmit?.(match, duprMatchId)}
+            />
+          )}
         </div>
       )}
     </div>

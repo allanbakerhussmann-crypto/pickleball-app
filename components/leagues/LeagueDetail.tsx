@@ -27,6 +27,8 @@ import {
 import { LeagueScheduleManager } from './LeagueScheduleManager';
 import { BoxPlayerDragDrop } from './boxLeague';
 import { PlayerSeedingList } from './PlayerSeedingList';
+import { LeagueMatchCard } from './LeagueMatchCard';
+import { LeagueScoreEntryModal } from './LeagueScoreEntryModal';
 import type {
   League,
   LeagueMember,
@@ -72,6 +74,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [paymentCancelled, setPaymentCancelled] = useState(false);
+  const [selectedMatch, setSelectedMatch] = useState<LeagueMatch | null>(null);
+  const [showScoreEntryModal, setShowScoreEntryModal] = useState(false);
   const [editForm, setEditForm] = useState({
     // Basic Info
     name: '',
@@ -342,32 +346,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         {labels[status] || status}
       </span>
     );
-  };
-
-  // Match status badge
-  const getMatchStatusBadge = (status: string) => {
-    const styles: Record<string, string> = {
-      scheduled: 'bg-gray-600/20 text-gray-400 border-gray-600',
-      pending_confirmation: 'bg-yellow-600/20 text-yellow-400 border-yellow-600',
-      completed: 'bg-green-600/20 text-green-400 border-green-600',
-      disputed: 'bg-red-600/20 text-red-400 border-red-600',
-      cancelled: 'bg-gray-600/20 text-gray-500 border-gray-600',
-      forfeit: 'bg-orange-600/20 text-orange-400 border-orange-600',
-      no_show: 'bg-red-600/20 text-red-400 border-red-600',
-    };
-    const labels: Record<string, string> = {
-      scheduled: 'Scheduled',
-      pending_confirmation: 'Awaiting Confirmation',
-      completed: 'Completed',
-      disputed: 'Disputed',
-      cancelled: 'Cancelled',
-      forfeit: 'Forfeit',
-      no_show: 'No Show',
-    };
-    return {
-      className: styles[status] || styles.scheduled,
-      label: labels[status] || status,
-    };
   };
 
   const getFormatLabel = (format: string) => {
@@ -841,89 +819,40 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         <div className="space-y-3">
           {filteredMatches.length === 0 ? (
             <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center text-gray-400">
-              No matches played yet
+              No matches yet
             </div>
           ) : (
-            filteredMatches.map(match => {
-              const isMyMatch = match.memberAId === myMembership?.id || match.memberBId === myMembership?.id;
-              const gamesA = match.scores?.filter(g => g.scoreA > g.scoreB).length || 0;
-              const gamesB = match.scores?.filter(g => g.scoreB > g.scoreA).length || 0;
-              const statusBadge = getMatchStatusBadge(match.status);
-
-              return (
-                <div
-                  key={match.id}
-                  className={`bg-gray-800 rounded-xl p-4 border ${
-                    isMyMatch ? 'border-blue-500/50' : 'border-gray-700'
-                  }`}
-                >
-                  {/* Match Header */}
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2 text-xs text-gray-500">
-                      {match.weekNumber && <span>Week {match.weekNumber}</span>}
-                      {match.roundNumber && <span>Round {match.roundNumber}</span>}
-                      {match.boxNumber && <span>Box {match.boxNumber}</span>}
-                    </div>
-                    {/* Status Badge */}
-                    <span className={`text-xs px-2 py-0.5 rounded border ${statusBadge.className}`}>
-                      {statusBadge.label}
-                    </span>
-                  </div>
-
-                  {/* Players and Score */}
-                  <div className="flex items-center justify-between">
-                    <div className={`flex-1 font-semibold ${
-                      match.winnerMemberId === match.memberAId ? 'text-green-400' : 'text-white'
-                    }`}>
-                      {match.memberAName}
-                      {match.winnerMemberId === match.memberAId && ' ✓'}
-                    </div>
-                    
-                    <div className="px-6 text-center">
-                      {match.status === 'completed' ? (
-                        <div className="text-xl font-bold text-white">
-                          {gamesA} - {gamesB}
-                        </div>
-                      ) : match.status === 'pending_confirmation' ? (
-                        <span className="text-xs bg-yellow-600/20 text-yellow-400 px-2 py-1 rounded">
-                          Awaiting Confirmation
-                        </span>
-                      ) : match.status === 'disputed' ? (
-                        <span className="text-xs bg-red-600/20 text-red-400 px-2 py-1 rounded">
-                          Disputed
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-500">vs</span>
-                      )}
-                    </div>
-                    
-                    <div className={`flex-1 text-right font-semibold ${
-                      match.winnerMemberId === match.memberBId ? 'text-green-400' : 'text-white'
-                    }`}>
-                      {match.winnerMemberId === match.memberBId && '✓ '}
-                      {match.memberBName}
-                    </div>
-                  </div>
-                  
-                  {/* Game scores */}
-                  {match.scores && match.scores.length > 0 && (
-                    <div className="flex justify-center gap-3 mt-2 text-sm">
-                      {match.scores.map((score, i) => (
-                        <span key={i} className="text-gray-400">
-                          {score.scoreA}-{score.scoreB}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {match.playedAt && (
-                    <div className="text-xs text-gray-500 text-center mt-2">
-                      {formatDate(match.playedAt)}
-                    </div>
-                  )}
-                </div>
-              );
-            })
+            filteredMatches.map(match => (
+              <LeagueMatchCard
+                key={match.id}
+                match={match}
+                currentUserId={currentUser?.uid}
+                isOrganizer={isOrganizer}
+                showWeek={league?.format === 'round_robin'}
+                showRound={league?.format === 'swiss' || league?.format === 'box_league'}
+                verificationSettings={league?.settings?.scoreVerification || undefined}
+                onEnterScore={(m) => {
+                  setSelectedMatch(m);
+                  setShowScoreEntryModal(true);
+                }}
+                onViewDetails={(m) => {
+                  setSelectedMatch(m);
+                  setShowScoreEntryModal(true);
+                }}
+                onConfirmScore={(m) => {
+                  setSelectedMatch(m);
+                  setShowScoreEntryModal(true);
+                }}
+                onDisputeScore={(m) => {
+                  setSelectedMatch(m);
+                  setShowScoreEntryModal(true);
+                }}
+                leagueId={leagueId}
+                duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
+                leagueName={league?.name}
+                showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
+              />
+            ))
           )}
         </div>
       )}
@@ -1521,6 +1450,28 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </div>
           </div>
         </div>
+      )}
+
+      {/* Score Entry Modal */}
+      {showScoreEntryModal && selectedMatch && league && (
+        <LeagueScoreEntryModal
+          leagueId={leagueId}
+          leagueName={league.name}
+          match={selectedMatch}
+          bestOf={(league.settings.matchFormat?.bestOf as 1 | 3 | 5) || 3}
+          pointsPerGame={(league.settings.matchFormat?.gamesTo as 11 | 15 | 21) || 11}
+          winBy={(league.settings.matchFormat?.winBy as 1 | 2) || 2}
+          verificationSettings={league.settings.scoreVerification || undefined}
+          isOrganizer={isOrganizer}
+          onClose={() => {
+            setShowScoreEntryModal(false);
+            setSelectedMatch(null);
+          }}
+          onSuccess={() => {
+            setShowScoreEntryModal(false);
+            setSelectedMatch(null);
+          }}
+        />
       )}
     </div>
   );

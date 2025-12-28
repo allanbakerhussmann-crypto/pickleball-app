@@ -5,7 +5,11 @@
  * Creates fake teams and optionally generates matches for testing.
  *
  * FILE LOCATION: components/tournament/TournamentSeedButton.tsx
- * VERSION: V06.14
+ * VERSION: V06.15
+ *
+ * V06.15 Changes:
+ * - Added "Clear Orphaned Matches" button to delete matches where teams no longer exist
+ * - Clear button now also clears orphaned matches automatically
  *
  * V06.14 Changes:
  * - Now detects division type (singles/doubles) and creates appropriate teams
@@ -22,6 +26,7 @@ import {
   seedTournamentWithTestTeams,
   clearTestData,
   hasTestData,
+  clearOrphanedMatches,
 } from '../../services/tournamentSeeder';
 import type { Division } from '../../types';
 
@@ -88,13 +93,15 @@ export const TournamentSeedButton: React.FC<TournamentSeedButtonProps> = ({
     setMessage(null);
 
     try {
-      // Get the selected division to determine play type
+      // Get the selected division to determine play type and name
       const selectedDivision = divisions.find(d => d.id === selectedDivisionId);
       const playType = selectedDivision?.type === 'singles' ? 'singles' : 'doubles';
+      const divisionName = selectedDivision?.name; // Pass division name for unique player names
 
       const result = await seedTournamentWithTestTeams({
         tournamentId,
         divisionId: selectedDivisionId,
+        divisionName, // Pass division name for unique names across divisions
         teamCount,
         generateMatches,
         userId: currentUser.uid,
@@ -127,16 +134,51 @@ export const TournamentSeedButton: React.FC<TournamentSeedButtonProps> = ({
     setMessage(null);
 
     try {
+      // Clear test data (teams + associated matches)
       const result = await clearTestData(tournamentId, selectedDivisionId);
+
+      // Also clear any orphaned matches (teams deleted but matches remain)
+      const orphanResult = await clearOrphanedMatches(tournamentId, selectedDivisionId);
+
+      const totalMatches = result.matchesDeleted + orphanResult.matchesDeleted;
       setMessage({
         type: 'success',
-        text: `Deleted ${result.teamsDeleted} test teams and ${result.matchesDeleted} matches`,
+        text: `Deleted ${result.teamsDeleted} test teams and ${totalMatches} matches`,
       });
       setHasExistingTestData(false);
       onDataChanged?.();
     } catch (err) {
       console.error('Clear failed:', err);
       setMessage({ type: 'error', text: 'Failed to clear test data' });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleClearOrphaned = async () => {
+    if (!selectedDivisionId) {
+      setMessage({ type: 'error', text: 'Please select a division' });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Delete all orphaned matches (matches where teams no longer exist)?'
+    );
+    if (!confirmed) return;
+
+    setIsProcessing(true);
+    setMessage(null);
+
+    try {
+      const result = await clearOrphanedMatches(tournamentId, selectedDivisionId);
+      setMessage({
+        type: 'success',
+        text: `Deleted ${result.matchesDeleted} orphaned matches`,
+      });
+      onDataChanged?.();
+    } catch (err) {
+      console.error('Clear orphaned failed:', err);
+      setMessage({ type: 'error', text: 'Failed to clear orphaned matches' });
     } finally {
       setIsProcessing(false);
     }
@@ -263,6 +305,15 @@ export const TournamentSeedButton: React.FC<TournamentSeedButtonProps> = ({
             </button>
           )}
         </div>
+
+        {/* Clear Orphaned Button - always visible for cleanup */}
+        <button
+          onClick={handleClearOrphaned}
+          disabled={!selectedDivisionId || isProcessing}
+          className="w-full mt-2 py-2 bg-orange-600/20 hover:bg-orange-600/30 disabled:bg-gray-600/20 text-orange-400 border border-orange-600/50 rounded text-sm font-medium transition-colors"
+        >
+          Clear Orphaned Matches
+        </button>
 
         {/* Info about what gets created */}
         <div className="mt-4 pt-3 border-t border-gray-700">

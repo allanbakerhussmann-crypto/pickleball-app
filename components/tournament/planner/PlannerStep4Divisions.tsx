@@ -8,18 +8,20 @@
  */
 
 import React, { useState } from 'react';
-import type { PlannerDivision, PlannerCapacity } from '../../../types';
+import type { PlannerDivision, PlannerCapacity, TournamentPaymentMode } from '../../../types';
 import { AddDivisionModal } from './AddDivisionModal';
 
 interface PlannerStep4DivisionsProps {
   divisions: PlannerDivision[];
   capacity: PlannerCapacity;
+  paymentMode?: TournamentPaymentMode;
   onChange: (divisions: PlannerDivision[]) => void;
 }
 
 export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
   divisions,
   capacity,
+  paymentMode,
   onChange,
 }) => {
   const [showAddModal, setShowAddModal] = useState(false);
@@ -53,6 +55,19 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
       ladder: 'Ladder',
     };
     return labels[format] || format;
+  };
+
+  // Get gender display label
+  const getGenderLabel = (gender?: string): string => {
+    const labels: Record<string, string> = {
+      men: 'Men',
+      women: 'Women',
+      mixed: 'Mixed',
+      open: 'Open',
+      mens: 'Men',
+      womens: 'Women',
+    };
+    return labels[gender || 'open'] || 'Open';
   };
 
   // Get division breakdown from capacity
@@ -111,6 +126,9 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
                 <div className="px-3 py-1 bg-gray-600 rounded-full text-sm text-gray-300">
                   {getFormatLabel(division.format)}
                 </div>
+                <div className="px-3 py-1 bg-purple-900/50 rounded-full text-sm text-purple-300">
+                  {getGenderLabel(division.gender)}
+                </div>
                 <div className="px-3 py-1 bg-gray-600 rounded-full text-sm text-gray-300">
                   {division.expectedPlayers}{' '}
                   {division.playType === 'singles' ? 'players' : 'teams'}
@@ -140,6 +158,17 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
                       ~{(stats.minutes / 60).toFixed(1)} hrs
                     </div>
                   </>
+                )}
+                {/* Entry fee display */}
+                {division.entryFee && division.entryFee > 0 && (
+                  <div className="px-3 py-1 bg-green-900/50 rounded-full text-sm text-green-300">
+                    ${(division.entryFee / 100).toFixed(2)}
+                  </div>
+                )}
+                {paymentMode === 'paid' && (!division.entryFee || division.entryFee === 0) && (
+                  <div className="px-3 py-1 bg-gray-600/50 rounded-full text-sm text-gray-400">
+                    Free entry
+                  </div>
                 )}
               </div>
             </div>
@@ -227,6 +256,7 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
         <AddDivisionModal
           onAdd={handleAddDivision}
           onClose={() => setShowAddModal(false)}
+          paymentMode={paymentMode}
         />
       )}
 
@@ -236,6 +266,7 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
           division={editingDivision}
           onAdd={handleEditDivision}
           onClose={() => setEditingDivision(null)}
+          paymentMode={paymentMode}
         />
       )}
     </div>

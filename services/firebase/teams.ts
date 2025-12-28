@@ -70,7 +70,11 @@ export const ensureTeamExists = async (
   playerIds: string[],
   teamName: string | null,
   createdByUserId: string,
-  options?: { status?: string }
+  options?: {
+    status?: string;
+    paymentStatus?: string;
+    paymentMethod?: 'stripe' | 'manual';
+  }
 ): Promise<{ existed: boolean; teamId: string; team: any | null }> => {
   const normalizedPlayers = Array.from(new Set(playerIds.map(String))).sort();
 
@@ -128,7 +132,10 @@ export const ensureTeamExists = async (
         isLookingForPartner: (options?.status === 'pending_partner') || (normalizedPlayers.length === 1),
         status: options?.status || (normalizedPlayers.length === 1 ? 'pending_partner' : 'active'),
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
+        // Payment fields
+        ...(options?.paymentStatus && { paymentStatus: options.paymentStatus }),
+        ...(options?.paymentMethod && { paymentMethod: options.paymentMethod }),
       };
       tx.set(teamRef, teamDoc);
 
@@ -228,6 +235,61 @@ export const isDivisionFull = async (
   if (!maxTeams) return false; // No limit set
   const count = await getActiveTeamCountForDivision(tournamentId, divisionId);
   return count >= maxTeams;
+};
+
+// ============================================
+// Payment Management
+// ============================================
+
+/**
+ * Mark a team as paid (for manual/cash payments)
+ * Used by organizers when they receive payment outside Stripe
+ */
+export const markTeamAsPaid = async (
+  tournamentId: string,
+  teamId: string,
+  paidAmount: number,
+  markedByUserId: string
+): Promise<void> => {
+  const teamRef = doc(db, 'tournaments', tournamentId, 'teams', teamId);
+  const now = Date.now();
+
+  await updateDoc(teamRef, {
+    paymentStatus: 'paid',
+    paymentMethod: 'manual',
+    paidAt: now,
+    paidAmount,
+    paidMarkedBy: markedByUserId,
+    updatedAt: now,
+  });
+};
+
+/**
+ * Update team payment status (for Stripe payments)
+ */
+export const updateTeamPaymentStatus = async (
+  tournamentId: string,
+  teamId: string,
+  paymentStatus: 'pending' | 'processing' | 'paid' | 'failed' | 'refunded',
+  stripePaymentId?: string,
+  paidAmount?: number
+): Promise<void> => {
+  const teamRef = doc(db, 'tournaments', tournamentId, 'teams', teamId);
+  const now = Date.now();
+
+  const updates: Record<string, unknown> = {
+    paymentStatus,
+    updatedAt: now,
+  };
+
+  if (paymentStatus === 'paid') {
+    updates.paymentMethod = 'stripe';
+    updates.paidAt = now;
+    if (stripePaymentId) updates.stripePaymentId = stripePaymentId;
+    if (paidAmount) updates.paidAmount = paidAmount;
+  }
+
+  await updateDoc(teamRef, updates);
 };
 
 // ============================================
