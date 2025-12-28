@@ -447,12 +447,12 @@ VITE_GEMINI_API_KEY=your_gemini_key
 
 ## Recent Development
 
-### Current Version: 06.08
-- **Dynamic Court Allocation** - Live match queue with rest time, fair distribution, pool balance
-- **Tournament Planner Age Groups** - Min/max age fields for division configuration
-- **Test Mode** - Seed test teams, simulate matches, cleanup corrupted data
+### Current Version: 06.18
+- **Phone Verification System** - SMS-based phone verification with OTP codes
+- **PhoneInput Component** - Country code selector (NZ, AU, US, UK) with auto-formatting
 
 ### Recent Major Features (v06.00+)
+- **Phone Verification** - OTP-based phone verification for SMS notifications
 - **Unified Game & Format System** - Standardized 10 competition formats
 - **Tournament Planner** - Capacity planning wizard with age/skill requirements
 - **Schedule Builder** - Automated match scheduling with conflict detection
@@ -484,6 +484,8 @@ matches/            # Match data
 teams/              # Team groupings
 scores/             # Live scores
 courtBookings/      # Court reservations
+phone_verification_codes/  # OTP codes for phone verification
+sms_messages/       # SMS messages queue (Twilio integration)
 ```
 
 ---
@@ -784,3 +786,86 @@ uat: {
 2. **Bulk submission**: Submit multiple matches at once
 3. **Rating sync**: Periodic refresh of player ratings from DUPR
 4. **Move credentials to .env**: `VITE_DUPR_CLIENT_KEY`, `VITE_DUPR_CLIENT_SECRET`
+
+---
+
+## Phone Verification System
+
+### Overview
+
+SMS-based phone number verification using OTP codes. Players can verify their phone numbers to receive SMS notifications for court assignments, match results, and other alerts.
+
+### How It Works
+
+1. **Signup Flow**: Phone field shown during signup (optional, no blocking)
+2. **Verification Modal**: After signup with phone, prompts for verification (skippable)
+3. **Profile Page**: Can add/verify phone later from Profile
+4. **SMS Notifications**: Requires verified phone to enable SMS preferences
+
+### Key Components
+
+| File | Purpose |
+|------|---------|
+| `functions/src/phoneVerification.ts` | Cloud Functions for OTP send/verify |
+| `services/firebase/phoneVerification.ts` | Frontend service wrapper |
+| `components/auth/PhoneVerificationModal.tsx` | Two-step verification modal |
+| `components/shared/PhoneInput.tsx` | Country code selector with auto-formatting |
+
+### Cloud Functions
+
+**`phone_sendVerificationCode`**
+- Generates 6-digit OTP code
+- Stores hashed code in `phone_verification_codes` collection
+- Sends SMS via Twilio (writes to `sms_messages` collection)
+- Rate limits: 3 codes/phone/hour, 10 codes/user/day
+- Code expires in 10 minutes
+
+**`phone_verifyCode`**
+- Validates OTP against stored hash
+- Max 3 attempts per code
+- On success: Sets `phoneVerified: true` on user profile
+- Returns remaining attempts on failure
+
+### PhoneInput Component
+
+Reusable component with country code selector:
+- **NZ** (+64) - Default
+- **AU** (+61)
+- **US** (+1)
+- **UK** (+44)
+
+Auto-formats numbers as user types, outputs E.164 format.
+
+```typescript
+<PhoneInput
+  value={phone}
+  onChange={(e164Value) => setPhone(e164Value)}
+  defaultCountry="NZ"
+/>
+```
+
+### Firestore Indexes Required
+
+The `phone_verification_codes` collection requires 3 composite indexes:
+
+1. `phone` (Asc) + `createdAt` (Asc) - Rate limiting per phone
+2. `userId` (Asc) + `createdAt` (Asc) - Daily rate limiting per user
+3. `phone` (Asc) + `userId` (Asc) + `verified` (Asc) + `expiresAt` (Desc) - Verify query
+
+### User Profile Fields
+
+```typescript
+interface UserProfile {
+  phone?: string;           // E.164 format (+64211234567)
+  phoneVerified?: boolean;  // Verification status
+  phoneVerifiedAt?: number; // Timestamp when verified
+}
+```
+
+### Security
+
+- OTP codes hashed with SHA-256 before storage
+- 10-minute expiry on codes
+- Max 3 verification attempts per code
+- Rate limiting prevents brute force
+- Firestore rules: `phone_verification_codes` only accessible via Cloud Functions
