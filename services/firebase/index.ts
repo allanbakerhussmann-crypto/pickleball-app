@@ -509,6 +509,19 @@ export {
 } from './notifications';
 
 // ============================================
+// PHONE VERIFICATION (NEW V06.18)
+// ============================================
+export {
+  sendPhoneVerificationCode,
+  verifyPhoneCode,
+  formatPhoneE164,
+  isValidPhoneNumber,
+  formatPhoneForDisplay,
+  isPhoneVerified,
+  canReceiveSMS,
+} from './phoneVerification';
+
+// ============================================
 // COMPETITION STUBS (Placeholder functions for CompetitionManager)
 // ============================================
 

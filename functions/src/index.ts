@@ -66,3 +66,12 @@ export {
   sendSMS,
   sendBulkSMS,
 } from './sms';
+
+// ============================================
+// PHONE VERIFICATION FUNCTIONS (V06.18)
+// ============================================
+
+export {
+  phone_sendVerificationCode,
+  phone_verifyCode,
+} from './phoneVerification';

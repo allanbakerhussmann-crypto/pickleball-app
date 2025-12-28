@@ -54,6 +54,8 @@ export interface UserProfile {
   isAppAdmin?: boolean;
   isRootAdmin?: boolean;
   phone?: string;
+  phoneVerified?: boolean;
+  phoneVerifiedAt?: number;
   bio?: string;
   photoURL?: string;
   photoData?: string;  // Base64 photo data for display

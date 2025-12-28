@@ -20,6 +20,8 @@ import { UserStripeConnect } from './profile/UserStripeConnect';
 import { DuprConnect } from './profile/DuprConnect';
 import { DeleteAccountModal } from './profile/DeleteAccountModal';
 import { DataExportButton } from './profile/DataExportButton';
+import { PhoneVerificationModal } from './auth/PhoneVerificationModal';
+import { PhoneInput } from './shared/PhoneInput';
 
 // Gender type defined locally since not exported from types
 type UserGender = 'male' | 'female' | 'other';
@@ -77,6 +79,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [showPhoneVerification, setShowPhoneVerification] = useState(false);
 
     useEffect(() => {
         if (userProfile) {
@@ -338,8 +341,31 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                     {/* Phone and Hand */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
-                            <label htmlFor="phone" className="block text-sm font-medium text-gray-300 mb-2">Phone Number <span className="text-gray-500">(Optional)</span></label>
-                            <input type="tel" id="phone" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+1 555-0123" className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
+                            <label className="block text-sm font-medium text-gray-300 mb-2">
+                                Phone Number
+                                {userProfile?.phoneVerified && (
+                                    <span className="ml-2 px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded-full">
+                                        Verified
+                                    </span>
+                                )}
+                            </label>
+                            <PhoneInput
+                                value={phone}
+                                onChange={(e164Value) => setPhone(e164Value)}
+                            />
+                            {phone && !userProfile?.phoneVerified ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPhoneVerification(true)}
+                                    className="mt-1 text-sm text-green-400 hover:text-green-300 underline"
+                                >
+                                    Verify your phone to receive SMS notifications
+                                </button>
+                            ) : !userProfile?.phoneVerified && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                    Verify your phone to receive SMS notifications
+                                </p>
+                            )}
                         </div>
                         <div>
                             <label htmlFor="playsHand" className="block text-sm font-medium text-gray-300 mb-2">Playing Hand</label>
@@ -449,6 +475,21 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                 <DeleteAccountModal
                     onClose={() => setShowDeleteModal(false)}
                     userEmail={currentUser?.email || ''}
+                />
+            )}
+
+            {/* Phone Verification Modal */}
+            {showPhoneVerification && (
+                <PhoneVerificationModal
+                    onClose={() => setShowPhoneVerification(false)}
+                    onVerified={() => {
+                        setShowPhoneVerification(false);
+                        setSuccessMessage('Phone number verified successfully!');
+                        setTimeout(() => setSuccessMessage(null), 3000);
+                    }}
+                    initialPhone={phone}
+                    canSkip={false}
+                    skipLabel="Cancel"
                 />
             )}
         </div>

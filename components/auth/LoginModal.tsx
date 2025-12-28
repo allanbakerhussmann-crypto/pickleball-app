@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
 import { isFirebaseConfigured } from '../../services/firebase';
+import { PhoneVerificationModal } from './PhoneVerificationModal';
+import { PhoneInput } from '../shared/PhoneInput';
 
 interface LoginModalProps {
   onClose: () => void;
@@ -51,13 +53,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
   const [roleChoice, setRoleChoice] = useState<UserRole>('player');
   const [agreeToTerms, setAgreeToTerms] = useState(false);
   const [agreeToDataProcessing, setAgreeToDataProcessing] = useState(false);
+  const [phone, setPhone] = useState('');
+  const [showPhoneVerification, setShowPhoneVerification] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [isConfigError, setIsConfigError] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  const { login, signup, resetPassword } = useAuth();
+  const { login, signup, resetPassword, updateUserExtendedProfile } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,6 +102,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
 
       if (isLoginView) {
         await login(email, password);
+        onClose();
       } else {
         // Pass consent data to signup for Privacy Act 2020 compliance
         await signup(email, password, roleChoice, name, {
@@ -105,8 +110,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
           termsOfService: agreeToTerms,
           dataProcessing: agreeToDataProcessing,
         });
+
+        // If phone was provided (already in E.164 format from PhoneInput), show verification modal
+        if (phone && phone.startsWith('+') && phone.length >= 10) {
+          await updateUserExtendedProfile({ phone, phoneVerified: false });
+          setShowPhoneVerification(true);
+          return; // Don't close yet - wait for verification
+        }
+        onClose();
       }
-      onClose();
     } catch (err: any) {
       console.error("Login Error:", err);
       const friendlyMsg = getFriendlyErrorMessage(err);
@@ -226,7 +238,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
                 required
                 className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
               />
-              
+
+              <PhoneInput
+                value={phone}
+                onChange={(e164Value) => setPhone(e164Value)}
+              />
+
               <div className="pt-2">
                 <p className="text-sm text-gray-300 mb-2">I want to:</p>
                 <div className="grid grid-cols-2 gap-3">
@@ -350,6 +367,23 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
           </button>
         </p>
       </div>
+
+      {/* Phone Verification Modal - shown after signup if phone provided */}
+      {showPhoneVerification && (
+        <PhoneVerificationModal
+          onClose={() => {
+            setShowPhoneVerification(false);
+            onClose();
+          }}
+          onVerified={() => {
+            setShowPhoneVerification(false);
+            onClose();
+          }}
+          initialPhone={phone}
+          canSkip={true}
+          skipLabel="Skip for now"
+        />
+      )}
     </div>
   );
 };
