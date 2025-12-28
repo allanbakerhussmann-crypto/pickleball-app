@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMeetupById, updateMeetup } from '../../services/firebase';
 import { LocationPicker } from './LocationPicker';
+import { RollingTimePicker } from '../shared/RollingTimePicker';
 import type { Meetup } from '../../types';
 
 interface EditMeetupProps {
@@ -178,12 +179,10 @@ export const EditMeetup: React.FC<EditMeetupProps> = ({ meetupId, onBack, onSave
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-400 mb-1">Time *</label>
-              <input
-                type="time"
-                required
+              <RollingTimePicker
                 value={time}
-                onChange={e => setTime(e.target.value)}
-                className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
+                onChange={setTime}
+                placeholder="--:-- --"
               />
             </div>
           </div>

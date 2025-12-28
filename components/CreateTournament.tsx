@@ -228,6 +228,10 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       maxTeams: plannerDiv.expectedPlayers,
       // Entry fee for this division (in cents)
       entryFee: plannerDiv.entryFee,
+      // Day assignment for multi-day tournaments
+      tournamentDayId: plannerDiv.assignedDayId,
+      scheduledStartTime: plannerDiv.estimatedStartTime,
+      scheduledEndTime: plannerDiv.estimatedEndTime,
     };
   };
 
@@ -440,7 +444,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
   const handleSubmit = async () => {
       if (divisions.length === 0) return setErrorMessage("Add at least one division");
-      
+
       setIsSubmitting(true);
       try {
           const tId = generateId();
@@ -448,9 +452,11 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
               ...formData as Tournament,
               id: tId,
               startDatetime: formData.startDatetime || new Date().toISOString(),
-              venue: formData.venue || 'TBD'
+              venue: formData.venue || 'TBD',
+              // Map tournamentDays to days for multi-day tournament support
+              days: (formData as any).tournamentDays || undefined,
           };
-          
+
           await saveTournament(tournament, divisions);
           await onCreateTournament(tournament);
       } catch (e: any) {

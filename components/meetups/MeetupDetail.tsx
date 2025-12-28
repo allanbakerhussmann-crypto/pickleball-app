@@ -34,6 +34,7 @@ import {
   type MeetupStanding,
 } from '../../services/firebase/meetupMatches';
 import type { MeetupRSVP } from '../../types';
+import { formatTimestamp } from '../../utils/timeFormat';
 
 // ============================================
 // TYPES
@@ -254,13 +255,8 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
     });
   };
 
-  const formatTime = (timestamp: number) => {
-    return new Date(timestamp).toLocaleTimeString('en-NZ', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  };
+  // Use formatTimestamp from utils/timeFormat
+  const formatTime = formatTimestamp;
 
   const formatCurrency = (cents: number) => {
     return `$${(cents / 100).toFixed(2)}`;

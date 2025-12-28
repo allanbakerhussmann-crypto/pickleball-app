@@ -253,6 +253,27 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         allow write: if isAuthenticated() && request.auth.uid == odUserId;
       }
+
+      // Meetup matches subcollection (V06.16)
+      match /matches/{matchId} {
+        allow read: if isAuthenticated();
+        // Organizer can create/delete matches
+        allow create, delete: if isAuthenticated() &&
+          get(/databases/$(database)/documents/meetups/$(meetupId)).data.createdByUserId == request.auth.uid;
+        // Organizer OR match participants can update (for score entry)
+        allow update: if isAuthenticated() && (
+          get(/databases/$(database)/documents/meetups/$(meetupId)).data.createdByUserId == request.auth.uid ||
+          resource.data.player1Id == request.auth.uid ||
+          resource.data.player2Id == request.auth.uid
+        );
+      }
+
+      // Meetup standings subcollection (V06.16)
+      match /standings/{odUserId} {
+        allow read: if isAuthenticated();
+        // Standings are updated automatically when matches complete
+        allow write: if isAuthenticated();
+      }
     }
 
     // Tournaments - SECURED: Only organizers or app admins can modify

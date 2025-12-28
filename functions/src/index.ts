@@ -57,3 +57,12 @@ export {
 // ============================================
 
 // export { createTeam } from './teams';
+
+// ============================================
+// SMS FUNCTIONS (Twilio)
+// ============================================
+
+export {
+  sendSMS,
+  sendBulkSMS,
+} from './sms';

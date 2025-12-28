@@ -9,6 +9,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import type { TournamentDay, TournamentPaymentMode, BankDetails } from '../../../types';
+import { formatTime } from '../../../utils/timeFormat';
 
 interface PlannerStep2TimeProps {
   days: TournamentDay[];
@@ -59,13 +60,8 @@ const formatDateDisplay = (dateStr: string): string => {
   });
 };
 
-// Format time for display
-const formatTimeDisplay = (time: string): string => {
-  const [hours, minutes] = time.split(':').map(Number);
-  const hours12 = hours % 12 || 12;
-  const ampm = hours < 12 ? 'AM' : 'PM';
-  return `${hours12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-};
+// Use formatTime from utils/timeFormat (aliased as formatTimeDisplay)
+const formatTimeDisplay = formatTime;
 
 // Calculate hours for a single day
 const calculateDayHours = (day: TournamentDay): number => {

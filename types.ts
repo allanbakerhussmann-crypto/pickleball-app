@@ -105,6 +105,8 @@ export interface UserProfile {
   duprSinglesRating?: number;
   ratingDoubles?: number;
   ratingSingles?: number;
+  // Notification Preferences (V06.17)
+  notificationPreferences?: NotificationPreferences;
 }
 
 // ============================================
@@ -136,6 +138,55 @@ export interface Notification {
     matchId?: string;
     courtName?: string;
     inviteId?: string;
+  };
+}
+
+// ============================================
+// SMS NOTIFICATION TYPES (V06.17)
+// ============================================
+
+export type SMSNotificationType =
+  | 'court_assignment'     // Assigned to a court, ready to play
+  | 'match_result'         // Match completed
+  | 'score_confirmation'   // Score needs confirmation
+  | 'reminder'             // Event reminder
+  | 'custom';              // Custom organizer message
+
+export type SMSStatus = 'pending' | 'sent' | 'failed';
+
+export interface SMSMessage {
+  id: string;
+  to: string;              // Phone number in E.164 format (+1XXXXXXXXXX)
+  body: string;            // Message content
+  createdAt: number;
+  status: SMSStatus;
+  twilioSid?: string;      // Twilio message SID after sending
+  sentAt?: number;
+  error?: string;          // Error message if failed
+
+  // Optional metadata
+  userId?: string;         // User who triggered the SMS
+  eventType?: 'tournament' | 'league' | 'meetup';
+  eventId?: string;
+  matchId?: string;
+  notificationType?: SMSNotificationType;
+}
+
+/** User notification preferences */
+export interface NotificationPreferences {
+  /** Receive in-app notifications */
+  inApp: boolean;
+  /** Receive SMS notifications (requires phone number) */
+  sms: boolean;
+  /** Receive email notifications */
+  email: boolean;
+  /** Specific notification types to receive */
+  types: {
+    courtAssignment: boolean;
+    matchResult: boolean;
+    scoreConfirmation: boolean;
+    reminders: boolean;
+    marketing: boolean;
   };
 }
 
@@ -401,6 +452,8 @@ export interface Tournament {
   divisions?: Division[];
   /** Admin test mode - allows organizers to score any match and test features */
   testMode?: boolean;
+  /** Tournament day schedule (for multi-day events) */
+  days?: TournamentDay[];
 }
 
 export interface TournamentSettings {

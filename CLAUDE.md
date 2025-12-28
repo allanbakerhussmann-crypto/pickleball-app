@@ -1,7 +1,9 @@
 # Pickleball Director
 
-> **Version**: 06.08
+> **Version**: 06.17
 > **Type**: Tournament, League & Club Management Platform
+> **Live URL**: https://pickleballdirector.co.nz
+> **Firebase URL**: https://pickleball-app-dev.web.app
 
 ## Project Overview
 
@@ -51,6 +53,7 @@ Pickleball Director is a comprehensive web application for managing competitive 
 ### External Integrations
 - **Stripe Connect** - Payment processing (@stripe/stripe-js)
 - **DUPR API** - Player ratings lookup and sync
+- **Twilio** - SMS notifications (court assignments, match results)
 - **Google Gemini** - AI features
 - **Leaflet** - Maps for venue locations
 
@@ -118,6 +121,9 @@ pickleball-app/
 │   ├── formats/          # Format-specific types
 │   ├── game/             # Game, match, score types
 │   └── index.ts          # Re-exports
+│
+├── utils/                # Shared utility functions
+│   └── timeFormat.ts     # Time formatting (12-hour display standard)
 │
 ├── config/               # Feature flags, app config
 ├── constants/            # App constants
@@ -191,6 +197,26 @@ import { Header } from './Header';
 - Union types for enums: `type UserRole = 'player' | 'organizer' | 'app_admin'`
 - Strict mode enabled
 - Path alias: `@/*` resolves to project root
+
+### Time Format Standard
+- **Storage**: 24-hour format (e.g., `"08:00"`, `"14:30"`)
+- **Display**: 12-hour format with AM/PM (e.g., `"8:00 AM"`, `"2:30 PM"`)
+- **Utility**: Use `utils/timeFormat.ts` for all time formatting
+- **Components**: Use `RollingTimePicker` for time input fields
+
+```typescript
+// Import time utilities
+import { formatTime, formatTimeRange, formatTimestamp } from '../utils/timeFormat';
+
+// Format "14:30" -> "2:30 PM"
+formatTime('14:30')
+
+// Format time range
+formatTimeRange('08:00', '17:00')  // "8:00 AM - 5:00 PM"
+
+// Format timestamp (milliseconds)
+formatTimestamp(1703750400000)  // "8:00 AM"
+```
 
 ### Commit Message Format
 ```

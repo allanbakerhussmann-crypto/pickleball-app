@@ -126,7 +126,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
-    'participants' | 'courts' | 'settings' | 'livecourts' | 'pools'
+    'participants' | 'courts' | 'settings' | 'livecourts' | 'pools' |
+    'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder'
   >('livecourts');
 
   
@@ -177,19 +178,21 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     'details' | 'players' | 'bracket' | 'standings' | 'pool-stage' | 'final-stage'
   >('details');
 
-  // Editable division settings (ratings, age, seeding)
+  // Editable division settings (ratings, age, seeding, day assignment)
   const [divisionSettings, setDivisionSettings] = useState<{
     minRating: string;
     maxRating: string;
     minAge: string;
     maxAge: string;
     seedingMethod: SeedingMethod;
+    tournamentDayId: string;
   }>({
     minRating: '',
     maxRating: '',
     minAge: '',
     maxAge: '',
     seedingMethod: 'dupr',
+    tournamentDayId: '',
   });
 
   /* -------- Tournament phase derived from matches -------- */
@@ -212,6 +215,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         activeDivision.ageMax != null ? activeDivision.ageMax.toString() : '',
       seedingMethod: (activeDivision.format.seedingMethod ||
         'dupr') as SeedingMethod,
+      tournamentDayId: activeDivision.tournamentDayId || '',
     });
 
     // Set default tab based on format
@@ -671,6 +675,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         ...activeDivision.format,
         seedingMethod: divisionSettings.seedingMethod,
       },
+      // Day assignment for multi-day tournaments
+      tournamentDayId: divisionSettings.tournamentDayId || undefined,
     });
 
     alert('Division settings updated');
@@ -846,6 +852,163 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             {tournament.name}
           </h1>
 
+          {/* Tournament Status Management (Manager View Only) */}
+          {canManageTournament && viewMode === 'admin' && (
+            <div className="mb-6 p-4 rounded-xl bg-gray-900/60 backdrop-blur border border-white/10">
+              <div className="flex flex-wrap items-center gap-4">
+                {/* Current Status Badge */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400 uppercase tracking-wide">Status:</span>
+                  <span className={`
+                    inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
+                    ${tournament.status === 'draft' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : ''}
+                    ${tournament.status === 'published' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : ''}
+                    ${tournament.status === 'registration_open' ? 'bg-green-500/20 text-green-400 border border-green-500/30' : ''}
+                    ${tournament.status === 'registration_closed' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' : ''}
+                    ${tournament.status === 'in_progress' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : ''}
+                    ${tournament.status === 'completed' ? 'bg-gray-500/20 text-gray-400 border border-gray-500/30' : ''}
+                    ${tournament.status === 'cancelled' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : ''}
+                  `}>
+                    {tournament.status === 'draft' && 'Draft'}
+                    {tournament.status === 'published' && 'Published'}
+                    {tournament.status === 'registration_open' && 'Registration Open'}
+                    {tournament.status === 'registration_closed' && 'Registration Closed'}
+                    {tournament.status === 'in_progress' && 'In Progress'}
+                    {tournament.status === 'completed' && 'Completed'}
+                    {tournament.status === 'cancelled' && 'Cancelled'}
+                  </span>
+                </div>
+
+                {/* Status Action Buttons */}
+                <div className="flex flex-wrap items-center gap-2 ml-auto">
+                  {/* Draft → Published */}
+                  {tournament.status === 'draft' && (
+                    <button
+                      onClick={() => onUpdateTournament({ ...tournament, status: 'published' })}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                      Publish
+                    </button>
+                  )}
+
+                  {/* Published → Registration Open */}
+                  {tournament.status === 'published' && (
+                    <>
+                      <button
+                        onClick={() => onUpdateTournament({ ...tournament, status: 'registration_open' })}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-green-600 hover:bg-green-500 text-white transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                        </svg>
+                        Open Registration
+                      </button>
+                      <button
+                        onClick={() => onUpdateTournament({ ...tournament, status: 'draft' })}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-600 hover:bg-gray-500 text-white transition-colors"
+                      >
+                        Back to Draft
+                      </button>
+                    </>
+                  )}
+
+                  {/* Registration Open → Registration Closed */}
+                  {tournament.status === 'registration_open' && (
+                    <button
+                      onClick={() => onUpdateTournament({ ...tournament, status: 'registration_closed' })}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-yellow-600 hover:bg-yellow-500 text-white transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                      Close Registration
+                    </button>
+                  )}
+
+                  {/* Registration Closed → In Progress */}
+                  {tournament.status === 'registration_closed' && (
+                    <>
+                      <button
+                        onClick={() => onUpdateTournament({ ...tournament, status: 'in_progress' })}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-orange-600 hover:bg-orange-500 text-white transition-colors"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Start Tournament
+                      </button>
+                      <button
+                        onClick={() => onUpdateTournament({ ...tournament, status: 'registration_open' })}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-600 hover:bg-gray-500 text-white transition-colors"
+                      >
+                        Reopen Registration
+                      </button>
+                    </>
+                  )}
+
+                  {/* In Progress → Completed */}
+                  {tournament.status === 'in_progress' && (
+                    <button
+                      onClick={() => {
+                        if (confirm('Are you sure you want to mark this tournament as completed?')) {
+                          onUpdateTournament({ ...tournament, status: 'completed' });
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-600 hover:bg-gray-500 text-white transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Complete Tournament
+                    </button>
+                  )}
+
+                  {/* Cancel Option (for draft, published, registration states) */}
+                  {['draft', 'published', 'registration_open', 'registration_closed'].includes(tournament.status) && (
+                    <button
+                      onClick={() => {
+                        if (confirm('Are you sure you want to cancel this tournament? This action can be undone.')) {
+                          onUpdateTournament({ ...tournament, status: 'cancelled' });
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
+
+                  {/* Restore from Cancelled */}
+                  {tournament.status === 'cancelled' && (
+                    <button
+                      onClick={() => onUpdateTournament({ ...tournament, status: 'draft' })}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+                    >
+                      Restore to Draft
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Status Flow Hint */}
+              <div className="mt-3 pt-3 border-t border-white/5">
+                <p className="text-xs text-gray-500">
+                  {tournament.status === 'draft' && 'Draft tournaments are only visible to you. Publish to make it visible to players.'}
+                  {tournament.status === 'published' && 'Tournament is visible but registration is not yet open.'}
+                  {tournament.status === 'registration_open' && 'Players can register for this tournament.'}
+                  {tournament.status === 'registration_closed' && 'Registration is closed. Generate pools/brackets and start the tournament.'}
+                  {tournament.status === 'in_progress' && 'Tournament is live. Matches can be played and scored.'}
+                  {tournament.status === 'completed' && 'Tournament has ended. Results are final.'}
+                  {tournament.status === 'cancelled' && 'Tournament has been cancelled.'}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Stats Row */}
           <div className="flex flex-wrap gap-3 md:gap-4">
             {/* Players Stat */}
@@ -954,6 +1117,9 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             const teamCount = (teams || []).filter(t => t.divisionId === div.id).length;
             const isActive = activeDivisionId === div.id;
             const hasAttention = (attentionMatches || []).some(m => m.divisionId === div.id);
+            // Find day label for multi-day tournaments
+            const dayInfo = tournament.days?.find(d => d.id === div.tournamentDayId);
+            const dayLabel = dayInfo?.label || (dayInfo ? `Day ${tournament.days!.indexOf(dayInfo) + 1}` : null);
 
             return (
               <button
@@ -973,6 +1139,11 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     {div.name}
                     {hasAttention && (
                       <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                    )}
+                    {dayLabel && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${isActive ? 'bg-indigo-100 text-indigo-700' : 'bg-indigo-900/50 text-indigo-400'}`}>
+                        {dayLabel}
+                      </span>
                     )}
                   </span>
                   <span className={`text-xs ${isActive ? 'text-gray-600' : 'text-gray-500'}`}>
@@ -1058,12 +1229,24 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 className="md:hidden w-full bg-gray-800 text-white border border-white/10 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500"
               >
                 <option value="livecourts">📺 Live Courts</option>
-                <option value="participants">👥 Participants</option>
-                {(activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
-                  <option value="pools">🎱 Edit Pools</option>
-                )}
+                <option value="participants">👥 Teams</option>
                 <option value="courts">🏟️ Courts</option>
                 <option value="settings">⚙️ Settings</option>
+                {/* Format-specific tabs */}
+                {(activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
+                  <>
+                    <option value="pool-stage">🏊 Pool Stage</option>
+                    <option value="medal-bracket">🏆 Medal Bracket</option>
+                  </>
+                )}
+                {(activeDivision?.format?.competitionFormat === 'singles_elimination' ||
+                  (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'single_elim')) && (
+                  <option value="bracket">🏆 Bracket</option>
+                )}
+                {(activeDivision?.format?.competitionFormat === 'round_robin' ||
+                  (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) && (
+                  <option value="standings">📊 Standings</option>
+                )}
               </select>
 
               {/* Desktop Admin Tabs */}
@@ -1079,14 +1262,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                     </svg>
                   )},
-                  // Only show Edit Pools tab for pool play formats
-                  ...((activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') ? [
-                    { id: 'pools', label: 'Edit Pools', icon: (
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-                      </svg>
-                    )},
-                  ] : []),
                   { id: 'courts', label: 'Courts', icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
@@ -1097,6 +1272,38 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                     </svg>
                   )},
+                  // FORMAT-SPECIFIC TABS - dynamically shown based on competition format
+                  // Pool Play → Medals format
+                  ...((activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') ? [
+                    { id: 'pool-stage', label: 'Pool Stage', icon: (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                      </svg>
+                    )},
+                    { id: 'medal-bracket', label: 'Medal Bracket', icon: (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                      </svg>
+                    )},
+                  ] : []),
+                  // Single Elimination format
+                  ...((activeDivision?.format?.competitionFormat === 'singles_elimination' ||
+                       (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'single_elim')) ? [
+                    { id: 'bracket', label: 'Bracket', icon: (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" />
+                      </svg>
+                    )},
+                  ] : []),
+                  // Round Robin format
+                  ...((activeDivision?.format?.competitionFormat === 'round_robin' ||
+                       (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) ? [
+                    { id: 'standings', label: 'Standings', icon: (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      </svg>
+                    )},
+                  ] : []),
                 ].map(tab => (
                   <button
                     key={tab.id}
@@ -1369,18 +1576,454 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             </div>
           )}
 
-          {/* Edit Pools Tab - for pool_play_medals format */}
-          {adminTab === 'pools' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
+          {/* Pool Stage Tab - for pool_play_medals format */}
+          {adminTab === 'pool-stage' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
+            <div className="space-y-6">
+              {/* Pool Standings */}
+              <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-white font-bold text-lg">Pool Standings</h3>
+                  <div className="flex gap-2">
+                    {/* Generate Finals button if pools complete */}
+                    {(() => {
+                      const poolMatches = (divisionMatches || []).filter(m =>
+                        m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
+                      );
+                      const completedPoolMatches = poolMatches.filter(m => m.status === 'completed');
+                      const allPoolsComplete = poolMatches.length > 0 && completedPoolMatches.length === poolMatches.length;
+                      return (
+                        <button
+                          onClick={() => handleGenerateFinals(standings)}
+                          disabled={poolMatches.length === 0 || !allPoolsComplete}
+                          className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded font-bold text-sm disabled:bg-gray-700 disabled:cursor-not-allowed"
+                        >
+                          Generate Medal Bracket
+                        </button>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <PoolGroupStandings
+                  teams={divisionTeams || []}
+                  matches={(divisionMatches || []).filter(m =>
+                    m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
+                  )}
+                  poolAssignments={activeDivision?.poolAssignments}
+                  getTeamDisplayName={getTeamDisplayName}
+                />
+              </div>
+
+              {/* Pool Editor */}
+              <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 className="text-white font-bold text-lg mb-4">Edit Pool Assignments</h3>
+                <PoolEditor
+                  tournamentId={tournament.id}
+                  divisionId={activeDivision.id}
+                  teams={divisionTeams || []}
+                  matches={divisionMatches || []}
+                  initialAssignments={activeDivision.poolAssignments}
+                  poolSize={activeDivision.format.teamsPerPool || 4}
+                  getTeamDisplayName={getTeamDisplayName}
+                />
+              </div>
+
+              {/* Pool Matches List - Grouped by Pool */}
+              <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 className="text-white font-bold text-lg mb-4">Match List</h3>
+                {(() => {
+                  const poolMatches = (divisionMatches || []).filter(m =>
+                    m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play' || !m.stage
+                  );
+
+                  if (poolMatches.length === 0) {
+                    return <p className="text-gray-500 text-center py-4">No pool matches generated yet. Go to Teams tab to generate schedule.</p>;
+                  }
+
+                  // Helper to derive pool from team assignment if poolGroup not set
+                  const getMatchPool = (match: any): string => {
+                    if (match.poolGroup) return match.poolGroup;
+
+                    // Try to derive pool from team's pool assignment
+                    const assignments = activeDivision?.poolAssignments || [];
+                    const teamAId = match.teamAId || match.sideA?.id;
+                    const teamBId = match.teamBId || match.sideB?.id;
+
+                    for (const pa of assignments) {
+                      if (pa.teamId === teamAId || pa.teamId === teamBId) {
+                        return pa.poolName || `Pool ${String.fromCharCode(65 + (pa.poolIndex || 0))}`;
+                      }
+                    }
+
+                    // Fallback: derive from round number if available
+                    // Matches are typically grouped: Pool A = rounds 1-3, Pool B = rounds 4-6, etc.
+                    const roundNum = match.roundNumber || 1;
+                    const teamsPerPool = activeDivision?.format?.teamsPerPool || 4;
+                    const matchesPerPool = (teamsPerPool * (teamsPerPool - 1)) / 2;
+                    const poolIndex = Math.floor((match.matchNumber || 0) / matchesPerPool);
+                    return `Pool ${String.fromCharCode(65 + poolIndex)}`;
+                  };
+
+                  // Get unique pool groups
+                  const poolGroups = [...new Set(poolMatches.map(m => getMatchPool(m)))].sort();
+
+                  // Helper to render match
+                  const renderMatch = (match: any) => (
+                    <div
+                      key={match.id}
+                      className={`p-3 rounded border ${
+                        match.status === 'completed' ? 'border-green-700 bg-green-900/20' :
+                        match.status === 'in_progress' ? 'border-yellow-700 bg-yellow-900/20' :
+                        'border-gray-600 bg-gray-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm">
+                          <span className="text-white">{getTeamDisplayName(match.teamAId || match.sideA?.id)}</span>
+                          <span className="text-gray-500"> vs </span>
+                          <span className="text-white">{getTeamDisplayName(match.teamBId || match.sideB?.id)}</span>
+                        </div>
+                        <div className="text-sm">
+                          {match.status === 'completed' && (
+                            <span className="text-green-400">
+                              {match.scores?.map((s: any) => `${s.scoreA}-${s.scoreB}`).join(', ') ||
+                                `${match.scoreTeamAGames?.[0] || 0}-${match.scoreTeamBGames?.[0] || 0}`}
+                            </span>
+                          )}
+                          {match.status === 'in_progress' && <span className="text-yellow-400">In Progress</span>}
+                          {match.status === 'scheduled' && <span className="text-gray-400">Scheduled</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+
+                  return (
+                    <div className="space-y-4">
+                      {poolGroups.map(poolName => {
+                        const matches = poolMatches
+                          .filter(m => getMatchPool(m) === poolName)
+                          .sort((a, b) => (a.matchNumber || 0) - (b.matchNumber || 0));
+                        const completedCount = matches.filter(m => m.status === 'completed').length;
+
+                        return (
+                          <div key={poolName} className="border border-gray-700 rounded-lg overflow-hidden">
+                            {/* Pool Header */}
+                            <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-lg font-bold text-white">{poolName}</span>
+                                <span className="text-xs text-gray-400">({matches.length} matches)</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {completedCount === matches.length && matches.length > 0 ? (
+                                  <span className="text-xs px-2 py-0.5 bg-green-900/50 text-green-400 rounded">Complete</span>
+                                ) : (
+                                  <span className="text-xs text-gray-400">{completedCount}/{matches.length} played</span>
+                                )}
+                              </div>
+                            </div>
+                            {/* Pool Matches */}
+                            <div className="p-3 space-y-2">
+                              {matches.map(renderMatch)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* Medal Bracket Tab - for pool_play_medals format */}
+          {adminTab === 'medal-bracket' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
+            <div className="space-y-6">
+              {/* Main Medal Bracket */}
+              <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 className="text-white font-bold text-lg mb-4">Medal Bracket</h3>
+                {(() => {
+                  const bracketMatches = (divisionMatches || []).filter(m =>
+                    m.stage === 'Finals' || m.stage === 'finals' || m.stage === 'Medal' ||
+                    m.bracketType === 'main' || (!m.poolGroup && !m.stage?.toLowerCase().includes('pool'))
+                  );
+                  if (bracketMatches.length === 0) {
+                    return (
+                      <div className="text-center py-8">
+                        <p className="text-gray-400 mb-4">Medal bracket not generated yet.</p>
+                        <p className="text-sm text-gray-500">Complete all pool matches first, then click "Generate Medal Bracket" in the Pool Stage tab.</p>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="space-y-2">
+                      {bracketMatches
+                        .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0))
+                        .map(match => (
+                          <div
+                            key={match.id}
+                            className={`p-3 rounded border ${
+                              match.status === 'completed' ? 'border-green-700 bg-green-900/20' :
+                              match.status === 'in_progress' ? 'border-yellow-700 bg-yellow-900/20' :
+                              'border-gray-600 bg-gray-800'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <span className="text-xs text-gray-500">Round {match.roundNumber || 1}</span>
+                                <div className="text-sm">
+                                  <span className="text-white">{getTeamDisplayName(match.teamAId || match.sideA?.id)}</span>
+                                  <span className="text-gray-500"> vs </span>
+                                  <span className="text-white">{getTeamDisplayName(match.teamBId || match.sideB?.id)}</span>
+                                </div>
+                              </div>
+                              <div className="text-sm">
+                                {match.status === 'completed' && (
+                                  <span className="text-green-400">
+                                    {match.scores?.map(s => `${s.scoreA}-${s.scoreB}`).join(', ') ||
+                                      `${match.scoreTeamAGames?.[0] || 0}-${match.scoreTeamBGames?.[0] || 0}`}
+                                  </span>
+                                )}
+                                {match.status === 'in_progress' && <span className="text-yellow-400">In Progress</span>}
+                                {match.status === 'scheduled' && <span className="text-gray-400">Scheduled</span>}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Plate Bracket (if enabled) */}
+              {activeDivision?.format?.plateEnabled && (
+                <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                  <h3 className="text-white font-bold text-lg mb-4">
+                    {activeDivision?.format?.plateName || 'Plate'} Bracket
+                  </h3>
+                  {(() => {
+                    const plateMatches = (divisionMatches || []).filter(m =>
+                      m.bracketType === 'plate' || m.stage?.toLowerCase().includes('plate')
+                    );
+                    if (plateMatches.length === 0) {
+                      return (
+                        <p className="text-gray-400 text-center py-4">Plate bracket not generated yet.</p>
+                      );
+                    }
+                    return (
+                      <div className="space-y-2">
+                        {plateMatches.map(match => (
+                          <div
+                            key={match.id}
+                            className={`p-3 rounded border ${
+                              match.status === 'completed' ? 'border-green-700 bg-green-900/20' :
+                              match.status === 'in_progress' ? 'border-yellow-700 bg-yellow-900/20' :
+                              'border-gray-600 bg-gray-800'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="text-sm">
+                                <span className="text-white">{getTeamDisplayName(match.teamAId || match.sideA?.id)}</span>
+                                <span className="text-gray-500"> vs </span>
+                                <span className="text-white">{getTeamDisplayName(match.teamBId || match.sideB?.id)}</span>
+                              </div>
+                              <div className="text-sm">
+                                {match.status === 'completed' && <span className="text-green-400">Complete</span>}
+                                {match.status === 'in_progress' && <span className="text-yellow-400">In Progress</span>}
+                                {match.status === 'scheduled' && <span className="text-gray-400">Scheduled</span>}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Bracket Tab - for single elimination format */}
+          {adminTab === 'bracket' && (activeDivision?.format?.competitionFormat === 'singles_elimination' ||
+            (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'single_elim')) && (
             <div className="bg-gray-900 p-4 rounded border border-gray-700">
-              <PoolEditor
-                tournamentId={tournament.id}
-                divisionId={activeDivision.id}
-                teams={divisionTeams || []}
-                matches={divisionMatches || []}
-                initialAssignments={activeDivision.poolAssignments}
-                poolSize={activeDivision.format.teamsPerPool || 4}
-                getTeamDisplayName={getTeamDisplayName}
-              />
+              <h3 className="text-white font-bold text-lg mb-4">Elimination Bracket</h3>
+              {(() => {
+                const bracketMatches = divisionMatches || [];
+                if (bracketMatches.length === 0) {
+                  return (
+                    <p className="text-gray-400 text-center py-8">No bracket matches generated yet. Go to Teams tab to generate schedule.</p>
+                  );
+                }
+                return (
+                  <div className="space-y-2">
+                    {bracketMatches
+                      .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0))
+                      .map(match => (
+                        <div
+                          key={match.id}
+                          className={`p-3 rounded border ${
+                            match.status === 'completed' ? 'border-green-700 bg-green-900/20' :
+                            match.status === 'in_progress' ? 'border-yellow-700 bg-yellow-900/20' :
+                            'border-gray-600 bg-gray-800'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-xs text-gray-500">Round {match.roundNumber || 1}</span>
+                              <div className="text-sm">
+                                <span className="text-white">{getTeamDisplayName(match.teamAId || match.sideA?.id)}</span>
+                                <span className="text-gray-500"> vs </span>
+                                <span className="text-white">{getTeamDisplayName(match.teamBId || match.sideB?.id)}</span>
+                              </div>
+                            </div>
+                            <div className="text-sm">
+                              {match.status === 'completed' && (
+                                <span className="text-green-400">
+                                  {match.scores?.map(s => `${s.scoreA}-${s.scoreB}`).join(', ') ||
+                                    `${match.scoreTeamAGames?.[0] || 0}-${match.scoreTeamBGames?.[0] || 0}`}
+                                </span>
+                              )}
+                              {match.status === 'in_progress' && <span className="text-yellow-400">In Progress</span>}
+                              {match.status === 'scheduled' && <span className="text-gray-400">Scheduled</span>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Standings Tab - for round robin format */}
+          {adminTab === 'standings' && (activeDivision?.format?.competitionFormat === 'round_robin' ||
+            (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) && (
+            <div className="space-y-6">
+              <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 className="text-white font-bold text-lg mb-4">Round Robin Standings</h3>
+                <PoolGroupStandings
+                  teams={divisionTeams || []}
+                  matches={divisionMatches || []}
+                  poolAssignments={activeDivision?.poolAssignments}
+                  getTeamDisplayName={getTeamDisplayName}
+                />
+              </div>
+
+              {/* Match List - Grouped by Pool */}
+              <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 className="text-white font-bold text-lg mb-4">Match List</h3>
+                {(() => {
+                  // Group matches by pool
+                  const poolMatches = (divisionMatches || []).filter(m => m.stage === 'pool' || !m.stage);
+                  const bracketMatches = (divisionMatches || []).filter(m => m.stage === 'bracket' || m.stage === 'finals' || m.stage === 'third_place');
+                  const plateMatches = (divisionMatches || []).filter(m => m.stage === 'plate');
+
+                  // Get unique pool groups and sort them
+                  const poolGroups = [...new Set(poolMatches.map(m => m.poolGroup || 'Pool A'))].sort();
+
+                  // Helper to render a single match
+                  const renderMatch = (match: Match) => (
+                    <div
+                      key={match.id}
+                      className={`p-3 rounded border ${
+                        match.status === 'completed' ? 'border-green-700 bg-green-900/20' :
+                        match.status === 'in_progress' ? 'border-yellow-700 bg-yellow-900/20' :
+                        'border-gray-600 bg-gray-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm">
+                          <span className="text-white">{getTeamDisplayName(match.teamAId || match.sideA?.id)}</span>
+                          <span className="text-gray-500"> vs </span>
+                          <span className="text-white">{getTeamDisplayName(match.teamBId || match.sideB?.id)}</span>
+                        </div>
+                        <div className="text-sm">
+                          {match.status === 'completed' && (
+                            <span className="text-green-400">
+                              {match.scores?.map(s => `${s.scoreA}-${s.scoreB}`).join(', ') ||
+                                `${match.scoreTeamAGames?.[0] || 0}-${match.scoreTeamBGames?.[0] || 0}`}
+                            </span>
+                          )}
+                          {match.status === 'in_progress' && <span className="text-yellow-400">In Progress</span>}
+                          {match.status === 'scheduled' && <span className="text-gray-400">Scheduled</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+
+                  if ((divisionMatches || []).length === 0) {
+                    return <p className="text-gray-500 text-center py-4">No matches generated yet. Go to Teams tab to generate schedule.</p>;
+                  }
+
+                  return (
+                    <div className="space-y-6">
+                      {/* Pool Stage Matches - Grouped by Pool */}
+                      {poolGroups.length > 0 && (
+                        <div className="space-y-4">
+                          {poolGroups.map(poolName => {
+                            const matches = poolMatches
+                              .filter(m => (m.poolGroup || 'Pool A') === poolName)
+                              .sort((a, b) => (a.matchNumber || 0) - (b.matchNumber || 0));
+                            const completedCount = matches.filter(m => m.status === 'completed').length;
+
+                            return (
+                              <div key={poolName} className="border border-gray-700 rounded-lg overflow-hidden">
+                                {/* Pool Header */}
+                                <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-lg font-bold text-white">{poolName}</span>
+                                    <span className="text-xs text-gray-400">({matches.length} matches)</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {completedCount === matches.length && matches.length > 0 ? (
+                                      <span className="text-xs px-2 py-0.5 bg-green-900/50 text-green-400 rounded">Complete</span>
+                                    ) : (
+                                      <span className="text-xs text-gray-400">{completedCount}/{matches.length} played</span>
+                                    )}
+                                  </div>
+                                </div>
+                                {/* Pool Matches */}
+                                <div className="p-3 space-y-2">
+                                  {matches.map(renderMatch)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Medal Bracket Matches */}
+                      {bracketMatches.length > 0 && (
+                        <div className="border border-yellow-700/50 rounded-lg overflow-hidden">
+                          <div className="bg-yellow-900/30 px-4 py-2 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg font-bold text-yellow-400">Medal Bracket</span>
+                              <span className="text-xs text-gray-400">({bracketMatches.length} matches)</span>
+                            </div>
+                          </div>
+                          <div className="p-3 space-y-2">
+                            {bracketMatches.sort((a, b) => (a.matchNumber || 0) - (b.matchNumber || 0)).map(renderMatch)}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Plate Bracket Matches */}
+                      {plateMatches.length > 0 && (
+                        <div className="border border-purple-700/50 rounded-lg overflow-hidden">
+                          <div className="bg-purple-900/30 px-4 py-2 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg font-bold text-purple-400">Plate Bracket</span>
+                              <span className="text-xs text-gray-400">({plateMatches.length} matches)</span>
+                            </div>
+                          </div>
+                          <div className="p-3 space-y-2">
+                            {plateMatches.sort((a, b) => (a.matchNumber || 0) - (b.matchNumber || 0)).map(renderMatch)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           )}
 
@@ -1491,6 +2134,35 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     Used when generating pools/brackets for this division.
                   </p>
                 </div>
+
+                {/* Day Assignment - only for multi-day tournaments */}
+                {tournament.days && tournament.days.length > 1 && (
+                  <div className="mb-4">
+                    <label className="block text-xs text-gray-400 mb-1">
+                      Tournament Day
+                    </label>
+                    <select
+                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                      value={divisionSettings.tournamentDayId}
+                      onChange={e =>
+                        setDivisionSettings(prev => ({
+                          ...prev,
+                          tournamentDayId: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">-- Select Day --</option>
+                      {tournament.days.map((day, idx) => (
+                        <option key={day.id} value={day.id}>
+                          {day.label || `Day ${idx + 1}`} ({day.date})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      Which day this division is scheduled to play.
+                    </p>
+                  </div>
+                )}
 
                 {/* Pool Size Setting - only for pool_play_medals format */}
                 {(activeDivision.format?.competitionFormat === 'pool_play_medals' ||

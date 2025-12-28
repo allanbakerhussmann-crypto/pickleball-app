@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { getMeetups, subscribeToTournaments, subscribeToLeagues } from '../services/firebase';
 import { ROUTES, getRoute } from '../router/routes';
 import type { Meetup, Tournament, League } from '../types';
+import { formatTimestamp } from '../utils/timeFormat';
 
 // Chevron icon component
 const ChevronRightIcon = () => (
@@ -80,14 +81,8 @@ const HomePage: React.FC = () => {
     });
   };
 
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  };
+  // Use formatTimestamp from utils/timeFormat
+  const formatTime = formatTimestamp;
 
   const formatTournamentDate = (dateStr: string) => {
     const date = new Date(dateStr);

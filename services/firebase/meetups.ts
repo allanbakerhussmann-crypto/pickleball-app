@@ -177,20 +177,31 @@ export const getMeetupRSVPs = async (meetupId: string): Promise<MeetupRSVP[]> =>
       try {
         const userIds = rsvps.map(r => r.userId);
         console.log('Fetching user profiles for:', userIds);
-        
+
         const users = await getUsersByIds(userIds);
         console.log('Users fetched:', users.length);
-        
+
         const userMap = new Map(users.map(u => [u.id, u]));
-        
-        return rsvps.map(r => ({
-          ...r,
-          userProfile: userMap.get(r.userId)
-        }));
+
+        return rsvps.map(r => {
+          const profile = userMap.get(r.userId);
+          return {
+            ...r,
+            // Map to expected fields for MeetupScoring
+            odUserId: r.userId,
+            odUserName: profile?.displayName || 'Player',
+            duprId: profile?.duprId,
+            userProfile: profile
+          };
+        });
       } catch (userError) {
         console.error('Error fetching user profiles:', userError);
-        // Return RSVPs without user profiles
-        return rsvps;
+        // Return RSVPs with at least odUserId mapped
+        return rsvps.map(r => ({
+          ...r,
+          odUserId: r.userId,
+          odUserName: 'Player'
+        }));
       }
     }
     

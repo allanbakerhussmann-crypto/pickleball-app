@@ -32,6 +32,7 @@ import type { CompetitionFormat } from '../../types/formats';
 import { getFormatOption } from '../../types/formats';
 import { VerificationSettingsForm } from './verification';
 import { FormatCards } from '../shared/FormatSelector';
+import { formatTime } from '../../utils/timeFormat';
 
 // ============================================
 // LOCAL TYPES
@@ -155,12 +156,8 @@ const formatDateDisplay = (dateStr: string): string => {
   });
 };
 
-const formatTimeDisplay = (time: string): string => {
-  const [hours, mins] = time.split(':').map(Number);
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const displayHours = hours % 12 || 12;
-  return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
-};
+// Use formatTime from utils/timeFormat (aliased as formatTimeDisplay for compatibility)
+const formatTimeDisplay = formatTime;
 
 // ============================================
 // COMPONENT

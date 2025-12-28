@@ -30,6 +30,7 @@ import type { Club } from '../../types';
 import type { CompetitionFormat } from '../../types/formats';
 import { getFormatOption } from '../../types/formats';
 import { FormatCards } from '../shared/FormatSelector';
+import { RollingTimePicker } from '../shared/RollingTimePicker';
 
 // ============================================
 // TYPES
@@ -168,9 +169,9 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   // Basic info
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [date, setDate] = useState('');
-  const [time, setTime] = useState('');
-  const [endTime, setEndTime] = useState('');
+  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [time, setTime] = useState('08:00');
+  const [endTime, setEndTime] = useState('10:00');
   const [maxPlayers, setMaxPlayers] = useState('16');
   const [locationName, setLocationName] = useState('');
   const [lat, setLat] = useState<number | null>(null);
@@ -587,20 +588,18 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Start *</label>
-                <input
-                  type="time"
+                <RollingTimePicker
                   value={time}
-                  onChange={(e) => setTime(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                  onChange={setTime}
+                  placeholder="--:-- --"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">End</label>
-                <input
-                  type="time"
+                <RollingTimePicker
                   value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
+                  onChange={setEndTime}
+                  placeholder="--:-- --"
                 />
               </div>
             </div>
@@ -676,9 +675,9 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
               </div>
               <button
                 onClick={() => setPricingEnabled(!pricingEnabled)}
-                className={`relative w-14 h-8 flex-shrink-0 rounded-full transition-colors ${pricingEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                className={`relative w-12 h-6 flex-shrink-0 rounded-full transition-colors ${pricingEnabled ? 'bg-green-500' : 'bg-gray-600'}`}
               >
-                <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${pricingEnabled ? 'translate-x-7' : 'translate-x-1'}`}></span>
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${pricingEnabled ? 'translate-x-6' : 'translate-x-0'}`}></span>
               </button>
             </div>
 
@@ -721,9 +720,9 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                   </div>
                   <button
                     onClick={() => setPrizePoolEnabled(!prizePoolEnabled)}
-                    className={`relative w-14 h-8 flex-shrink-0 rounded-full transition-colors ${prizePoolEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                    className={`relative w-12 h-6 flex-shrink-0 rounded-full transition-colors ${prizePoolEnabled ? 'bg-green-500' : 'bg-gray-600'}`}
                   >
-                    <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${prizePoolEnabled ? 'translate-x-7' : 'translate-x-1'}`}></span>
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${prizePoolEnabled ? 'translate-x-6' : 'translate-x-0'}`}></span>
                   </button>
                 </div>
 
@@ -877,9 +876,9 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                   </div>
                   <button
                     onClick={() => setManagedInApp(!managedInApp)}
-                    className={`relative w-14 h-8 rounded-full transition-colors ${managedInApp ? 'bg-green-600' : 'bg-gray-600'}`}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${managedInApp ? 'bg-green-500' : 'bg-gray-600'}`}
                   >
-                    <span className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-transform ${managedInApp ? 'translate-x-7' : 'translate-x-1'}`}></span>
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${managedInApp ? 'translate-x-6' : 'translate-x-0'}`}></span>
                   </button>
                 </div>
 

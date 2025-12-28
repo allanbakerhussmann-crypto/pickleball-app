@@ -23,6 +23,7 @@ import {
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import type { TournamentPlannerSettings, PlannerCapacity, TournamentDay } from '../../../types';
+import { formatTime } from '../../../utils/timeFormat';
 
 // Division breakdown type (matches inline type in PlannerCapacity)
 interface DivisionBreakdown {
@@ -150,13 +151,8 @@ const formatDateDisplay = (dateStr: string): string => {
   });
 };
 
-// Format time to 12-hour format for display
-const formatTime12Hour = (time: string): string => {
-  const [h, m] = time.split(':').map(Number);
-  const hour12 = h % 12 || 12;
-  const ampm = h < 12 ? 'AM' : 'PM';
-  return `${hour12}:${m.toString().padStart(2, '0')} ${ampm}`;
-};
+// Use formatTime from utils/timeFormat (aliased as formatTime12Hour)
+const formatTime12Hour = formatTime;
 
 export const PlannerStep5Preview: React.FC<PlannerStep5PreviewProps> = ({
   settings,

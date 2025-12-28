@@ -15,6 +15,7 @@ import {
   ScoreVerificationIcon,
 } from './verification';
 import { DuprSubmitButton } from '../shared/DuprSubmitButton';
+import { formatTimestamp } from '../../utils/timeFormat';
 
 // ============================================
 // TYPES
@@ -68,13 +69,10 @@ const formatDate = (timestamp: number | null | undefined): string => {
   });
 };
 
+// Use formatTimestamp from utils/timeFormat (wrapper for null handling)
 const formatTime = (timestamp: number | null | undefined): string => {
   if (!timestamp) return '';
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString('en-NZ', { 
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatTimestamp(timestamp);
 };
 
 const getStatusBadge = (status: string): { label: string; className: string } => {

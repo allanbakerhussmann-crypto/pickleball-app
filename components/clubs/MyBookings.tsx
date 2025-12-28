@@ -23,6 +23,7 @@ import {
 import { db } from '../../services/firebase';
 import { cancelCourtBooking, canCancelBooking } from '../../services/firebase';
 import type { CourtBooking, ClubBookingSettings } from '../../types';
+import { formatTime } from '../../utils/timeFormat';
 
 // ============================================
 // TYPES
@@ -56,12 +57,7 @@ const formatDate = (dateStr: string): string => {
   });
 };
 
-const formatTime = (time: string): string => {
-  const [hours, mins] = time.split(':').map(Number);
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const displayHours = hours % 12 || 12;
-  return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
-};
+// formatTime imported from utils/timeFormat
 
 const isUpcoming = (date: string, startTime: string): boolean => {
   const now = new Date();

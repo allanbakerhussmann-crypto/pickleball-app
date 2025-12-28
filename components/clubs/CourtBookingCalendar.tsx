@@ -33,6 +33,7 @@ import { getPendingCourtHolds } from '../../services/firebase/checkout';
 import type { ClubCourt, ClubBookingSettings, CourtBooking } from '../../types';
 import type { PriceCalculation, PriceLineItem } from '../../services/firebase/pricing';
 import type { CheckoutItem, CheckoutItemDetails } from '../../services/firebase/checkout';
+import { formatTime } from '../../utils/timeFormat';
 
 // ============================================
 // TYPES
@@ -88,13 +89,7 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Format time for display - defined early so it can be used in useMemo hooks
-  const formatTime = (time: string): string => {
-    const [hours, mins] = time.split(':').map(Number);
-    const period = hours >= 12 ? 'PM' : 'AM';
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
-  };
+  // formatTime imported from utils/timeFormat
 
   // Check for payment success/cancel from URL
   useEffect(() => {

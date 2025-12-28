@@ -23,6 +23,7 @@ import {
   PLATFORM_FEE_PERCENT,
 } from '../../services/stripe';
 import type { PriceCalculation } from '../../services/firebase/pricing';
+import { formatTime } from '../../utils/timeFormat';
 
 // ============================================
 // TYPES (inline to avoid import issues)
@@ -142,14 +143,7 @@ const formatDate = (dateStr?: string): string => {
   });
 };
 
-const formatTime = (time?: string): string => {
-  if (!time) return '';
-  const [hours, minutes] = time.split(':');
-  const hour = parseInt(hours);
-  const ampm = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 || 12;
-  return `${displayHour}:${minutes} ${ampm}`;
-};
+// formatTime imported from utils/timeFormat
 
 const formatCurrency = (cents: number): string => {
   return `NZ$${(cents / 100).toFixed(2)}`;

@@ -38,7 +38,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
+exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -78,4 +78,10 @@ Object.defineProperty(exports, "privacy_processRequest", { enumerable: true, get
 // TEAM FUNCTIONS (if you have them)
 // ============================================
 // export { createTeam } from './teams';
+// ============================================
+// SMS FUNCTIONS (Twilio)
+// ============================================
+var sms_1 = require("./sms");
+Object.defineProperty(exports, "sendSMS", { enumerable: true, get: function () { return sms_1.sendSMS; } });
+Object.defineProperty(exports, "sendBulkSMS", { enumerable: true, get: function () { return sms_1.sendBulkSMS; } });
 //# sourceMappingURL=index.js.map
