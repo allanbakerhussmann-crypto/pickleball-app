@@ -53,14 +53,24 @@ export const getClub = async (clubId: string): Promise<Club | null> => {
 
 /**
  * Update club profile
+ * Filters out undefined values since Firestore doesn't accept them
  */
 export const updateClub = async (
   clubId: string,
   updates: Partial<Club>
 ): Promise<void> => {
   const clubRef = doc(db, 'clubs', clubId);
+
+  // Filter out undefined values - Firestore doesn't accept them
+  const cleanedUpdates: Record<string, any> = {};
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined) {
+      cleanedUpdates[key] = value;
+    }
+  }
+
   await updateDoc(clubRef, {
-    ...updates,
+    ...cleanedUpdates,
     updatedAt: Date.now(),
   });
 };

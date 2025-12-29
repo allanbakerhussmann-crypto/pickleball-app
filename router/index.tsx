@@ -49,6 +49,9 @@ import WatchScorePage from '../pages/WatchScorePage';
 import ScoreboardPage from '../pages/ScoreboardPage';
 import ScoringDashboardPage from '../pages/ScoringDashboardPage';
 
+// Public Results Page (V06.19)
+import EventResultsPage from '../pages/EventResultsPage';
+
 // Legal / Privacy Pages (V06.04)
 import PrivacyPolicyPage from '../pages/PrivacyPolicyPage';
 import TermsOfServicePage from '../pages/TermsOfServicePage';
@@ -339,6 +342,12 @@ export const router = createHashRouter([
       {
         path: 'scoreboard/:eventId',
         element: <ScoreboardPage />,
+      },
+
+      // Public results page (V06.19) - shows standings, on court, next up, sponsors
+      {
+        path: 'results/:eventId',
+        element: <EventResultsPage />,
       },
 
       // ==========================================

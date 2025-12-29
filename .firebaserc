@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "pickleball-app-dev"
-  }
+  },
+  "targets": {
+    "pickleball-app-dev": {
+      "storage": {
+        "default": [
+          "pickleball-app-dev.firebasestorage.app"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

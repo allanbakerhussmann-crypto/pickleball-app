@@ -109,15 +109,20 @@ export const ClubSettingsForm: React.FC<ClubSettingsFormProps> = ({
     setSuccess(false);
 
     try {
-      await updateClub(club.id, {
-        website: website.trim() || undefined,
-        contactEmail: contactEmail.trim() || undefined,
-        contactPhone: contactPhone.trim() || undefined,
-        socialLinks: socialLinks.length > 0 ? socialLinks : undefined,
-        // Location fields (cast to any since we're adding them)
-        ...(address.trim() && { address: address.trim() }),
-        ...(city.trim() && { city: city.trim() }),
-      } as Partial<Club>);
+      // Build updates object - only include non-empty values
+      const updates: Partial<Club> = {};
+
+      // String fields - empty string means remove/clear
+      if (website.trim()) updates.website = website.trim();
+      if (contactEmail.trim()) updates.contactEmail = contactEmail.trim();
+      if (contactPhone.trim()) updates.contactPhone = contactPhone.trim();
+      if (socialLinks.length > 0) updates.socialLinks = socialLinks;
+
+      // Location fields
+      if (address.trim()) (updates as any).address = address.trim();
+      if (city.trim()) (updates as any).city = city.trim();
+
+      await updateClub(club.id, updates);
 
       setSuccess(true);
       onUpdate();
