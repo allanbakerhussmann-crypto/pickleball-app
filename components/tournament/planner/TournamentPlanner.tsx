@@ -8,7 +8,7 @@
  * VERSION: V06.00
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import type {
   TournamentPlannerSettings,
   PlannerCapacity,
@@ -19,6 +19,10 @@ import {
   MATCH_PRESETS,
   createDefaultTournamentDay,
 } from '../../../types';
+
+// localStorage keys for draft persistence
+const PLANNER_DRAFT_KEY = 'tournament_planner_draft';
+const PLANNER_DRAFT_STEP_KEY = 'tournament_planner_draft_step';
 import { calculateTournamentCapacity } from '../../../services/plannerCalculations';
 import { useAuth } from '../../../contexts/AuthContext';
 
@@ -48,13 +52,90 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
   const { userProfile } = useAuth();
   const hasStripeConnected = !!(userProfile?.stripeConnectedAccountId && userProfile?.stripeChargesEnabled);
 
-  // Current step (1-5)
-  const [step, setStep] = useState(1);
+  // Track if we loaded a draft (for showing resume prompt)
+  const [showResumePrompt, setShowResumePrompt] = useState(false);
 
-  // Planner settings
-  const [settings, setSettings] = useState<TournamentPlannerSettings>(
-    initialSettings || DEFAULT_TOURNAMENT_PLANNER_SETTINGS
-  );
+  // Load draft from localStorage on mount (only if no initialSettings provided)
+  const loadDraft = useCallback((): { settings: TournamentPlannerSettings; step: number } | null => {
+    if (typeof window === 'undefined' || initialSettings) return null;
+    try {
+      const savedSettings = localStorage.getItem(PLANNER_DRAFT_KEY);
+      const savedStep = localStorage.getItem(PLANNER_DRAFT_STEP_KEY);
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        // Basic validation - check for expected structure
+        if (parsed.courts && parsed.days && Array.isArray(parsed.days)) {
+          const step = savedStep ? parseInt(savedStep, 10) : 1;
+          return {
+            settings: parsed,
+            step: (step >= 1 && step <= 5) ? step : 1
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse planner draft:', e);
+    }
+    return null;
+  }, [initialSettings]);
+
+  // Current step (1-5) - load from draft if available
+  const [step, setStep] = useState(() => {
+    const draft = loadDraft();
+    if (draft) {
+      // We'll show the resume prompt after mount
+      return draft.step;
+    }
+    return 1;
+  });
+
+  // Planner settings - load from draft if available
+  const [settings, setSettings] = useState<TournamentPlannerSettings>(() => {
+    const draft = loadDraft();
+    if (draft) {
+      return draft.settings;
+    }
+    return initialSettings || DEFAULT_TOURNAMENT_PLANNER_SETTINGS;
+  });
+
+  // Show resume prompt if we loaded a draft
+  useEffect(() => {
+    if (!initialSettings) {
+      const saved = localStorage.getItem(PLANNER_DRAFT_KEY);
+      if (saved) {
+        setShowResumePrompt(true);
+      }
+    }
+  }, [initialSettings]);
+
+  // Auto-save settings to localStorage whenever they change
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !initialSettings) {
+      localStorage.setItem(PLANNER_DRAFT_KEY, JSON.stringify(settings));
+    }
+  }, [settings, initialSettings]);
+
+  // Auto-save step to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !initialSettings) {
+      localStorage.setItem(PLANNER_DRAFT_STEP_KEY, String(step));
+    }
+  }, [step, initialSettings]);
+
+  // Clear draft from localStorage
+  const clearDraft = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(PLANNER_DRAFT_KEY);
+      localStorage.removeItem(PLANNER_DRAFT_STEP_KEY);
+    }
+  }, []);
+
+  // Handle starting fresh (discard draft)
+  const handleStartFresh = useCallback(() => {
+    clearDraft();
+    setSettings(DEFAULT_TOURNAMENT_PLANNER_SETTINGS);
+    setStep(1);
+    setShowResumePrompt(false);
+  }, [clearDraft]);
 
   // Calculate capacity whenever settings change
   const capacity = useMemo(() => {
@@ -75,8 +156,9 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
   }, [step]);
 
   const handleComplete = useCallback(() => {
+    clearDraft();
     onComplete(settings, capacity);
-  }, [settings, capacity, onComplete]);
+  }, [settings, capacity, onComplete, clearDraft]);
 
   // Settings updates
   const updateSettings = useCallback(
@@ -257,6 +339,34 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
         </div>
       </div>
 
+      {/* Resume Draft Prompt */}
+      {showResumePrompt && (
+        <div className="max-w-4xl mx-auto px-6 pt-6">
+          <div className="bg-blue-900/30 border border-blue-500 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <p className="text-blue-400 font-medium">Draft found</p>
+              <p className="text-sm text-gray-400">
+                Continue where you left off? (Step {step} of {TOTAL_STEPS})
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleStartFresh}
+                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                Start Fresh
+              </button>
+              <button
+                onClick={() => setShowResumePrompt(false)}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-500 transition-colors"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       <div className="max-w-4xl mx-auto px-6 py-8">
         <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
@@ -277,7 +387,10 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
               </button>
             ) : onCancel ? (
               <button
-                onClick={onCancel}
+                onClick={() => {
+                  clearDraft();
+                  onCancel();
+                }}
                 className="px-4 py-2 text-gray-300 hover:text-white transition-colors"
               >
                 Cancel

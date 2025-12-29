@@ -28,6 +28,7 @@ import { CourtBookingCalendar } from './clubs/CourtBookingCalendar';
 import { ManageCourts } from './clubs/ManageCourts';
 import { ClubStripeConnect } from './clubs/ClubStripeConnect';
 import { MyBookings } from './clubs/MyBookings';
+import { ClubSettingsForm } from './clubs/ClubSettingsForm';
 
 interface ClubDetailPageProps {
     clubId: string;
@@ -631,7 +632,15 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
             {activeTab === 'settings' && isAdmin && (
                 <div className="space-y-6">
                     <h2 className="text-xl font-bold text-white mb-4">Club Settings</h2>
-                    
+
+                    {/* Club Profile Settings */}
+                    <ClubSettingsForm
+                        club={club}
+                        onUpdate={() => {
+                            // Club subscription will auto-refresh
+                        }}
+                    />
+
                     {/* Stripe Connect */}
                     <ClubStripeConnect
                         clubId={clubId}

@@ -209,6 +209,10 @@ export interface Club {
   contactPhone?: string;
   website?: string;
   socialLinks?: { platform: string; url: string }[];
+  // Location/Address fields
+  address?: string;
+  city?: string;
+  coordinates?: { lat: number; lng: number };
   ownerId: string;
   adminIds: string[];
   memberCount: number;
@@ -456,6 +460,42 @@ export interface Tournament {
   testMode?: boolean;
   /** Tournament day schedule (for multi-day events) */
   days?: TournamentDay[];
+  /** Tournament sponsors */
+  sponsors?: TournamentSponsor[];
+  /** Sponsor display settings */
+  sponsorSettings?: SponsorDisplaySettings;
+  /** User IDs of tournament staff who can manage live courts and scoring */
+  staffIds?: string[];
+}
+
+/**
+ * Sponsor tier for display prominence
+ */
+export type SponsorTier = 'platinum' | 'gold' | 'silver' | 'bronze';
+
+/**
+ * Tournament sponsor
+ */
+export interface TournamentSponsor {
+  id: string;
+  name: string;
+  logoUrl: string;           // Firebase Storage URL
+  websiteUrl?: string;       // Opens in new tab when clicked
+  tier: SponsorTier;
+  displayOrder?: number;     // Order within tier (lower = first)
+  isActive: boolean;         // Toggle visibility without deleting
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Sponsor display settings - controls where sponsors appear
+ */
+export interface SponsorDisplaySettings {
+  showOnCards: boolean;        // Tournament list cards
+  showOnHeader: boolean;       // Tournament detail header
+  showOnRegistration: boolean; // Registration confirmation
+  showOnScoreboard: boolean;   // Live scoring displays
 }
 
 export interface TournamentSettings {

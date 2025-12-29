@@ -11,8 +11,11 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import type { LiveScore, ScoreboardConfig, ScoreboardLayout } from '../../types/scoring';
+import type { TournamentSponsor } from '../../types';
 import { subscribeToEventLiveScores, subscribeToScoreboardConfig } from '../../services/firebase/liveScores';
 import { LiveScoreDisplay } from './LiveScoreDisplay';
+import { SponsorLogoStrip } from '../shared/SponsorLogoStrip';
+import { ClubBrandingSection } from '../shared/ClubBrandingSection';
 
 // =============================================================================
 // PROPS
@@ -41,6 +44,12 @@ interface MultiCourtScoreboardProps {
   isOrganizer?: boolean;
   /** Callback when config changes */
   onConfigChange?: (config: Partial<ScoreboardConfig>) => void;
+  /** Event sponsors to display */
+  sponsors?: TournamentSponsor[];
+  /** Club ID for branding display */
+  clubId?: string;
+  /** Club name (fallback if club not loaded) */
+  clubName?: string;
 }
 
 // =============================================================================
@@ -145,6 +154,9 @@ export const MultiCourtScoreboard: React.FC<MultiCourtScoreboardProps> = ({
   autoRotateSeconds = 10,
   isOrganizer = false,
   onConfigChange,
+  sponsors,
+  clubId,
+  clubName,
 }) => {
   const [scores, setScores] = useState<LiveScore[]>([]);
   const [loading, setLoading] = useState(true);
@@ -285,6 +297,25 @@ export const MultiCourtScoreboard: React.FC<MultiCourtScoreboardProps> = ({
                   {l.charAt(0).toUpperCase() + l.slice(1)}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Club Branding */}
+          {(clubId || clubName) && (
+            <ClubBrandingSection
+              clubId={clubId}
+              clubName={clubName}
+              variant="scoreboard"
+            />
+          )}
+
+          {/* Sponsors */}
+          {sponsors && sponsors.filter(s => s.isActive).length > 0 && (
+            <div className="flex items-center">
+              <SponsorLogoStrip
+                sponsors={sponsors.filter(s => s.isActive)}
+                variant="scoreboard"
+              />
             </div>
           )}
 

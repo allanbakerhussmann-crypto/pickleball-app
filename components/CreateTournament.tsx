@@ -28,11 +28,13 @@ import type {
     PlannerDivision
 } from '../types';
 import { saveTournament, getUserClubs, getAllClubs } from '../services/firebase';
+import { createOrganizerRequest, getOrganizerRequestByUserId } from '../services/firebase/organizerRequests';
 import { useAuth } from '../contexts/AuthContext';
 import type { CompetitionFormat, PoolPlayMedalsSettings } from '../types/formats';
 import { getFormatOption, DEFAULT_POOL_PLAY_MEDALS_SETTINGS } from '../types/formats';
 import { FormatCards } from './shared/FormatSelector';
 import { TournamentPlanner } from './tournament/planner';
+import { PhoneVerificationModal } from './auth/PhoneVerificationModal';
 
 interface CreateTournamentProps {
   onCreateTournament: (tournament: Tournament) => Promise<void> | void;
@@ -118,7 +120,7 @@ const mapCompetitionToTournamentFormat = (format: CompetitionFormat): Partial<Di
 };
 
 export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTournament, onCancel, onCreateClub, userId }) => {
-  const { isAppAdmin, userProfile } = useAuth();
+  const { isAppAdmin, isOrganizer, userProfile, currentUser } = useAuth();
   // Step: 0 = mode selection, 'planner' = planner flow, 1 = basic info, 2 = divisions
   const [step, setStep] = useState<number | 'planner'>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -127,6 +129,18 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
   // Club Fetching
   const [availableClubs, setAvailableClubs] = useState<Club[]>([]);
   const [loadingClubs, setLoadingClubs] = useState(true);
+
+  // Phone verification & Organizer request state
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [requestReason, setRequestReason] = useState('');
+  const [requestExperience, setRequestExperience] = useState('');
+  const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'denied' | 'approved'>('none');
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [denialReason, setDenialReason] = useState<string | null>(null);
+
+  // Computed values
+  const isPhoneVerified = userProfile?.phoneVerified === true;
+  const hasStripeConnected = !!(userProfile?.stripeConnectedAccountId && userProfile?.stripeChargesEnabled);
 
   // Tournament Draft
   const [formData, setFormData] = useState<Partial<Tournament>>({
@@ -320,12 +334,56 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       loadClubs();
   }, [userId, isAppAdmin]);
 
+  // Load existing organizer request status
+  useEffect(() => {
+    const loadRequestStatus = async () => {
+      if (!isOrganizer && userId) {
+        try {
+          const existing = await getOrganizerRequestByUserId(userId);
+          if (existing) {
+            setRequestStatus(existing.status);
+            if (existing.status === 'denied') {
+              setDenialReason(existing.denialReason || null);
+            }
+          }
+        } catch (err) {
+          console.error('Failed to load organizer request status:', err);
+        }
+      }
+    };
+    loadRequestStatus();
+  }, [userId, isOrganizer]);
+
   useEffect(() => {
     if (formData.name && step === 1) {
       const slug = formData.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       setFormData(prev => ({ ...prev, slug }));
     }
   }, [formData.name, step]);
+
+  // Handle organizer request submission
+  const handleRequestOrganizer = async () => {
+    if (!requestReason.trim()) {
+      alert('Please provide a reason for your request');
+      return;
+    }
+    setSubmittingRequest(true);
+    try {
+      await createOrganizerRequest({
+        odUserId: userId,
+        userEmail: currentUser?.email || '',
+        userName: userProfile?.displayName || 'User',
+        userPhotoURL: userProfile?.photoURL,
+        reason: requestReason.trim(),
+        experience: requestExperience.trim() || undefined,
+      });
+      setRequestStatus('pending');
+    } catch (err: any) {
+      alert(err.message || 'Failed to submit request');
+    } finally {
+      setSubmittingRequest(false);
+    }
+  };
 
   const handleEditDivision = (div: Division) => {
     setNewDivBasic({
@@ -437,7 +495,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
   const handleNext = () => {
       if (!formData.name) return setErrorMessage("Name is required");
-      if (!formData.clubId) return setErrorMessage("Please select a club to host this tournament.");
+      // Club is now optional - organizers can host independently
       setStep(2);
       setErrorMessage(null);
   };
@@ -448,6 +506,15 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       setIsSubmitting(true);
       try {
           const tId = generateId();
+
+          // Determine Stripe account: use club's if selected, otherwise use organizer's
+          const selectedClub = formData.clubId
+            ? availableClubs.find(c => c.id === formData.clubId)
+            : null;
+          const stripeAccountId = selectedClub?.stripeConnectedAccountId
+            || userProfile?.stripeConnectedAccountId
+            || undefined;
+
           const tournament: Tournament = {
               ...formData as Tournament,
               id: tId,
@@ -455,6 +522,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
               venue: formData.venue || 'TBD',
               // Map tournamentDays to days for multi-day tournament support
               days: (formData as any).tournamentDays || undefined,
+              // Payment routing: club's Stripe or organizer's Stripe
+              stripeConnectedAccountId: stripeAccountId,
           };
 
           await saveTournament(tournament, divisions);
@@ -468,32 +537,260 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
   if (loadingClubs) return <div className="p-8 text-center">Loading Clubs...</div>;
 
-  if (availableClubs.length === 0) {
-      return (
-          <div className="max-w-4xl mx-auto bg-gray-800 rounded-lg p-8 border border-gray-700 text-center mt-10">
-              <div className="mb-6">
-                 <svg className="w-16 h-16 mx-auto text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-              </div>
-              <h2 className="text-2xl text-white font-bold mb-4">
-                  {isAppAdmin ? "No Clubs Found" : "You need to be a Club Admin"}
-              </h2>
-              <p className="text-gray-400 mb-8 max-w-lg mx-auto">
-                  To host tournaments, you must manage a Club.
-                  {isAppAdmin ? " Create one to get started." : " Ask an admin to add you or create your own club."}
-              </p>
-              <div className="flex justify-center gap-4">
-                  <button onClick={onCancel} className="text-gray-400 hover:text-white px-4 py-2">Back</button>
-                  {isAppAdmin && (
-                      <button 
-                          onClick={onCreateClub}
-                          className="bg-green-600 hover:bg-green-500 text-white font-bold px-6 py-2 rounded shadow-lg transition-colors"
-                      >
-                          Create Club
-                      </button>
-                  )}
-              </div>
+  // Show requirements flow if user doesn't have access yet
+  // App admins skip this check
+  // Organizers need: phone verified + organizer role + Stripe connected
+  if ((!isOrganizer || !hasStripeConnected) && !isAppAdmin) {
+    // Determine which step is active
+    const step1Complete = isPhoneVerified;
+    const step2Complete = isOrganizer;
+    const step2Pending = requestStatus === 'pending';
+    const step3Complete = hasStripeConnected;
+
+    return (
+      <div className="max-w-2xl mx-auto bg-gray-800 rounded-lg p-8 border border-gray-700 mt-10">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-lime-500/20 flex items-center justify-center">
+            <svg className="w-8 h-8 text-lime-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
           </div>
-      );
+          <h2 className="text-2xl text-white font-bold mb-2">Host a Tournament</h2>
+          <p className="text-gray-400">Complete these steps to start hosting tournaments</p>
+        </div>
+
+        {/* Requirements Checklist */}
+        <div className="space-y-3 mb-8">
+          {/* Step 1: Phone Verification */}
+          <div className={`p-4 rounded-lg border ${step1Complete ? 'border-green-500/50 bg-green-900/20' : 'border-gray-600 bg-gray-900/50'}`}>
+            <div className="flex items-center gap-3">
+              {step1Complete ? (
+                <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+              ) : (
+                <div className="w-6 h-6 rounded-full border-2 border-red-500 flex items-center justify-center">
+                  <span className="text-red-500 text-xs font-bold">1</span>
+                </div>
+              )}
+              <div className="flex-1">
+                <p className={`font-medium ${step1Complete ? 'text-green-400' : 'text-white'}`}>
+                  Verify Phone Number
+                </p>
+                <p className="text-sm text-gray-400">Required for identity verification</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Step 2: Organizer Access */}
+          <div className={`p-4 rounded-lg border ${
+            step2Complete ? 'border-green-500/50 bg-green-900/20' :
+            step2Pending ? 'border-yellow-500/50 bg-yellow-900/20' :
+            !step1Complete ? 'border-gray-700 bg-gray-900/30 opacity-60' :
+            'border-gray-600 bg-gray-900/50'
+          }`}>
+            <div className="flex items-center gap-3">
+              {step2Complete ? (
+                <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+              ) : step2Pending ? (
+                <div className="w-6 h-6 rounded-full bg-yellow-500 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-white animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+              ) : !step1Complete ? (
+                <div className="w-6 h-6 rounded-full border-2 border-gray-600 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-gray-600" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 17a2 2 0 002-2V9a2 2 0 10-4 0v6a2 2 0 002 2zm-1-9h2v6h-2V8z"/>
+                  </svg>
+                </div>
+              ) : (
+                <div className="w-6 h-6 rounded-full border-2 border-red-500 flex items-center justify-center">
+                  <span className="text-red-500 text-xs font-bold">2</span>
+                </div>
+              )}
+              <div className="flex-1">
+                <p className={`font-medium ${
+                  step2Complete ? 'text-green-400' :
+                  step2Pending ? 'text-yellow-400' :
+                  !step1Complete ? 'text-gray-500' : 'text-white'
+                }`}>
+                  Organizer Access {!step1Complete && '(locked)'}
+                </p>
+                <p className="text-sm text-gray-400">
+                  {step2Pending ? 'Your request is pending admin review' : 'Request approval to host tournaments'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Step 3: Connect Stripe */}
+          <div className={`p-4 rounded-lg border ${
+            step3Complete ? 'border-green-500/50 bg-green-900/20' :
+            !step2Complete ? 'border-gray-700 bg-gray-900/30 opacity-60' :
+            'border-gray-600 bg-gray-900/50'
+          }`}>
+            <div className="flex items-center gap-3">
+              {step3Complete ? (
+                <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+              ) : !step2Complete ? (
+                <div className="w-6 h-6 rounded-full border-2 border-gray-600 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-gray-600" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 17a2 2 0 002-2V9a2 2 0 10-4 0v6a2 2 0 002 2zm-1-9h2v6h-2V8z"/>
+                  </svg>
+                </div>
+              ) : (
+                <div className="w-6 h-6 rounded-full border-2 border-red-500 flex items-center justify-center">
+                  <span className="text-red-500 text-xs font-bold">3</span>
+                </div>
+              )}
+              <div className="flex-1">
+                <p className={`font-medium ${
+                  step3Complete ? 'text-green-400' :
+                  !step2Complete ? 'text-gray-500' : 'text-white'
+                }`}>
+                  Connect Stripe Account {!step2Complete && '(locked)'}
+                </p>
+                <p className="text-sm text-gray-400">Required for receiving tournament payments</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Section - based on current step */}
+        {!step1Complete ? (
+          // Step 1: Phone verification needed
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+              <p className="text-blue-300 text-sm">
+                Verify your mobile number to continue. We'll send a 6-digit code via SMS.
+              </p>
+            </div>
+            <div className="flex justify-between">
+              <button onClick={onCancel} className="text-gray-400 hover:text-white px-4 py-2">
+                Back
+              </button>
+              <button
+                onClick={() => setShowPhoneModal(true)}
+                className="bg-lime-500 hover:bg-lime-400 text-gray-900 font-bold px-6 py-3 rounded-lg transition-colors"
+              >
+                Verify Phone Number
+              </button>
+            </div>
+          </div>
+        ) : !step2Complete && !step2Pending ? (
+          // Step 2: Organizer request form
+          <div className="space-y-4">
+            {requestStatus === 'denied' && (
+              <div className="p-4 bg-red-900/20 border border-red-500/30 rounded-lg">
+                <p className="text-red-300 text-sm font-medium mb-1">Previous request was denied</p>
+                {denialReason && (
+                  <p className="text-red-400 text-sm">Reason: {denialReason}</p>
+                )}
+                <p className="text-gray-400 text-sm mt-2">You can submit a new request below.</p>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Why do you want to become an organizer? <span className="text-red-400">*</span>
+              </label>
+              <textarea
+                value={requestReason}
+                onChange={(e) => setRequestReason(e.target.value)}
+                placeholder="Tell us about the tournaments or events you'd like to organize..."
+                className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg min-h-[100px] resize-none focus:border-lime-500 focus:ring-1 focus:ring-lime-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Event organizing experience (optional)
+              </label>
+              <textarea
+                value={requestExperience}
+                onChange={(e) => setRequestExperience(e.target.value)}
+                placeholder="Any previous experience organizing pickleball or other events..."
+                className="w-full bg-gray-900 border border-gray-600 text-white p-3 rounded-lg min-h-[80px] resize-none focus:border-lime-500 focus:ring-1 focus:ring-lime-500"
+              />
+            </div>
+
+            <div className="flex justify-between pt-2">
+              <button onClick={onCancel} className="text-gray-400 hover:text-white px-4 py-2">
+                Back
+              </button>
+              <button
+                onClick={handleRequestOrganizer}
+                disabled={submittingRequest || !requestReason.trim()}
+                className="bg-lime-500 hover:bg-lime-400 disabled:bg-gray-600 disabled:cursor-not-allowed text-gray-900 font-bold px-6 py-3 rounded-lg transition-colors"
+              >
+                {submittingRequest ? 'Submitting...' : 'Request Organizer Access'}
+              </button>
+            </div>
+          </div>
+        ) : step2Pending ? (
+          // Step 2: Request pending
+          <div className="space-y-4">
+            <div className="p-4 bg-yellow-900/20 border border-yellow-500/30 rounded-lg text-center">
+              <p className="text-yellow-300 font-medium mb-1">Request Submitted</p>
+              <p className="text-gray-400 text-sm">
+                Your organizer request is being reviewed by our admin team.
+                We'll notify you once it's approved.
+              </p>
+            </div>
+            <div className="flex justify-center">
+              <button onClick={onCancel} className="text-gray-400 hover:text-white px-4 py-2">
+                Back
+              </button>
+            </div>
+          </div>
+        ) : (
+          // Step 3: Organizer approved, need Stripe
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+              <p className="text-blue-300 text-sm">
+                You're an approved organizer! Connect your Stripe account to receive tournament payments.
+              </p>
+            </div>
+            <div className="flex justify-between">
+              <button onClick={onCancel} className="text-gray-400 hover:text-white px-4 py-2">
+                Back
+              </button>
+              <a
+                href="/#/profile"
+                className="bg-lime-500 hover:bg-lime-400 text-gray-900 font-bold px-6 py-3 rounded-lg transition-colors inline-block"
+              >
+                Connect Stripe Account
+              </a>
+            </div>
+          </div>
+        )}
+
+        {/* Phone Verification Modal */}
+        {showPhoneModal && (
+          <PhoneVerificationModal
+            onClose={() => setShowPhoneModal(false)}
+            onVerified={() => {
+              setShowPhoneModal(false);
+              // userProfile will update via AuthContext subscription
+            }}
+            initialPhone={userProfile?.phone}
+            canSkip={false}
+          />
+        )}
+      </div>
+    );
   }
 
   // If using planner flow, show the planner component
@@ -606,24 +903,29 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
                   <div>
                       <div className="flex justify-between items-end mb-1">
-                          <label className="block text-sm font-medium text-gray-400">Hosting Club</label>
+                          <label className="block text-sm font-medium text-gray-400">
+                            Hosting Club <span className="text-gray-500">(Optional)</span>
+                          </label>
                           {isAppAdmin && (
                               <button onClick={onCreateClub} className="text-xs text-green-400 hover:underline">
                                   + New Club
                               </button>
                           )}
                       </div>
-                      
-                      <select 
+
+                      <select
                         className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
                         value={formData.clubId}
                         onChange={e => setFormData({...formData, clubId: e.target.value})}
                       >
-                          <option value="">-- Select Club --</option>
+                          <option value="">None (Independent Tournament)</option>
                           {availableClubs.map(c => (
                               <option key={c.id} value={c.id}>{c.name}</option>
                           ))}
                       </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Select a club for branding, or leave empty to host independently
+                      </p>
                   </div>
 
                   <div>

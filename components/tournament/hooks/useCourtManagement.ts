@@ -301,14 +301,6 @@ export const useCourtManagement = ({
       return !isActive && !hasCourt;
     });
 
-    // Debug: log match statuses for understanding
-    const statusCounts: Record<string, number> = {};
-    safeMatches.forEach(m => {
-      const key = `${m.status || 'undefined'}_court:${m.court ? 'yes' : 'no'}`;
-      statusCounts[key] = (statusCounts[key] || 0) + 1;
-    });
-    console.log('[Match Status Breakdown]', statusCounts);
-
     // Filter for eligibility and score
     const eligible: Match[] = [];
     const scores: Record<string, number> = {};
@@ -375,90 +367,6 @@ export const useCourtManagement = ({
     // Sort eligible matches by score (lower = higher priority)
     eligible.sort((a, b) => (scores[a.id] || 0) - (scores[b.id] || 0));
 
-    // Debug logging - comprehensive breakdown
-    const rejectedReasons = {
-      missingTeamIds: 0,
-      selfMatch: 0,
-      teamBusy: 0,
-      playerBusy: 0,
-      nameBusy: 0,
-      insufficientRest: 0,
-    };
-
-    // Re-analyze candidates for detailed logging
-    const rejectedDetails: { matchId: string; reason: string; teamAName: string; teamBName: string }[] = [];
-
-    candidates.forEach(m => {
-      const teamAId = m.teamAId || m.sideA?.id;
-      const teamBId = m.teamBId || m.sideB?.id;
-      const teamAName = m.sideA?.name || '';
-      const teamBName = m.sideB?.name || '';
-      const playerIdsA = m.sideA?.playerIds || [];
-      const playerIdsB = m.sideB?.playerIds || [];
-
-      if (!teamAId || !teamBId) {
-        rejectedReasons.missingTeamIds++;
-        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'missingTeamIds', teamAName, teamBName });
-        return;
-      }
-      if (teamAId === teamBId) {
-        rejectedReasons.selfMatch++;
-        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'selfMatch (ID)', teamAName, teamBName });
-        return;
-      }
-      if (teamAName && teamBName && teamAName.toLowerCase() === teamBName.toLowerCase()) {
-        rejectedReasons.selfMatch++;
-        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'selfMatch (name)', teamAName, teamBName });
-        return;
-      }
-      if (busyTeams.has(teamAId) || busyTeams.has(teamBId)) {
-        rejectedReasons.teamBusy++;
-        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: `teamBusy: ${busyTeams.has(teamAId) ? teamAId : teamBId}`, teamAName, teamBName });
-        return;
-      }
-      if (playerIdsA.some(p => p && busyPlayers.has(p)) || playerIdsB.some(p => p && busyPlayers.has(p)) ||
-          busyPlayers.has(teamAId) || busyPlayers.has(teamBId)) {
-        rejectedReasons.playerBusy++;
-        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'playerBusy', teamAName, teamBName });
-        return;
-      }
-      if ((teamAName && busyTeamNames.has(teamAName.toLowerCase())) || (teamBName && busyTeamNames.has(teamBName.toLowerCase()))) {
-        rejectedReasons.nameBusy++;
-        const busyOne = busyTeamNames.has(teamAName.toLowerCase()) ? teamAName : teamBName;
-        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: `nameBusy: ${busyOne}`, teamAName, teamBName });
-        return;
-      }
-      const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
-      if (allPlayerIds.some(pid => !playerHasSufficientRest(pid))) {
-        rejectedReasons.insufficientRest++;
-        if (rejectedDetails.length < 5) rejectedDetails.push({ matchId: m.id, reason: 'insufficientRest', teamAName, teamBName });
-        return;
-      }
-    });
-
-    if (rejectedDetails.length > 0) {
-      console.log('[Rejected Match Details]', rejectedDetails);
-    }
-
-    // Log ALL unique team names from candidates to compare with busy names
-    const allCandidateTeamNames = new Set<string>();
-    candidates.forEach(m => {
-      if (m.sideA?.name) allCandidateTeamNames.add(m.sideA.name.toLowerCase());
-      if (m.sideB?.name) allCandidateTeamNames.add(m.sideB.name.toLowerCase());
-    });
-
-    console.log('[Court Queue Debug]', {
-      totalMatches: safeMatches.length,
-      candidates: candidates.length,
-      eligible: eligible.length,
-      busyTeamCount: busyTeams.size,
-      busyTeamNames: Array.from(busyTeamNames),
-      busyPlayerCount: busyPlayers.size,
-      rejectedReasons,
-      allCandidateTeamNames: Array.from(allCandidateTeamNames),
-      freeTeamNames: Array.from(allCandidateTeamNames).filter(n => !busyTeamNames.has(n)),
-    });
-
     return { eligible, scores };
   }, [safeMatches, getPlayerRestTime, playerHasSufficientRest, getPoolProgress]);
 
@@ -521,17 +429,6 @@ export const useCourtManagement = ({
       playerIdsA.forEach(p => { if (p) queuedPlayers.add(p); });
       playerIdsB.forEach(p => { if (p) queuedPlayers.add(p); });
     }
-
-    // Debug: log queue building results
-    console.log('[Court Queue Builder]', {
-      eligibleCount: eligible.length,
-      activeCourts: activeCourts.length,
-      occupiedCourts,
-      availableCourtCount,
-      maxQueueSize,
-      finalQueueSize: finalQueue.length,
-      queuedTeamCount: queuedTeams.size,
-    });
 
     return { queue: finalQueue, waitTimes: scores };
   }, [getEligibleMatches, courts, safeMatches]);

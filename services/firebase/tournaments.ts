@@ -2,21 +2,23 @@
  * Tournament and Division Management
  */
 
-import { 
-  doc, 
-  getDoc, 
-  getDocs, 
+import {
+  doc,
+  getDoc,
+  getDocs,
   setDoc,
   updateDoc,
-  collection, 
-  query, 
+  collection,
+  query,
   orderBy,
   limit,
   onSnapshot,
   writeBatch,
+  arrayUnion,
 } from '@firebase/firestore';
-import { db } from './config';
-import type { Tournament, Division } from '../../types';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from '@firebase/storage';
+import { db, storage } from './config';
+import type { Tournament, Division, TournamentSponsor } from '../../types';
 
 // ============================================
 // Tournament CRUD
@@ -113,4 +115,238 @@ export const updateDivision = async (
 ): Promise<void> => {
   const divRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
   await updateDoc(divRef, { ...updates, updatedAt: Date.now() });
+};
+
+// ============================================
+// Sponsor Management
+// ============================================
+
+/**
+ * Upload sponsor logo to Firebase Storage
+ */
+export const uploadSponsorLogo = async (
+  tournamentId: string,
+  sponsorId: string,
+  file: File
+): Promise<string> => {
+  const ext = file.name.split('.').pop() || 'png';
+  const path = `sponsor_logos/${tournamentId}/${sponsorId}.${ext}`;
+  const storageRef = ref(storage, path);
+
+  await uploadBytes(storageRef, file);
+  return await getDownloadURL(storageRef);
+};
+
+/**
+ * Delete sponsor logo from Firebase Storage
+ */
+export const deleteSponsorLogo = async (logoUrl: string): Promise<void> => {
+  try {
+    const storageRef = ref(storage, logoUrl);
+    await deleteObject(storageRef);
+  } catch (error) {
+    // Ignore if file doesn't exist
+    console.warn('Could not delete sponsor logo:', error);
+  }
+};
+
+/**
+ * Add a new sponsor to a tournament
+ */
+export const addTournamentSponsor = async (
+  tournamentId: string,
+  sponsor: Omit<TournamentSponsor, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<string> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  const now = Date.now();
+  const sponsorId = `sponsor_${now}`;
+
+  const newSponsor: TournamentSponsor = {
+    ...sponsor,
+    id: sponsorId,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const existingSponsors = tournament.sponsors || [];
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    sponsors: [...existingSponsors, newSponsor],
+    updatedAt: now,
+  });
+
+  return sponsorId;
+};
+
+/**
+ * Update an existing sponsor
+ */
+export const updateTournamentSponsor = async (
+  tournamentId: string,
+  sponsorId: string,
+  updates: Partial<TournamentSponsor>
+): Promise<void> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  const existingSponsors = tournament.sponsors || [];
+  const sponsorIndex = existingSponsors.findIndex(s => s.id === sponsorId);
+
+  if (sponsorIndex === -1) throw new Error('Sponsor not found');
+
+  const now = Date.now();
+  existingSponsors[sponsorIndex] = {
+    ...existingSponsors[sponsorIndex],
+    ...updates,
+    updatedAt: now,
+  };
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    sponsors: existingSponsors,
+    updatedAt: now,
+  });
+};
+
+/**
+ * Remove a sponsor from a tournament
+ */
+export const removeTournamentSponsor = async (
+  tournamentId: string,
+  sponsorId: string,
+  deleteLogoFile = true
+): Promise<void> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  const existingSponsors = tournament.sponsors || [];
+  const sponsor = existingSponsors.find(s => s.id === sponsorId);
+
+  if (!sponsor) throw new Error('Sponsor not found');
+
+  // Optionally delete the logo file
+  if (deleteLogoFile && sponsor.logoUrl) {
+    await deleteSponsorLogo(sponsor.logoUrl);
+  }
+
+  const filteredSponsors = existingSponsors.filter(s => s.id !== sponsorId);
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    sponsors: filteredSponsors,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Reorder sponsors (after drag-drop)
+ */
+export const reorderTournamentSponsors = async (
+  tournamentId: string,
+  reorderedSponsors: TournamentSponsor[]
+): Promise<void> => {
+  // Update displayOrder based on array position
+  const sponsorsWithOrder = reorderedSponsors.map((sponsor, index) => ({
+    ...sponsor,
+    displayOrder: index,
+    updatedAt: Date.now(),
+  }));
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    sponsors: sponsorsWithOrder,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Update sponsor display settings
+ */
+export const updateSponsorDisplaySettings = async (
+  tournamentId: string,
+  settings: Partial<Tournament['sponsorSettings']>
+): Promise<void> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    sponsorSettings: {
+      ...(tournament.sponsorSettings || {
+        showOnCards: true,
+        showOnHeader: true,
+        showOnRegistration: true,
+        showOnScoreboard: true,
+      }),
+      ...settings,
+    },
+    updatedAt: Date.now(),
+  });
+};
+
+// ============================================
+// Tournament Staff Management
+// ============================================
+
+/** Staff member details for display */
+export interface TournamentStaffMember {
+  userId: string;
+  displayName: string;
+  email: string;
+  photoURL?: string;
+}
+
+/**
+ * Add a user as tournament staff
+ */
+export const addTournamentStaff = async (
+  tournamentId: string,
+  userId: string
+): Promise<void> => {
+  const tournamentRef = doc(db, 'tournaments', tournamentId);
+  await updateDoc(tournamentRef, {
+    staffIds: arrayUnion(userId),
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Remove a user from tournament staff
+ */
+export const removeTournamentStaff = async (
+  tournamentId: string,
+  userId: string
+): Promise<void> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  const updatedStaff = (tournament.staffIds || []).filter(id => id !== userId);
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    staffIds: updatedStaff,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Get staff member details with user profiles
+ */
+export const getTournamentStaffDetails = async (
+  staffIds: string[]
+): Promise<TournamentStaffMember[]> => {
+  if (!staffIds.length) return [];
+
+  const staffDetails = await Promise.all(
+    staffIds.map(async (userId) => {
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      if (!userDoc.exists()) return null;
+      const data = userDoc.data();
+      return {
+        userId,
+        displayName: data.displayName || 'Unknown',
+        email: data.email || '',
+        photoURL: data.photoURL || data.photoData,
+      };
+    })
+  );
+
+  return staffDetails.filter((s): s is NonNullable<typeof s> => s !== null) as TournamentStaffMember[];
 };

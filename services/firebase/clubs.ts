@@ -20,7 +20,8 @@ import {
   writeBatch,
   arrayUnion,
 } from '@firebase/firestore';
-import { db } from './config';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from '@firebase/storage';
+import { db, storage } from './config';
 import type { Club, ClubJoinRequest } from '../../types';
 
 // ============================================
@@ -48,6 +49,47 @@ export const createClub = async (
 export const getClub = async (clubId: string): Promise<Club | null> => {
   const snap = await getDoc(doc(db, 'clubs', clubId));
   return snap.exists() ? { id: snap.id, ...snap.data() } as Club : null;
+};
+
+/**
+ * Update club profile
+ */
+export const updateClub = async (
+  clubId: string,
+  updates: Partial<Club>
+): Promise<void> => {
+  const clubRef = doc(db, 'clubs', clubId);
+  await updateDoc(clubRef, {
+    ...updates,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Upload club logo to Firebase Storage
+ */
+export const uploadClubLogo = async (
+  clubId: string,
+  file: File
+): Promise<string> => {
+  const ext = file.name.split('.').pop() || 'png';
+  const path = `club_logos/${clubId}/logo.${ext}`;
+  const storageRef = ref(storage, path);
+
+  await uploadBytes(storageRef, file);
+  return await getDownloadURL(storageRef);
+};
+
+/**
+ * Delete club logo from Firebase Storage
+ */
+export const deleteClubLogo = async (logoUrl: string): Promise<void> => {
+  try {
+    const storageRef = ref(storage, logoUrl);
+    await deleteObject(storageRef);
+  } catch (error) {
+    console.error('Failed to delete club logo:', error);
+  }
 };
 
 export const subscribeToClub = (

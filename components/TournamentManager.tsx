@@ -36,7 +36,16 @@ import { generatePoolAssignments, savePoolAssignments } from '../services/fireba
 import { TestModeWrapper } from './tournament/TestModeWrapper';
 import { TestModePanel } from './tournament/TestModePanel';
 import { PlayerMatchCard } from './tournament/PlayerMatchCard';
+import { SponsorManagement } from './tournament/SponsorManagement';
+import { StaffManagement } from './tournament/StaffManagement';
+import { SponsorLogoStrip } from './shared/SponsorLogoStrip';
+import { ClubBrandingSection } from './shared/ClubBrandingSection';
+import { VenuePreview } from './shared/VenuePreview';
+import { LocationMap } from './shared/LocationMap';
+import { ClubEventsPreview } from './shared/ClubEventsPreview';
+import { useTournamentPermissions } from '../hooks/useTournamentPermissions';
 import { clearTestData, quickScoreMatch, simulatePoolCompletion, deleteCorruptedSelfMatches } from '../services/firebase/matches';
+import { getTournament } from '../services/firebase/tournaments';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -60,10 +69,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 }) => {
   const { currentUser, userProfile, isOrganizer, isAppAdmin } = useAuth();
 
-  // Check if current user is the owner of THIS tournament (not just any organizer)
-  const isTournamentOwner = currentUser?.uid === tournament.organizerId;
-  // Can manage = owner OR app admin
-  const canManageTournament = isTournamentOwner || isAppAdmin;
+  // Use centralized permissions hook
+  const permissions = useTournamentPermissions(tournament);
+  // Full admin = owner OR app admin (can manage settings, teams, staff)
+  const canManageTournament = permissions.isFullAdmin;
+  // Can see admin view = full admin OR staff
+  const canSeeAdminView = permissions.canViewAdminDashboard;
   // Tournament Data (using new hook)
   const {
     divisions,
@@ -126,7 +137,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
-    'participants' | 'courts' | 'settings' | 'livecourts' | 'pools' |
+    'participants' | 'courts' | 'settings' | 'sponsors' | 'staff' | 'livecourts' | 'pools' |
     'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder'
   >('livecourts');
 
@@ -760,7 +771,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     await onUpdateTournament({ ...tournament, testMode: false });
   };
 
-  const isTestModeActive = tournament.testMode === true && (isAppAdmin || isTournamentOwner);
+  const isTestModeActive = tournament.testMode === true && permissions.isFullAdmin;
 
   return (
     <TestModeWrapper
@@ -813,8 +824,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
         {/* Content */}
         <div className="relative px-6 py-8 md:px-8 md:py-10">
-          {/* Top Row - View Toggle - Only show for tournament owner or app admin */}
-          {canManageTournament && (
+          {/* Top Row - View Toggle - Show for tournament owner, app admin, or staff */}
+          {canSeeAdminView && (
             <div className="flex justify-end mb-6">
               <button
                 onClick={() => setViewMode(viewMode === 'public' ? 'admin' : 'public')}
@@ -848,9 +859,51 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           )}
 
           {/* Tournament Title */}
-          <h1 className="text-3xl md:text-4xl font-bold text-white mb-6 tracking-tight">
+          <h1 className="text-3xl md:text-4xl font-bold text-white mb-4 tracking-tight">
             {tournament.name}
           </h1>
+
+          {/* Hosted By / Club Branding */}
+          {(tournament.clubId || tournament.clubName || tournament.organizerName) && (
+            <ClubBrandingSection
+              clubId={tournament.clubId}
+              clubName={tournament.clubName}
+              organizerName={tournament.organizerName}
+              variant="header"
+              className="mb-4"
+            />
+          )}
+
+          {/* Official Sponsors */}
+          {tournament.sponsors && tournament.sponsors.filter(s => s.isActive).length > 0 && (
+            <div className="mb-6 p-4 rounded-xl bg-gray-900/40 border border-white/5">
+              <div className="flex items-center gap-4">
+                <span className="text-xs text-gray-500 uppercase tracking-wide">Official Sponsors</span>
+                <SponsorLogoStrip
+                  sponsors={tournament.sponsors.filter(s => s.isActive)}
+                  variant="header"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Venue Info - Courts, Location, Other Events */}
+          {tournament.clubId && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+              <VenuePreview
+                clubId={tournament.clubId}
+                variant="compact"
+                showBookingLink={true}
+              />
+              <LocationMap clubId={tournament.clubId} />
+              <ClubEventsPreview
+                clubId={tournament.clubId}
+                excludeEventId={tournament.id}
+                excludeEventType="tournament"
+                maxEvents={3}
+              />
+            </div>
+          )}
 
           {/* Tournament Status Management (Manager View Only) */}
           {canManageTournament && viewMode === 'admin' && (
@@ -1228,11 +1281,11 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 onChange={(e) => setAdminTab(e.target.value as any)}
                 className="md:hidden w-full bg-gray-800 text-white border border-white/10 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500"
               >
+                {/* Settings first (admin only) */}
+                {permissions.isFullAdmin && <option value="settings">⚙️ Settings</option>}
+                {/* Live Courts (visible to staff) */}
                 <option value="livecourts">📺 Live Courts</option>
-                <option value="participants">👥 Teams</option>
-                <option value="courts">🏟️ Courts</option>
-                <option value="settings">⚙️ Settings</option>
-                {/* Format-specific tabs */}
+                {/* Format-specific tabs (visible to all with admin view) */}
                 {(activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
                   <>
                     <option value="pool-stage">🏊 Pool Stage</option>
@@ -1247,64 +1300,87 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) && (
                   <option value="standings">📊 Standings</option>
                 )}
+                {/* Remaining admin-only tabs */}
+                {permissions.isFullAdmin && <option value="participants">👥 Teams</option>}
+                {permissions.isFullAdmin && <option value="courts">🏟️ Courts</option>}
+                {permissions.isFullAdmin && <option value="sponsors">🏢 Sponsors</option>}
+                {permissions.isFullAdmin && <option value="staff">👷 Staff</option>}
               </select>
 
               {/* Desktop Admin Tabs */}
               <div className="hidden md:flex gap-1">
                 {[
-                  { id: 'livecourts', label: 'Live Courts', icon: (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                    </svg>
-                  )},
-                  { id: 'participants', label: 'Teams', icon: (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                    </svg>
-                  )},
-                  { id: 'courts', label: 'Courts', icon: (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-                    </svg>
-                  )},
-                  { id: 'settings', label: 'Settings', icon: (
+                  // Settings first (admin only)
+                  { id: 'settings', label: 'Settings', adminOnly: true, icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                     </svg>
                   )},
-                  // FORMAT-SPECIFIC TABS - dynamically shown based on competition format
-                  // Pool Play → Medals format
+                  // Live Courts (visible to staff)
+                  { id: 'livecourts', label: 'Live Courts', adminOnly: false, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  )},
+                  // FORMAT-SPECIFIC TABS - Pool Play → Medals format (visible to staff)
                   ...((activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') ? [
-                    { id: 'pool-stage', label: 'Pool Stage', icon: (
+                    { id: 'pool-stage', label: 'Pool Stage', adminOnly: false, icon: (
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
                       </svg>
                     )},
-                    { id: 'medal-bracket', label: 'Medal Bracket', icon: (
+                    { id: 'medal-bracket', label: 'Medal Bracket', adminOnly: false, icon: (
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
                       </svg>
                     )},
                   ] : []),
-                  // Single Elimination format
+                  // Single Elimination format (visible to staff)
                   ...((activeDivision?.format?.competitionFormat === 'singles_elimination' ||
                        (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'single_elim')) ? [
-                    { id: 'bracket', label: 'Bracket', icon: (
+                    { id: 'bracket', label: 'Bracket', adminOnly: false, icon: (
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" />
                       </svg>
                     )},
                   ] : []),
-                  // Round Robin format
+                  // Round Robin format (visible to staff)
                   ...((activeDivision?.format?.competitionFormat === 'round_robin' ||
                        (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) ? [
-                    { id: 'standings', label: 'Standings', icon: (
+                    { id: 'standings', label: 'Standings', adminOnly: false, icon: (
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                       </svg>
                     )},
                   ] : []),
-                ].map(tab => (
+                  // Teams (admin only)
+                  { id: 'participants', label: 'Teams', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  )},
+                  // Courts (admin only)
+                  { id: 'courts', label: 'Courts', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                    </svg>
+                  )},
+                  // Sponsors (admin only)
+                  { id: 'sponsors', label: 'Sponsors', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                  )},
+                  // Staff (admin only)
+                  { id: 'staff', label: 'Staff', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                    </svg>
+                  )},
+                ]
+                // Filter tabs: show all for full admin, only non-adminOnly for staff
+                .filter(tab => !tab.adminOnly || permissions.isFullAdmin)
+                .map(tab => (
                   <button
                     key={tab.id}
                     onClick={() => setAdminTab(tab.id as any)}
@@ -2489,6 +2565,35 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 </div>
               </div>
             </div>
+          )}
+
+          {adminTab === 'sponsors' && (
+            <SponsorManagement
+              tournamentId={tournament.id}
+              sponsors={tournament.sponsors || []}
+              displaySettings={tournament.sponsorSettings}
+              onUpdate={async () => {
+                // Refresh tournament data
+                const updated = await getTournament(tournament.id);
+                if (updated) {
+                  await onUpdateTournament(updated);
+                }
+              }}
+            />
+          )}
+
+          {adminTab === 'staff' && permissions.isFullAdmin && (
+            <StaffManagement
+              tournamentId={tournament.id}
+              staffIds={tournament.staffIds || []}
+              onStaffUpdated={async () => {
+                // Refresh tournament data
+                const updated = await getTournament(tournament.id);
+                if (updated) {
+                  await onUpdateTournament(updated);
+                }
+              }}
+            />
           )}
 
           {adminTab === 'livecourts' && (

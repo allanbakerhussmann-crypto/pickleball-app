@@ -2,6 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import type { Tournament } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { SponsorLogoStrip } from './shared/SponsorLogoStrip';
 
 interface TournamentDashboardProps {
   tournaments: Tournament[];
@@ -158,7 +159,18 @@ export const TournamentDashboard: React.FC<TournamentDashboardProps> = ({
                                     <span className="text-xs font-bold text-green-400 uppercase tracking-wide truncate">{t.clubName}</span>
                                 </div>
                             )}
-                            
+
+                            {/* Sponsors */}
+                            {t.sponsors && t.sponsors.filter(s => s.isActive).length > 0 && (
+                                <div className="mb-3">
+                                    <SponsorLogoStrip
+                                        sponsors={t.sponsors.filter(s => s.isActive)}
+                                        variant="card"
+                                        maxDisplay={3}
+                                    />
+                                </div>
+                            )}
+
                             <div className="flex flex-wrap gap-y-2 text-sm text-gray-400">
                                 <div className="flex items-center gap-1.5 mr-6">
                                     <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>

@@ -11,6 +11,7 @@ import {
 } from '../../services/firebase';
 import { DoublesPartnerStep } from './DoublesPartnerStep';
 import { calculateTournamentEntryPrice } from '../../services/firebase/pricing';
+import { SponsorLogoStrip } from '../shared/SponsorLogoStrip';
 
 interface WizardProps {
     tournament: Tournament;
@@ -462,6 +463,17 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
                             <div className="space-y-4">
                                 <h3 className="text-white font-bold">Liability Waiver</h3>
                                 <p className="text-gray-300">By registering, I acknowledge the risks blah blah (waiver text omitted for brevity).</p>
+
+                                {/* Tournament Sponsors */}
+                                {tournament.sponsors && tournament.sponsors.filter(s => s.isActive).length > 0 && (
+                                    <div className="bg-gray-900 rounded-lg p-4 border border-gray-700 mt-4">
+                                        <h4 className="text-sm font-medium text-gray-400 mb-3">Tournament Sponsors</h4>
+                                        <SponsorLogoStrip
+                                            sponsors={tournament.sponsors.filter(s => s.isActive)}
+                                            variant="registration"
+                                        />
+                                    </div>
+                                )}
 
                                 {/* Fee Summary & Payment Method Choice */}
                                 {feeBreakdown.hasFees && !isFreeEvent && (

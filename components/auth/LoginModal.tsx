@@ -79,6 +79,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
         setError('Passwords do not match.');
         return;
       }
+      // Phone number is mandatory for all signups
+      if (!phone || !phone.startsWith('+') || phone.length < 10) {
+        setError('Please enter a valid mobile number. Phone verification is required.');
+        return;
+      }
       if (!agreeToTerms) {
         setError('You must agree to the Privacy Policy and Terms of Service.');
         return;
@@ -111,13 +116,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
           dataProcessing: agreeToDataProcessing,
         });
 
-        // If phone was provided (already in E.164 format from PhoneInput), show verification modal
-        if (phone && phone.startsWith('+') && phone.length >= 10) {
-          await updateUserExtendedProfile({ phone, phoneVerified: false });
-          setShowPhoneVerification(true);
-          return; // Don't close yet - wait for verification
-        }
-        onClose();
+        // Phone verification is mandatory - save phone and show verification modal
+        await updateUserExtendedProfile({ phone, phoneVerified: false });
+        setShowPhoneVerification(true);
+        return; // Don't close - must complete verification
       }
     } catch (err: any) {
       console.error("Login Error:", err);
@@ -239,10 +241,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
                 className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500"
               />
 
-              <PhoneInput
-                value={phone}
-                onChange={(e164Value) => setPhone(e164Value)}
-              />
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">
+                  Mobile Number <span className="text-red-400">*</span>
+                </label>
+                <PhoneInput
+                  value={phone}
+                  onChange={(e164Value) => setPhone(e164Value)}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  You'll need to verify your number via SMS
+                </p>
+              </div>
 
               <div className="pt-2">
                 <p className="text-sm text-gray-300 mb-2">I want to:</p>
@@ -368,10 +378,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
         </p>
       </div>
 
-      {/* Phone Verification Modal - shown after signup if phone provided */}
+      {/* Phone Verification Modal - MANDATORY after signup */}
       {showPhoneVerification && (
         <PhoneVerificationModal
           onClose={() => {
+            // Can't skip - just close and reopen on next action
             setShowPhoneVerification(false);
             onClose();
           }}
@@ -380,8 +391,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
             onClose();
           }}
           initialPhone={phone}
-          canSkip={true}
-          skipLabel="Skip for now"
+          canSkip={false}
         />
       )}
     </div>
