@@ -954,6 +954,49 @@ export const generateFinalsFromPoolStandings = async (
     const savedPoolAssignments = division?.poolAssignments;
 
     // ============================================
+    // STEP 3a: Upfront validation logging
+    // ============================================
+    console.log('[generateFinalsFromPoolStandings] Starting validation:', {
+      tournamentId,
+      divisionId,
+      hasPoolAssignments: !!savedPoolAssignments,
+      poolAssignmentsCount: savedPoolAssignments?.length || 0,
+      formatNumberOfPools: division?.format?.numberOfPools,
+      totalPoolMatches: poolMatches.length,
+    });
+
+    // ============================================
+    // STEP 3b: HARD GATE - Pool stage must be complete
+    // ============================================
+    const incompleteMatches = poolMatches.filter(m =>
+      m.status !== 'completed' && m.status !== 'forfeit' && m.status !== 'bye'
+    );
+    if (incompleteMatches.length > 0) {
+      console.error('[generateFinalsFromPoolStandings] Pool stage not complete:', {
+        totalMatches: poolMatches.length,
+        incompleteCount: incompleteMatches.length,
+        incompleteStatuses: incompleteMatches.map(m => ({ id: m.id, status: m.status })),
+      });
+      throw new Error(
+        `Pool stage not complete (${incompleteMatches.length} remaining). ` +
+        `Complete all pool matches before generating the medal bracket.`
+      );
+    }
+
+    // ============================================
+    // STEP 3c: Validate pool consistency
+    // ============================================
+    const formatNumberOfPools = division?.format?.numberOfPools;
+    if (savedPoolAssignments && formatNumberOfPools && formatNumberOfPools !== savedPoolAssignments.length) {
+      console.warn('[generateFinalsFromPoolStandings] Pool count mismatch:', {
+        formatNumberOfPools,
+        poolAssignmentsLength: savedPoolAssignments.length,
+        decision: 'Using poolAssignments as source of truth',
+      });
+      // Use poolAssignments as the source of truth (actual data > format config)
+    }
+
+    // ============================================
     // STEP 4: Group matches by pool
     // ============================================
     const poolGroups = new Map<string, Match[]>();

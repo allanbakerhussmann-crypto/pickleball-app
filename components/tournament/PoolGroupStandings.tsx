@@ -333,7 +333,7 @@ const PoolSection: React.FC<PoolSectionProps> = ({
                           <div className="flex items-center justify-center gap-1">
                             {row.isAdvancing && (
                               <span className="bg-green-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold">
-                                Set to Advance
+                                Advancing to Finals
                               </span>
                             )}
                             {!row.isAdvancing && (
@@ -569,12 +569,33 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
 
       {/* Pool advancement info */}
       <div className="bg-gray-900/50 rounded p-3 mb-4 text-sm text-gray-400">
-        <span className="text-gray-300 font-medium">Advancement Rule:</span>{' '}
-        {poolSettings?.advancementRule === 'top_1' && 'Top 1 from each pool advances'}
-        {poolSettings?.advancementRule === 'top_2' && 'Top 2 from each pool advance'}
-        {poolSettings?.advancementRule === 'top_n_plus_best' &&
-          `Top ${advancementCount} from each pool advance`}
-        {!poolSettings && 'Top 2 from each pool advance'}
+        <div className="mb-1">
+          <span className="text-gray-300 font-medium">Advancement Rule:</span>{' '}
+          {poolSettings?.advancementRule === 'top_1' && 'Top 1 from each pool advances'}
+          {poolSettings?.advancementRule === 'top_2' && 'Top 2 from each pool advance'}
+          {poolSettings?.advancementRule === 'top_n_plus_best' &&
+            `Top ${advancementCount} from each pool advance`}
+          {!poolSettings && 'Top 2 from each pool advance'}
+        </div>
+        {poolSettings?.tiebreakers && poolSettings.tiebreakers.length > 0 && (
+          <div>
+            <span className="text-gray-300 font-medium">Tiebreakers:</span>{' '}
+            {poolSettings.tiebreakers.map((tb, i) => {
+              const labels: Record<string, string> = {
+                wins: 'Wins',
+                head_to_head: 'Head-to-Head',
+                point_diff: 'Point Diff',
+                points_scored: 'Points Scored',
+              };
+              return (
+                <span key={tb}>
+                  {i > 0 && ' → '}
+                  {labels[tb] || tb}
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Pool Sections */}
