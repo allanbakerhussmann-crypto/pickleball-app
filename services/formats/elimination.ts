@@ -305,50 +305,61 @@ export function generateEliminationBracket(config: BracketConfig): BracketResult
     // Skip pure bye matches
     if (bracketMatch.isBye) continue;
 
-    const match: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> & { matchId?: string } = {
+    // Build sideA - only include defined fields (Firestore rejects undefined)
+    const sideA: Record<string, unknown> = bracketMatch.sideA
+      ? {
+          id: bracketMatch.sideA.id,
+          name: bracketMatch.sideA.name,
+          playerIds: bracketMatch.sideA.playerIds || [],
+        }
+      : {
+          id: 'TBD',
+          name: 'TBD',
+          playerIds: [],
+        };
+    // Only add optional fields if they have values
+    if (bracketMatch.sideA?.duprIds) sideA.duprIds = bracketMatch.sideA.duprIds;
+    if (bracketMatch.sideA?.duprRating !== undefined) sideA.duprRating = bracketMatch.sideA.duprRating;
+    if (bracketMatch.sideA?.seed !== undefined) sideA.seed = bracketMatch.sideA.seed;
+
+    // Build sideB - only include defined fields (Firestore rejects undefined)
+    const sideB: Record<string, unknown> = bracketMatch.sideB
+      ? {
+          id: bracketMatch.sideB.id,
+          name: bracketMatch.sideB.name,
+          playerIds: bracketMatch.sideB.playerIds || [],
+        }
+      : {
+          id: 'TBD',
+          name: 'TBD',
+          playerIds: [],
+        };
+    // Only add optional fields if they have values
+    if (bracketMatch.sideB?.duprIds) sideB.duprIds = bracketMatch.sideB.duprIds;
+    if (bracketMatch.sideB?.duprRating !== undefined) sideB.duprRating = bracketMatch.sideB.duprRating;
+    if (bracketMatch.sideB?.seed !== undefined) sideB.seed = bracketMatch.sideB.seed;
+
+    // Build match object - only include defined fields
+    const match: Record<string, unknown> = {
       matchId: bracketMatch.matchId,  // Temp ID for bracket linking (e.g., temp_1, temp_2, etc.)
       eventType,
       eventId,
       format,
       gameSettings,
-      sideA: bracketMatch.sideA
-        ? {
-            id: bracketMatch.sideA.id,
-            name: bracketMatch.sideA.name,
-            playerIds: bracketMatch.sideA.playerIds,
-            duprIds: bracketMatch.sideA.duprIds,
-            duprRating: bracketMatch.sideA.duprRating,
-            seed: bracketMatch.sideA.seed,
-          }
-        : {
-            id: 'TBD',
-            name: 'TBD',
-            playerIds: [],
-          },
-      sideB: bracketMatch.sideB
-        ? {
-            id: bracketMatch.sideB.id,
-            name: bracketMatch.sideB.name,
-            playerIds: bracketMatch.sideB.playerIds,
-            duprIds: bracketMatch.sideB.duprIds,
-            duprRating: bracketMatch.sideB.duprRating,
-            seed: bracketMatch.sideB.seed,
-          }
-        : {
-            id: 'TBD',
-            name: 'TBD',
-            playerIds: [],
-          },
+      sideA,
+      sideB,
       roundNumber: bracketMatch.roundNumber,
       matchNumber: bracketMatch.matchInRound,
       bracketPosition: bracketMatch.bracketPosition,
-      nextMatchId: bracketMatch.nextMatchId,
-      nextMatchSlot: bracketMatch.nextMatchSlot,  // Also include nextMatchSlot for completeness
-      status: bracketMatch.sideA && bracketMatch.sideB ? 'scheduled' : 'scheduled',
+      status: 'scheduled',
       scores: [],
     };
+    // Only add optional fields if they have values
+    if (bracketMatch.nextMatchId) match.nextMatchId = bracketMatch.nextMatchId;
+    if (bracketMatch.nextMatchSlot) match.nextMatchSlot = bracketMatch.nextMatchSlot;
+    if (bracketMatch.isThirdPlace) match.isThirdPlace = bracketMatch.isThirdPlace;
 
-    matches.push(match);
+    matches.push(match as Omit<Match, 'id' | 'createdAt' | 'updatedAt'>);
   }
 
   return {

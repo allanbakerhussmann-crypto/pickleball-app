@@ -675,13 +675,22 @@ export const generatePoolPlaySchedule = async (
 
     // ============================================
     // STEP 7: Update division with success status + poolAssignments
+    // Reconcile format.numberOfPools with actual pool count
     // ============================================
+    const divisionSnap = await getDoc(divisionRef);
+    const divisionData = divisionSnap.data() as Division | undefined;
+    const currentFormat = divisionData?.format || {};
+
     await updateDoc(divisionRef, {
       scheduleStatus: 'generated',
       scheduleVersion: currentVersion + 1,
       scheduleGeneratedAt: now,
       scheduleGeneratedBy: userId || null,
       poolAssignments: poolAssignmentsToSave,
+      format: {
+        ...currentFormat,
+        numberOfPools: poolAssignmentsToSave.length,  // Reconcile with actual pool count
+      },
       updatedAt: now,
     });
 
@@ -1141,12 +1150,19 @@ export const generateFinalsFromPoolStandings = async (
     // STEP 10: Generate main medal bracket
     // ============================================
     const gameCfg = settings.gameSettings || DEFAULT_GAME_SETTINGS;
+    console.log('[generateFinalsFromPoolStandings] Calling generateMedalBracket...');
     const medalBracket = generateMedalBracket({
       eventType: 'tournament',
       eventId: tournamentId,
       qualifiedParticipants: mainParticipants,
       gameSettings: gameCfg,
       formatSettings: settings,
+    });
+    console.log('[generateFinalsFromPoolStandings] Medal bracket generated:', {
+      bracketMatchCount: medalBracket.bracketMatches.length,
+      bracketSize: medalBracket.bracketSize,
+      rounds: medalBracket.rounds,
+      matchIds: medalBracket.bracketMatches.map(m => (m as any).matchId),
     });
 
     // ============================================
@@ -1163,6 +1179,10 @@ export const generateFinalsFromPoolStandings = async (
         divisionId,
         'main'
       );
+    console.log('[generateFinalsFromPoolStandings] ID maps built:', {
+      tempToPositionKeys: Array.from(mainTempToPosition.keys()),
+      positionToCanonicalSize: mainPosToCanonical.size,
+    });
 
     // ============================================
     // STEP 9b: Save main bracket matches with canonical IDs
