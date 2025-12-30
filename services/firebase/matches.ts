@@ -2,7 +2,13 @@
  * Match Management and Schedule Generation
  *
  * FILE LOCATION: services/firebase/matches.ts
- * VERSION: V06.06 - Added pool play schedule generation using new format generator
+ * VERSION: V06.21 - Idempotent pool match generation with canonical IDs
+ *
+ * Key changes in V06.21:
+ * - Canonical match IDs (deterministic, not random) for idempotency
+ * - Pre-generation and post-generation validation
+ * - Firestore transaction lock to prevent race conditions
+ * - poolKey (normalized) stored on matches for validation/queries
  */
 
 import {
@@ -13,9 +19,20 @@ import {
   collection,
   onSnapshot,
   writeBatch,
+  runTransaction,
 } from '@firebase/firestore';
 import { db } from './config';
 import type { Match, Division, Team, UserProfile, StandingsEntry, GameScore, PoolAssignment } from '../../types';
+import {
+  generatePoolMatchId,
+  generateBracketMatchId,
+  normalizePoolKey,
+} from '../formats/poolMatchUtils';
+import {
+  validateMatchesBeforeWrite,
+  assertValidPools,
+  type PoolForValidation,
+} from '../formats/roundRobinValidator';
 import type { GameSettings } from '../../types/game/gameSettings';
 import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
 import { DEFAULT_GAME_SETTINGS } from '../../types/game/gameSettings';
@@ -363,11 +380,24 @@ export const generateFinalsFromPools = async (
 // Pool Play Medals Schedule Generation (NEW)
 // ============================================
 
+// ============================================
+// LOCK TIMEOUT FOR CRASH SAFETY
+// ============================================
+
+const GENERATION_LOCK_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+
 /**
  * Generate pool play schedule using the new format generator.
  *
  * This is the bridge function that connects the UI to the new poolPlayMedals generator.
  * It uses the NEW Match structure (sideA, sideB, poolGroup, scores[], etc.)
+ *
+ * V06.21 Changes:
+ * - Uses canonical match IDs for idempotency (regenerating overwrites, not duplicates)
+ * - Pre-validates pools before generation
+ * - Post-validates matches before writing to Firestore
+ * - Uses Firestore transaction lock to prevent race conditions
+ * - Stores poolKey (normalized) on each match for validation/queries
  *
  * @param tournamentId - Tournament ID
  * @param divisionId - Division ID
@@ -375,6 +405,7 @@ export const generateFinalsFromPools = async (
  * @param poolSettings - Pool play settings (pool size, advancement rules)
  * @param gameSettings - Game scoring settings
  * @param poolAssignments - Optional manual pool assignments (from drag-drop editor)
+ * @param userId - User ID who is generating the schedule (for audit)
  * @returns Match IDs and pool count
  */
 export const generatePoolPlaySchedule = async (
@@ -383,116 +414,277 @@ export const generatePoolPlaySchedule = async (
   teams: Team[],
   poolSettings?: PoolPlayMedalsSettings,
   gameSettings?: GameSettings,
-  poolAssignments?: PoolAssignment[]
+  poolAssignments?: PoolAssignment[],
+  userId?: string
 ): Promise<{ matchIds: string[]; poolCount: number }> => {
   if (teams.length < 2) {
     return { matchIds: [], poolCount: 0 };
   }
 
-  // Use defaults if not provided
-  const settings = poolSettings || DEFAULT_POOL_PLAY_MEDALS_SETTINGS;
-  const gameCfg = gameSettings || DEFAULT_GAME_SETTINGS;
+  const divisionRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
 
-  // Convert teams to pool participants
-  console.log('[generatePoolPlaySchedule] Teams input:', teams.length, teams.map(t => ({ id: t.id, odTeamId: t.odTeamId, name: t.teamName })));
+  // ============================================
+  // STEP 1: Acquire generation lock atomically
+  // ============================================
+  let currentVersion = 0;
 
-  const participants: PoolParticipant[] = teams
-    .filter(t => t.id || t.odTeamId)  // Ensure we have an ID
-    .map(t => {
+  try {
+    const lockResult = await runTransaction(db, async (transaction) => {
+      const divisionSnap = await transaction.get(divisionRef);
+      const division = divisionSnap.data() as Division | undefined;
+
+      // Check for active lock (with timeout for crash recovery)
+      if (division?.scheduleStatus === 'generating') {
+        const lockAge = Date.now() - (division.updatedAt ?? 0);
+        if (lockAge < GENERATION_LOCK_TIMEOUT_MS) {
+          throw new Error('Schedule generation already in progress. Please wait.');
+        }
+        // Lock is stale (browser crashed) - allow takeover
+        console.warn(`[generatePoolPlaySchedule] Stale lock detected (${lockAge}ms old), taking over`);
+      }
+
+      // Atomically set generating status
+      transaction.update(divisionRef, {
+        scheduleStatus: 'generating',
+        updatedAt: Date.now(),
+      });
+
+      return {
+        currentVersion: division?.scheduleVersion || 0,
+      };
+    });
+
+    currentVersion = lockResult.currentVersion;
+  } catch (error) {
+    // Re-throw lock errors as-is
+    throw error;
+  }
+
+  try {
+    // ============================================
+    // STEP 2: Prepare participants and config
+    // ============================================
+    const settings = poolSettings || DEFAULT_POOL_PLAY_MEDALS_SETTINGS;
+    const gameCfg = gameSettings || DEFAULT_GAME_SETTINGS;
+
+    console.log('[generatePoolPlaySchedule] Teams input:', teams.length, teams.map(t => ({ id: t.id, odTeamId: t.odTeamId, name: t.teamName })));
+
+    // Deduplicate teams by ID to prevent duplicate participants
+    const seenTeamIds = new Set<string>();
+    const uniqueTeams = teams.filter(t => {
+      const teamId = t.id || t.odTeamId || '';
+      if (!teamId || seenTeamIds.has(teamId)) {
+        if (teamId) {
+          console.warn(`[generatePoolPlaySchedule] Skipping duplicate team ID: ${teamId}`);
+        }
+        return false;
+      }
+      seenTeamIds.add(teamId);
+      return true;
+    });
+
+    console.log(`[generatePoolPlaySchedule] Unique teams: ${uniqueTeams.length} (from ${teams.length} input)`);
+
+    const participants: PoolParticipant[] = uniqueTeams.map(t => {
       const teamId = t.id || t.odTeamId || '';
       return {
         id: teamId,
         name: t.teamName || t.name || `Team ${teamId.slice(0, 4)}`,
         playerIds: t.players?.map(p => typeof p === 'string' ? p : p.odUserId || p.id || '') || t.playerIds || [],
-        duprRating: t.seed,  // Use seed as rating proxy
+        duprRating: t.seed,
       };
     });
 
-  console.log('[generatePoolPlaySchedule] Participants:', participants.length);
+    console.log('[generatePoolPlaySchedule] Participants:', participants.length);
 
-  // Build config for the generator
-  const config = {
-    eventType: 'tournament' as const,
-    eventId: tournamentId,
-    participants,
-    gameSettings: gameCfg,
-    formatSettings: settings,
-  };
-
-  // If we have manual pool assignments, convert them to the generator's Pool format
-  let poolResult;
-  console.log('[generatePoolPlaySchedule] Pool assignments:', poolAssignments?.length || 0);
-  console.log('[generatePoolPlaySchedule] Settings:', settings);
-
-  if (poolAssignments && poolAssignments.length > 0) {
-    console.log('[generatePoolPlaySchedule] Using manual pool assignments');
-    // Build pools from manual assignments
-    const manualPools: Pool[] = poolAssignments.map((pa, index) => ({
-      poolNumber: index + 1,
-      poolName: pa.poolName,
-      participants: pa.teamIds
-        .map(teamId => participants.find(p => p.id === teamId))
-        .filter((p): p is PoolParticipant => p !== undefined),
-    }));
-    console.log('[generatePoolPlaySchedule] Manual pools:', manualPools.map(p => ({ name: p.poolName, count: p.participants.length })));
-
-    // Generate matches manually from manual pools
-    poolResult = generatePoolMatchesFromPools(manualPools, config);
-  } else {
-    console.log('[generatePoolPlaySchedule] Using auto-seeding via generatePoolStage');
-    // Use auto-seeding via the generator
-    // generatePoolStage returns PoolPlayResult with { pools, poolMatches }
-    poolResult = generatePoolStage(config);
-  }
-
-  console.log('[generatePoolPlaySchedule] Pool result:', poolResult.pools.length, 'pools,', poolResult.poolMatches.length, 'matches');
-
-  // Save all pool matches to Firestore
-  const batch = writeBatch(db);
-  const matchIds: string[] = [];
-  const now = Date.now();
-
-  // Helper to remove undefined values (Firestore rejects undefined)
-  const removeUndefined = (obj: Record<string, unknown>): Record<string, unknown> => {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj)) {
-      if (value === undefined) continue;
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        result[key] = removeUndefined(value as Record<string, unknown>);
-      } else {
-        result[key] = value;
-      }
-    }
-    return result;
-  };
-
-  for (const matchData of poolResult.poolMatches) {
-    const matchRef = doc(collection(db, 'tournaments', tournamentId, 'matches'));
-    matchIds.push(matchRef.id);
-
-    const match = {
-      ...matchData,
-      id: matchRef.id,
-      tournamentId,
-      divisionId,
-      stage: 'pool',
-      createdAt: now,
-      updatedAt: now,
+    const config = {
+      eventType: 'tournament' as const,
+      eventId: tournamentId,
+      participants,
+      gameSettings: gameCfg,
+      formatSettings: settings,
     };
 
-    // Clean undefined values before saving to Firestore
-    const cleanedMatch = removeUndefined(match as Record<string, unknown>);
-    batch.set(matchRef, cleanedMatch);
+    // ============================================
+    // STEP 3: Build pools and validate
+    // ============================================
+    let poolResult!: { pools: Pool[]; poolMatches: Match[] };
+    console.log('[generatePoolPlaySchedule] Pool assignments:', poolAssignments?.length || 0);
+
+    // Check if we should use manual pool assignments
+    let useManualPools = poolAssignments && poolAssignments.length > 0;
+
+    if (useManualPools) {
+      console.log('[generatePoolPlaySchedule] Checking manual pool assignments...');
+
+      // SAFEGUARD: Check for duplicate teamIds across pools BEFORE mapping
+      const allTeamIdsInAssignments = poolAssignments!.flatMap(pa => pa.teamIds);
+      const duplicateTeamIds = allTeamIdsInAssignments.filter((id, i) => allTeamIdsInAssignments.indexOf(id) !== i);
+
+      if (duplicateTeamIds.length > 0) {
+        const uniqueDupes = [...new Set(duplicateTeamIds)];
+        console.error(`[generatePoolPlaySchedule] CRITICAL: Duplicate teams in poolAssignments: ${uniqueDupes.join(', ')}. Falling back to auto-seeding.`);
+        useManualPools = false;
+      }
+    }
+
+    if (useManualPools) {
+      const manualPools: Pool[] = poolAssignments!.map((pa, index) => ({
+        poolNumber: index + 1,
+        poolName: pa.poolName,
+        participants: pa.teamIds
+          .map(teamId => participants.find(p => p.id === teamId))
+          .filter((p): p is PoolParticipant => p !== undefined),
+      }));
+
+      // SAFEGUARD: If saved poolAssignments map to 0 teams (stale data), fallback to auto-assign
+      const totalMappedTeams = manualPools.reduce((sum, p) => sum + p.participants.length, 0);
+      if (totalMappedTeams === 0) {
+        console.warn('[generatePoolPlaySchedule] Saved poolAssignments are stale (0 teams mapped). Falling back to auto-seeding.');
+        useManualPools = false;
+      } else {
+        console.log('[generatePoolPlaySchedule] Manual pools:', manualPools.map(p => ({ name: p.poolName, count: p.participants.length })));
+
+        // Pre-validate pools (FAIL CLOSED)
+        const poolsForValidation: PoolForValidation[] = manualPools.map(p => ({
+          poolName: p.poolName,
+          participants: p.participants.map(pt => ({ id: pt.id, name: pt.name })),
+        }));
+        assertValidPools(poolsForValidation);
+
+        poolResult = generatePoolMatchesFromPools(manualPools, config, divisionId);
+      }
+    }
+
+    if (!useManualPools) {
+      console.log('[generatePoolPlaySchedule] Using auto-seeding via generatePoolStage');
+      poolResult = generatePoolStage(config);
+
+      // Pre-validate auto-generated pools
+      const poolsForValidation: PoolForValidation[] = poolResult.pools.map(p => ({
+        poolName: p.poolName,
+        participants: p.participants.map(pt => ({ id: pt.id, name: pt.name })),
+      }));
+      assertValidPools(poolsForValidation);
+    }
+
+    console.log('[generatePoolPlaySchedule] Pool result:', poolResult.pools.length, 'pools,', poolResult.poolMatches.length, 'matches');
+
+    // ============================================
+    // STEP 4: Post-validate matches (FAIL CLOSED)
+    // ============================================
+    const poolsForValidation: PoolForValidation[] = poolResult.pools.map(p => ({
+      poolName: p.poolName,
+      participants: p.participants.map(pt => ({ id: pt.id, name: pt.name })),
+    }));
+
+    const matchesForValidation = poolResult.poolMatches.map(m => ({
+      poolGroup: m.poolGroup,
+      poolKey: (m as any).poolKey || normalizePoolKey(m.poolGroup || ''),
+      divisionId,
+      stage: 'pool' as const,
+      sideA: { id: m.sideA?.id || '', name: m.sideA?.name || '' },
+      sideB: { id: m.sideB?.id || '', name: m.sideB?.name || '' },
+    }));
+
+    const validation = validateMatchesBeforeWrite(matchesForValidation, poolsForValidation);
+    if (!validation.valid) {
+      console.error('[generatePoolPlaySchedule] Match validation failed:', validation);
+      throw new Error(`Schedule generation failed: ${validation.errors.join('; ')}`);
+    }
+
+    if (validation.warnings && validation.warnings.length > 0) {
+      console.warn('[generatePoolPlaySchedule] Validation warnings:', validation.warnings);
+    }
+
+    // ============================================
+    // STEP 5: Write matches with canonical IDs
+    // ============================================
+    const batch = writeBatch(db);
+    const matchIds: string[] = [];
+    const now = Date.now();
+
+    const removeUndefined = (obj: Record<string, unknown>): Record<string, unknown> => {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (value === undefined) continue;
+        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          result[key] = removeUndefined(value as Record<string, unknown>);
+        } else {
+          result[key] = value;
+        }
+      }
+      return result;
+    };
+
+    for (const matchData of poolResult.poolMatches) {
+      // Generate canonical ID (deterministic, not random)
+      const poolKey = (matchData as any).poolKey || normalizePoolKey(matchData.poolGroup || '');
+      const sideAId = matchData.sideA?.id || '';
+      const sideBId = matchData.sideB?.id || '';
+      const canonicalId = generatePoolMatchId(divisionId, poolKey, sideAId, sideBId);
+
+      // Use canonical ID for the document
+      const matchRef = doc(db, 'tournaments', tournamentId, 'matches', canonicalId);
+      matchIds.push(canonicalId);
+
+      const match = {
+        ...matchData,
+        id: canonicalId,
+        poolKey, // Store normalized key for queries/validation
+        tournamentId,
+        divisionId,
+        stage: 'pool',
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const cleanedMatch = removeUndefined(match as Record<string, unknown>);
+      batch.set(matchRef, cleanedMatch); // set() overwrites if exists - idempotent!
+    }
+
+    await batch.commit();
+
+    // ============================================
+    // STEP 6: Update division with success status
+    // ============================================
+    await updateDoc(divisionRef, {
+      scheduleStatus: 'generated',
+      scheduleVersion: currentVersion + 1,
+      scheduleGeneratedAt: now,
+      scheduleGeneratedBy: userId || null,
+      updatedAt: now,
+    });
+
+    console.log(`[generatePoolPlaySchedule] Successfully generated ${matchIds.length} matches (version ${currentVersion + 1})`);
+
+    return { matchIds, poolCount: poolResult.pools.length };
+
+  } catch (error) {
+    // ============================================
+    // CLEANUP: Reset status on failure
+    // ============================================
+    console.error('[generatePoolPlaySchedule] Generation failed, resetting lock:', error);
+    try {
+      await updateDoc(divisionRef, {
+        scheduleStatus: 'idle',
+        updatedAt: Date.now(),
+      });
+    } catch (resetError) {
+      console.error('[generatePoolPlaySchedule] Failed to reset lock:', resetError);
+    }
+    throw error;
   }
-
-  await batch.commit();
-
-  return { matchIds, poolCount: poolResult.pools.length };
 };
 
 /**
  * Helper function to generate pool matches from manually assigned pools.
  * Uses the same round robin logic as the main generator.
+ *
+ * V06.21 Changes:
+ * - Removed name-based identity check (only use team.id)
+ * - Added poolKey (normalized) to each match
+ * - Added divisionId parameter for canonical ID generation
  */
 function generatePoolMatchesFromPools(
   pools: Pool[],
@@ -501,13 +693,17 @@ function generatePoolMatchesFromPools(
     eventId: string;
     gameSettings: GameSettings;
     formatSettings: PoolPlayMedalsSettings;
-  }
+  },
+  divisionId?: string
 ): { pools: Pool[]; poolMatches: Omit<Match, 'id' | 'createdAt' | 'updatedAt'>[] } {
   const { eventType, eventId, gameSettings } = config;
   const allPoolMatches: Omit<Match, 'id' | 'createdAt' | 'updatedAt'>[] = [];
   let globalMatchNumber = 1;
 
   for (const pool of pools) {
+    // Normalize pool name to poolKey for consistent validation/queries
+    const poolKey = normalizePoolKey(pool.poolName);
+
     // Generate round robin matches within each pool
     const n = pool.participants.length;
     for (let i = 0; i < n; i++) {
@@ -515,13 +711,10 @@ function generatePoolMatchesFromPools(
         const pA = pool.participants[i];
         const pB = pool.participants[j];
 
-        // CRITICAL: Validate teams are different (prevent data corruption)
+        // CRITICAL: Validate teams are different by ID ONLY (not by name)
+        // Two teams with the same name but different IDs are valid opponents
         if (pA.id === pB.id) {
           console.error(`[Pool Matches] Skipping invalid pairing: same team ID: ${pA.id}`);
-          continue;
-        }
-        if (pA.name.toLowerCase() === pB.name.toLowerCase()) {
-          console.error(`[Pool Matches] Skipping invalid pairing: same team name: ${pA.name}`);
           continue;
         }
 
@@ -550,7 +743,9 @@ function generatePoolMatchesFromPools(
           sideB,
           roundNumber: 1,
           matchNumber: globalMatchNumber++,
-          poolGroup: pool.poolName,
+          poolGroup: pool.poolName, // Display name
+          poolKey,                   // Normalized key for queries/validation
+          divisionId,               // For canonical ID generation
           status: 'scheduled',
           scores: [],
         };
@@ -563,16 +758,99 @@ function generatePoolMatchesFromPools(
   return { pools, poolMatches: allPoolMatches };
 }
 
+// ============================================
+// BRACKET LOCK TIMEOUT (for crash safety)
+// ============================================
+
+const BRACKET_LOCK_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+
+// ============================================
+// BRACKET ID MAPPING HELPERS (V06.21)
+// ============================================
+
+interface BracketMatchData {
+  matchId?: string;  // Temp ID from generator
+  bracketPosition: number;
+  isThirdPlace?: boolean;
+  nextMatchId?: string;  // Temp ID reference
+}
+
+/**
+ * Build maps for temp→position and position→canonical.
+ * Single pass each, O(n) total.
+ *
+ * @param bracket - Array of bracket matches from generator
+ * @param divisionId - Division ID for canonical ID generation
+ * @param bracketType - Type of bracket ('main' or 'plate')
+ * @returns Maps for converting temp IDs to canonical IDs
+ */
+function buildBracketIdMaps(
+  bracket: BracketMatchData[],
+  divisionId: string,
+  bracketType: 'main' | 'plate'
+): {
+  tempToPosition: Map<string, number>;
+  positionToCanonical: Map<number, string>;
+} {
+  const tempToPosition = new Map<string, number>();
+  const positionToCanonical = new Map<number, string>();
+
+  for (const m of bracket) {
+    // Map temp ID to position
+    if (m.matchId) {
+      tempToPosition.set(m.matchId, m.bracketPosition);
+    }
+
+    // Generate canonical ID for this position
+    const canonicalId = m.isThirdPlace
+      ? `${divisionId}__bracket__${bracketType}__bronze`
+      : generateBracketMatchId(divisionId, bracketType, m.bracketPosition);
+    positionToCanonical.set(m.bracketPosition, canonicalId);
+  }
+
+  return { tempToPosition, positionToCanonical };
+}
+
+/**
+ * Convert a temp nextMatchId to canonical using the ID maps.
+ *
+ * @param tempNextMatchId - The temp ID reference (or undefined)
+ * @param tempToPosition - Map from temp ID to bracket position
+ * @param positionToCanonical - Map from position to canonical ID
+ * @returns The canonical nextMatchId (or undefined)
+ */
+function mapNextMatchIdToCanonical(
+  tempNextMatchId: string | undefined,
+  tempToPosition: Map<string, number>,
+  positionToCanonical: Map<number, string>
+): string | undefined {
+  if (!tempNextMatchId) return undefined;
+
+  const nextPosition = tempToPosition.get(tempNextMatchId);
+  if (nextPosition === undefined) {
+    console.warn(`[mapNextMatchIdToCanonical] Unknown temp ID: ${tempNextMatchId}`);
+    return undefined;
+  }
+
+  return positionToCanonical.get(nextPosition);
+}
+
 /**
  * Generate finals bracket from completed pool standings.
  *
  * Called when all pool matches are complete to create the medal bracket.
+ *
+ * V06.21 Changes:
+ * - Transaction lock to prevent race conditions
+ * - Fail-closed check if bracket already exists
+ * - Success tracking for proper lock release
  *
  * @param tournamentId - Tournament ID
  * @param divisionId - Division ID
  * @param poolMatches - Completed pool matches
  * @param teams - All division teams
  * @param settings - Pool play settings with advancement rules
+ * @param userId - Optional user ID for audit trail
  * @returns Main bracket IDs and optional plate bracket IDs
  */
 export const generateFinalsFromPoolStandings = async (
@@ -586,140 +864,377 @@ export const generateFinalsFromPoolStandings = async (
     plateThirdPlace?: boolean;
     plateName?: string;
     gameSettings?: GameSettings;
-  }
+  },
+  userId?: string
 ): Promise<{ mainBracketIds: string[]; plateBracketIds: string[] }> => {
-  // 1. Group matches by pool
-  const poolGroups = new Map<string, Match[]>();
-  for (const match of poolMatches) {
-    if (!match.poolGroup) continue;
-    const group = poolGroups.get(match.poolGroup) || [];
-    group.push(match);
-    poolGroups.set(match.poolGroup, group);
-  }
+  const divisionRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
+  const matchesRef = collection(db, 'tournaments', tournamentId, 'matches');
 
-  // 2. Build pools from match data
-  const pools: Pool[] = [];
-  const sortedPoolNames = Array.from(poolGroups.keys()).sort();
+  // ============================================
+  // STEP 1: Acquire lock atomically
+  // ============================================
+  await runTransaction(db, async (transaction) => {
+    const divisionSnap = await transaction.get(divisionRef);
+    const division = divisionSnap.data() as Division | undefined;
 
-  for (let i = 0; i < sortedPoolNames.length; i++) {
-    const poolName = sortedPoolNames[i];
-    const matches = poolGroups.get(poolName) || [];
-
-    // Extract unique participant IDs from matches
-    const participantIds = new Set<string>();
-    for (const m of matches) {
-      if (m.sideA?.id) participantIds.add(m.sideA.id);
-      if (m.sideB?.id) participantIds.add(m.sideB.id);
-      // Also support legacy format
-      if ((m as any).teamAId) participantIds.add((m as any).teamAId);
-      if ((m as any).teamBId) participantIds.add((m as any).teamBId);
+    // Check for active lock (with timeout for crash recovery)
+    if (division?.bracketStatus === 'generating') {
+      const lockAge = Date.now() - (division.bracketGeneratedAt ?? 0);
+      if (lockAge < BRACKET_LOCK_TIMEOUT_MS) {
+        throw new Error('Bracket generation already in progress. Please wait.');
+      }
+      // Lock is stale (browser crashed) - allow takeover
+      console.warn(`[generateFinalsFromPoolStandings] Stale lock detected (${lockAge}ms old), taking over`);
     }
 
-    // Map to PoolParticipants
-    const participants: PoolParticipant[] = [];
-    for (const id of participantIds) {
+    // Set lock atomically
+    transaction.update(divisionRef, {
+      bracketStatus: 'generating',
+      bracketGeneratedAt: Date.now(),
+    });
+  });
+
+  // Track success for proper lock release
+  let success = false;
+
+  try {
+    // ============================================
+    // STEP 2: Check for existing bracket (fail closed)
+    // ============================================
+    // MUST catch both legacy 'plate' stage and new 'bracket' stage
+    const { getDocs, query, where } = await import('@firebase/firestore');
+    const existingBracket = await getDocs(query(
+      matchesRef,
+      where('divisionId', '==', divisionId),
+      where('stage', 'in', ['bracket', 'plate'])
+    ));
+
+    if (!existingBracket.empty) {
+      throw new Error(
+        `Bracket already exists for division ${divisionId} (${existingBracket.size} matches). ` +
+        `Delete existing bracket first to regenerate.`
+      );
+    }
+
+    // ============================================
+    // STEP 3: Fetch division to get poolAssignments
+    // ============================================
+    const { getDoc } = await import('@firebase/firestore');
+    const divisionSnap = await getDoc(divisionRef);
+    const division = divisionSnap.data() as Division | undefined;
+    const savedPoolAssignments = division?.poolAssignments;
+
+    // ============================================
+    // STEP 4: Group matches by pool
+    // ============================================
+    const poolGroups = new Map<string, Match[]>();
+    for (const match of poolMatches) {
+      if (!match.poolGroup) continue;
+      const group = poolGroups.get(match.poolGroup) || [];
+      group.push(match);
+      poolGroups.set(match.poolGroup, group);
+    }
+
+    // ============================================
+    // STEP 5: Build pools - prefer poolAssignments, fallback to match data
+    // ============================================
+    const pools: Pool[] = [];
+
+    // Helper to get participant from team ID
+    const getParticipantFromId = (id: string): PoolParticipant => {
+      // Try to find in teams array
       const team = teams.find(t => (t.id || t.odTeamId) === id);
       if (team) {
-        const teamId = team.id || team.odTeamId || id;
-        participants.push({
-          id: teamId,
-          name: team.teamName || team.name || `Team ${teamId.slice(0, 4)}`,
+        return {
+          id: team.id || team.odTeamId || id,
+          name: team.teamName || team.name || `Team ${id.slice(0, 4)}`,
           playerIds: team.players?.map(p => typeof p === 'string' ? p : p.odUserId || p.id || '') || team.playerIds || [],
           duprRating: team.seed,
+        };
+      }
+
+      // Try to find info from match sides
+      for (const match of poolMatches) {
+        if (match.sideA?.id === id && match.sideA?.name) {
+          return {
+            id,
+            name: match.sideA.name,
+            playerIds: match.sideA.playerIds || [],
+            duprRating: undefined,
+          };
+        }
+        if (match.sideB?.id === id && match.sideB?.name) {
+          return {
+            id,
+            name: match.sideB.name,
+            playerIds: match.sideB.playerIds || [],
+            duprRating: undefined,
+          };
+        }
+      }
+
+      // Last resort: use ID as name
+      return {
+        id,
+        name: `Team ${id.slice(0, 6)}`,
+        playerIds: [],
+        duprRating: undefined,
+      };
+    };
+
+    if (savedPoolAssignments && savedPoolAssignments.length > 0) {
+      // Use saved pool assignments as source of truth
+      console.log(`[generateFinalsFromPoolStandings] Using saved poolAssignments (${savedPoolAssignments.length} pools)`);
+
+      for (let i = 0; i < savedPoolAssignments.length; i++) {
+        const pa = savedPoolAssignments[i];
+        const participants: PoolParticipant[] = pa.teamIds
+          .filter(id => id) // Filter empty IDs
+          .map(id => getParticipantFromId(id));
+
+        pools.push({
+          poolNumber: i + 1,
+          poolName: pa.poolName,
+          participants,
+        });
+      }
+    } else {
+      // Fallback: derive pools from match data
+      console.log(`[generateFinalsFromPoolStandings] No poolAssignments, deriving from ${poolGroups.size} pool groups in matches`);
+
+      const sortedPoolNames = Array.from(poolGroups.keys()).sort();
+
+      for (let i = 0; i < sortedPoolNames.length; i++) {
+        const poolName = sortedPoolNames[i];
+        const matches = poolGroups.get(poolName) || [];
+
+        // Extract unique participant IDs from matches
+        const participantIds = new Set<string>();
+        for (const m of matches) {
+          if (m.sideA?.id) participantIds.add(m.sideA.id);
+          if (m.sideB?.id) participantIds.add(m.sideB.id);
+          // Also support legacy format
+          if ((m as any).teamAId) participantIds.add((m as any).teamAId);
+          if ((m as any).teamBId) participantIds.add((m as any).teamBId);
+        }
+
+        const participants: PoolParticipant[] = [...participantIds]
+          .filter(id => id)
+          .map(id => getParticipantFromId(id));
+
+        pools.push({
+          poolNumber: i + 1,
+          poolName,
+          participants,
         });
       }
     }
 
-    pools.push({
-      poolNumber: i + 1,
-      poolName,
-      participants,
+    // Log pool info for debugging
+    console.log(`[generateFinalsFromPoolStandings] Built ${pools.length} pools:`);
+    pools.forEach(p => console.log(`  ${p.poolName}: ${p.participants.length} participants`));
+
+    // ============================================
+    // STEP 6: Validate pools have participants
+    // ============================================
+    const totalParticipants = pools.reduce((sum, p) => sum + p.participants.length, 0);
+    if (totalParticipants === 0) {
+      throw new Error(
+        'No participants found in pools. Check that pool assignments exist and team IDs match.'
+      );
+    }
+
+    // ============================================
+    // STEP 7: Calculate standings for each pool
+    // ============================================
+    // Note: Cast to any to bridge legacy Match type from types.ts with new Match from types/game/match
+    const allPoolStandings: PoolStanding[][] = pools.map(pool =>
+      calculatePoolStandings(pool, poolMatches as any, settings.tiebreakers)
+    );
+
+    // ============================================
+    // STEP 8: Determine qualifiers
+    // ============================================
+    // Default to top_2 if advancementRule is missing
+    const effectiveSettings = {
+      ...settings,
+      advancementRule: settings.advancementRule || 'top_2',
+    };
+    const updatedStandings = determineQualifiers(allPoolStandings, effectiveSettings);
+
+    // ============================================
+    // STEP 9: Get qualified participants for main bracket
+    // ============================================
+    const mainParticipants = getQualifiedParticipants(updatedStandings);
+
+    // Safety check: ensure we have qualifiers
+    if (mainParticipants.length === 0) {
+      console.error('[generateFinalsFromPoolStandings] 0 qualifiers found!', {
+        poolCount: pools.length,
+        standingsPerPool: allPoolStandings.map(s => s.length),
+        advancementRule: effectiveSettings.advancementRule,
+      });
+      throw new Error(
+        `No qualified participants found. Check pool standings and advancement rules. ` +
+        `(${pools.length} pools, advancementRule: ${effectiveSettings.advancementRule})`
+      );
+    }
+
+    console.log(`[generateFinalsFromPoolStandings] ${mainParticipants.length} qualifiers for main bracket`);
+
+    // ============================================
+    // STEP 10: Generate main medal bracket
+    // ============================================
+    const gameCfg = settings.gameSettings || DEFAULT_GAME_SETTINGS;
+    const medalBracket = generateMedalBracket({
+      eventType: 'tournament',
+      eventId: tournamentId,
+      qualifiedParticipants: mainParticipants,
+      gameSettings: gameCfg,
+      formatSettings: settings,
     });
-  }
 
-  // 3. Calculate standings for each pool
-  // Note: Cast to any to bridge legacy Match type from types.ts with new Match from types/game/match
-  const allPoolStandings: PoolStanding[][] = pools.map(pool =>
-    calculatePoolStandings(pool, poolMatches as any, settings.tiebreakers)
-  );
+    // ============================================
+    // STEP 9: Build canonical ID maps for main bracket
+    // ============================================
+    const batch = writeBatch(db);
+    const mainBracketIds: string[] = [];
+    const now = Date.now();
 
-  // 4. Determine qualifiers
-  const updatedStandings = determineQualifiers(allPoolStandings, settings);
-
-  // 5. Get qualified participants for main bracket
-  const mainParticipants = getQualifiedParticipants(updatedStandings);
-
-  // 6. Generate main medal bracket
-  const gameCfg = settings.gameSettings || DEFAULT_GAME_SETTINGS;
-  const medalBracket = generateMedalBracket({
-    eventType: 'tournament',
-    eventId: tournamentId,
-    qualifiedParticipants: mainParticipants,
-    gameSettings: gameCfg,
-    formatSettings: settings,
-  });
-
-  // 7. Save main bracket matches
-  const batch = writeBatch(db);
-  const mainBracketIds: string[] = [];
-  const now = Date.now();
-
-  for (const matchData of medalBracket.bracketMatches) {
-    const matchRef = doc(collection(db, 'tournaments', tournamentId, 'matches'));
-    mainBracketIds.push(matchRef.id);
-
-    const match: Match = {
-      ...matchData,
-      id: matchRef.id,
-      tournamentId,
-      divisionId,
-      stage: 'bracket',
-      createdAt: now,
-      updatedAt: now,
-    } as Match;
-
-    batch.set(matchRef, match);
-  }
-
-  // 8. Generate plate bracket if enabled
-  const plateBracketIds: string[] = [];
-  if (settings.plateEnabled) {
-    const plateParticipants = getPlateParticipants(updatedStandings);
-
-    if (plateParticipants.length >= 2) {
-      const plateBracket = generatePlateBracket(
-        { eventType: 'tournament', eventId: tournamentId, gameSettings: gameCfg, formatSettings: settings },
-        plateParticipants,
-        {
-          plateFormat: settings.plateFormat || 'single_elim',
-          plateThirdPlace: settings.plateThirdPlace || false,
-          plateName: settings.plateName || 'Plate',
-        }
+    // Build maps for temp→position and position→canonical (O(n) total)
+    const { tempToPosition: mainTempToPosition, positionToCanonical: mainPosToCanonical } =
+      buildBracketIdMaps(
+        medalBracket.bracketMatches as BracketMatchData[],
+        divisionId,
+        'main'
       );
 
-      for (const matchData of plateBracket.plateMatches) {
-        const matchRef = doc(collection(db, 'tournaments', tournamentId, 'matches'));
-        plateBracketIds.push(matchRef.id);
+    // ============================================
+    // STEP 9b: Save main bracket matches with canonical IDs
+    // ============================================
+    for (const matchData of medalBracket.bracketMatches) {
+      // Get canonical ID for this match position
+      const canonicalId = mainPosToCanonical.get(matchData.bracketPosition!)!;
+      mainBracketIds.push(canonicalId);
 
-        const match: Match = {
-          ...matchData,
-          id: matchRef.id,
-          tournamentId,
-          divisionId,
-          stage: 'plate',
-          bracketType: 'plate',
-          createdAt: now,
-          updatedAt: now,
-        } as Match;
+      // Map nextMatchId from temp to canonical
+      const canonicalNextMatchId = mapNextMatchIdToCanonical(
+        matchData.nextMatchId,
+        mainTempToPosition,
+        mainPosToCanonical
+      );
 
-        batch.set(matchRef, match);
+      // Use canonical ID for the document
+      const matchRef = doc(db, 'tournaments', tournamentId, 'matches', canonicalId);
+
+      const match: Match = {
+        ...matchData,
+        id: canonicalId,
+        nextMatchId: canonicalNextMatchId,  // Now canonical, not temp
+        tournamentId,
+        divisionId,
+        stage: 'bracket',
+        bracketType: 'main',  // Standardized: always set bracketType
+        createdAt: now,
+        updatedAt: now,
+      } as Match;
+
+      batch.set(matchRef, match);  // Idempotent: overwrites if exists
+    }
+
+    // ============================================
+    // STEP 10: Generate plate bracket if enabled
+    // ============================================
+    const plateBracketIds: string[] = [];
+    if (settings.plateEnabled || settings.includePlate) {
+      const plateParticipants = getPlateParticipants(updatedStandings);
+
+      if (plateParticipants.length >= 2) {
+        const plateBracket = generatePlateBracket(
+          { eventType: 'tournament', eventId: tournamentId, gameSettings: gameCfg, formatSettings: settings },
+          plateParticipants,
+          {
+            plateFormat: settings.plateFormat || 'single_elim',
+            plateThirdPlace: settings.plateThirdPlace || false,
+            plateName: settings.plateName || 'Plate',
+          }
+        );
+
+        // Build canonical ID maps for plate bracket
+        const { tempToPosition: plateTempToPosition, positionToCanonical: platePosToCanonical } =
+          buildBracketIdMaps(
+            plateBracket.plateMatches as BracketMatchData[],
+            divisionId,
+            'plate'
+          );
+
+        for (const matchData of plateBracket.plateMatches) {
+          // Get canonical ID for this match position
+          const canonicalId = platePosToCanonical.get(matchData.bracketPosition!)!;
+          plateBracketIds.push(canonicalId);
+
+          // Map nextMatchId from temp to canonical
+          const canonicalNextMatchId = mapNextMatchIdToCanonical(
+            matchData.nextMatchId,
+            plateTempToPosition,
+            platePosToCanonical
+          );
+
+          // Use canonical ID for the document
+          const matchRef = doc(db, 'tournaments', tournamentId, 'matches', canonicalId);
+
+          const match: Match = {
+            ...matchData,
+            id: canonicalId,
+            nextMatchId: canonicalNextMatchId,  // Now canonical, not temp
+            tournamentId,
+            divisionId,
+            stage: 'bracket',       // Standardized: use 'bracket' not 'plate'
+            bracketType: 'plate',   // Distinguish via bracketType
+            createdAt: now,
+            updatedAt: now,
+          } as Match;
+
+          batch.set(matchRef, match);  // Idempotent: overwrites if exists
+        }
+      }
+    }
+
+    // ============================================
+    // STEP 11: Commit batch and mark success
+    // ============================================
+    await batch.commit();
+    success = true;  // Only set AFTER successful commit
+
+    // ============================================
+    // STEP 12: Update division with success status
+    // ============================================
+    await updateDoc(divisionRef, {
+      bracketStatus: 'generated',
+      bracketGeneratedAt: Date.now(),
+      bracketGeneratedBy: userId || null,
+    });
+
+    console.log(`[generateFinalsFromPoolStandings] Successfully generated bracket: ${mainBracketIds.length} main + ${plateBracketIds.length} plate matches`);
+
+    return { mainBracketIds, plateBracketIds };
+
+  } finally {
+    // ============================================
+    // CLEANUP: Release lock (status depends on success)
+    // ============================================
+    if (!success) {
+      try {
+        await updateDoc(divisionRef, {
+          bracketStatus: 'idle',
+          bracketGeneratedAt: Date.now(),
+        });
+        console.log('[generateFinalsFromPoolStandings] Lock released after failure');
+      } catch (unlockError) {
+        console.error('[generateFinalsFromPoolStandings] Failed to release lock:', unlockError);
       }
     }
   }
-
-  await batch.commit();
-
-  return { mainBracketIds, plateBracketIds };
 };
 
 // ============================================
@@ -765,6 +1280,7 @@ export const publishScheduleTimes = async (
 /**
  * Clear all test data from matches in a division
  * Resets test-flagged matches back to scheduled status
+ * Also clears poolAssignments on the division to allow fresh pool generation
  */
 export const clearTestData = async (
   tournamentId: string,
@@ -783,7 +1299,17 @@ export const clearTestData = async (
     query(matchesRef, where('divisionId', '==', divisionId))
   );
 
-  if (divisionMatchesSnapshot.empty) return 0;
+  // Always clear poolAssignments to allow fresh pool generation
+  const divisionRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
+
+  if (divisionMatchesSnapshot.empty) {
+    // Still clear poolAssignments even if no matches
+    await updateDoc(divisionRef, {
+      poolAssignments: null,
+      updatedAt: Date.now(),
+    });
+    return 0;
+  }
 
   // Filter for test data matches (check both field names)
   const testMatches = divisionMatchesSnapshot.docs.filter(docSnap => {
@@ -791,7 +1317,14 @@ export const clearTestData = async (
     return data.testData === true || data.isTestData === true;
   });
 
-  if (testMatches.length === 0) return 0;
+  if (testMatches.length === 0) {
+    // Still clear poolAssignments even if no test matches
+    await updateDoc(divisionRef, {
+      poolAssignments: null,
+      updatedAt: Date.now(),
+    });
+    return 0;
+  }
 
   const batch = writeBatch(db);
   const now = Date.now();
@@ -808,6 +1341,12 @@ export const clearTestData = async (
       isTestData: null,
       updatedAt: now,
     });
+  });
+
+  // Also clear poolAssignments on the division
+  batch.update(divisionRef, {
+    poolAssignments: null,
+    updatedAt: now,
   });
 
   await batch.commit();
@@ -867,6 +1406,62 @@ export const deleteCorruptedSelfMatches = async (
   }
 
   console.log(`[deleteCorruptedSelfMatches] Deleted ${deletedCount} corrupted matches from division ${divisionId}`);
+  return deletedCount;
+};
+
+/**
+ * Delete all pool matches for a division
+ * Used when organizer wants to regenerate schedule after editing pools
+ *
+ * @param tournamentId - Tournament ID
+ * @param divisionId - Division ID
+ * @returns Number of matches deleted
+ */
+export const deletePoolMatches = async (
+  tournamentId: string,
+  divisionId: string
+): Promise<number> => {
+  const { getDocs, query, where } = await import('@firebase/firestore');
+
+  // Get all pool matches for the division
+  const matchesRef = collection(db, 'tournaments', tournamentId, 'matches');
+  const snapshot = await getDocs(query(matchesRef, where('divisionId', '==', divisionId)));
+
+  if (snapshot.empty) return 0;
+
+  let deletedCount = 0;
+  const batch = writeBatch(db);
+  const batchSize = 450; // Firestore batch limit is 500
+  let batchCount = 0;
+
+  for (const docSnap of snapshot.docs) {
+    const match = docSnap.data() as Match;
+
+    // Only delete pool matches (not bracket matches)
+    const isPoolMatch =
+      match.stage === 'pool' ||
+      match.poolGroup ||
+      (!match.stage && !match.bracketType); // Legacy matches without stage
+
+    if (isPoolMatch) {
+      batch.delete(docSnap.ref);
+      deletedCount++;
+      batchCount++;
+
+      // Commit if batch is full
+      if (batchCount >= batchSize) {
+        await batch.commit();
+        batchCount = 0;
+      }
+    }
+  }
+
+  // Commit remaining
+  if (batchCount > 0) {
+    await batch.commit();
+  }
+
+  console.log(`[deletePoolMatches] Deleted ${deletedCount} pool matches from division ${divisionId}`);
   return deletedCount;
 };
 

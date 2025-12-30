@@ -161,7 +161,7 @@ Recommended Actions:
 2. Consider updating your password
 3. Be cautious of any suspicious emails or communications
 
-If you have any questions or concerns, please contact our Privacy Officer at privacy@pickleballdirector.com.
+If you have any questions or concerns, please contact us at support@pickleballdirector.co.nz.
 
 We apologize for any inconvenience this may cause.
 

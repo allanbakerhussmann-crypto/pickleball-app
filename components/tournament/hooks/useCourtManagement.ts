@@ -84,6 +84,9 @@ interface CourtMatchModel {
   status: 'WAITING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED';
   courtId?: string;
   courtName?: string;
+  // V06.22: Rest timer info for queue display
+  restingUntil?: number;  // Timestamp when all players have sufficient rest
+  isReady: boolean;       // True if match can be assigned now (no rest needed)
 }
 
 interface UseCourtManagementReturn {
@@ -153,6 +156,56 @@ export const useCourtManagement = ({
   const playerHasSufficientRest = useCallback((playerId: string): boolean => {
     return getPlayerRestTime(playerId) >= REST_TIME_MINIMUM_MS;
   }, [getPlayerRestTime]);
+
+  // ============================================
+  // Helper: Get when a player will have sufficient rest
+  // Returns timestamp when player is ready, or 0 if ready now
+  // ============================================
+
+  const getPlayerRestingUntil = useCallback((playerId: string): number => {
+    const restTime = getPlayerRestTime(playerId);
+    if (restTime >= REST_TIME_MINIMUM_MS) return 0; // Already rested
+
+    // Calculate when they'll be ready
+    const completedMatches = safeMatches.filter(m => {
+      if (m.status !== 'completed' || !m.completedAt) return false;
+      const playerIdsA = m.sideA?.playerIds || [];
+      const playerIdsB = m.sideB?.playerIds || [];
+      return playerIdsA.includes(playerId) || playerIdsB.includes(playerId);
+    });
+
+    if (completedMatches.length === 0) return 0; // Never played
+
+    const mostRecent = completedMatches.reduce((latest, m) =>
+      (m.completedAt || 0) > (latest.completedAt || 0) ? m : latest
+    );
+
+    return (mostRecent.completedAt || 0) + REST_TIME_MINIMUM_MS;
+  }, [getPlayerRestTime, safeMatches]);
+
+  // ============================================
+  // Helper: Get when ALL players in a match will be rested
+  // Returns timestamp when match is ready, or 0 if ready now
+  // ============================================
+
+  const getMatchRestingUntil = useCallback((match: Match): number => {
+    const playerIdsA = match.sideA?.playerIds || [];
+    const playerIdsB = match.sideB?.playerIds || [];
+    const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
+
+    if (allPlayerIds.length === 0) return 0;
+
+    // Find the latest rest time among all players
+    let maxRestingUntil = 0;
+    for (const pid of allPlayerIds) {
+      const restingUntil = getPlayerRestingUntil(pid);
+      if (restingUntil > maxRestingUntil) {
+        maxRestingUntil = restingUntil;
+      }
+    }
+
+    return maxRestingUntil;
+  }, [getPlayerRestingUntil]);
 
   // ============================================
   // Helper: Get pool progress for fair distribution
@@ -507,15 +560,64 @@ export const useCourtManagement = ({
   // Queue Match Models (smart-filtered queue in CourtMatchModel format)
   // This is the FILTERED queue that accounts for busy teams, rest time, etc.
   // Used by CourtAllocation to show only eligible matches
+  // V06.22: Now includes rest timer info (restingUntil, isReady)
   // ============================================
 
   const queueMatchModels = useMemo((): CourtMatchModel[] => {
-    return (queue || []).map(m => {
-      const division = safeDivisions.find(d => d.id === m.divisionId);
+    const now = Date.now();
 
-      // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
-      const teamAName = m.sideA?.name || m.teamAId || 'TBD';
-      const teamBName = m.sideB?.name || m.teamBId || 'TBD';
+    // Get ALL pending matches (not just eligible ones) so we can show resting matches too
+    const pendingMatches = safeMatches.filter(m => {
+      const status = m.status ?? 'scheduled';
+      const isActive = status === 'completed' || status === 'in_progress';
+      const hasCourt = m.court && m.court.trim() !== '';
+      return !isActive && !hasCourt;
+    });
+
+    // Get busy teams/players (on court)
+    const busyTeams = new Set<string>();
+    const busyPlayers = new Set<string>();
+    const busyTeamNames = new Set<string>();
+
+    safeMatches.forEach(m => {
+      if (!m.court || m.status === 'completed') return;
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      if (teamAId) { busyTeams.add(teamAId); busyPlayers.add(teamAId); }
+      if (teamBId) { busyTeams.add(teamBId); busyPlayers.add(teamBId); }
+      if (m.sideA?.name) busyTeamNames.add(m.sideA.name.toLowerCase());
+      if (m.sideB?.name) busyTeamNames.add(m.sideB.name.toLowerCase());
+      (m.sideA?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
+      (m.sideB?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
+    });
+
+    // Map matches with rest info
+    const modelsWithRestInfo = pendingMatches.map(m => {
+      const division = safeDivisions.find(d => d.id === m.divisionId);
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      const teamAName = m.sideA?.name || teamAId || 'TBD';
+      const teamBName = m.sideB?.name || teamBId || 'TBD';
+
+      // Check if teams are busy (on court)
+      const isBusy =
+        (teamAId && (busyTeams.has(teamAId) || busyPlayers.has(teamAId))) ||
+        (teamBId && (busyTeams.has(teamBId) || busyPlayers.has(teamBId))) ||
+        (m.sideA?.name && busyTeamNames.has(m.sideA.name.toLowerCase())) ||
+        (m.sideB?.name && busyTeamNames.has(m.sideB.name.toLowerCase())) ||
+        (m.sideA?.playerIds || []).some(p => p && busyPlayers.has(p)) ||
+        (m.sideB?.playerIds || []).some(p => p && busyPlayers.has(p));
+
+      // Skip matches where teams are on court
+      if (isBusy) return null;
+
+      // Skip self-matches
+      if (teamAId && teamBId && teamAId === teamBId) return null;
+      if (teamAName && teamBName && teamAName.toLowerCase() === teamBName.toLowerCase()) return null;
+
+      // Get rest time info
+      const restingUntil = getMatchRestingUntil(m);
+      const isReady = restingUntil === 0 || restingUntil <= now;
 
       return {
         id: m.id,
@@ -524,12 +626,32 @@ export const useCourtManagement = ({
         matchLabel: `Match ${m.matchNumber ?? m.id.slice(-4)}`,
         teamAName,
         teamBName,
-        status: 'WAITING' as const,  // Queue only contains waiting matches
+        status: 'WAITING' as const,
         courtId: undefined,
         courtName: undefined,
+        restingUntil: restingUntil > now ? restingUntil : undefined,
+        isReady,
+        _sortScore: isReady ? 0 : restingUntil, // For sorting: ready first, then by rest time
       };
+    }).filter((m): m is NonNullable<typeof m> => m !== null);
+
+    // Sort: ready matches first, then by rest time (soonest first)
+    modelsWithRestInfo.sort((a, b) => {
+      if (a.isReady && !b.isReady) return -1;
+      if (!a.isReady && b.isReady) return 1;
+      // Both resting: sort by soonest
+      if (!a.isReady && !b.isReady) {
+        return (a.restingUntil || 0) - (b.restingUntil || 0);
+      }
+      return 0;
     });
-  }, [queue, safeDivisions]);
+
+    // Limit to reasonable queue size
+    const activeCourts = safeCourts.filter(c => c.active !== false);
+    const maxQueueSize = Math.max(activeCourts.length + 3, 6);
+
+    return modelsWithRestInfo.slice(0, maxQueueSize).map(({ _sortScore, ...model }) => model);
+  }, [safeMatches, safeDivisions, safeCourts, getMatchRestingUntil]);
 
   // ============================================
   // Conflict Detection

@@ -13,6 +13,8 @@ import { getMeetups, subscribeToTournaments, subscribeToLeagues } from '../servi
 import { ROUTES, getRoute } from '../router/routes';
 import type { Meetup, Tournament, League } from '../types';
 import { formatTimestamp } from '../utils/timeFormat';
+import { useLiveMatches } from '../hooks/useLiveMatches';
+import { LiveNowSection } from '../components/home/LiveNowSection';
 
 // Chevron icon component
 const ChevronRightIcon = () => (
@@ -28,6 +30,9 @@ const HomePage: React.FC = () => {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [leagues, setLeagues] = useState<League[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Live matches feed
+  const { matches: liveMatches, loading: liveLoading, totalCount: liveTotalCount } = useLiveMatches();
 
   useEffect(() => {
     const loadData = async () => {
@@ -102,6 +107,13 @@ const HomePage: React.FC = () => {
         </h1>
         <p className="text-gray-400">Find games, join leagues, and compete in tournaments</p>
       </div>
+
+      {/* ==================== LIVE NOW SECTION ==================== */}
+      <LiveNowSection
+        matches={liveMatches}
+        totalCount={liveTotalCount}
+        loading={liveLoading}
+      />
 
       {/* ==================== MEETUPS SECTION ==================== */}
       <section>

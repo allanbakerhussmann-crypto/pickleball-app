@@ -369,6 +369,6 @@ ${breach.remediation || 'To be determined'}
 ---
 Report generated: ${new Date().toISOString()}
 Organisation: Pickleball Director
-Contact: privacy@pickleballdirector.com
+Contact: support@pickleballdirector.co.nz
   `.trim();
 };

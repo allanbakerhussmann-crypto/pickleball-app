@@ -296,10 +296,10 @@ const PrivacyRequestPage: React.FC = () => {
           <p className="text-gray-400 text-sm text-center">
             You can also contact our Privacy Officer directly at{' '}
             <a
-              href="mailto:privacy@pickleballdirector.com"
+              href="mailto:support@pickleballdirector.co.nz"
               className="text-green-400 hover:text-green-300"
             >
-              privacy@pickleballdirector.com
+              support@pickleballdirector.co.nz
             </a>
           </p>
         </div>

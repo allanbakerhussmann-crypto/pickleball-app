@@ -47,6 +47,9 @@ export interface CourtMatch {
   teamBName: string;
   status: MatchStatus;
   courtId?: string;
+  // V06.22: Rest timer info for queue display
+  restingUntil?: number;  // Timestamp when all players have sufficient rest
+  isReady?: boolean;      // True if match can be assigned now
 }
 
 interface CourtAllocationProps {

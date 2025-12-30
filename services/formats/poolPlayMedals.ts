@@ -899,3 +899,78 @@ export function getMatchesForPool(
 ): Match[] {
   return poolMatches.filter(m => m.poolGroup === poolName);
 }
+
+// ============================================
+// BRACKET VALIDATION (V06.21)
+// ============================================
+
+/**
+ * Result of bracket readiness validation
+ */
+export interface BracketReadiness {
+  /** Whether bracket generation can proceed */
+  ready: boolean;
+  /** Whether all pool matches are complete */
+  allPoolsComplete: boolean;
+  /** Number of incomplete pool matches */
+  incompleteMatchCount: number;
+  /** Number of qualified participants for bracket */
+  qualifierCount: number;
+  /** Minimum qualifiers needed (always 2) */
+  minimumRequired: number;
+  /** List of validation errors */
+  errors: string[];
+}
+
+/**
+ * Validate that bracket can be generated from pool results.
+ * Fails closed - all conditions must pass.
+ *
+ * Checks:
+ * 1. All pool matches are completed/forfeit/bye
+ * 2. At least 2 qualifiers exist
+ * 3. No duplicate qualifier IDs
+ *
+ * @param poolMatches - All pool matches
+ * @param qualifiedParticipants - Participants who qualified for bracket
+ * @returns Validation result with ready status and errors
+ */
+export function validateBracketReadiness(
+  poolMatches: Match[],
+  qualifiedParticipants: PoolParticipant[]
+): BracketReadiness {
+  const errors: string[] = [];
+
+  // 1. All pool matches completed/forfeit/bye
+  const incomplete = poolMatches.filter(m =>
+    (m.stage === 'pool' || m.poolGroup) &&
+    m.status !== 'completed' &&
+    m.status !== 'forfeit' &&
+    m.status !== 'bye'
+  );
+  if (incomplete.length > 0) {
+    errors.push(`${incomplete.length} pool match(es) not complete`);
+  }
+
+  // 2. Minimum 2 qualifiers
+  if (qualifiedParticipants.length < 2) {
+    errors.push(`Need at least 2 qualifiers, have ${qualifiedParticipants.length}`);
+  }
+
+  // 3. No duplicate qualifier IDs
+  const ids = qualifiedParticipants.map(p => p.id);
+  const duplicates = ids.filter((id, i) => ids.indexOf(id) !== i);
+  if (duplicates.length > 0) {
+    const uniqueDuplicates = [...new Set(duplicates)];
+    errors.push(`Duplicate qualifiers: ${uniqueDuplicates.join(', ')}`);
+  }
+
+  return {
+    ready: errors.length === 0,
+    allPoolsComplete: incomplete.length === 0,
+    incompleteMatchCount: incomplete.length,
+    qualifierCount: qualifiedParticipants.length,
+    minimumRequired: 2,
+    errors,
+  };
+}

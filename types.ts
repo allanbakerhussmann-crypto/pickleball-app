@@ -556,6 +556,30 @@ export interface Division {
   scheduledStartTime?: string;
   /** Scheduled end time for this division (e.g., "14:30") */
   scheduledEndTime?: string;
+
+  // ============================================
+  // Schedule Generation Status (V06.21)
+  // ============================================
+
+  /** Schedule generation status (for idempotency lock) */
+  scheduleStatus?: 'idle' | 'generating' | 'generated';
+  /** Version number incremented each time schedule is regenerated */
+  scheduleVersion?: number;
+  /** Timestamp when schedule was last generated */
+  scheduleGeneratedAt?: number;
+  /** User ID who last generated the schedule */
+  scheduleGeneratedBy?: string;
+
+  // ============================================
+  // Bracket Generation Status (V06.21)
+  // ============================================
+
+  /** Bracket generation status (for idempotency lock) */
+  bracketStatus?: 'idle' | 'generating' | 'generated';
+  /** Timestamp when bracket was last generated */
+  bracketGeneratedAt?: number;
+  /** User ID who last generated the bracket */
+  bracketGeneratedBy?: string;
 }
 
 export interface DivisionFormat {
@@ -675,6 +699,7 @@ export interface Match {
   // Stage info
   stage?: string;
   poolGroup?: string;
+  poolKey?: string;  // V06.21: Normalized pool key for validation/queries
   bracketType?: 'main' | 'plate' | 'consolation';
 
   // @deprecated Use sideA.id / sideB.id instead

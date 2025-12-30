@@ -7,7 +7,7 @@
  *   import { generateRoundRobinMatches, generateEliminationBracket } from '../services/formats';
  *
  * FILE LOCATION: services/formats/index.ts
- * VERSION: V06.00
+ * VERSION: V06.21
  */
 
 // Round Robin
@@ -120,6 +120,7 @@ export {
   type MedalBracketConfig,
   type MedalBracketResult,
   type PoolPlayMedalsResult,
+  type BracketReadiness,
   getPoolName,
   assignParticipantsToPools,
   calculatePoolCount,
@@ -132,4 +133,29 @@ export {
   isPoolStageComplete,
   getPoolStageProgress,
   getMatchesForPool,
+  validateBracketReadiness,
 } from './poolPlayMedals';
+
+// Pool Match Utilities (V06.21 - Idempotent Match Generation)
+export {
+  normalizePoolKey,
+  sortTeamIds,
+  generatePoolMatchId,
+  generateBracketMatchId,
+  parsePoolMatchId,
+  isCanonicalPoolMatchId,
+} from './poolMatchUtils';
+
+// Round Robin Validation (V06.21 - Fail Closed Validation)
+export {
+  type ValidationResult,
+  type MatchValidationStats,
+  type MatchValidationResult,
+  type PoolForValidation,
+  type MatchForValidation,
+  validatePoolsBeforeGeneration,
+  validateMatchesBeforeWrite,
+  assertValidMatches,
+  assertValidPools,
+  checkPoolFairness,
+} from './roundRobinValidator';

@@ -305,12 +305,22 @@ export const DEFAULT_TEAM_LEAGUE_SETTINGS: TeamLeagueSettings = {
 /**
  * Settings for Pool Play → Medals format
  * The most common tournament format in pickleball
+ *
+ * Qualifier rules:
+ * - mainQualifiersPerPool: How many from each pool go to main bracket (e.g., 2 = 1st + 2nd)
+ * - plateQualifiersPerPool: How many from each pool go to plate bracket (e.g., 1 = 3rd place)
+ * - includePlate: Explicit flag to enable plate bracket
+ *
+ * Example for 4-team pools:
+ *   1st + 2nd → main bracket (mainQualifiersPerPool: 2)
+ *   3rd       → plate bracket (plateQualifiersPerPool: 1, includePlate: true)
+ *   4th       → eliminated
  */
 export interface PoolPlayMedalsSettings {
   /** Number of participants per pool (3-6) */
   poolSize: 3 | 4 | 5 | 6;
 
-  /** How many advance from each pool */
+  /** How many advance from each pool to main bracket */
   advancementRule: 'top_1' | 'top_2' | 'top_n_plus_best';
 
   /** For 'top_n_plus_best', how many total advance */
@@ -321,6 +331,32 @@ export interface PoolPlayMedalsSettings {
 
   /** Tiebreaker order for pool standings */
   tiebreakers: ('wins' | 'head_to_head' | 'point_diff' | 'points_scored')[];
+
+  // ============================================
+  // EXPLICIT QUALIFIER CONFIGURATION (V06.21)
+  // ============================================
+
+  /**
+   * How many qualifiers per pool advance to main bracket.
+   * E.g., 2 means 1st + 2nd from each pool → main bracket.
+   * @default 2
+   */
+  mainQualifiersPerPool?: number;
+
+  /**
+   * How many qualifiers per pool advance to plate bracket.
+   * E.g., 1 means 3rd place from each pool → plate bracket.
+   * Set to 0 or omit to disable plate bracket.
+   * @default 0
+   */
+  plateQualifiersPerPool?: number;
+
+  /**
+   * Explicit flag to include plate bracket for non-advancing teams.
+   * When true, teams that don't qualify for main bracket can play for plate.
+   * @default false
+   */
+  includePlate?: boolean;
 }
 
 export const DEFAULT_POOL_PLAY_MEDALS_SETTINGS: PoolPlayMedalsSettings = {
@@ -328,6 +364,10 @@ export const DEFAULT_POOL_PLAY_MEDALS_SETTINGS: PoolPlayMedalsSettings = {
   advancementRule: 'top_2',
   bronzeMatch: 'yes',
   tiebreakers: ['wins', 'head_to_head', 'point_diff', 'points_scored'],
+  // Explicit qualifier configuration
+  mainQualifiersPerPool: 2,   // 1st + 2nd → main bracket
+  plateQualifiersPerPool: 0,  // No plate bracket by default
+  includePlate: false,
 };
 
 // ============================================

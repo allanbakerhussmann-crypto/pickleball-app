@@ -87,16 +87,45 @@ export async function clearPoolAssignments(
  * - Pool A gets seeds 1, 4, 5, 8, ...
  * - Pool B gets seeds 2, 3, 6, 7, ...
  *
+ * IMPORTANT: Each team appears in exactly ONE pool. Duplicates are rejected.
+ *
  * @param options - Teams and pool configuration
  * @returns Array of pool assignments
+ * @throws Error if duplicate team IDs are detected
  */
 export function generatePoolAssignments(options: GeneratePoolsOptions): PoolAssignment[] {
   const { teams, poolSize, seedingMethod = 'rating' } = options;
 
   if (teams.length === 0) return [];
 
-  // Sort teams by seeding method
-  const sortedTeams = [...teams].sort((a, b) => {
+  // ============================================
+  // STEP 1: Deduplicate teams by ID (one-team-one-pool enforcement)
+  // ============================================
+  const seenIds = new Set<string>();
+  const uniqueTeams: Team[] = [];
+
+  for (const team of teams) {
+    const teamId = team.id || team.odTeamId || '';
+    if (!teamId) {
+      console.warn('[generatePoolAssignments] Skipping team with no ID:', team);
+      continue;
+    }
+    if (seenIds.has(teamId)) {
+      console.warn(`[generatePoolAssignments] Skipping duplicate team ID: ${teamId}`);
+      continue;
+    }
+    seenIds.add(teamId);
+    uniqueTeams.push(team);
+  }
+
+  console.log(`[generatePoolAssignments] Input: ${teams.length} teams, Unique: ${uniqueTeams.length} teams`);
+
+  if (uniqueTeams.length === 0) return [];
+
+  // ============================================
+  // STEP 2: Sort teams by seeding method
+  // ============================================
+  const sortedTeams = [...uniqueTeams].sort((a, b) => {
     if (seedingMethod === 'rating') {
       // Sort by DUPR rating (highest first)
       const ratingA = a.avgDuprRating || a.seed || 0;
@@ -107,10 +136,11 @@ export function generatePoolAssignments(options: GeneratePoolsOptions): PoolAssi
     return Math.random() - 0.5;
   });
 
-  // Calculate number of pools
-  const poolCount = Math.ceil(teams.length / poolSize);
+  // ============================================
+  // STEP 3: Calculate pool count and initialize
+  // ============================================
+  const poolCount = Math.ceil(uniqueTeams.length / poolSize);
 
-  // Initialize pools
   const pools: PoolAssignment[] = [];
   for (let i = 0; i < poolCount; i++) {
     pools.push({
@@ -119,12 +149,24 @@ export function generatePoolAssignments(options: GeneratePoolsOptions): PoolAssi
     });
   }
 
-  // Snake draft assignment
+  // ============================================
+  // STEP 4: Snake draft assignment (each team goes to exactly one pool)
+  // ============================================
+  const assignedTeamIds = new Set<string>();
   let direction = 1; // 1 = forward, -1 = backward
   let poolIndex = 0;
 
   for (const team of sortedTeams) {
-    pools[poolIndex].teamIds.push(team.id);
+    const teamId = team.id || team.odTeamId || '';
+
+    // Double-check: skip if already assigned (should never happen after dedup)
+    if (assignedTeamIds.has(teamId)) {
+      console.error(`[generatePoolAssignments] BUG: Team ${teamId} already assigned!`);
+      continue;
+    }
+
+    pools[poolIndex].teamIds.push(teamId);
+    assignedTeamIds.add(teamId);
 
     // Move to next pool
     poolIndex += direction;
@@ -138,6 +180,24 @@ export function generatePoolAssignments(options: GeneratePoolsOptions): PoolAssi
       direction = 1;
     }
   }
+
+  // ============================================
+  // STEP 5: Hard validation - no duplicates across pools
+  // ============================================
+  const allAssignedIds: string[] = [];
+  for (const pool of pools) {
+    allAssignedIds.push(...pool.teamIds);
+  }
+
+  const uniqueAssignedIds = new Set(allAssignedIds);
+  if (uniqueAssignedIds.size !== allAssignedIds.length) {
+    const duplicates = allAssignedIds.filter((id, i) => allAssignedIds.indexOf(id) !== i);
+    const errorMsg = `Duplicate teams detected in pool assignments: ${[...new Set(duplicates)].join(', ')}`;
+    console.error(`[generatePoolAssignments] ${errorMsg}`);
+    throw new Error(errorMsg);
+  }
+
+  console.log(`[generatePoolAssignments] Generated ${pools.length} pools with ${allAssignedIds.length} unique teams`);
 
   return pools;
 }

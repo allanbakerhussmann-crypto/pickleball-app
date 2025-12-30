@@ -441,10 +441,10 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                             Privacy Request
                         </Link>
                         <a
-                            href="mailto:privacy@pickleballdirector.com"
+                            href="mailto:support@pickleballdirector.co.nz"
                             className="text-green-400 hover:text-green-300 underline"
                         >
-                            Contact Privacy Officer
+                            Contact Support
                         </a>
                     </div>
 

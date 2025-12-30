@@ -114,7 +114,17 @@ export const updateDivision = async (
   updates: Partial<Division>
 ): Promise<void> => {
   const divRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
-  await updateDoc(divRef, { ...updates, updatedAt: Date.now() });
+
+  // Filter out undefined values - Firestore rejects them
+  // This prevents crashes when form fields are empty (e.g., skillMin: undefined)
+  const filteredUpdates: Record<string, unknown> = { updatedAt: Date.now() };
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined) {
+      filteredUpdates[key] = value;
+    }
+  }
+
+  await updateDoc(divRef, filteredUpdates);
 };
 
 // ============================================

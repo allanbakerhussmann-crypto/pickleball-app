@@ -219,7 +219,7 @@ export const AppLayout: React.FC = () => {
               Terms of Service
             </Link>
             <a
-              href="mailto:privacy@pickleballdirector.com"
+              href="mailto:support@pickleballdirector.co.nz"
               className="hover:text-gray-300 transition-colors"
             >
               Contact

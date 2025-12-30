@@ -161,14 +161,6 @@
       ]
     },
     {
-      "collectionGroup": "refunds",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "paymentId", "order": "ASCENDING" }
-      ]
-    },
-    
-    {
       "collectionGroup": "annualPasses",
       "queryScope": "COLLECTION",
       "fields": [
@@ -228,14 +220,6 @@
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     },
-    {
-      "collectionGroup": "receipts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "transactionId", "order": "ASCENDING" }
-      ]
-    },
-    
     {
       "collectionGroup": "reports",
       "queryScope": "COLLECTION",

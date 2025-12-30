@@ -214,7 +214,7 @@ const TermsOfServicePage: React.FC = () => {
           </p>
           <div className="bg-gray-900 rounded-lg p-4">
             <p className="text-white font-medium">Pickleball Director</p>
-            <p className="text-green-400">support@pickleballdirector.com</p>
+            <p className="text-green-400">support@pickleballdirector.co.nz</p>
           </div>
         </section>
 

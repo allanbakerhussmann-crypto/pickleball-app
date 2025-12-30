@@ -40,11 +40,8 @@ import { SponsorManagement } from './tournament/SponsorManagement';
 import { StaffManagement } from './tournament/StaffManagement';
 import { SponsorLogoStrip } from './shared/SponsorLogoStrip';
 import { ClubBrandingSection } from './shared/ClubBrandingSection';
-import { VenuePreview } from './shared/VenuePreview';
-import { LocationMap } from './shared/LocationMap';
-import { ClubEventsPreview } from './shared/ClubEventsPreview';
 import { useTournamentPermissions } from '../hooks/useTournamentPermissions';
-import { clearTestData, quickScoreMatch, simulatePoolCompletion, deleteCorruptedSelfMatches } from '../services/firebase/matches';
+import { clearTestData, quickScoreMatch, simulatePoolCompletion, deleteCorruptedSelfMatches, deletePoolMatches } from '../services/firebase/matches';
 import { getTournament } from '../services/firebase/tournaments';
 
 interface TournamentManagerProps {
@@ -824,9 +821,30 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
 
         {/* Content */}
         <div className="relative px-6 py-8 md:px-8 md:py-10">
-          {/* Top Row - View Toggle - Show for tournament owner, app admin, or staff */}
-          {canSeeAdminView && (
-            <div className="flex justify-end mb-6">
+          {/* Top Row - View Toggle & Share Button */}
+          <div className="flex justify-end gap-2 mb-6">
+            {/* Share Results Button */}
+            <button
+              onClick={() => {
+                const resultsUrl = `${window.location.origin}/#/results/${tournament.id}?type=tournament`;
+                navigator.clipboard.writeText(resultsUrl).then(() => {
+                  alert('Results page link copied to clipboard!');
+                }).catch(() => {
+                  // Fallback: open in new tab
+                  window.open(`/#/results/${tournament.id}?type=tournament`, '_blank');
+                });
+              }}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all bg-lime-500/20 text-lime-300 border border-lime-500/30 hover:bg-lime-500/30"
+              title="Copy public results link for spectators"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+              Share Results
+            </button>
+
+            {/* View Toggle - Show for tournament owner, app admin, or staff */}
+            {canSeeAdminView && (
               <button
                 onClick={() => setViewMode(viewMode === 'public' ? 'admin' : 'public')}
                 className={`
@@ -855,8 +873,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   </>
                 )}
               </button>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Tournament Title */}
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-4 tracking-tight">
@@ -887,23 +905,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             </div>
           )}
 
-          {/* Venue Info - Courts, Location, Other Events */}
-          {tournament.clubId && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-              <VenuePreview
-                clubId={tournament.clubId}
-                variant="compact"
-                showBookingLink={true}
-              />
-              <LocationMap clubId={tournament.clubId} />
-              <ClubEventsPreview
-                clubId={tournament.clubId}
-                excludeEventId={tournament.id}
-                excludeEventType="tournament"
-                maxEvents={3}
-              />
-            </div>
-          )}
 
           {/* Tournament Status Management (Manager View Only) */}
           {canManageTournament && viewMode === 'admin' && (
@@ -1425,10 +1426,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 activeDivision={activeDivision}
                 onAddTeam={handleAddTeam}
                 onDeleteTeam={handleRemoveTeam}
-                onGenerateSchedule={handleGenerateSchedule}
-                scheduleGenerated={(divisionMatches || []).length > 0}
                 isVerified={isVerified}
-                playHasStarted={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
                 tournamentId={tournament.id}
                 entryFee={tournament.entryFee || 0}
                 currentUserId={currentUser?.uid}
@@ -1436,25 +1434,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 testMode={isTestModeActive}
                 divisionName={activeDivision?.name}
               />
-
-              {/* Pool Draw Preview - shown for pool_play_medals before schedule generation */}
-              {(activeDivision?.format?.competitionFormat === 'pool_play_medals' ||
-                activeDivision?.format?.stageMode === 'two_stage') &&
-                (divisionTeams || []).length >= 4 &&
-                (divisionMatches || []).length === 0 && (
-                <div className="bg-gray-900 p-4 rounded border border-gray-700">
-                  <PoolDrawPreview
-                    teams={divisionTeams}
-                    poolSize={activeDivision.format?.teamsPerPool || 4}
-                    poolAssignments={activeDivision.poolAssignments}
-                    poolSettings={activeDivision.format?.poolPlayMedalsSettings}
-                    getTeamDisplayName={getTeamDisplayName}
-                    showDetails={true}
-                    showAdvancement={true}
-                    onEditPools={() => setAdminTab('pools')}
-                  />
-                </div>
-              )}
 
               <div className="bg-gray-900 p-4 rounded border border-gray-700">
                 <h4 className="text-white font-bold mb-2">Schedule Actions</h4>
@@ -1700,7 +1679,62 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   initialAssignments={activeDivision.poolAssignments}
                   poolSize={activeDivision.format.teamsPerPool || 4}
                   getTeamDisplayName={getTeamDisplayName}
+                  onDeleteScheduleAndSave={async (newAssignments) => {
+                    // Delete all pool matches first
+                    await deletePoolMatches(tournament.id, activeDivision.id);
+                    // Save new pool assignments
+                    await savePoolAssignments(tournament.id, activeDivision.id, newAssignments);
+                    // Data auto-refreshes via Firebase subscriptions
+                    console.log('[PoolEditor] Schedule deleted and pools saved');
+                  }}
+                  onSave={() => console.log('[PoolEditor] Pools saved')}
                 />
+              </div>
+
+              {/* Generate Schedule Button */}
+              <div className="bg-gray-900 p-4 rounded border border-gray-700">
+                <h3 className="text-white font-bold text-lg mb-4">Schedule Generation</h3>
+                {(() => {
+                  const poolMatches = (divisionMatches || []).filter(m =>
+                    m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
+                  );
+                  const hasSchedule = poolMatches.length > 0;
+                  const playHasStarted = poolMatches.some(m => m.status === 'in_progress' || m.status === 'completed');
+                  const teamsCount = (divisionTeams || []).length;
+
+                  return (
+                    <div className="space-y-3">
+                      {hasSchedule ? (
+                        <>
+                          <div className="flex items-center gap-2 text-green-400">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            <span className="font-medium">Schedule generated ({poolMatches.length} matches)</span>
+                          </div>
+                          {playHasStarted && (
+                            <p className="text-amber-400 text-sm">
+                              Play has started. To regenerate, use "Delete Schedule & Save" in Pool Assignments above.
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-gray-400 text-sm mb-3">
+                            Generate round-robin matches for all pools. Teams must be assigned to pools first.
+                          </p>
+                          <button
+                            onClick={handleGenerateSchedule}
+                            disabled={teamsCount < 2}
+                            className="w-full bg-blue-600 text-white font-bold py-3 rounded hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {teamsCount < 2 ? `Need at least 2 teams (have ${teamsCount})` : 'Generate Pool Schedule'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Pool Matches List - Grouped by Pool */}
@@ -1712,7 +1746,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   );
 
                   if (poolMatches.length === 0) {
-                    return <p className="text-gray-500 text-center py-4">No pool matches generated yet. Go to Teams tab to generate schedule.</p>;
+                    return <p className="text-gray-500 text-center py-4">No pool matches generated yet. Use the "Generate Pool Schedule" button above.</p>;
                   }
 
                   // Helper to derive pool from team assignment if poolGroup not set

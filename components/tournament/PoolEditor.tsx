@@ -52,6 +52,8 @@ interface PoolEditorProps {
   poolSize: number;
   onAssignmentsChange?: (assignments: PoolAssignment[]) => void;
   onSave?: () => void;
+  /** Called when user wants to delete schedule and save new pools */
+  onDeleteScheduleAndSave?: (newAssignments: PoolAssignment[]) => Promise<void>;
   getTeamDisplayName?: (teamId: string) => string;
 }
 
@@ -154,7 +156,7 @@ const DroppablePool: React.FC<{
   canDelete?: boolean;
 }> = ({ poolName, teamIds, teams, isOver, isLocked, getTeamDisplayName, onDeletePool, canDelete }) => {
   const poolTeams = (teamIds || [])
-    .map(id => (teams || []).find(t => t.id === id))
+    .map(id => (teams || []).find(t => (t.id || t.odTeamId) === id))
     .filter((t): t is Team => t !== undefined);
 
   return (
@@ -229,6 +231,7 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
   poolSize,
   onAssignmentsChange,
   onSave,
+  onDeleteScheduleAndSave,
   getTeamDisplayName: externalGetTeamDisplayName,
 }) => {
   const [assignments, setAssignments] = useState<PoolAssignment[]>([]);
@@ -237,6 +240,16 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [deletingSchedule, setDeletingSchedule] = useState(false);
+
+  // Check if a schedule (pool matches) already exists
+  const existingPoolMatches = useMemo(() => {
+    return (matches || []).filter(
+      m => m.stage === 'pool' || (m.poolGroup && m.status !== 'cancelled')
+    );
+  }, [matches]);
+
+  const hasExistingSchedule = existingPoolMatches.length > 0;
 
   // Initialize assignments
   useEffect(() => {
@@ -389,8 +402,14 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
     onAssignmentsChange?.(generated);
   };
 
-  // Save assignments
+  // Save assignments (only when no schedule exists)
   const handleSave = async () => {
+    // If schedule exists, user must use "Delete Schedule & Save" instead
+    if (hasExistingSchedule) {
+      setError('A schedule already exists. Use "Delete Schedule & Save" to apply pool changes.');
+      return;
+    }
+
     setSaving(true);
     setError(null);
 
@@ -403,6 +422,32 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
       setError('Failed to save changes');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Delete existing schedule and save new pool assignments
+  const handleDeleteScheduleAndSave = async () => {
+    if (!onDeleteScheduleAndSave) {
+      setError('Delete & save handler not configured');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `This will DELETE all ${existingPoolMatches.length} existing pool matches and save your new pool assignments.\n\nYou will need to click "Generate Schedule" again to create new matches.\n\nContinue?`
+    );
+    if (!confirmed) return;
+
+    setDeletingSchedule(true);
+    setError(null);
+
+    try {
+      await onDeleteScheduleAndSave(assignments);
+      setHasChanges(false);
+    } catch (err) {
+      console.error('Failed to delete schedule and save:', err);
+      setError('Failed to delete schedule and save');
+    } finally {
+      setDeletingSchedule(false);
     }
   };
 
@@ -450,20 +495,51 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={handleReset}
-            disabled={hasAnyLockedPools || saving}
+            disabled={hasAnyLockedPools || saving || deletingSchedule}
             className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-gray-300 rounded transition-colors"
           >
             Reset to Auto-Seed
           </button>
-          <button
-            onClick={handleSave}
-            disabled={!hasChanges || saving}
-            className="px-4 py-1.5 text-sm bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded transition-colors"
-          >
-            {saving ? 'Saving...' : 'Save Changes'}
-          </button>
+          {hasExistingSchedule ? (
+            /* When schedule exists, show Delete & Save button */
+            <button
+              onClick={handleDeleteScheduleAndSave}
+              disabled={!hasChanges || deletingSchedule || !onDeleteScheduleAndSave}
+              className="px-4 py-1.5 text-sm bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded transition-colors"
+            >
+              {deletingSchedule ? 'Deleting...' : 'Delete Schedule & Save'}
+            </button>
+          ) : (
+            /* When no schedule, show regular Save button */
+            <button
+              onClick={handleSave}
+              disabled={!hasChanges || saving}
+              className="px-4 py-1.5 text-sm bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded transition-colors"
+            >
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Schedule Exists Warning */}
+      {hasExistingSchedule && (
+        <div className="bg-orange-900/30 border border-orange-600/50 rounded-lg p-3 text-sm">
+          <div className="flex items-start gap-2">
+            <svg className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div>
+              <span className="font-medium text-orange-400">Schedule already exists</span>
+              <p className="text-orange-300/80 mt-1">
+                {existingPoolMatches.length} pool match{existingPoolMatches.length !== 1 ? 'es' : ''} exist.
+                To apply pool changes, you must delete the existing schedule first.
+                Use "Delete Schedule & Save" to remove matches and save your new pool assignments.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Validation Warning */}
       {!balanceValidation.isBalanced && (

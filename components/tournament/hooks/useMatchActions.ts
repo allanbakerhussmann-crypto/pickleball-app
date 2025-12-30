@@ -2,10 +2,10 @@
  * useMatchActions Hook
  *
  * Handles match score updates, schedule generation, and team management.
- * VERSION: V06.06 - Added pool_play_medals format detection
+ * VERSION: V06.21 - Added loading state for schedule generation, pass userId for audit
  */
 
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import type { Division, Team, UserProfile, PoolAssignment } from '../../../types';
 import type { PoolPlayMedalsSettings } from '../../../types/formats/formatTypes';
 import type { GameSettings } from '../../../types/game/gameSettings';
@@ -38,11 +38,11 @@ interface UseMatchActionsReturn {
   // Team actions
   handleAddTeam: (params: { name: string; playerIds: string[] }) => Promise<void>;
   handleRemoveTeam: (teamId: string) => Promise<void>;
-  
+
   // Schedule actions
   handleGenerateSchedule: () => Promise<void>;
   handleGenerateFinals: (standings: any[]) => Promise<void>;
-  
+
   // Score actions
   handleUpdateScore: (
     matchId: string,
@@ -51,6 +51,9 @@ interface UseMatchActionsReturn {
     action: 'submit' | 'confirm' | 'dispute',
     reason?: string
   ) => Promise<void>;
+
+  // Loading state (V06.21)
+  isGeneratingSchedule: boolean;
 }
 
 export const useMatchActions = ({
@@ -62,6 +65,8 @@ export const useMatchActions = ({
   currentUserId,
   isOrganizer,
 }: UseMatchActionsProps): UseMatchActionsReturn => {
+  // Loading state for schedule generation (V06.21)
+  const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
 
   // ============================================
   // Team Actions
@@ -115,6 +120,14 @@ export const useMatchActions = ({
       return;
     }
 
+    // Prevent double-clicks (V06.21)
+    if (isGeneratingSchedule) {
+      console.warn('[handleGenerateSchedule] Already generating, ignoring click');
+      return;
+    }
+
+    setIsGeneratingSchedule(true);
+
     try {
       // Check if this is a pool_play_medals format (two-stage with pools → bracket)
       const isPoolPlayMedals =
@@ -154,13 +167,15 @@ export const useMatchActions = ({
           hasPoolAssignments: !!poolAssignments?.length,
         });
 
+        // V06.21: Pass userId for audit trail
         const result = await generatePoolPlaySchedule(
           tournamentId,
           activeDivision.id,
           divisionTeams,
           poolSettings,
           gameSettings,
-          poolAssignments
+          poolAssignments,
+          currentUserId  // For scheduleGeneratedBy audit
         );
 
         console.log(`Generated ${result.matchIds.length} pool matches across ${result.poolCount} pools`);
@@ -205,8 +220,11 @@ export const useMatchActions = ({
       console.error('Failed to generate schedule', err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       alert(`Failed to generate schedule: ${errorMessage}`);
+    } finally {
+      // Always reset loading state (V06.21)
+      setIsGeneratingSchedule(false);
     }
-  }, [tournamentId, activeDivision, divisionTeams, playersCache]);
+  }, [tournamentId, activeDivision, divisionTeams, playersCache, currentUserId, isGeneratingSchedule]);
 
   const handleGenerateFinals = useCallback(async (standings: any[]) => {
     if (!activeDivision) return;
@@ -326,5 +344,6 @@ export const useMatchActions = ({
     handleGenerateSchedule,
     handleGenerateFinals,
     handleUpdateScore,
+    isGeneratingSchedule, // V06.21: Loading state for UI
   };
 };

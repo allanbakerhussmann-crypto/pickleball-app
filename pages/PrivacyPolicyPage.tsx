@@ -238,7 +238,7 @@ const PrivacyPolicyPage: React.FC = () => {
           <div className="bg-gray-900 rounded-lg p-4">
             <p className="text-white font-medium">Privacy Officer</p>
             <p className="text-gray-400">Pickleball Director</p>
-            <p className="text-green-400">privacy@pickleballdirector.com</p>
+            <p className="text-green-400">support@pickleballdirector.co.nz</p>
           </div>
           <p className="text-gray-400 text-sm mt-4">
             If you are not satisfied with our response, you can lodge a complaint with the

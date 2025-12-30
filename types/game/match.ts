@@ -233,8 +233,11 @@ export interface Match {
   /** Which slot in next match (sideA or sideB) */
   nextMatchSlot?: 'sideA' | 'sideB';
 
-  /** Pool group identifier */
+  /** Pool group identifier (display name, e.g., "Pool A") */
   poolGroup?: string;
+
+  /** Pool key (normalized identifier for queries/validation, e.g., "pool-a") */
+  poolKey?: string;
 
   /** Stage of competition (pool, bracket, plate, finals) */
   stage?: 'pool' | 'bracket' | 'plate' | 'finals' | 'third_place';
