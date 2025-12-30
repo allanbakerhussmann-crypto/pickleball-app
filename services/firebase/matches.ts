@@ -857,8 +857,17 @@ function mapNextMatchIdToCanonical(
 
   const nextPosition = tempToPosition.get(tempNextMatchId);
   if (nextPosition === undefined) {
-    console.warn(`[mapNextMatchIdToCanonical] Unknown temp ID: ${tempNextMatchId}`);
-    return undefined;
+    // Log all available temp IDs for debugging and throw clear error
+    const availableTempIds = Array.from(tempToPosition.keys());
+    console.error(`[mapNextMatchIdToCanonical] Unknown temp ID: ${tempNextMatchId}`, {
+      availableTempIds,
+      tempToPositionSize: tempToPosition.size,
+    });
+    throw new Error(
+      `Bracket generation failed: Unknown temp ID "${tempNextMatchId}". ` +
+      `Available IDs: [${availableTempIds.join(', ')}]. ` +
+      `This is a bug in bracket generation - please report it.`
+    );
   }
 
   return positionToCanonical.get(nextPosition);

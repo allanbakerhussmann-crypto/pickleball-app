@@ -305,7 +305,8 @@ export function generateEliminationBracket(config: BracketConfig): BracketResult
     // Skip pure bye matches
     if (bracketMatch.isBye) continue;
 
-    const match: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> = {
+    const match: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> & { matchId?: string } = {
+      matchId: bracketMatch.matchId,  // Temp ID for bracket linking (e.g., temp_1, temp_2, etc.)
       eventType,
       eventId,
       format,
@@ -342,6 +343,7 @@ export function generateEliminationBracket(config: BracketConfig): BracketResult
       matchNumber: bracketMatch.matchInRound,
       bracketPosition: bracketMatch.bracketPosition,
       nextMatchId: bracketMatch.nextMatchId,
+      nextMatchSlot: bracketMatch.nextMatchSlot,  // Also include nextMatchSlot for completeness
       status: bracketMatch.sideA && bracketMatch.sideB ? 'scheduled' : 'scheduled',
       scores: [],
     };
