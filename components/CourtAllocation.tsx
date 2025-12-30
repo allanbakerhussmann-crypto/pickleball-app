@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   DndContext,
   closestCenter,
@@ -106,6 +106,34 @@ const SortableMatchItem: React.FC<SortableMatchItemProps> = ({
     isDragging,
   } = useSortable({ id: match.id });
 
+  // Rest time countdown state
+  const [now, setNow] = useState(Date.now());
+
+  // Default isReady to true if undefined (backwards compatibility)
+  const isReady = match.isReady ?? true;
+  const isResting = !isReady && match.restingUntil && match.restingUntil > now;
+
+  // Update countdown every second when match is resting
+  useEffect(() => {
+    if (!isResting) return;
+
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isResting]);
+
+  // Calculate remaining time
+  const secondsRemaining = isResting ? Math.ceil((match.restingUntil! - now) / 1000) : 0;
+
+  // Format countdown as M:SS
+  const formatCountdown = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -117,7 +145,9 @@ const SortableMatchItem: React.FC<SortableMatchItemProps> = ({
       ref={setNodeRef}
       style={style}
       className={`border rounded p-3 text-sm bg-gray-900 ${
-        isDragging ? "border-indigo-500 shadow-lg shadow-indigo-500/20" : "border-gray-700"
+        isDragging ? "border-indigo-500 shadow-lg shadow-indigo-500/20"
+          : isResting ? "border-amber-700/50"
+          : "border-gray-700"
       }`}
     >
       <div className="flex items-start gap-2">
@@ -139,7 +169,14 @@ const SortableMatchItem: React.FC<SortableMatchItemProps> = ({
               <span className="text-xs text-gray-500 font-mono">#{index + 1}</span>
               <span className="font-medium text-white">{match.division}</span>
             </div>
-            {renderMatchStatusBadge(match.status)}
+            <div className="flex items-center gap-1">
+              {renderMatchStatusBadge(match.status)}
+              {isResting && (
+                <span className="px-2 py-0.5 text-xs rounded bg-amber-900/50 text-amber-400 font-mono">
+                  Resting {formatCountdown(secondsRemaining)}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="text-xs text-gray-400 mt-0.5">
@@ -162,8 +199,13 @@ const SortableMatchItem: React.FC<SortableMatchItemProps> = ({
                 .map((court) => (
                   <button
                     key={court.id}
-                    className="px-2 py-1 text-xs border border-gray-600 text-gray-200 rounded hover:bg-gray-700 hover:border-gray-500 transition-colors"
-                    onClick={() => onAssignMatchToCourt(match.id, court.id)}
+                    className={`px-2 py-1 text-xs border rounded transition-colors ${
+                      isResting
+                        ? "border-gray-700 text-gray-600 cursor-not-allowed"
+                        : "border-gray-600 text-gray-200 hover:bg-gray-700 hover:border-gray-500"
+                    }`}
+                    onClick={() => !isResting && onAssignMatchToCourt(match.id, court.id)}
+                    disabled={!!isResting}
                   >
                     {court.name}
                   </button>

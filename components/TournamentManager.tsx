@@ -97,6 +97,21 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     tournamentPhaseLabel,
     handleStartTournament,
   } = useTournamentPhase({ matches });
+
+  // Persist auto-allocation setting per tournament in localStorage
+  const [autoAllocateCourts, setAutoAllocateCourts] = useState(() => {
+    if (typeof window === 'undefined' || !tournament?.id) return false;
+    const saved = localStorage.getItem(`autoAllocate_${tournament.id}`);
+    return saved === 'true';
+  });
+
+  // Save auto-allocation setting when it changes
+  useEffect(() => {
+    if (tournament?.id) {
+      localStorage.setItem(`autoAllocate_${tournament.id}`, String(autoAllocateCourts));
+    }
+  }, [autoAllocateCourts, tournament?.id]);
+
   // Court Management (using new hook)
   const {
     courtViewModels,
@@ -114,6 +129,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     matches,
     courts,
     divisions,
+    autoAssignOnRestComplete: autoAllocateCourts,
   });
   // Match Actions (using new hook)
   const {
@@ -163,22 +179,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   };
 
   // Track if the current user has already completed a registration
- 
-    // Tournament Phase (using new hook)
 
-  // Persist auto-allocation setting per tournament in localStorage
-  const [autoAllocateCourts, setAutoAllocateCourts] = useState(() => {
-    if (typeof window === 'undefined' || !tournament?.id) return false;
-    const saved = localStorage.getItem(`autoAllocate_${tournament.id}`);
-    return saved === 'true';
-  });
-
-  // Save auto-allocation setting when it changes
-  useEffect(() => {
-    if (tournament?.id) {
-      localStorage.setItem(`autoAllocate_${tournament.id}`, String(autoAllocateCourts));
-    }
-  }, [autoAllocateCourts, tournament?.id]);
   const [showScheduleBuilder, setShowScheduleBuilder] = useState(false);
   /* -------- Active Division / Tabs -------- */
 

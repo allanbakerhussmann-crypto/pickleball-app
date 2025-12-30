@@ -53,7 +53,7 @@
  *   appearing on multiple courts even if they're in different teams
  */
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Match, Court, Division } from '../../../types';
 import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment } from '../../../services/firebase';
 import { validateGameScore } from '../../../services/game/scoreValidation';
@@ -64,6 +64,7 @@ interface UseCourtManagementProps {
   matches: Match[];
   courts: Court[];
   divisions: Division[];
+  autoAssignOnRestComplete?: boolean; // Auto-assign matches when rest time ends
 }
 
 interface CourtViewModel {
@@ -119,6 +120,7 @@ export const useCourtManagement = ({
   matches,
   courts,
   divisions,
+  autoAssignOnRestComplete = false,
 }: UseCourtManagementProps): UseCourtManagementReturn => {
 
   // Safeguard: ensure arrays are never undefined
@@ -552,6 +554,7 @@ export const useCourtManagement = ({
         status,
         courtId: court?.id,
         courtName: court?.name,
+        isReady: true, // courtMatchModels are all matches, not queue-filtered
       };
     });
   }, [safeMatches, safeDivisions, safeCourts]);
@@ -583,8 +586,8 @@ export const useCourtManagement = ({
       if (!m.court || m.status === 'completed') return;
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
-      if (teamAId) { busyTeams.add(teamAId); busyPlayers.add(teamAId); }
-      if (teamBId) { busyTeams.add(teamBId); busyPlayers.add(teamBId); }
+      if (teamAId) busyTeams.add(teamAId);
+      if (teamBId) busyTeams.add(teamBId);
       if (m.sideA?.name) busyTeamNames.add(m.sideA.name.toLowerCase());
       if (m.sideB?.name) busyTeamNames.add(m.sideB.name.toLowerCase());
       (m.sideA?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
@@ -631,7 +634,6 @@ export const useCourtManagement = ({
         courtName: undefined,
         restingUntil: restingUntil > now ? restingUntil : undefined,
         isReady,
-        _sortScore: isReady ? 0 : restingUntil, // For sorting: ready first, then by rest time
       };
     }).filter((m): m is NonNullable<typeof m> => m !== null);
 
@@ -650,7 +652,7 @@ export const useCourtManagement = ({
     const activeCourts = safeCourts.filter(c => c.active !== false);
     const maxQueueSize = Math.max(activeCourts.length + 3, 6);
 
-    return modelsWithRestInfo.slice(0, maxQueueSize).map(({ _sortScore, ...model }) => model);
+    return modelsWithRestInfo.slice(0, maxQueueSize);
   }, [safeMatches, safeDivisions, safeCourts, getMatchRestingUntil]);
 
   // ============================================
@@ -1078,6 +1080,65 @@ export const useCourtManagement = ({
     await Promise.all(updates);
     Promise.all(notifications).catch(() => {}); // Fire and forget notifications
   }, [tournamentId, safeCourts, safeMatches, getEligibleMatches]);
+
+  // ============================================
+  // Auto-assign when rest time ends OR ready matches exist
+  // Precise setTimeout scheduling - not polling
+  // ============================================
+  const autoAssignTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAutoAssigningRef = useRef(false);
+
+  useEffect(() => {
+    if (autoAssignTimerRef.current) {
+      clearTimeout(autoAssignTimerRef.current);
+      autoAssignTimerRef.current = null;
+    }
+
+    if (!autoAssignOnRestComplete) return;
+
+    const freeCourts = safeCourts.filter(c =>
+      c.active !== false &&
+      !safeMatches.some(m => m.court === c.name && m.status !== 'completed')
+    );
+    if (freeCourts.length === 0) return;
+
+    const now = Date.now();
+    // Derive readiness from restingUntil, not m.isReady (which may be stale)
+    const isReadyNow = (m: CourtMatchModel) => !m.restingUntil || m.restingUntil <= now;
+
+    const readyMatches = queueMatchModels.filter(isReadyNow);
+    const restingMatches = queueMatchModels.filter(m => m.restingUntil && m.restingUntil > now);
+
+    const trigger = (delay: number) => {
+      autoAssignTimerRef.current = setTimeout(() => {
+        if (isAutoAssigningRef.current) return;
+        isAutoAssigningRef.current = true;
+
+        autoAssignFreeCourts({ silent: true })
+          .catch(err => console.error('[useCourtManagement] Auto-assign failed:', err))
+          .finally(() => { isAutoAssigningRef.current = false; });
+      }, delay);
+    };
+
+    if (readyMatches.length > 0) {
+      trigger(100);
+      return () => {
+        if (autoAssignTimerRef.current) clearTimeout(autoAssignTimerRef.current);
+        autoAssignTimerRef.current = null;
+      };
+    }
+
+    if (restingMatches.length > 0) {
+      const nextReadyTime = Math.min(...restingMatches.map(m => m.restingUntil!));
+      const delay = Math.max(nextReadyTime - now + 250, 250);
+      trigger(delay);
+    }
+
+    return () => {
+      if (autoAssignTimerRef.current) clearTimeout(autoAssignTimerRef.current);
+      autoAssignTimerRef.current = null;
+    };
+  }, [autoAssignOnRestComplete, queueMatchModels, safeCourts, safeMatches, autoAssignFreeCourts]);
 
   return {
     courtViewModels,

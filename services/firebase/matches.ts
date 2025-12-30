@@ -646,13 +646,42 @@ export const generatePoolPlaySchedule = async (
     await batch.commit();
 
     // ============================================
-    // STEP 6: Update division with success status
+    // STEP 6: Build poolAssignments for storage
+    // ============================================
+    const poolAssignmentsToSave: PoolAssignment[] = poolResult.pools.map(pool => {
+      const teamIds = pool.participants.map(p => {
+        const id = p.id;
+        if (!id || id.trim() === '') {
+          throw new Error(`Pool "${pool.poolName}" contains participant with missing/empty ID`);
+        }
+        return id;
+      });
+      return {
+        poolName: pool.poolName,
+        teamIds,
+      };
+    });
+
+    // Validate we have at least one pool with teams
+    if (poolAssignmentsToSave.length === 0) {
+      throw new Error('No pools generated - cannot save empty poolAssignments');
+    }
+    const totalTeams = poolAssignmentsToSave.reduce((sum, pa) => sum + pa.teamIds.length, 0);
+    if (totalTeams === 0) {
+      throw new Error('All pools are empty - cannot save poolAssignments with no teams');
+    }
+
+    console.log(`[generatePoolPlaySchedule] Saving ${poolAssignmentsToSave.length} pools with ${totalTeams} total teams`);
+
+    // ============================================
+    // STEP 7: Update division with success status + poolAssignments
     // ============================================
     await updateDoc(divisionRef, {
       scheduleStatus: 'generated',
       scheduleVersion: currentVersion + 1,
       scheduleGeneratedAt: now,
       scheduleGeneratedBy: userId || null,
+      poolAssignments: poolAssignmentsToSave,
       updatedAt: now,
     });
 
@@ -982,52 +1011,26 @@ export const generateFinalsFromPoolStandings = async (
       };
     };
 
-    if (savedPoolAssignments && savedPoolAssignments.length > 0) {
-      // Use saved pool assignments as source of truth
-      console.log(`[generateFinalsFromPoolStandings] Using saved poolAssignments (${savedPoolAssignments.length} pools)`);
+    // Pool assignments are REQUIRED - no fallback to deriving from matches
+    if (!savedPoolAssignments || savedPoolAssignments.length === 0) {
+      console.error('[generateFinalsFromPoolStandings] poolAssignments is missing or empty');
+      throw new Error('Pool assignments missing. Please regenerate the pool schedule.');
+    }
 
-      for (let i = 0; i < savedPoolAssignments.length; i++) {
-        const pa = savedPoolAssignments[i];
-        const participants: PoolParticipant[] = pa.teamIds
-          .filter(id => id) // Filter empty IDs
-          .map(id => getParticipantFromId(id));
+    // Use saved pool assignments as the canonical source of truth
+    console.log(`[generateFinalsFromPoolStandings] Using saved poolAssignments (${savedPoolAssignments.length} pools)`);
 
-        pools.push({
-          poolNumber: i + 1,
-          poolName: pa.poolName,
-          participants,
-        });
-      }
-    } else {
-      // Fallback: derive pools from match data
-      console.log(`[generateFinalsFromPoolStandings] No poolAssignments, deriving from ${poolGroups.size} pool groups in matches`);
+    for (let i = 0; i < savedPoolAssignments.length; i++) {
+      const pa = savedPoolAssignments[i];
+      const participants: PoolParticipant[] = pa.teamIds
+        .filter(id => id) // Filter empty IDs
+        .map(id => getParticipantFromId(id));
 
-      const sortedPoolNames = Array.from(poolGroups.keys()).sort();
-
-      for (let i = 0; i < sortedPoolNames.length; i++) {
-        const poolName = sortedPoolNames[i];
-        const matches = poolGroups.get(poolName) || [];
-
-        // Extract unique participant IDs from matches
-        const participantIds = new Set<string>();
-        for (const m of matches) {
-          if (m.sideA?.id) participantIds.add(m.sideA.id);
-          if (m.sideB?.id) participantIds.add(m.sideB.id);
-          // Also support legacy format
-          if ((m as any).teamAId) participantIds.add((m as any).teamAId);
-          if ((m as any).teamBId) participantIds.add((m as any).teamBId);
-        }
-
-        const participants: PoolParticipant[] = [...participantIds]
-          .filter(id => id)
-          .map(id => getParticipantFromId(id));
-
-        pools.push({
-          poolNumber: i + 1,
-          poolName,
-          participants,
-        });
-      }
+      pools.push({
+        poolNumber: i + 1,
+        poolName: pa.poolName,
+        participants,
+      });
     }
 
     // Log pool info for debugging
