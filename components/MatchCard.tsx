@@ -14,6 +14,7 @@
 
 import React, { useState, useEffect } from 'react';
 import type { GameSettings } from '../types/game/gameSettings';
+import type { GameScore } from '../types/game/match';
 import { validateGameScore } from '../services/game';
 
 /**
@@ -33,10 +34,14 @@ export interface MatchDisplay {
   team2: MatchTeam;
   score1: number | null;
   score2: number | null;
+  /** V06.45: Full multi-game scores array for Best of 3/5 matches */
+  scores?: GameScore[];
   status: string;
   roundNumber?: number;
   court?: string | null;
   courtName?: string | null;
+  bracketPosition?: number;
+  isThirdPlace?: boolean;
   // Optional flags added in TournamentManager
   isWaitingOnYou?: boolean;
   canCurrentUserConfirm?: boolean;

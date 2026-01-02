@@ -4,11 +4,20 @@
  * Displays pool play standings grouped by pool (Group A, Group B, etc.)
  * with collapsible sections, advancement badges, and match history.
  *
+ * V06.39 Changes:
+ * - Added plateSettings prop to display plate bracket indicator
+ * - Shows consolation bracket info when plateEnabled is true
+ *
+ * V06.37 Changes:
+ * - Now uses configurable tiebreakers from poolSettings.tiebreakers
+ * - Added head-to-head tiebreaker support
+ * - UI now matches bracket generation tiebreaker logic
+ *
  * V06.08 Changes:
  * - Fixed wins/losses calculation to derive winner from scores when winnerId is not set
  * - Now correctly counts W/L even for matches completed without winnerId
  *
- * @version 06.08
+ * @version 06.39
  * @file components/tournament/PoolGroupStandings.tsx
  */
 
@@ -21,10 +30,18 @@ import { MatchHistoryIndicator } from './MatchHistoryIndicator';
 // TYPES
 // ============================================
 
+// V06.39: Plate bracket settings from DivisionFormat
+interface PlateSettings {
+  plateEnabled?: boolean;
+  plateThirdPlace?: boolean;
+  plateName?: string;
+}
+
 interface PoolGroupStandingsProps {
   matches: Match[];
   teams: Team[];
   poolSettings?: PoolPlayMedalsSettings;
+  plateSettings?: PlateSettings;  // V06.39: For displaying plate bracket indicator
   getTeamPlayers?: (teamId: string) => { displayName: string }[];
 }
 
@@ -79,13 +96,18 @@ function getPoolNames(matches: Match[]): string[] {
   return Array.from(poolSet).sort();
 }
 
+type TiebreakerKey = 'wins' | 'head_to_head' | 'point_diff' | 'points_scored';
+
 /**
  * Calculate standings for a single pool
+ *
+ * V06.37: Now uses configurable tiebreakers from poolSettings
  */
 function calculatePoolStandings(
   poolMatches: Match[],
   teams: Team[],
-  advancementCount: number
+  advancementCount: number,
+  tiebreakers: TiebreakerKey[] = ['wins', 'head_to_head', 'point_diff', 'points_scored']
 ): PoolStandingRow[] {
   // Get all team IDs involved in this pool
   const teamIds = new Set<string>();
@@ -130,24 +152,20 @@ function calculatePoolStandings(
       const rowB = standingsMap.get(teamBId);
       if (!rowA || !rowB) return;
 
-      // Calculate total points from scores
+      // Calculate total points from scores - use modern format OR legacy, not both
       let pointsA = 0;
       let pointsB = 0;
 
-      // Handle scores array (GameScore format)
-      if (match.scores && Array.isArray(match.scores)) {
-        (match.scores || []).forEach((game) => {
+      if (match.scores && Array.isArray(match.scores) && match.scores.length > 0) {
+        // Use modern scores array
+        match.scores.forEach((game) => {
           pointsA += game.scoreA || 0;
           pointsB += game.scoreB || 0;
         });
-      }
-
-      // Handle legacy scoreTeamAGames / scoreTeamBGames
-      if (match.scoreTeamAGames && Array.isArray(match.scoreTeamAGames)) {
-        pointsA += match.scoreTeamAGames.reduce((sum: number, s: number) => sum + s, 0);
-      }
-      if (match.scoreTeamBGames && Array.isArray(match.scoreTeamBGames)) {
-        pointsB += match.scoreTeamBGames.reduce((sum: number, s: number) => sum + s, 0);
+      } else if (match.scoreTeamAGames?.length && match.scoreTeamBGames?.length) {
+        // Fallback to legacy format ONLY if modern is empty
+        pointsA = match.scoreTeamAGames.reduce((sum: number, s: number) => sum + s, 0);
+        pointsB = match.scoreTeamBGames.reduce((sum: number, s: number) => sum + s, 0);
       }
 
       // Update played
@@ -190,11 +208,48 @@ function calculatePoolStandings(
     row.pointDifference = row.pointsFor - row.pointsAgainst;
   });
 
-  // Sort by: wins (desc), point diff (desc), points for (desc)
+  // V06.37: Sort using configurable tiebreakers
+  // Completed matches for head-to-head lookup
+  const completedMatches = (poolMatches || []).filter(m => m.status === 'completed');
+
   standings.sort((a, b) => {
-    if (b.wins !== a.wins) return b.wins - a.wins;
-    if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
-    return b.pointsFor - a.pointsFor;
+    for (const tiebreaker of tiebreakers) {
+      let comparison = 0;
+
+      switch (tiebreaker) {
+        case 'wins':
+          comparison = b.wins - a.wins;
+          break;
+
+        case 'head_to_head':
+          // Find direct match between these two teams
+          const directMatch = completedMatches.find(m => {
+            const teamAId = m.teamAId || m.sideA?.id;
+            const teamBId = m.teamBId || m.sideB?.id;
+            return (
+              (teamAId === a.teamId && teamBId === b.teamId) ||
+              (teamAId === b.teamId && teamBId === a.teamId)
+            );
+          });
+          if (directMatch) {
+            const winnerId = directMatch.winnerTeamId || directMatch.winnerId;
+            if (winnerId === a.teamId) comparison = -1;
+            else if (winnerId === b.teamId) comparison = 1;
+          }
+          break;
+
+        case 'point_diff':
+          comparison = b.pointDifference - a.pointDifference;
+          break;
+
+        case 'points_scored':
+          comparison = b.pointsFor - a.pointsFor;
+          break;
+      }
+
+      if (comparison !== 0) return comparison;
+    }
+    return 0;
   });
 
   // Assign ranks and advancement
@@ -485,6 +540,7 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
   matches,
   teams,
   poolSettings,
+  plateSettings,  // V06.39
   getTeamPlayers,
 }) => {
   // Determine advancement count from settings
@@ -517,7 +573,9 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
         }
         return false;
       });
-      const standings = calculatePoolStandings(poolMatches, teams, advancementCount);
+      // V06.37: Pass tiebreakers from poolSettings (or use default order)
+      const tiebreakers = poolSettings?.tiebreakers || ['wins', 'head_to_head', 'point_diff', 'points_scored'];
+      const standings = calculatePoolStandings(poolMatches, teams, advancementCount, tiebreakers as TiebreakerKey[]);
       const completedCount = (poolMatches || []).filter((m) => m.status === 'completed').length;
       const isComplete = poolMatches.length > 0 && completedCount === poolMatches.length;
 
@@ -528,7 +586,7 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
         isComplete,
       };
     });
-  }, [matches, teams, advancementCount]);
+  }, [matches, teams, advancementCount, poolSettings?.tiebreakers]);
 
   // Overall progress - include both modern (poolGroup) and legacy (stage='Pool Play'/'pool') matches
   const isPoolMatch = (m: Match) => m.poolGroup || m.stage === 'Pool Play' || m.stage === 'pool';
@@ -577,23 +635,30 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
             `Top ${advancementCount} from each pool advance`}
           {!poolSettings && 'Top 2 from each pool advance'}
         </div>
-        {poolSettings?.tiebreakers && poolSettings.tiebreakers.length > 0 && (
-          <div>
-            <span className="text-gray-300 font-medium">Tiebreakers:</span>{' '}
-            {poolSettings.tiebreakers.map((tb, i) => {
-              const labels: Record<string, string> = {
-                wins: 'Wins',
-                head_to_head: 'Head-to-Head',
-                point_diff: 'Point Diff',
-                points_scored: 'Points Scored',
-              };
-              return (
-                <span key={tb}>
-                  {i > 0 && ' → '}
-                  {labels[tb] || tb}
-                </span>
-              );
-            })}
+        {/* V06.38: Always show tiebreakers with fallback to defaults */}
+        <div>
+          <span className="text-gray-300 font-medium">Tiebreakers:</span>{' '}
+          {(poolSettings?.tiebreakers || ['wins', 'head_to_head', 'point_diff', 'points_scored']).map((tb, i) => {
+            const labels: Record<string, string> = {
+              wins: 'Wins',
+              head_to_head: 'Head-to-Head',
+              point_diff: 'Point Diff',
+              points_scored: 'Points Scored',
+            };
+            return (
+              <span key={tb}>
+                {i > 0 && ' → '}
+                {labels[tb] || tb}
+              </span>
+            );
+          })}
+        </div>
+        {/* V06.39: Show plate bracket indication if enabled */}
+        {plateSettings?.plateEnabled && (
+          <div className="mt-1 text-amber-400">
+            <span className="font-medium">Consolation:</span>{' '}
+            Non-advancing teams play in {plateSettings?.plateName || 'Plate'} bracket
+            {plateSettings?.plateThirdPlace && ' (with 3rd place match)'}
           </div>
         )}
       </div>

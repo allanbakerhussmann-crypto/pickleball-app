@@ -459,9 +459,9 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
       return;
     }
 
-    // Require at least 2 pools
-    if (assignments.length <= 2) {
-      setError('Cannot delete - minimum 2 pools required');
+    // Require at least 1 pool
+    if (assignments.length <= 1) {
+      setError('Cannot delete - minimum 1 pool required');
       return;
     }
 
@@ -582,7 +582,7 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
               isLocked={isPoolLocked(pool.poolName)}
               getTeamDisplayName={getTeamDisplayName}
               onDeletePool={handleDeletePool}
-              canDelete={assignments.length > 2}
+              canDelete={assignments.length > 1}
             />
           ))}
         </div>

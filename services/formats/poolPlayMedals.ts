@@ -9,7 +9,19 @@
  * Uses existing roundRobin and elimination generators internally.
  *
  * FILE LOCATION: services/formats/poolPlayMedals.ts
- * VERSION: V06.00
+ * VERSION: V06.30 - Industry-standard cross-pool seeding for medal brackets
+ *
+ * V06.30 Changes:
+ * - Replaced getQualifiedParticipants() with pair-order logic
+ * - Uses cross-pool pairing formula: winners[i] vs seconds[(P-1)-i]
+ * - Handles odd pool counts with BYEs to avoid same-pool matchups
+ * - Selects by rank only (not qualified flag) for reliability
+ * - Added qualifiersPerPool parameter (not hardcoded K=2)
+ *
+ * V06.29 Changes:
+ * - Fixed plate qualifier calculation: now defaults to min(qualifiersPerPool, teamsPerPool - qualifiersPerPool)
+ * - This ensures correct plate bracket sizing (e.g., 4 pools × 4 teams → 8 plate teams → QF bracket)
+ * - Added debug logging in determineQualifiers for troubleshooting
  */
 
 import type { Match } from '../../types/game/match';
@@ -376,6 +388,11 @@ export function calculatePoolStandings(
 /**
  * Determine which participants qualify for medal bracket and plate bracket
  *
+ * V06.29 Changes:
+ * - Fixed plate qualifier count calculation to match main bracket logic
+ * - advanceToPlatePerPool now defaults to: min(qualifiersPerPool, teamsPerPool - qualifiersPerPool)
+ * - This ensures plate bracket has correct sizing (e.g., 4 pools × 4 teams → 8 plate teams)
+ *
  * @param allPoolStandings - Standings from all pools
  * @param settings - Pool play settings
  * @returns All standings with qualified flags set
@@ -387,8 +404,7 @@ export function determineQualifiers(
   const { advancementRule, advancementCount } = settings;
 
   // Plate settings from format (cast to access extended fields)
-  const plateEnabled = (settings as any).plateEnabled === true;
-  const advanceToPlatePerPool = (settings as any).advanceToPlatePerPool || 1;
+  const plateEnabled = (settings as any).plateEnabled === true || (settings as any).includePlate === true;
 
   // Mark top N from each pool
   let qualifiersPerPool = 0;
@@ -403,6 +419,30 @@ export function determineQualifiers(
       qualifiersPerPool = 1; // Top 1 guaranteed, plus best remaining
       break;
   }
+
+  // Calculate teams per pool from first pool (assumes all pools have similar size)
+  const teamsPerPool = allPoolStandings.length > 0 && allPoolStandings[0].length > 0
+    ? allPoolStandings[0].length
+    : 4; // default fallback
+
+  // V06.29: Calculate plate qualifiers per pool dynamically
+  // Take the same number as main bracket qualifiers, but cap at remaining teams
+  // e.g., 4 teams per pool, top 2 go to main → 2 remaining → plate gets 2 per pool
+  // This ensures 4 pools × 2 plate per pool = 8 plate teams → proper bracket sizing
+  const settingsAdvanceToPlate = (settings as any).advanceToPlatePerPool;
+  const advanceToPlatePerPool = settingsAdvanceToPlate !== undefined && settingsAdvanceToPlate > 0
+    ? settingsAdvanceToPlate
+    : Math.min(qualifiersPerPool, teamsPerPool - qualifiersPerPool);
+
+  console.log('[determineQualifiers] Plate calculation:', {
+    plateEnabled,
+    teamsPerPool,
+    qualifiersPerPool,
+    advanceToPlatePerPool,
+    settingsAdvanceToPlate,
+    poolCount: allPoolStandings.length,
+    expectedPlateTeams: plateEnabled ? allPoolStandings.length * advanceToPlatePerPool : 0,
+  });
 
   // Mark top qualifiers for main bracket
   for (const poolStandings of allPoolStandings) {
@@ -470,43 +510,139 @@ export function determineQualifiers(
 }
 
 /**
- * Get all qualified participants for medal bracket
+ * Get qualified participants in bracket-order (QF pair order)
  *
- * @param allPoolStandings - Standings with qualified flags
- * @returns Qualified participants sorted for seeding
+ * V06.30: Industry-standard cross-pool seeding approach:
+ * 1. Build ordered pool list by poolNumber (Pool A, Pool B, ...)
+ * 2. Collect rank 1..K participants per pool BY RANK ONLY (not qualified flag)
+ * 3. Build QF pairs using cross-pool formula: winners[i] vs seconds[P-1-i]
+ * 4. Handle odd pools: if i === crossIndex, give winner a BYE (avoid same-pool matchup)
+ * 5. Flatten pairs into participant list for bracket generator
+ *
+ * This scales to any pool count without hardcoded seed maps.
+ *
+ * @param allPoolStandings - Pool standings arrays
+ * @param qualifiersPerPool - K value from settings (1 for top_1, 2 for top_2). Defaults to 2.
+ * @returns Qualified participants in bracket pair-order
  */
 export function getQualifiedParticipants(
-  allPoolStandings: PoolStanding[][]
+  allPoolStandings: PoolStanding[][],
+  qualifiersPerPool: number = 2
 ): PoolParticipant[] {
-  const qualified: PoolStanding[] = [];
+  const P = allPoolStandings.length;  // Pool count
+  const K = qualifiersPerPool;        // From settings, not hardcoded
 
-  for (const poolStandings of allPoolStandings) {
-    for (const standing of poolStandings) {
-      if (standing.qualified) {
-        qualified.push(standing);
+  if (P === 0) {
+    console.warn('[getQualifiedParticipants] No pools provided');
+    return [];
+  }
+
+  // Step 1: Sort pool standings by poolNumber for deterministic ordering
+  const sortedPools = [...allPoolStandings].sort((a, b) => {
+    const poolA = a[0]?.poolNumber ?? 0;
+    const poolB = b[0]?.poolNumber ?? 0;
+    return poolA - poolB;
+  });
+
+  // Step 2: Collect rank 1 and rank 2 per pool BY RANK ONLY
+  // CRITICAL: Select by rank, NOT by standing.qualified flag
+  const winners: (PoolStanding | null)[] = [];
+  const seconds: (PoolStanding | null)[] = [];
+
+  for (const poolStandings of sortedPools) {
+    // Sort by rank to ensure we get actual rank 1 and rank 2
+    const sorted = [...poolStandings].sort((a, b) => a.rank - b.rank);
+
+    const rank1 = sorted.find(s => s.rank === 1) || null;
+    const rank2 = K >= 2 ? (sorted.find(s => s.rank === 2) || null) : null;
+
+    // GUARDRAIL: Verify we're not pulling rank > K
+    if (rank1 && rank1.rank > K) {
+      console.error(`[getQualifiedParticipants] REJECTED: ${rank1.participant.name} has rank ${rank1.rank} > ${K}`);
+      winners.push(null);
+    } else {
+      winners.push(rank1);
+    }
+
+    if (rank2 && rank2.rank > K) {
+      console.error(`[getQualifiedParticipants] REJECTED: ${rank2.participant.name} has rank ${rank2.rank} > ${K}`);
+      seconds.push(null);
+    } else {
+      seconds.push(rank2);
+    }
+  }
+
+  // Step 3: Build QF pairs using cross-pool formula
+  // pairs[i] = [ winners[i], seconds[P-1-i] ]
+  // CRITICAL: Only loop i < crossIndex to avoid duplicate pairs
+  // Handle odd pools: middle pool winner gets BYE, but middle pool's #2 is still included
+  const pairs: [PoolStanding | null, PoolStanding | null][] = [];
+  let middlePoolSecond: PoolStanding | null = null;  // Track middle pool's #2 for odd pools
+
+  for (let i = 0; i < P; i++) {
+    const crossIndex = (P - 1) - i;
+
+    if (i > crossIndex) {
+      // Already created this pair (from the other direction), skip to avoid duplicates
+      continue;
+    }
+
+    if (i === crossIndex) {
+      // Odd pool handling: middle pool (e.g., B for 3 pools)
+      // Winner gets a BYE, but we MUST include the #2 in participants
+      pairs.push([winners[i], null]);  // Winner vs BYE
+      middlePoolSecond = seconds[i];   // Save #2 for later inclusion
+    } else {
+      // Normal cross-pool pairing: A1 vs D2, B1 vs C2, etc.
+      pairs.push([winners[i], seconds[crossIndex]]);
+      pairs.push([winners[crossIndex], seconds[i]]);
+    }
+  }
+
+  // If odd pool count, add the middle pool's #2 as a BYE recipient
+  // This ensures they're not dropped from the bracket
+  if (middlePoolSecond) {
+    pairs.push([middlePoolSecond, null]);
+    console.log(`[getQualifiedParticipants] Odd pool: ${middlePoolSecond.poolName}#2 added with BYE`);
+  }
+
+  // Step 4: Log QF matchups for verification
+  console.log('[getQualifiedParticipants] QF Matchups:');
+  pairs.forEach((pair, idx) => {
+    const a = pair[0] ? `${pair[0].poolName}#${pair[0].rank} (${pair[0].participant.name})` : 'BYE';
+    const b = pair[1] ? `${pair[1].poolName}#${pair[1].rank} (${pair[1].participant.name})` : 'BYE';
+    console.log(`  QF${idx + 1}: ${a} vs ${b}`);
+  });
+
+  // Step 5: ACCEPTANCE CHECK - Fail if any qualifier rank > K
+  const allQualifiers = pairs.flat().filter(Boolean) as PoolStanding[];
+  const invalidQualifiers = allQualifiers.filter(q => q.rank > K);
+  if (invalidQualifiers.length > 0) {
+    const names = invalidQualifiers.map(q => `${q.participant.name} (rank ${q.rank})`);
+    console.error(`[getQualifiedParticipants] INVALID: Found rank > ${K} in main bracket:`, names);
+    throw new Error(`Invalid qualifiers in main bracket: ${names.join(', ')}`);
+  }
+
+  // Step 6: Flatten pairs into participant list (bracket-order)
+  // Order: [QF1-A, QF1-B, QF2-A, QF2-B, ...]
+  const participants: PoolParticipant[] = [];
+
+  for (const pair of pairs) {
+    for (const standing of pair) {
+      if (standing) {
+        participants.push({
+          id: standing.participant.id,
+          name: standing.participant.name,
+          playerIds: standing.participant.playerIds,
+          duprIds: standing.participant.duprIds,
+          duprRating: standing.participant.duprRating,
+        });
       }
     }
   }
 
-  // Sort: top qualifiers first (by pool finish), then best remaining
-  qualified.sort((a, b) => {
-    // Top qualifiers before best remaining
-    if (a.qualifiedAs === 'top' && b.qualifiedAs !== 'top') return -1;
-    if (a.qualifiedAs !== 'top' && b.qualifiedAs === 'top') return 1;
-
-    // Within same qualification type, sort by rank then pool record
-    if (a.rank !== b.rank) return a.rank - b.rank;
-    if (b.wins !== a.wins) return b.wins - a.wins;
-    return b.pointDifferential - a.pointDifferential;
-  });
-
-  return qualified.map(s => ({
-    id: s.participant.id,
-    name: s.participant.name,
-    playerIds: s.participant.playerIds,
-    duprIds: s.participant.duprIds,
-    duprRating: s.participant.duprRating,
-  }));
+  console.log(`[getQualifiedParticipants] Returning ${participants.length} participants in bracket-order`);
+  return participants;
 }
 
 /**
@@ -613,6 +749,8 @@ export function generateMedalBracket(config: MedalBracketConfig): MedalBracketRe
     duprRating: p.duprRating,
   }));
 
+  // V06.30: Pass preserveOrder: true to use the pair-order from getQualifiedParticipants
+  // This ensures cross-pool seeding is respected and participants are not re-sorted by DUPR
   const bracketResult = generateEliminationBracket({
     eventType,
     eventId,
@@ -623,6 +761,7 @@ export function generateMedalBracket(config: MedalBracketConfig): MedalBracketRe
       consolationBracket: false,
     },
     format: gameSettings.playType === 'singles' ? 'singles_elimination' : 'doubles_elimination',
+    preserveOrder: true,  // V06.30: Don't re-sort, use pair-order from cross-pool seeding
   });
 
   // Update format to pool_play_medals
@@ -800,11 +939,19 @@ export function generatePoolPlayMedals(config: PoolPlayConfig): PoolPlayMedalsRe
     poolMatches: poolResult.poolMatches,
 
     generateMedalBracket: (poolStandings: PoolStanding[][]) => {
+      // V06.30: Calculate qualifiersPerPool from advancement rule
+      let qualifiersPerPool = 2;  // default
+      switch (config.formatSettings.advancementRule) {
+        case 'top_1': qualifiersPerPool = 1; break;
+        case 'top_2': qualifiersPerPool = 2; break;
+        case 'top_n_plus_best': qualifiersPerPool = 1; break;
+      }
+
       // Determine qualifiers (also sets plate qualifiers)
       const updatedStandings = determineQualifiers(poolStandings, config.formatSettings);
 
-      // Get main bracket qualified participants
-      const qualifiedParticipants = getQualifiedParticipants(updatedStandings);
+      // V06.30: Get main bracket qualified participants with cross-pool seeding
+      const qualifiedParticipants = getQualifiedParticipants(updatedStandings, qualifiersPerPool);
 
       // Generate medal bracket
       return generateMedalBracket({

@@ -1,13 +1,29 @@
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { MatchCard, MatchDisplay } from './MatchCard';
 import type { Court } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+
+// Queue match model with rest time info (from useCourtManagement)
+interface QueueMatchModel {
+  id: string;
+  division: string;
+  roundLabel: string;
+  matchLabel: string;
+  teamAName: string;
+  teamBName: string;
+  status: 'WAITING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED';
+  courtId?: string;
+  courtName?: string;
+  restingUntil?: number;  // Timestamp when all players have sufficient rest
+  isReady: boolean;       // True if match can be assigned now
+}
 
 interface ScheduleProps {
   matches: MatchDisplay[];
   courts?: Court[];
   queue?: MatchDisplay[];
+  queueMatchModels?: QueueMatchModel[];  // Queue with rest time info
   waitTimes?: { [matchId: string]: number };
   onUpdateScore: (
     matchId: string,
@@ -23,11 +39,20 @@ export const Schedule: React.FC<ScheduleProps> = ({
   matches,
   courts = [],
   queue = [],
+  queueMatchModels = [],
   waitTimes = {},
   onUpdateScore,
   isVerified,
 }) => {
   const { currentUser } = useAuth();
+
+  // For updating rest countdown every second
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Active Matches on Courts
   const matchesOnCourt = useMemo(() => {
@@ -356,13 +381,75 @@ export const Schedule: React.FC<ScheduleProps> = ({
             {/* Queue */}
             <div className="space-y-3">
               <h3 className="text-xs font-bold text-gray-500 uppercase">
-                Up Next
+                Up Next {queueMatchModels.length > 0 && <span className="text-gray-600">({queueMatchModels.length} waiting)</span>}
               </h3>
-              {(queue || []).length === 0 ? (
+              {(queueMatchModels.length > 0 ? queueMatchModels : queue || []).length === 0 ? (
                 <div className="text-gray-500 text-sm italic bg-gray-900/50 p-4 rounded border border-dashed border-gray-700 text-center">
                   Queue is empty
                 </div>
+              ) : queueMatchModels.length > 0 ? (
+                // Use queueMatchModels with rest time info
+                queueMatchModels.slice(0, 8).map((qm, idx) => {
+                  // Check if this is the user's match
+                  const matchFromQueue = (queue || []).find(q => q.id === qm.id);
+                  const isMyMatch = matchFromQueue ? isUserMatch(matchFromQueue) : false;
+
+                  // Calculate rest countdown
+                  const isResting = qm.restingUntil && qm.restingUntil > now;
+                  const secondsRemaining = isResting ? Math.ceil((qm.restingUntil! - now) / 1000) : 0;
+                  const minutes = Math.floor(secondsRemaining / 60);
+                  const seconds = secondsRemaining % 60;
+                  const countdown = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+                  return (
+                    <div
+                      key={qm.id}
+                      className={`p-3 rounded border flex justify-between items-center relative overflow-hidden transition-all ${
+                        isMyMatch
+                          ? 'bg-indigo-900/30 border-indigo-500/50 ring-1 ring-indigo-500/30'
+                          : 'bg-gray-900 border-gray-700'
+                      }`}
+                    >
+                      <div className={`absolute left-0 top-0 bottom-0 w-1 ${
+                        isMyMatch ? 'bg-indigo-500' : isResting ? 'bg-amber-500' : 'bg-green-500'
+                      }`}></div>
+                      <div className="pl-2">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          {isMyMatch && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500 text-white uppercase">
+                              You
+                            </span>
+                          )}
+                          <span className="px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-500 text-white uppercase">
+                            WAITING
+                          </span>
+                          <span className="text-xs text-gray-400">#{idx + 1}</span>
+                        </div>
+                        <div className={`text-xs mb-0.5 font-medium ${
+                          isMyMatch ? 'text-white' : 'text-gray-400'
+                        }`}>
+                          {qm.teamAName} <span className="text-gray-600">vs</span> {qm.teamBName}
+                        </div>
+                        <div className="text-[10px] text-gray-500 uppercase bg-gray-800 inline-block px-1.5 rounded">
+                          {qm.roundLabel || 'Pool'}
+                        </div>
+                      </div>
+                      <div className="text-right flex flex-col gap-1 items-end">
+                        {isResting ? (
+                          <span className="px-2 py-0.5 text-xs rounded bg-amber-900/50 text-amber-400 font-mono">
+                            Resting {countdown}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 text-xs rounded bg-green-900/50 text-green-400 font-bold">
+                            Ready
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
               ) : (
+                // Fallback to basic queue without rest info
                 (queue || []).slice(0, 5).map((m, idx) => {
                   const isMyMatch = isUserMatch(m);
                   return (

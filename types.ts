@@ -604,11 +604,26 @@ export interface DivisionFormat {
   plateName?: string;
   plateThirdPlace?: boolean;       // Include 3rd place match in plate bracket
 
-  // Match settings
+  // Match settings (pool play defaults)
   bestOfGames?: 1 | 3 | 5;
   pointsPerGame?: 11 | 15 | 21;
   winBy?: 1 | 2;
   hasBronzeMatch?: boolean;
+
+  // Medal round settings (per-round configuration)
+  useSeparateMedalSettings?: boolean;
+  medalRoundSettings?: {
+    quarterFinals?: { bestOf: 1 | 3 | 5; pointsToWin: 11 | 15 | 21; winBy: 1 | 2 };
+    semiFinals?: { bestOf: 1 | 3 | 5; pointsToWin: 11 | 15 | 21; winBy: 1 | 2 };
+    finals?: { bestOf: 1 | 3 | 5; pointsToWin: 11 | 15 | 21; winBy: 1 | 2 };
+    bronze?: { bestOf: 1 | 3 | 5; pointsToWin: 11 | 15 | 21; winBy: 1 | 2 };
+  };
+
+  // V06.40: Plate bracket round-specific settings
+  plateRoundSettings?: {
+    plateFinals?: { bestOf: 1 | 3 | 5; pointsToWin: 11 | 15 | 21; winBy: 1 | 2 };
+    plateBronze?: { bestOf: 1 | 3 | 5; pointsToWin: 11 | 15 | 21; winBy: 1 | 2 };
+  };
 
   // Seeding
   seedingMethod?: SeedingMethod;
@@ -755,6 +770,7 @@ export interface Match {
 
   // Other metadata
   isBye?: boolean;
+  isThirdPlace?: boolean;  // Bronze/3rd place match
   bracketPosition?: number;
   testData?: boolean;
   lastUpdatedBy?: string | null;
@@ -2052,9 +2068,17 @@ export interface TournamentPlannerSettings {
   matchPreset: MatchPreset;
   gameSettings: PlannerGameSettings;           // Legacy - used as default
   poolGameSettings: PlannerGameSettings;       // Pool play scoring (e.g., 1 game to 11)
-  medalGameSettings: PlannerGameSettings;      // Medal rounds scoring (e.g., best of 3)
+  medalGameSettings: PlannerGameSettings;      // Medal rounds scoring - legacy simple mode
   useSeparateMedalSettings: boolean;           // Whether to use different settings for medals
   timingSettings: PlannerTimingSettings;
+
+  // Per-round medal settings (overrides medalGameSettings when present)
+  medalRoundSettings?: {
+    quarterFinals?: PlannerGameSettings;
+    semiFinals?: PlannerGameSettings;
+    finals?: PlannerGameSettings;
+    bronze?: PlannerGameSettings;
+  };
 
   // Step 4: Divisions
   divisions: PlannerDivision[];
@@ -2175,13 +2199,20 @@ export const DEFAULT_TOURNAMENT_PLANNER_SETTINGS: TournamentPlannerSettings = {
 
 /**
  * Match preset configurations
- * Now includes separate pool and medal game settings
+ * Now includes separate pool and per-round medal game settings
  */
 export const MATCH_PRESETS: Record<MatchPreset, {
   gameSettings: PlannerGameSettings;           // Legacy/default
   poolGameSettings: PlannerGameSettings;       // Pool play scoring
-  medalGameSettings: PlannerGameSettings;      // Medal rounds scoring
+  medalGameSettings: PlannerGameSettings;      // Medal rounds scoring - legacy simple mode
   useSeparateMedalSettings: boolean;           // Whether pool ≠ medal
+  // Per-round medal settings
+  medalRoundSettings?: {
+    quarterFinals?: PlannerGameSettings;
+    semiFinals?: PlannerGameSettings;
+    finals?: PlannerGameSettings;
+    bronze?: PlannerGameSettings;
+  };
   label: string;
   description: string;
   poolDescription: string;
@@ -2195,6 +2226,13 @@ export const MATCH_PRESETS: Record<MatchPreset, {
     poolGameSettings: { pointsToWin: 11, winBy: 1, bestOf: 1 },
     medalGameSettings: { pointsToWin: 11, winBy: 1, bestOf: 1 },
     useSeparateMedalSettings: false,
+    // Quick: all rounds Bo1
+    medalRoundSettings: {
+      quarterFinals: { pointsToWin: 11, winBy: 1, bestOf: 1 },
+      semiFinals: { pointsToWin: 11, winBy: 1, bestOf: 1 },
+      finals: { pointsToWin: 11, winBy: 1, bestOf: 1 },
+      bronze: { pointsToWin: 11, winBy: 1, bestOf: 1 },
+    },
     label: 'Quick',
     description: '11 pts, Win by 1, 1 game',
     poolDescription: '1 game to 11',
@@ -2208,10 +2246,17 @@ export const MATCH_PRESETS: Record<MatchPreset, {
     poolGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
     medalGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 3 },
     useSeparateMedalSettings: true,
+    // Standard: QF/SF = Bo1, Gold/Bronze = Bo3
+    medalRoundSettings: {
+      quarterFinals: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+      semiFinals: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+      finals: { pointsToWin: 11, winBy: 2, bestOf: 3 },
+      bronze: { pointsToWin: 11, winBy: 2, bestOf: 3 },
+    },
     label: 'Standard',
-    description: 'Pool: 1 game • Medals: Best of 3',
+    description: 'Pool: 1 game • Gold/Bronze: Best of 3',
     poolDescription: '1 game to 11',
-    medalDescription: 'Best of 3 to 11',
+    medalDescription: 'Gold/Bronze: Bo3',
     estimatedMinutes: 15,
     poolEstimatedMinutes: 12,
     medalEstimatedMinutes: 28,
@@ -2221,10 +2266,17 @@ export const MATCH_PRESETS: Record<MatchPreset, {
     poolGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
     medalGameSettings: { pointsToWin: 15, winBy: 2, bestOf: 3 },
     useSeparateMedalSettings: true,
+    // Pro: QF = Bo1, SF/Gold/Bronze = Bo3 to 15
+    medalRoundSettings: {
+      quarterFinals: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+      semiFinals: { pointsToWin: 15, winBy: 2, bestOf: 3 },
+      finals: { pointsToWin: 15, winBy: 2, bestOf: 3 },
+      bronze: { pointsToWin: 15, winBy: 2, bestOf: 3 },
+    },
     label: 'Pro',
-    description: 'Pool: 1 game • Medals: Best of 3 to 15',
+    description: 'Pool: 1 game • SF+Finals: Best of 3 to 15',
     poolDescription: '1 game to 11',
-    medalDescription: 'Best of 3 to 15',
+    medalDescription: 'SF+Finals: Bo3 to 15',
     estimatedMinutes: 20,
     poolEstimatedMinutes: 12,
     medalEstimatedMinutes: 40,
@@ -2234,6 +2286,13 @@ export const MATCH_PRESETS: Record<MatchPreset, {
     poolGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 1 },
     medalGameSettings: { pointsToWin: 11, winBy: 2, bestOf: 3 },
     useSeparateMedalSettings: true,
+    // Custom: starts same as Standard, user can edit
+    medalRoundSettings: {
+      quarterFinals: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+      semiFinals: { pointsToWin: 11, winBy: 2, bestOf: 1 },
+      finals: { pointsToWin: 11, winBy: 2, bestOf: 3 },
+      bronze: { pointsToWin: 11, winBy: 2, bestOf: 3 },
+    },
     label: 'Custom',
     description: 'Your settings',
     poolDescription: 'Custom',
@@ -2395,4 +2454,98 @@ export const DEFAULT_SCHEDULE_OPTIONS: ScheduleGenerationOptions = {
   keepPoolsTogether: true,
   autoResolveConflicts: true,
 };
+
+// ============================================
+// V06.33 RESULTS TABLE ARCHITECTURE
+// Canonical subcollections for pool results and bracket seeding
+// ============================================
+
+/**
+ * Pool result row - individual team standing in a pool
+ */
+export interface PoolResultRow {
+  rank: number;
+  teamId: string;
+  name: string;
+  wins: number;
+  losses: number;
+  pf: number;   // Points for
+  pa: number;   // Points against
+  diff: number; // Point differential
+}
+
+/**
+ * Pool result document - stored at tournaments/{tId}/divisions/{dId}/poolResults/{poolKey}
+ *
+ * Canonical, persisted pool standings that bracket generation reads directly.
+ * Prevents wrong participants in medal brackets caused by rank leakage.
+ */
+export interface PoolResultDoc {
+  poolKey: string;              // "pool-a"
+  poolName: string;             // "Pool A"
+  divisionId: string;
+  tournamentId: string;
+  generatedAt: number;
+  calculationVersion: string;   // "v06.33"
+  testData: boolean;
+  matchesUpdatedAtMax: number;  // Watermark: latest match.updatedAt used
+  rows: PoolResultRow[];
+}
+
+/**
+ * Bracket slot metadata - team info with pool context
+ */
+export interface BracketSlot {
+  teamId: string;
+  name: string;
+  poolKey: string;
+  poolName: string;
+  rank: number;
+  // Stats for debugging/results page
+  wins: number;
+  losses: number;
+  pf: number;
+  pa: number;
+  diff: number;
+}
+
+/**
+ * Round 1 pair - defines a single Round 1 match
+ */
+export interface Round1Pair {
+  matchNum: number;           // 1, 2, 3, 4...
+  sideA: string | null;       // Slot key like "A1", or null for BYE
+  sideB: string | null;       // Slot key or null for BYE
+}
+
+/**
+ * Bracket seeds document - stored at tournaments/{tId}/divisions/{dId}/bracketSeeds/{bracketType}
+ *
+ * Canonical bracket seeding that match generation reads directly.
+ * Prevents bracket scattering caused by placementBracket() rearrangement.
+ */
+export interface BracketSeedsDoc {
+  bracketType: 'main' | 'plate';
+  generatedAt: number;
+  qualifiersPerPool: number;    // K value
+  poolCount: number;            // P value
+  method: 'mirror';
+  testData: boolean;
+
+  // Bracket structure
+  bracketSize: number;          // nextPow2(totalQualifiers)
+  rounds: number;               // log2(bracketSize)
+  round1MatchCount: number;     // bracketSize / 2
+
+  // V06.39: Third place match support
+  thirdPlaceMatch?: boolean;    // Whether bracket has 3rd place match (bronze for main, 3rd for plate)
+
+  // Slots with FULL metadata (for debugging + results page)
+  slots: {
+    [slotKey: string]: BracketSlot;  // "A1", "A2", "B1", etc.
+  };
+
+  // Round 1 pairs - bracket generator creates matches DIRECTLY from this
+  round1Pairs: Round1Pair[];
+}
 

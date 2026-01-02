@@ -76,6 +76,12 @@ export interface MatchParticipant {
 
   /** Seed number (calculated from DUPR rating) */
   seed?: number;
+
+  /** V06.33: Pool key from pool stage (for bracket tracking) */
+  poolKey?: string;
+
+  /** V06.33: Rank from pool stage (for bracket tracking) */
+  poolRank?: number;
 }
 
 // ============================================

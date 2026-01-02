@@ -4,11 +4,12 @@
  * This file re-exports all Firebase functionality for backwards compatibility.
  * Import from here: import { ... } from './services/firebase';
  *
- * UPDATED V06.03:
- * - Added live scores service exports
+ * UPDATED V06.33:
+ * - Added pool results and bracket seeds service exports
+ * - Added generateBracketFromSeeds for Results Table Architecture
  *
  * FILE LOCATION: services/firebase/index.ts
- * VERSION: V06.03
+ * VERSION: V06.33
  */
 
 // Re-export config and core instances
@@ -111,6 +112,8 @@ export {
   // Pool Play Medals schedule generation (V06.06)
   generatePoolPlaySchedule,
   generateFinalsFromPoolStandings,
+  // V06.33 Results Table Architecture
+  generateBracketFromSeeds,
   // Match completion with bracket advancement (V06.05)
   completeMatchWithAdvancement,
   getMatch,
@@ -119,7 +122,25 @@ export {
   publishScheduleTimes,
   // Data cleanup utilities
   deleteCorruptedSelfMatches,
+  clearTestData,
 } from './matches';
+
+// ============================================
+// V06.35 Results Table Architecture
+// ============================================
+export {
+  buildPoolResults,
+  getPoolResults,
+  poolResultToStandings,
+  // V06.35: Automatic pool results on match completion
+  updatePoolResultsOnMatchComplete,
+} from './poolResults';
+
+export {
+  buildBracketSeeds,
+  buildPlateBracketSeeds,  // V06.39: Plate bracket seeds
+  getBracketSeeds,
+} from './bracketSeeds';
 
 // Courts
 export {

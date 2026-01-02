@@ -2,13 +2,46 @@
  * useMatchActions Hook
  *
  * Handles match score updates, schedule generation, and team management.
- * VERSION: V06.21 - Added loading state for schedule generation, pass userId for audit
+ * VERSION: V06.41 - Fix Stale Format in Medal Bracket Generation
+ *
+ * V06.41 Changes:
+ * - CRITICAL FIX: handleGenerateFinals() now fetches FRESH division format from Firestore
+ * - Before: Used stale activeDivision.format (React state not yet updated after save)
+ * - After: Fetches fresh format ensuring medalRoundSettings is used correctly
+ * - Finals now correctly use Best of 3, points to 15, etc. as configured
+ *
+ * V06.39 Changes:
+ * - handleGenerateFinals() now generates plate bracket when plateEnabled is true
+ * - Plate bracket uses buildPlateBracketSeeds() for non-advancing teams
+ * - Bronze match created automatically by generateBracketFromSeeds() when configured
+ * - Plate bracket supports its own 3rd place match via plateThirdPlace setting
+ *
+ * V06.36 Changes:
+ * - generateBracketFromSeeds() now receives divisionFormat to use medalRoundSettings
+ * - Bracket matches now correctly use finals/semiFinals/quarterFinals settings
+ * - Finals match uses bestOf 3, play to 15, etc. instead of pool settings
+ *
+ * V06.35 Changes:
+ * - Pool results now created automatically when pool matches complete
+ * - handleGenerateFinals() simplified: buildBracketSeeds() → generateBracketFromSeeds()
+ * - Removed buildPoolResults() call from handleGenerateFinals (already done on match completion)
+ *
+ * V06.34 Changes:
+ * - FIX D: sanitizeForFirestore wrapper to remove undefined values before setDoc
+ * - FIX E: Fetch fresh matches from Firestore instead of using stale divisionMatches prop
+ *
+ * V06.33 Changes:
+ * - Canonical subcollections as source of truth for bracket generation
+ * - FIX A: No orphan BYEs
+ * - FIX B: BYE auto-advance with overwrite protection
+ * - FIX C: Uses canonical subcollections
  */
 
 import { useCallback, useState } from 'react';
 import type { Division, Team, UserProfile, PoolAssignment } from '../../../types';
 import type { PoolPlayMedalsSettings } from '../../../types/formats/formatTypes';
 import type { GameSettings } from '../../../types/game/gameSettings';
+import type { GameScore } from '../../../types/game/match';
 import {
   createTeamServer,
   deleteTeam,
@@ -16,7 +49,9 @@ import {
   generateBracketSchedule,
   generateFinalsFromPools,
   generatePoolPlaySchedule,
-  generateFinalsFromPoolStandings,
+  // V06.35 Results Table Architecture
+  buildBracketSeeds,
+  generateBracketFromSeeds,
 } from '../../../services/firebase';
 import {
   submitMatchScore,
@@ -50,6 +85,13 @@ interface UseMatchActionsReturn {
     score2: number,
     action: 'submit' | 'confirm' | 'dispute',
     reason?: string
+  ) => Promise<void>;
+
+  // V06.42: Multi-game score handler for bracket matches (Best of 3/5)
+  handleUpdateMultiGameScore: (
+    matchId: string,
+    scores: GameScore[],
+    winnerId: string
   ) => Promise<void>;
 
   // Loading state (V06.21)
@@ -154,8 +196,9 @@ export const useMatchActions = ({
         // Build GameSettings from DivisionFormat fields
         // Note: Don't include scoreCap if undefined - Firestore rejects undefined values
         const gameSettings: GameSettings | undefined = divFormat?.bestOfGames ? {
+          playType: (divFormat.playType || 'doubles') as 'singles' | 'doubles' | 'mixed' | 'open',
           bestOf: divFormat.bestOfGames as 1 | 3 | 5,
-          pointsToWin: (divFormat.pointsPerGame || 11) as 11 | 15 | 21,
+          pointsPerGame: (divFormat.pointsPerGame || 11) as 11 | 15 | 21,
           winBy: (divFormat.winBy || 2) as 1 | 2,
         } : undefined;
         const poolAssignments: PoolAssignment[] | undefined = activeDivision.poolAssignments;
@@ -230,47 +273,154 @@ export const useMatchActions = ({
     if (!activeDivision) return;
 
     try {
-      // Check if this is a pool_play_medals format
+      // ============================================
+      // V06.41 FIX: Fetch FRESH division format from Firestore
+      // React state (activeDivision) may be stale after updateDivision()
+      // was called in the confirmation modal. The save happens, but React
+      // hasn't re-rendered yet, so activeDivision.format has OLD values.
+      // ============================================
+      const { doc, getDoc } = await import('@firebase/firestore');
+      const { db } = await import('../../../services/firebase/config');
+      const divisionRef = doc(db, 'tournaments', tournamentId, 'divisions', activeDivision.id);
+      const divisionSnap = await getDoc(divisionRef);
+
+      if (!divisionSnap.exists()) {
+        throw new Error('Division not found');
+      }
+
+      const freshDivisionFormat = divisionSnap.data()?.format;
+
+      console.log('[handleGenerateFinals] V06.41 Fresh format from Firestore:', {
+        useSeparateMedalSettings: freshDivisionFormat?.useSeparateMedalSettings,
+        medalRoundSettings: freshDivisionFormat?.medalRoundSettings,
+        plateRoundSettings: freshDivisionFormat?.plateRoundSettings,
+      });
+
+      // Check if this is a pool_play_medals format (using FRESH format)
       const isPoolPlayMedals =
-        activeDivision.format?.stageMode === 'two_stage' ||
-        activeDivision.format?.competitionFormat === 'pool_play_medals' ||
-        (activeDivision.format as any)?.poolPlayMedalsSettings;
+        freshDivisionFormat?.stageMode === 'two_stage' ||
+        freshDivisionFormat?.competitionFormat === 'pool_play_medals' ||
+        freshDivisionFormat?.poolPlayMedalsSettings;
 
       if (isPoolPlayMedals) {
-        // Use the NEW finals generator that works with pool standings
-        const poolMatches = divisionMatches.filter(
-          (m: any) => m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
-        );
+        // ============================================
+        // V06.35 Results Table Architecture
+        // Pool results already exist from match completions (V06.35)
+        // New flow: buildBracketSeeds → generateBracketFromSeeds
+        // ============================================
 
-        const poolSettings: PoolPlayMedalsSettings = (activeDivision.format as any)?.poolPlayMedalsSettings || {
+        const poolSettings: PoolPlayMedalsSettings = freshDivisionFormat?.poolPlayMedalsSettings || {
           poolSize: 4,
           advancementRule: 'top_2',
           bronzeMatch: 'yes',
           tiebreakers: ['wins', 'head_to_head', 'point_diff', 'points_scored'],
         };
 
-        // Include plate settings if enabled
-        const formatWithPlate = activeDivision.format as any;
-        const settings = {
-          ...poolSettings,
-          plateEnabled: formatWithPlate?.plateEnabled || false,
-          plateFormat: formatWithPlate?.plateFormat || 'single_elim',
-          plateThirdPlace: formatWithPlate?.plateThirdPlace || false,
-          plateName: formatWithPlate?.plateName || 'Plate',
-          gameSettings: formatWithPlate?.gameSettings,
+        // Determine qualifiersPerPool from advancement rule
+        let qualifiersPerPool = 2;  // default for 'top_2'
+        switch (poolSettings.advancementRule) {
+          case 'top_1': qualifiersPerPool = 1; break;
+          case 'top_2': qualifiersPerPool = 2; break;
+          case 'top_n_plus_best': qualifiersPerPool = 1; break;
+        }
+
+        // Build DEFAULT game settings from division format (used as fallback)
+        const divFormat = freshDivisionFormat as any;
+        const defaultGameSettings: GameSettings = {
+          playType: (divFormat?.playType || 'doubles') as 'singles' | 'doubles' | 'mixed' | 'open',
+          bestOf: (divFormat?.bestOfGames || 1) as 1 | 3 | 5,
+          pointsPerGame: (divFormat?.pointsPerGame || 11) as 11 | 15 | 21,
+          winBy: (divFormat?.winBy || 2) as 1 | 2,
         };
 
-        const result = await generateFinalsFromPoolStandings(
+        console.log('[handleGenerateFinals] V06.41 flow with fresh format:', {
+          qualifiersPerPool,
+          defaultGameSettings,
+          useSeparateMedalSettings: divFormat?.useSeparateMedalSettings,
+          medalRoundSettings: divFormat?.medalRoundSettings,
+        });
+
+        // ============================================
+        // STEP 1: Build and persist bracket seeds from existing poolResults
+        // V06.35: Pool results already exist from match completions
+        // ============================================
+        console.log('[handleGenerateFinals] Step 1: buildBracketSeeds (from existing poolResults)');
+        const seedsDoc = await buildBracketSeeds(
           tournamentId,
           activeDivision.id,
-          poolMatches,
-          divisionTeams,
-          settings
+          qualifiersPerPool,
+          false  // testData = false for real finals
         );
 
-        alert(`Finals bracket generated! ${result.mainBracketIds.length} main bracket matches${
-          result.plateBracketIds.length > 0 ? `, ${result.plateBracketIds.length} plate bracket matches` : ''
-        }.`);
+        // ============================================
+        // STEP 2: Generate bracket from seeds
+        // V06.41: Pass FRESH divisionFormat so bracket generation uses medalRoundSettings
+        // ============================================
+        console.log('[handleGenerateFinals] Step 2: generateBracketFromSeeds');
+        const matchIds = await generateBracketFromSeeds(
+          tournamentId,
+          activeDivision.id,
+          'main',
+          defaultGameSettings,
+          false,  // testData = false for real finals
+          freshDivisionFormat  // V06.41: Use FRESH format, not stale activeDivision.format
+        );
+
+        console.log('[handleGenerateFinals] Main bracket complete:', {
+          bracketSize: seedsDoc.bracketSize,
+          rounds: seedsDoc.rounds,
+          matchIds: matchIds.length,
+        });
+
+        // ============================================
+        // V06.39: Generate plate bracket if enabled
+        // ============================================
+        const plateEnabled = divFormat?.plateEnabled === true;
+        const plateThirdPlace = divFormat?.plateThirdPlace === true;
+        let plateMatchCount = 0;
+
+        if (plateEnabled) {
+          console.log('[handleGenerateFinals] Step 3: Generate plate bracket...');
+
+          // Dynamic import to avoid circular dependency
+          const { buildPlateBracketSeeds } = await import('../../../services/firebase/bracketSeeds');
+
+          // Build plate seeds (non-advancing teams)
+          const plateSeedsDoc = await buildPlateBracketSeeds(
+            tournamentId,
+            activeDivision.id,
+            qualifiersPerPool,
+            plateThirdPlace,
+            false  // testData
+          );
+
+          if (plateSeedsDoc.bracketSize > 0) {
+            // Generate plate bracket matches
+            const plateMatchIds = await generateBracketFromSeeds(
+              tournamentId,
+              activeDivision.id,
+              'plate',
+              defaultGameSettings,
+              false,
+              freshDivisionFormat  // V06.41: Use FRESH format
+            );
+
+            plateMatchCount = plateMatchIds.length;
+
+            console.log('[handleGenerateFinals] Plate bracket complete:', {
+              bracketSize: plateSeedsDoc.bracketSize,
+              matchIds: plateMatchCount,
+              thirdPlace: plateThirdPlace,
+            });
+          } else {
+            console.log('[handleGenerateFinals] Not enough teams for plate bracket');
+          }
+        }
+
+        // Build success message
+        const bronzeMsg = poolSettings.bronzeMatch === 'yes' ? ' Bronze match included.' : '';
+        const plateMsg = plateMatchCount > 0 ? ` Plate bracket: ${plateMatchCount} matches.` : '';
+        alert(`Finals bracket generated! ${matchIds.length} main bracket matches (${seedsDoc.bracketSize}-team).${bronzeMsg}${plateMsg}`);
         return;
       }
 
@@ -287,7 +437,8 @@ export const useMatchActions = ({
       alert('Finals bracket generated!');
     } catch (err) {
       console.error('Failed to generate finals', err);
-      alert('Failed to generate finals. Please try again.');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      alert(`Failed to generate finals: ${errorMessage}`);
     }
   }, [tournamentId, activeDivision, divisionTeams, divisionMatches, playersCache]);
 
@@ -338,12 +489,45 @@ export const useMatchActions = ({
     }
   }, [tournamentId, currentUserId, isOrganizer]);
 
+  // V06.42: Multi-game score handler for bracket matches (Best of 3/5)
+  // Opens ScoreEntryModal for multi-game entry, then submits all game scores
+  const handleUpdateMultiGameScore = useCallback(async (
+    matchId: string,
+    scores: GameScore[],
+    _winnerId: string  // Winner is calculated from scores in submitMatchScore
+  ) => {
+    if (!currentUserId) {
+      alert('You must be logged in to update scores.');
+      return;
+    }
+
+    try {
+      // Extract scores arrays from GameScore objects
+      const scoresA = scores.map(g => g.scoreA);
+      const scoresB = scores.map(g => g.scoreB);
+
+      // submitMatchScore now correctly counts games won (V06.42 fix)
+      await submitMatchScore(
+        tournamentId,
+        matchId,
+        currentUserId,
+        scoresA,
+        scoresB,
+        isOrganizer
+      );
+    } catch (err: any) {
+      console.error('Failed to update multi-game score', err);
+      alert(err.message || 'Failed to update score. Please try again.');
+    }
+  }, [tournamentId, currentUserId, isOrganizer]);
+
   return {
     handleAddTeam,
     handleRemoveTeam,
     handleGenerateSchedule,
     handleGenerateFinals,
     handleUpdateScore,
+    handleUpdateMultiGameScore,  // V06.42
     isGeneratingSchedule, // V06.21: Loading state for UI
   };
 };

@@ -6,12 +6,17 @@
  * Seeding is based on DUPR ratings.
  *
  * FILE LOCATION: services/formats/elimination.ts
- * VERSION: V06.00
+ * VERSION: V06.30 - Added preserveOrder option for pool-seeded brackets
+ *
+ * V06.30 Changes:
+ * - Added preserveOrder option to BracketConfig
+ * - When preserveOrder=true, participants are NOT re-sorted by DUPR
+ * - Used for medal brackets where cross-pool seeding is already applied
  */
 
 import type { Match } from '../../types/game/match';
 import type { GameSettings } from '../../types/game/gameSettings';
-import type { EliminationSettings, CompetitionFormat } from '../../types/formats/formatTypes';
+import type { EliminationSettings } from '../../types/formats/formatTypes';
 
 // ============================================
 // TYPES
@@ -33,6 +38,8 @@ export interface BracketConfig {
   gameSettings: GameSettings;
   formatSettings: EliminationSettings;
   format: 'singles_elimination' | 'doubles_elimination';
+  /** V06.30: If true, don't re-seed by DUPR - preserve input order (default: false) */
+  preserveOrder?: boolean;
 }
 
 export interface BracketMatch {
@@ -45,6 +52,8 @@ export interface BracketMatch {
   winnerId?: string;
   nextMatchId?: string;
   nextMatchSlot?: 'sideA' | 'sideB';
+  loserNextMatchId?: string;    // V06.22: For bronze match advancement
+  loserNextMatchSlot?: 'sideA' | 'sideB';  // V06.22: Which slot in bronze match
   isBye?: boolean;
   isThirdPlace?: boolean;
 }
@@ -171,14 +180,17 @@ export function placementBracket(
  * @returns Generated bracket with matches
  */
 export function generateEliminationBracket(config: BracketConfig): BracketResult {
-  const { eventType, eventId, participants, gameSettings, formatSettings, format } = config;
+  const { eventType, eventId, participants, gameSettings, formatSettings, format, preserveOrder = false } = config;
 
   if (participants.length < 2) {
     return { matches: [], bracket: [], rounds: 0, bracketSize: 0 };
   }
 
-  // Seed participants by DUPR
-  const seededParticipants = seedByDupr([...participants]);
+  // V06.30: Seed participants - preserve order if flag set, otherwise seed by DUPR
+  // preserveOrder is used for medal brackets where cross-pool seeding is already applied
+  const seededParticipants = preserveOrder
+    ? participants.map((p, i) => ({ ...p, seed: i + 1 }))
+    : seedByDupr([...participants]);
 
   // Calculate bracket structure
   const bracketSize = calculateBracketSize(participants.length);
@@ -278,6 +290,18 @@ export function generateEliminationBracket(config: BracketConfig): BracketResult
       sideB: null,
       isThirdPlace: true,
     });
+
+    // V06.22: Link semi-final matches to third place match for loser advancement
+    // Find the two semi-final matches (the matches that feed into the final)
+    const finalMatch = bracket.find(m => m.roundNumber === numRounds && !m.isThirdPlace);
+    if (finalMatch) {
+      // Semi-finals are the matches that have nextMatchId pointing to the final
+      const semiFinals = bracket.filter(m => m.nextMatchId === finalMatch.matchId);
+      semiFinals.forEach((sf, idx) => {
+        sf.loserNextMatchId = thirdPlaceMatchId;
+        sf.loserNextMatchSlot = idx === 0 ? 'sideA' : 'sideB';
+      });
+    }
   }
 
   // Process byes - advance winners automatically
@@ -357,6 +381,8 @@ export function generateEliminationBracket(config: BracketConfig): BracketResult
     // Only add optional fields if they have values
     if (bracketMatch.nextMatchId) match.nextMatchId = bracketMatch.nextMatchId;
     if (bracketMatch.nextMatchSlot) match.nextMatchSlot = bracketMatch.nextMatchSlot;
+    if (bracketMatch.loserNextMatchId) match.loserNextMatchId = bracketMatch.loserNextMatchId;  // V06.22
+    if (bracketMatch.loserNextMatchSlot) match.loserNextMatchSlot = bracketMatch.loserNextMatchSlot;  // V06.22
     if (bracketMatch.isThirdPlace) match.isThirdPlace = bracketMatch.isThirdPlace;
 
     matches.push(match as Omit<Match, 'id' | 'createdAt' | 'updatedAt'>);

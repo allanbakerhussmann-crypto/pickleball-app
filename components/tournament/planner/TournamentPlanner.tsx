@@ -268,6 +268,7 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
             preset={settings.matchPreset}
             poolGameSettings={settings.poolGameSettings}
             medalGameSettings={settings.medalGameSettings}
+            medalRoundSettings={settings.medalRoundSettings}
             useSeparateMedalSettings={settings.useSeparateMedalSettings}
             timingSettings={settings.timingSettings}
             onPresetChange={(preset) => updateSettings({ matchPreset: preset })}
@@ -276,6 +277,9 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
             }
             onMedalGameSettingsChange={(medalGameSettings) =>
               updateSettings({ medalGameSettings })
+            }
+            onMedalRoundSettingsChange={(medalRoundSettings) =>
+              updateSettings({ medalRoundSettings })
             }
             onUseSeparateMedalSettingsChange={(useSeparateMedalSettings) =>
               updateSettings({ useSeparateMedalSettings })

@@ -208,13 +208,59 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
   const convertPlannerDivision = (plannerDiv: PlannerDivision, settings: TournamentPlannerSettings): Division => {
     const formatSettings = mapCompetitionToTournamentFormat(plannerDiv.format);
 
+    // Build medal round settings (only include defined values to avoid Firestore undefined errors)
+    const buildMedalRoundSettings = () => {
+      if (!settings.useSeparateMedalSettings || !settings.medalRoundSettings) {
+        return undefined;
+      }
+      const medalSettings: Record<string, { bestOf: 1|3|5; pointsToWin: 11|15|21; winBy: 1|2 }> = {};
+      const { quarterFinals, semiFinals, finals, bronze } = settings.medalRoundSettings;
+
+      if (quarterFinals) {
+        medalSettings.quarterFinals = {
+          bestOf: quarterFinals.bestOf,
+          pointsToWin: quarterFinals.pointsToWin,
+          winBy: quarterFinals.winBy,
+        };
+      }
+      if (semiFinals) {
+        medalSettings.semiFinals = {
+          bestOf: semiFinals.bestOf,
+          pointsToWin: semiFinals.pointsToWin,
+          winBy: semiFinals.winBy,
+        };
+      }
+      if (finals) {
+        medalSettings.finals = {
+          bestOf: finals.bestOf,
+          pointsToWin: finals.pointsToWin,
+          winBy: finals.winBy,
+        };
+      }
+      if (bronze) {
+        medalSettings.bronze = {
+          bestOf: bronze.bestOf,
+          pointsToWin: bronze.pointsToWin,
+          winBy: bronze.winBy,
+        };
+      }
+
+      return Object.keys(medalSettings).length > 0 ? medalSettings : undefined;
+    };
+
+    const medalRoundSettings = buildMedalRoundSettings();
+
     // Build division format with planner game settings
     const divFormat: DivisionFormat = {
       ...DEFAULT_FORMAT,
       ...formatSettings,
-      bestOfGames: settings.gameSettings.bestOf,
-      pointsPerGame: settings.gameSettings.pointsToWin,
-      winBy: settings.gameSettings.winBy,
+      // Pool play settings (default for all matches)
+      bestOfGames: settings.poolGameSettings.bestOf,
+      pointsPerGame: settings.poolGameSettings.pointsToWin,
+      winBy: settings.poolGameSettings.winBy,
+      // Medal round settings (per-round configuration)
+      useSeparateMedalSettings: settings.useSeparateMedalSettings,
+      ...(medalRoundSettings && { medalRoundSettings }),
       // Pool play specific
       ...(plannerDiv.format === 'pool_play_medals' && plannerDiv.poolSize && {
         teamsPerPool: plannerDiv.poolSize,

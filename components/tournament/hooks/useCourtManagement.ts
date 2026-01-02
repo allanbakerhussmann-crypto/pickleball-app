@@ -4,7 +4,17 @@
  * Manages court allocation, match assignment, and queue management.
  *
  * FILE LOCATION: components/tournament/hooks/useCourtManagement.ts
- * VERSION: V06.13 - Court-based queue sizing
+ * VERSION: V06.36 - Pool results on Live Courts match completion
+ *
+ * V06.36 Changes:
+ * - Added updatePoolResultsOnMatchComplete() call to finishMatchOnCourt()
+ * - Pool standings now update automatically when matches finish via Live Courts
+ * - Previously only quickScoreMatch() and matchService functions triggered pool results
+ *
+ * V06.27 Changes:
+ * - Added testMode option to reduce rest time from 8 minutes to 10 seconds
+ * - When tournament.testMode is enabled, players only need 10s rest between matches
+ * - This dramatically speeds up testing workflows
  *
  * V06.13 Changes:
  * - Queue size now limited by number of courts (not unlimited)
@@ -55,9 +65,17 @@
 
 import { useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Match, Court, Division } from '../../../types';
-import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment } from '../../../services/firebase';
+import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment, updatePoolResultsOnMatchComplete } from '../../../services/firebase';
 import { validateGameScore } from '../../../services/game/scoreValidation';
 import type { GameSettings } from '../../../types/game/gameSettings';
+
+/**
+ * Options for court management hook
+ */
+interface CourtManagementOptions {
+  testMode?: boolean;
+  // Future: customRestTimeMs?, autoAssign?, etc.
+}
 
 interface UseCourtManagementProps {
   tournamentId: string;
@@ -65,6 +83,7 @@ interface UseCourtManagementProps {
   courts: Court[];
   divisions: Division[];
   autoAssignOnRestComplete?: boolean; // Auto-assign matches when rest time ends
+  options?: CourtManagementOptions;   // V06.27: Additional options (testMode, etc.)
 }
 
 interface CourtViewModel {
@@ -112,8 +131,9 @@ interface UseCourtManagementReturn {
   autoAssignFreeCourts: (options?: { silent?: boolean }) => Promise<void>;
 }
 
-// Minimum rest time between matches (8 minutes)
-const REST_TIME_MINIMUM_MS = 8 * 60 * 1000;
+// Minimum rest time between matches
+const REST_TIME_MINIMUM_MS = 8 * 60 * 1000;        // 8 minutes for production
+const TEST_REST_TIME_MINIMUM_MS = 10 * 1000;       // 10 seconds for test mode
 
 export const useCourtManagement = ({
   tournamentId,
@@ -121,7 +141,12 @@ export const useCourtManagement = ({
   courts,
   divisions,
   autoAssignOnRestComplete = false,
+  options = {},
 }: UseCourtManagementProps): UseCourtManagementReturn => {
+
+  // V06.27: Use shorter rest time in test mode for faster iteration
+  const { testMode = false } = options;
+  const effectiveRestTime = testMode ? TEST_REST_TIME_MINIMUM_MS : REST_TIME_MINIMUM_MS;
 
   // Safeguard: ensure arrays are never undefined
   const safeMatches = matches || [];
@@ -152,12 +177,12 @@ export const useCourtManagement = ({
   }, [safeMatches]);
 
   // ============================================
-  // Helper: Check if player has sufficient rest (8 min minimum)
+  // Helper: Check if player has sufficient rest (8 min production / 10s test mode)
   // ============================================
 
   const playerHasSufficientRest = useCallback((playerId: string): boolean => {
-    return getPlayerRestTime(playerId) >= REST_TIME_MINIMUM_MS;
-  }, [getPlayerRestTime]);
+    return getPlayerRestTime(playerId) >= effectiveRestTime;
+  }, [getPlayerRestTime, effectiveRestTime]);
 
   // ============================================
   // Helper: Get when a player will have sufficient rest
@@ -166,7 +191,7 @@ export const useCourtManagement = ({
 
   const getPlayerRestingUntil = useCallback((playerId: string): number => {
     const restTime = getPlayerRestTime(playerId);
-    if (restTime >= REST_TIME_MINIMUM_MS) return 0; // Already rested
+    if (restTime >= effectiveRestTime) return 0; // Already rested
 
     // Calculate when they'll be ready
     const completedMatches = safeMatches.filter(m => {
@@ -182,8 +207,8 @@ export const useCourtManagement = ({
       (m.completedAt || 0) > (latest.completedAt || 0) ? m : latest
     );
 
-    return (mostRecent.completedAt || 0) + REST_TIME_MINIMUM_MS;
-  }, [getPlayerRestTime, safeMatches]);
+    return (mostRecent.completedAt || 0) + effectiveRestTime;
+  }, [getPlayerRestTime, safeMatches, effectiveRestTime]);
 
   // ============================================
   // Helper: Get when ALL players in a match will be rested
@@ -332,10 +357,10 @@ export const useCourtManagement = ({
       if (allPlayerIds.length > 0) {
         const avgRestTime = allPlayerIds.reduce((sum, pid) => {
           const rest = getPlayerRestTime(pid);
-          return sum + (rest === Infinity ? REST_TIME_MINIMUM_MS * 2 : rest);
+          return sum + (rest === Infinity ? effectiveRestTime * 2 : rest);
         }, 0) / allPlayerIds.length;
         // More rest = lower score (inverted, capped at 10)
-        score -= Math.min(10, avgRestTime / REST_TIME_MINIMUM_MS * 5);
+        score -= Math.min(10, avgRestTime / effectiveRestTime * 5);
       }
 
       // Factor 4: Round number - earlier rounds first
@@ -914,10 +939,11 @@ export const useCourtManagement = ({
         scoreB: s.scoreB,
       }));
 
+      const now = Date.now();
       const updates: Partial<Match> = {
         status: 'completed',
-        completedAt: Date.now(),
-        endTime: Date.now(),
+        completedAt: now,
+        endTime: now,
         court: '',
         winnerId: winnerId,
         winnerTeamId: winnerId,
@@ -927,6 +953,19 @@ export const useCourtManagement = ({
       };
 
       await updateMatchScore(tournamentId, currentMatch.id, updates);
+
+      // V06.36: Update pool results if this is a pool match
+      if (currentMatch.divisionId) {
+        console.log('[finishMatchOnCourt] Calling updatePoolResultsOnMatchComplete...');
+        const completedMatch: Match = {
+          ...currentMatch,
+          ...updates,
+          status: 'completed',
+          completedAt: now,
+          updatedAt: now,
+        } as Match;
+        await updatePoolResultsOnMatchComplete(tournamentId, currentMatch.divisionId, completedMatch);
+      }
     }
 
     // Auto-assign next match to this court using DYNAMIC eligibility calculation

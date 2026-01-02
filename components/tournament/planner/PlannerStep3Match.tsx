@@ -12,15 +12,25 @@ import type { MatchPreset, PlannerGameSettings, PlannerTimingSettings } from '..
 import { MATCH_PRESETS } from '../../../types';
 import { calculateSlotDuration } from '../../../services/plannerCalculations';
 
+// Per-round medal settings type
+type MedalRoundSettings = {
+  quarterFinals?: PlannerGameSettings;
+  semiFinals?: PlannerGameSettings;
+  finals?: PlannerGameSettings;
+  bronze?: PlannerGameSettings;
+};
+
 interface PlannerStep3MatchProps {
   preset: MatchPreset;
   poolGameSettings: PlannerGameSettings;
   medalGameSettings: PlannerGameSettings;
+  medalRoundSettings?: MedalRoundSettings;
   useSeparateMedalSettings: boolean;
   timingSettings: PlannerTimingSettings;
   onPresetChange: (preset: MatchPreset) => void;
   onPoolGameSettingsChange: (settings: PlannerGameSettings) => void;
   onMedalGameSettingsChange: (settings: PlannerGameSettings) => void;
+  onMedalRoundSettingsChange: (settings: MedalRoundSettings) => void;
   onUseSeparateMedalSettingsChange: (use: boolean) => void;
   onTimingSettingsChange: (settings: PlannerTimingSettings) => void;
 }
@@ -119,11 +129,13 @@ export const PlannerStep3Match: React.FC<PlannerStep3MatchProps> = ({
   preset,
   poolGameSettings,
   medalGameSettings,
+  medalRoundSettings,
   useSeparateMedalSettings,
   timingSettings,
   onPresetChange,
   onPoolGameSettingsChange,
   onMedalGameSettingsChange,
+  onMedalRoundSettingsChange,
   onUseSeparateMedalSettingsChange,
   onTimingSettingsChange,
 }) => {
@@ -138,13 +150,17 @@ export const PlannerStep3Match: React.FC<PlannerStep3MatchProps> = ({
     return calculateSlotDuration(medalGameSettings, timingSettings);
   }, [medalGameSettings, timingSettings]);
 
-  // Handle preset change - apply to both pool and medal settings
+  // Handle preset change - apply to both pool and medal settings including per-round
   const handlePresetChange = (newPreset: MatchPreset) => {
     const presetConfig = MATCH_PRESETS[newPreset];
     onPresetChange(newPreset);
     onPoolGameSettingsChange(presetConfig.poolGameSettings);
     onMedalGameSettingsChange(presetConfig.medalGameSettings);
     onUseSeparateMedalSettingsChange(presetConfig.useSeparateMedalSettings);
+    // Also update per-round medal settings from preset
+    if (presetConfig.medalRoundSettings) {
+      onMedalRoundSettingsChange(presetConfig.medalRoundSettings);
+    }
   };
 
   return (

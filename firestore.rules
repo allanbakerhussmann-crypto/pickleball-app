@@ -285,6 +285,18 @@ service cloud.firestore {
       match /divisions/{divisionId} {
         allow read: if isAuthenticated();
         allow write: if isTournamentOrganizer(tournamentId);
+
+        // V06.33 Results Table Architecture - Pool Results subcollection
+        match /poolResults/{poolKey} {
+          allow read: if isAuthenticated();
+          allow write: if isTournamentOrganizer(tournamentId);
+        }
+
+        // V06.33 Results Table Architecture - Bracket Seeds subcollection
+        match /bracketSeeds/{bracketType} {
+          allow read: if isAuthenticated();
+          allow write: if isTournamentOrganizer(tournamentId);
+        }
       }
       match /teams/{teamId} {
         allow read: if isAuthenticated();

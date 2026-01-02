@@ -54,7 +54,8 @@ export const saveTournament = async (tournament: Tournament, divisions?: Divisio
     const batch = writeBatch(db);
     divisions.forEach(div => {
       const divRef = doc(db, 'tournaments', tournamentRef.id, 'divisions', div.id);
-      batch.set(divRef, cleanData({ ...div, updatedAt: now }));
+      // V06.36 FIX: Always set tournamentId on division (was sometimes empty string)
+      batch.set(divRef, cleanData({ ...div, tournamentId: tournamentRef.id, updatedAt: now }));
     });
     await batch.commit();
   }
@@ -117,7 +118,11 @@ export const updateDivision = async (
 
   // Filter out undefined values - Firestore rejects them
   // This prevents crashes when form fields are empty (e.g., skillMin: undefined)
-  const filteredUpdates: Record<string, unknown> = { updatedAt: Date.now() };
+  // V06.36 FIX: Always ensure tournamentId is set correctly (was sometimes empty string)
+  const filteredUpdates: { [key: string]: any } = {
+    updatedAt: Date.now(),
+    tournamentId,
+  };
   for (const [key, value] of Object.entries(updates)) {
     if (value !== undefined) {
       filteredUpdates[key] = value;

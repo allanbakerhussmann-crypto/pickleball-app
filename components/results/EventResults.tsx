@@ -4,7 +4,9 @@
  * Routes to appropriate standings component based on event type and format.
  * Handles tournaments (pools, brackets, standings), leagues, and meetups.
  *
- * @version V06.19
+ * V06.45: Added public bracket view with multi-game score display
+ *
+ * @version V06.45
  * @file components/results/EventResults.tsx
  */
 
@@ -13,6 +15,7 @@ import { PoolGroupStandings } from '../tournament/PoolGroupStandings';
 import { Standings } from '../Standings';
 import { LeagueStandings } from '../leagues/LeagueStandings';
 import { MeetupResults } from '../meetups/MeetupResults';
+import { BracketViewer } from '../BracketViewer';
 import type { MeetupMatch, MeetupStanding } from '../../services/firebase/meetupMatches';
 import type { EventData, EventType } from '../../hooks/useEventResultsData';
 import type { Division, Team, Match, LeagueMember, StandingsEntry } from '../../types';
@@ -173,23 +176,80 @@ export const EventResults: React.FC<EventResultsProps> = ({
 
     // Check if this is pool play format
     if (hasPoolPlayMatches(divisionMatches)) {
+      // V06.45: Separate bracket matches from pool matches
+      const bracketMatches = divisionMatches.filter(m =>
+        m.stage === 'bracket' || m.bracketType === 'main' || m.bracketType === 'plate'
+      );
+      const poolMatches = divisionMatches.filter(m =>
+        !m.stage || m.stage === 'pool' || m.stage === 'Pool Play' || m.poolGroup
+      );
+
+      // Convert bracket matches to UI format
+      const bracketUiMatches = bracketMatches.map(m => ({
+        id: m.id,
+        team1: {
+          id: m.sideA?.id || m.teamAId || '',
+          name: m.sideA?.name || 'TBD',
+          players: [],
+        },
+        team2: {
+          id: m.sideB?.id || m.teamBId || '',
+          name: m.sideB?.name || 'TBD',
+          players: [],
+        },
+        scores: m.scores,
+        score1: m.scores?.[0]?.scoreA ?? null,
+        score2: m.scores?.[0]?.scoreB ?? null,
+        gameSettings: m.gameSettings,
+        status: m.status || 'scheduled',
+        roundNumber: m.roundNumber,
+        bracketPosition: m.bracketPosition,
+        isThirdPlace: m.isThirdPlace,
+      }));
+
       return (
-        <section className="bg-gray-900/60 rounded-xl border border-white/10 overflow-hidden">
-          <div className="px-4 py-3 bg-gray-800/50 border-b border-white/5">
-            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-              <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
-              </svg>
-              Pool Standings
-            </h2>
-          </div>
-          <div className="p-4">
-            <PoolGroupStandings
-              matches={divisionMatches}
-              teams={divisionTeams}
-            />
-          </div>
-        </section>
+        <div className="space-y-6">
+          {/* Pool Standings */}
+          <section className="bg-gray-900/60 rounded-xl border border-white/10 overflow-hidden">
+            <div className="px-4 py-3 bg-gray-800/50 border-b border-white/5">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                </svg>
+                Pool Standings
+              </h2>
+            </div>
+            <div className="p-4">
+              <PoolGroupStandings
+                matches={poolMatches.length > 0 ? poolMatches : divisionMatches}
+                teams={divisionTeams}
+              />
+            </div>
+          </section>
+
+          {/* V06.45: Medal Bracket (public view) */}
+          {bracketUiMatches.length > 0 && (
+            <section className="bg-gray-900/60 rounded-xl border border-white/10 overflow-hidden">
+              <div className="px-4 py-3 bg-gray-800/50 border-b border-white/5">
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <svg className="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                  </svg>
+                  Medal Bracket
+                </h2>
+              </div>
+              <div className="p-4 overflow-x-auto">
+                <BracketViewer
+                  matches={bracketUiMatches}
+                  onUpdateScore={() => {}}
+                  isVerified={false}
+                  isOrganizer={false}
+                  bracketTitle="Medal Bracket"
+                />
+              </div>
+            </section>
+          )}
+        </div>
       );
     }
 

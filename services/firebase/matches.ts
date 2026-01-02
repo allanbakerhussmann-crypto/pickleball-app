@@ -2,7 +2,40 @@
  * Match Management and Schedule Generation
  *
  * FILE LOCATION: services/firebase/matches.ts
- * VERSION: V06.21 - Idempotent pool match generation with canonical IDs
+ * VERSION: V06.39 - Bronze Match & Plate Bracket Support
+ *
+ * Key changes in V06.39:
+ * - generateBracketFromSeeds() now creates bronze/3rd place match when configured
+ * - Main bracket: bronzeMatch from poolPlayMedalsSettings
+ * - Plate bracket: thirdPlaceMatch from BracketSeedsDoc
+ * - Links semi-final losers to bronze match via loserNextMatchId
+ *
+ * Key changes in V06.36:
+ * - simulatePoolCompletion now calls updatePoolResultsOnMatchComplete() after batch commit
+ * - Fixes "Complete Pool A/B/C/D" and "Complete All Pools" buttons in Test Mode
+ *
+ * Key changes in V06.35:
+ * - quickScoreMatch now calls updatePoolResultsOnMatchComplete() after scoring
+ * - clearTestData() now deletes ALL poolResults/bracketSeeds (Fix F)
+ *
+ * Key changes in V06.33:
+ * - Added generateBracketFromSeeds() to generate bracket matches from canonical bracketSeeds
+ * - Updated clearTestData() to delete poolResults and bracketSeeds subcollections
+ * - FIX A: No orphan BYEs - remaining seeds pair with each other
+ * - FIX B: BYE auto-advance with overwrite protection
+ * - FIX C: Uses canonical subcollections as source of truth
+ *
+ * Key changes in V06.31:
+ * - simulatePoolCompletion now reads match.gameSettings (pointsPerGame/pointsToWin, winBy, bestOf, capAt)
+ * - Generates correct number of games for bestOf 1/3/5 matches
+ * - Uses proper GameScore structure with gameNumber
+ * - Enforces winBy and capAt rules for valid scores
+ * - quickScoreMatch updated to use gameNumber in scores
+ *
+ * Key changes in V06.29:
+ * - Fixed completeMatchWithAdvancement to update sideA/sideB objects (not just legacy teamAId/teamBId)
+ * - Added loser advancement for bronze/third-place matches via loserNextMatchId/loserNextMatchSlot
+ * - Full side objects include { id, name, playerIds } for proper UI display
  *
  * Key changes in V06.21:
  * - Canonical match IDs (deterministic, not random) for idempotency
@@ -22,7 +55,7 @@ import {
   runTransaction,
 } from '@firebase/firestore';
 import { db } from './config';
-import type { Match, Division, Team, UserProfile, StandingsEntry, GameScore, PoolAssignment } from '../../types';
+import type { Match, Division, DivisionFormat, Team, UserProfile, StandingsEntry, GameScore, PoolAssignment, BracketSeedsDoc } from '../../types';
 import {
   generatePoolMatchId,
   generateBracketMatchId,
@@ -37,6 +70,7 @@ import type { GameSettings } from '../../types/game/gameSettings';
 import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
 import { DEFAULT_GAME_SETTINGS } from '../../types/game/gameSettings';
 import { DEFAULT_POOL_PLAY_MEDALS_SETTINGS } from '../../types/formats/formatTypes';
+import { updatePoolResultsOnMatchComplete } from './poolResults';
 import {
   generatePoolStage,
   type PoolParticipant,
@@ -97,8 +131,14 @@ export const batchCreateMatches = async (tournamentId: string, matches: Match[])
  * Complete a match and automatically advance the winner to the next bracket match.
  * This handles:
  * 1. Updating the current match with scores and winner
- * 2. If it's a bracket match with nextMatchId, advancing the winner
- * 3. Handling bye matches (auto-advance if opponent is empty)
+ * 2. If it's a bracket match with nextMatchId, advancing the winner to the next match
+ * 3. If loserNextMatchId exists (bronze match), advancing the loser
+ * 4. Handling bye matches (auto-advance if opponent is empty)
+ *
+ * V06.29 Changes:
+ * - Fixed winner advancement to update sideA/sideB objects (not just legacy teamAId/teamBId)
+ * - Added loser advancement for bronze/third-place matches
+ * - Full side objects include { id, name, playerIds } for UI display
  */
 export const completeMatchWithAdvancement = async (
   tournamentId: string,
@@ -142,17 +182,94 @@ export const completeMatchWithAdvancement = async (
     lastUpdatedAt: now,
   });
 
-  // Advance winner to next match if this is a bracket match
+  // ============================================
+  // Determine winner and loser side data
+  // ============================================
+  // Get the winning side's full data (id, name, playerIds)
+  const sideAId = match.sideA?.id || match.teamAId || '';
+  const sideBId = match.sideB?.id || match.teamBId || '';
+
+  const isWinnerSideA = winnerId === sideAId;
+  const winnerSide = isWinnerSideA ? match.sideA : match.sideB;
+  const loserSide = isWinnerSideA ? match.sideB : match.sideA;
+
+  // Build full side objects for advancement (UI needs name and playerIds)
+  const winnerData = winnerSide ? {
+    id: winnerSide.id || winnerId,
+    name: winnerSide.name || `Team ${(winnerSide.id || winnerId).slice(0, 4)}`,
+    playerIds: winnerSide.playerIds || [],
+    ...(winnerSide.duprRating !== undefined && { duprRating: winnerSide.duprRating }),
+  } : {
+    id: winnerId,
+    name: `Team ${winnerId.slice(0, 4)}`,
+    playerIds: [],
+  };
+
+  const loserId = isWinnerSideA ? sideBId : sideAId;
+  const loserData = loserSide ? {
+    id: loserSide.id || loserId,
+    name: loserSide.name || `Team ${(loserSide.id || loserId).slice(0, 4)}`,
+    playerIds: loserSide.playerIds || [],
+    ...(loserSide.duprRating !== undefined && { duprRating: loserSide.duprRating }),
+  } : {
+    id: loserId,
+    name: `Team ${loserId.slice(0, 4)}`,
+    playerIds: [],
+  };
+
+  // ============================================
+  // Advance WINNER to next match
+  // ============================================
   if (match.nextMatchId && match.nextMatchSlot) {
     const nextMatchRef = doc(db, 'tournaments', tournamentId, 'matches', match.nextMatchId);
-    const nextMatchField = match.nextMatchSlot === 'teamA' || match.nextMatchSlot === 'sideA'
-      ? 'teamAId'
-      : 'teamBId';
 
-    batch.update(nextMatchRef, {
-      [nextMatchField]: winnerId,
-      lastUpdatedAt: now,
-    });
+    // Determine which slot to update based on nextMatchSlot
+    const isSideA = match.nextMatchSlot === 'teamA' || match.nextMatchSlot === 'sideA';
+
+    if (isSideA) {
+      // Update sideA (modern) + teamAId (legacy)
+      batch.update(nextMatchRef, {
+        sideA: winnerData,
+        teamAId: winnerId,
+        lastUpdatedAt: now,
+      });
+    } else {
+      // Update sideB (modern) + teamBId (legacy)
+      batch.update(nextMatchRef, {
+        sideB: winnerData,
+        teamBId: winnerId,
+        lastUpdatedAt: now,
+      });
+    }
+  }
+
+  // ============================================
+  // Advance LOSER to bronze/third-place match
+  // ============================================
+  const loserNextMatchId = (match as any).loserNextMatchId;
+  const loserNextMatchSlot = (match as any).loserNextMatchSlot;
+
+  if (loserNextMatchId && loserNextMatchSlot && loserId) {
+    const loserMatchRef = doc(db, 'tournaments', tournamentId, 'matches', loserNextMatchId);
+
+    // Determine which slot to update based on loserNextMatchSlot
+    const isLoserSideA = loserNextMatchSlot === 'teamA' || loserNextMatchSlot === 'sideA';
+
+    if (isLoserSideA) {
+      // Update sideA (modern) + teamAId (legacy)
+      batch.update(loserMatchRef, {
+        sideA: loserData,
+        teamAId: loserId,
+        lastUpdatedAt: now,
+      });
+    } else {
+      // Update sideB (modern) + teamBId (legacy)
+      batch.update(loserMatchRef, {
+        sideB: loserData,
+        teamBId: loserId,
+        lastUpdatedAt: now,
+      });
+    }
   }
 
   await batch.commit();
@@ -883,6 +1000,131 @@ function mapNextMatchIdToCanonical(
 }
 
 /**
+ * Get game settings for a specific bracket round based on division format.
+ *
+ * Round numbering convention:
+ * - roundNumber increases toward finals
+ * - fromFinal = totalRounds - roundNumber gives:
+ *   - 0 → Finals
+ *   - 1 → Semi-Finals
+ *   - 2 → Quarter-Finals
+ *
+ * @param roundNumber - The round number of the match
+ * @param totalRounds - Total number of rounds in the bracket
+ * @param isThirdPlace - Whether this is a bronze/3rd place match
+ * @param divisionFormat - The division format containing medal round settings
+ * @param defaultSettings - Fallback game settings (pool play settings)
+ * @returns Game settings for this round
+ */
+function getGameSettingsForRound(
+  roundNumber: number,
+  totalRounds: number,
+  isThirdPlace: boolean,
+  divisionFormat: DivisionFormat | undefined,
+  defaultSettings: GameSettings,
+  bracketType: 'main' | 'plate' = 'main'  // V06.40: Support plate bracket settings
+): GameSettings {
+  // If not using separate medal settings or no format provided, use defaults
+  if (!divisionFormat?.useSeparateMedalSettings) {
+    return defaultSettings;
+  }
+
+  // Preserve playType from defaults (or use 'doubles' if not set)
+  const playType = defaultSettings.playType || 'doubles';
+
+  // V06.40: For plate bracket, use plateRoundSettings if available
+  if (bracketType === 'plate') {
+    const plateSettings = (divisionFormat as any)?.plateRoundSettings;
+    if (plateSettings) {
+      const fromFinal = totalRounds - roundNumber;
+
+      // Plate Bronze/3rd place match
+      if (isThirdPlace && plateSettings.plateBronze) {
+        return {
+          playType,
+          bestOf: plateSettings.plateBronze.bestOf,
+          pointsPerGame: plateSettings.plateBronze.pointsToWin,
+          winBy: plateSettings.plateBronze.winBy,
+        };
+      }
+
+      // Plate Finals
+      if (fromFinal === 0 && plateSettings.plateFinals) {
+        return {
+          playType,
+          bestOf: plateSettings.plateFinals.bestOf,
+          pointsPerGame: plateSettings.plateFinals.pointsToWin,
+          winBy: plateSettings.plateFinals.winBy,
+        };
+      }
+    }
+    // Fall through to default settings for plate bracket
+    return defaultSettings;
+  }
+
+  // Main bracket - use medalRoundSettings
+  if (!divisionFormat.medalRoundSettings) {
+    return defaultSettings;
+  }
+
+  const settings = divisionFormat.medalRoundSettings;
+  const fromFinal = totalRounds - roundNumber;
+
+  // Bronze/3rd place match
+  if (isThirdPlace) {
+    if (settings.bronze) {
+      return {
+        playType,
+        bestOf: settings.bronze.bestOf,
+        pointsPerGame: settings.bronze.pointsToWin,
+        winBy: settings.bronze.winBy,
+      };
+    }
+    return defaultSettings;
+  }
+
+  // Determine round type based on fromFinal
+  switch (fromFinal) {
+    case 0: // Finals
+      if (settings.finals) {
+        return {
+          playType,
+          bestOf: settings.finals.bestOf,
+          pointsPerGame: settings.finals.pointsToWin,
+          winBy: settings.finals.winBy,
+        };
+      }
+      break;
+    case 1: // Semi-Finals
+      if (settings.semiFinals) {
+        return {
+          playType,
+          bestOf: settings.semiFinals.bestOf,
+          pointsPerGame: settings.semiFinals.pointsToWin,
+          winBy: settings.semiFinals.winBy,
+        };
+      }
+      break;
+    case 2: // Quarter-Finals
+      if (settings.quarterFinals) {
+        return {
+          playType,
+          bestOf: settings.quarterFinals.bestOf,
+          pointsPerGame: settings.quarterFinals.pointsToWin,
+          winBy: settings.quarterFinals.winBy,
+        };
+      }
+      break;
+    default:
+      // R16, R32, etc. - use pool defaults
+      break;
+  }
+
+  // Fallback to default settings
+  return defaultSettings;
+}
+
+/**
  * Generate finals bracket from completed pool standings.
  *
  * Called when all pool matches are complete to create the medal bracket.
@@ -1128,8 +1370,15 @@ export const generateFinalsFromPoolStandings = async (
 
     // ============================================
     // STEP 9: Get qualified participants for main bracket
+    // V06.30: Calculate qualifiersPerPool from advancement rule for cross-pool seeding
     // ============================================
-    const mainParticipants = getQualifiedParticipants(updatedStandings);
+    let qualifiersPerPool = 2;  // default
+    switch (effectiveSettings.advancementRule) {
+      case 'top_1': qualifiersPerPool = 1; break;
+      case 'top_2': qualifiersPerPool = 2; break;
+      case 'top_n_plus_best': qualifiersPerPool = 1; break;
+    }
+    const mainParticipants = getQualifiedParticipants(updatedStandings, qualifiersPerPool);
 
     // Safety check: ensure we have qualifiers
     if (mainParticipants.length === 0) {
@@ -1187,6 +1436,9 @@ export const generateFinalsFromPoolStandings = async (
     // ============================================
     // STEP 9b: Save main bracket matches with canonical IDs
     // ============================================
+    const totalRounds = medalBracket.rounds;
+    const divisionFormat = division?.format;
+
     for (const matchData of medalBracket.bracketMatches) {
       // Get canonical ID for this match position
       const canonicalId = mainPosToCanonical.get(matchData.bracketPosition!)!;
@@ -1199,22 +1451,52 @@ export const generateFinalsFromPoolStandings = async (
         mainPosToCanonical
       );
 
+      // V06.22: Map loserNextMatchId from temp to canonical (for bronze match advancement)
+      const canonicalLoserNextMatchId = mapNextMatchIdToCanonical(
+        (matchData as any).loserNextMatchId,
+        mainTempToPosition,
+        mainPosToCanonical
+      );
+
       // Use canonical ID for the document
       const matchRef = doc(db, 'tournaments', tournamentId, 'matches', canonicalId);
 
+      // Destructure to remove temp matchId field, then build clean object
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { matchId: _tempId, ...matchDataWithoutTempId } = matchData as Record<string, unknown>;
+
+      // Get per-round game settings based on round number and match type
+      // Cast to access isThirdPlace which may be set by elimination generator
+      const isThirdPlace = (matchData as unknown as { isThirdPlace?: boolean }).isThirdPlace || false;
+      const roundGameSettings = getGameSettingsForRound(
+        matchData.roundNumber || 1,
+        totalRounds,
+        isThirdPlace,
+        divisionFormat,
+        gameCfg
+      );
+
       const match: Match = {
-        ...matchData,
+        ...matchDataWithoutTempId,
         id: canonicalId,
         nextMatchId: canonicalNextMatchId,  // Now canonical, not temp
+        loserNextMatchId: canonicalLoserNextMatchId,  // V06.22: For bronze match advancement
+        loserNextMatchSlot: (matchData as any).loserNextMatchSlot,  // V06.22
         tournamentId,
         divisionId,
         stage: 'bracket',
         bracketType: 'main',  // Standardized: always set bracketType
+        gameSettings: roundGameSettings,  // Apply per-round settings
         createdAt: now,
         updatedAt: now,
       } as Match;
 
-      batch.set(matchRef, match);  // Idempotent: overwrites if exists
+      // Remove any undefined values before saving (Firestore rejects undefined)
+      const cleanMatch = Object.fromEntries(
+        Object.entries(match).filter(([, v]) => v !== undefined)
+      ) as Match;
+
+      batch.set(matchRef, cleanMatch);  // Idempotent: overwrites if exists
     }
 
     // ============================================
@@ -1243,6 +1525,14 @@ export const generateFinalsFromPoolStandings = async (
             'plate'
           );
 
+        // Calculate total rounds for plate bracket
+        // Cast to access isThirdPlace which may be set by elimination generator
+        const plateTotalRounds = plateBracket.plateMatches.length > 0
+          ? Math.max(...plateBracket.plateMatches.filter(m =>
+              !(m as unknown as { isThirdPlace?: boolean }).isThirdPlace
+            ).map(m => m.roundNumber || 1))
+          : 1;
+
         for (const matchData of plateBracket.plateMatches) {
           // Get canonical ID for this match position
           const canonicalId = platePosToCanonical.get(matchData.bracketPosition!)!;
@@ -1255,22 +1545,56 @@ export const generateFinalsFromPoolStandings = async (
             platePosToCanonical
           );
 
+          // V06.29: Map loserNextMatchId from temp to canonical (for plate 3rd place match)
+          const canonicalLoserNextMatchId = mapNextMatchIdToCanonical(
+            (matchData as unknown as { loserNextMatchId?: string }).loserNextMatchId,
+            plateTempToPosition,
+            platePosToCanonical
+          );
+
           // Use canonical ID for the document
           const matchRef = doc(db, 'tournaments', tournamentId, 'matches', canonicalId);
 
+          // Destructure to remove temp matchId field, then build clean object
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { matchId: _tempId, ...plateMatchDataWithoutTempId } = matchData as Record<string, unknown>;
+
+          // Get per-round game settings for plate bracket
+          // V06.40: Plate bracket now uses plateRoundSettings if available
+          const plateIsThirdPlace = (matchData as unknown as { isThirdPlace?: boolean }).isThirdPlace || false;
+          const plateRoundGameSettings = getGameSettingsForRound(
+            matchData.roundNumber || 1,
+            plateTotalRounds,
+            plateIsThirdPlace,
+            divisionFormat,
+            gameCfg,
+            'plate'  // V06.40: Use plate bracket settings
+          );
+
+          // V06.29: Extract loserNextMatchSlot before spreading (gets overwritten by spread otherwise)
+          const loserNextMatchSlot = (matchData as unknown as { loserNextMatchSlot?: 'sideA' | 'sideB' }).loserNextMatchSlot;
+
           const match: Match = {
-            ...matchData,
+            ...plateMatchDataWithoutTempId,
             id: canonicalId,
             nextMatchId: canonicalNextMatchId,  // Now canonical, not temp
+            loserNextMatchId: canonicalLoserNextMatchId,  // V06.29: Canonical plate 3rd place ID
+            loserNextMatchSlot: loserNextMatchSlot,       // V06.29: Which slot loser goes to
             tournamentId,
             divisionId,
             stage: 'bracket',       // Standardized: use 'bracket' not 'plate'
             bracketType: 'plate',   // Distinguish via bracketType
+            gameSettings: plateRoundGameSettings,  // Apply per-round settings
             createdAt: now,
             updatedAt: now,
           } as Match;
 
-          batch.set(matchRef, match);  // Idempotent: overwrites if exists
+          // Remove any undefined values before saving (Firestore rejects undefined)
+          const cleanMatch = Object.fromEntries(
+            Object.entries(match).filter(([, v]) => v !== undefined)
+          ) as Match;
+
+          batch.set(matchRef, cleanMatch);  // Idempotent: overwrites if exists
         }
       }
     }
@@ -1313,6 +1637,392 @@ export const generateFinalsFromPoolStandings = async (
 };
 
 // ============================================
+// V06.33 Results Table Architecture
+// Generate bracket directly from canonical bracketSeeds subcollection
+// ============================================
+
+/**
+ * Generate bracket matches from canonical bracketSeeds document.
+ *
+ * This function:
+ * 1. Reads bracketSeeds from tournaments/{tId}/divisions/{dId}/bracketSeeds/{bracketType}
+ * 2. Creates Round 1 matches directly from round1Pairs (NO placementBracket, NO reseeding)
+ * 3. Creates later round matches and links them
+ * 4. Auto-advances BYE winners to their next matches (FIX C: with overwrite protection)
+ *
+ * V06.33: Part of Results Table Architecture
+ *
+ * @param tournamentId - Tournament ID
+ * @param divisionId - Division ID
+ * @param bracketType - 'main' or 'plate'
+ * @param gameSettings - Game settings for matches
+ * @param testData - Whether this is test data (for cleanup)
+ * @returns Array of created match IDs
+ */
+/**
+ * Remove undefined values from an object for Firestore compatibility.
+ * Firestore rejects undefined values - must be null or omitted.
+ */
+function sanitizeForFirestore<T extends object>(obj: T): T {
+  const result = {} as T;
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      (result as any)[key] = value;
+    }
+  }
+  return result;
+}
+
+export const generateBracketFromSeeds = async (
+  tournamentId: string,
+  divisionId: string,
+  bracketType: 'main' | 'plate',
+  defaultGameSettings: GameSettings,
+  testData: boolean = false,
+  divisionFormat?: DivisionFormat  // V06.36: Pass division format for medal round settings
+): Promise<string[]> => {
+  // Read bracketSeeds from subcollection
+  const seedsRef = doc(
+    db,
+    'tournaments',
+    tournamentId,
+    'divisions',
+    divisionId,
+    'bracketSeeds',
+    bracketType
+  );
+
+  const seedsSnap = await getDoc(seedsRef);
+  if (!seedsSnap.exists()) {
+    throw new Error(`No bracketSeeds found for ${bracketType}. Run buildBracketSeeds() first.`);
+  }
+  const seeds = seedsSnap.data() as BracketSeedsDoc;
+
+  const matchesCollection = collection(db, 'tournaments', tournamentId, 'matches');
+  const matchIds: string[] = [];
+  const round1MatchRefs: Map<number, { ref: ReturnType<typeof doc>; id: string }> = new Map();
+  const now = Date.now();
+
+  // Track BYE matches for auto-advance after all matches are created
+  const byeMatches: {
+    matchId: string;
+    winner: BracketSeedsDoc['slots'][string];
+  }[] = [];
+
+  console.log(`[generateBracketFromSeeds] Creating ${seeds.round1MatchCount} R1 matches for ${bracketType} bracket (totalRounds: ${seeds.rounds})`);
+
+  // ============================================
+  // Round 1: Create matches directly from round1Pairs
+  // NO placementBracket(), NO DUPR reseeding
+  // V06.36: Use per-round game settings from medalRoundSettings
+  // ============================================
+  for (const pair of seeds.round1Pairs) {
+    const sideASlot = pair.sideA ? seeds.slots[pair.sideA] : null;
+    const sideBSlot = pair.sideB ? seeds.slots[pair.sideB] : null;
+
+    if (!sideASlot && !sideBSlot) {
+      console.warn(`[generateBracketFromSeeds] Match ${pair.matchNum} has no participants, skipping`);
+      continue;
+    }
+
+    // Generate canonical ID for this match position
+    const canonicalId = generateBracketMatchId(divisionId, bracketType, pair.matchNum);
+    const matchRef = doc(matchesCollection, canonicalId);
+    round1MatchRefs.set(pair.matchNum, { ref: matchRef, id: canonicalId });
+    matchIds.push(canonicalId);
+
+    const isBye = !sideASlot || !sideBSlot;
+    const byeWinner = isBye ? (sideASlot || sideBSlot) : null;
+
+    // V06.36: Get game settings for this round (respects medalRoundSettings)
+    // V06.40: Pass bracketType so plate bracket uses plateRoundSettings
+    const roundGameSettings = getGameSettingsForRound(
+      1, // roundNumber
+      seeds.rounds, // totalRounds
+      false, // isThirdPlace
+      divisionFormat,
+      defaultGameSettings,
+      bracketType  // V06.40
+    );
+
+    const match: Partial<Match> = {
+      id: canonicalId,
+      eventType: 'tournament',
+      eventId: tournamentId,
+      tournamentId,
+      divisionId,
+      format: 'pool_play_medals',
+      gameSettings: roundGameSettings,
+      stage: 'bracket',
+      bracketType,
+      roundNumber: 1,
+      matchNumber: pair.matchNum,
+      bracketPosition: pair.matchNum,
+      sideA: sideASlot
+        ? {
+            id: sideASlot.teamId,
+            name: sideASlot.name,
+            playerIds: [],
+            poolKey: sideASlot.poolKey,
+            poolRank: sideASlot.rank,
+          }
+        : {
+            id: 'BYE',
+            name: 'BYE',
+            playerIds: [],
+          },
+      sideB: sideBSlot
+        ? {
+            id: sideBSlot.teamId,
+            name: sideBSlot.name,
+            playerIds: [],
+            poolKey: sideBSlot.poolKey,
+            poolRank: sideBSlot.rank,
+          }
+        : {
+            id: 'BYE',
+            name: 'BYE',
+            playerIds: [],
+          },
+      // BYE matches are immediately 'completed' with winner set
+      status: isBye ? 'completed' : 'scheduled',
+      scores: [],
+      testData,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    // Only add winnerId/winnerTeamId/completedAt for BYE matches
+    // Firestore rejects undefined values
+    if (isBye && byeWinner) {
+      (match as any).winnerId = byeWinner.teamId;
+      (match as any).winnerTeamId = byeWinner.teamId;
+      (match as any).completedAt = now;
+    }
+
+    await setDoc(matchRef, sanitizeForFirestore(match));
+
+    // Track BYE matches for auto-advance
+    if (isBye && byeWinner) {
+      byeMatches.push({ matchId: canonicalId, winner: byeWinner });
+    }
+
+    console.log(
+      `[generateBracketFromSeeds] R1 M${pair.matchNum}: ${sideASlot?.name || 'BYE'} vs ${sideBSlot?.name || 'BYE'}${isBye ? ' (BYE → ' + byeWinner?.name + ')' : ''}`
+    );
+  }
+
+  // ============================================
+  // Later rounds: Create matches and link winners
+  // Use seeds.rounds (from bracketSeeds doc)
+  // ============================================
+  let prevRoundRefs = round1MatchRefs;
+  let prevRoundMatchCount = seeds.round1MatchCount;
+  let cumulativeMatchCount = seeds.round1MatchCount; // V06.36 FIX: Track total matches for bracketPosition
+
+  for (let round = 2; round <= seeds.rounds; round++) {
+    const thisRoundMatchCount = prevRoundMatchCount / 2;
+    const thisRoundRefs: Map<number, { ref: ReturnType<typeof doc>; id: string }> = new Map();
+
+    // V06.36: Get game settings for this round (respects medalRoundSettings)
+    // V06.40: Pass bracketType so plate bracket uses plateRoundSettings
+    const roundGameSettings = getGameSettingsForRound(
+      round,
+      seeds.rounds,
+      false, // isThirdPlace - main bracket matches
+      divisionFormat,
+      defaultGameSettings,
+      bracketType  // V06.40
+    );
+
+    console.log(`[generateBracketFromSeeds] Round ${round} settings:`, {
+      bestOf: roundGameSettings.bestOf,
+      pointsPerGame: roundGameSettings.pointsPerGame,
+      winBy: roundGameSettings.winBy,
+    });
+
+    for (let i = 0; i < thisRoundMatchCount; i++) {
+      const matchNum = i + 1;
+      const bracketPosition = cumulativeMatchCount + i + 1; // V06.36 FIX: Use cumulative count
+
+      // Generate canonical ID for this match position
+      const canonicalId = generateBracketMatchId(divisionId, bracketType, bracketPosition);
+      const matchRef = doc(matchesCollection, canonicalId);
+      thisRoundRefs.set(matchNum, { ref: matchRef, id: canonicalId });
+      matchIds.push(canonicalId);
+
+      const match: Partial<Match> = {
+        id: canonicalId,
+        eventType: 'tournament',
+        eventId: tournamentId,
+        tournamentId,
+        divisionId,
+        format: 'pool_play_medals',
+        gameSettings: roundGameSettings,
+        stage: 'bracket',
+        bracketType,
+        roundNumber: round,
+        matchNumber: matchNum,
+        bracketPosition,
+        sideA: { id: 'TBD', name: 'TBD', playerIds: [] },
+        sideB: { id: 'TBD', name: 'TBD', playerIds: [] },
+        status: 'scheduled',
+        scores: [],
+        testData,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await setDoc(matchRef, sanitizeForFirestore(match));
+
+      // Link previous round matches to this one
+      const prevMatch1Num = i * 2 + 1;
+      const prevMatch2Num = i * 2 + 2;
+      const prevMatch1 = prevRoundRefs.get(prevMatch1Num);
+      const prevMatch2 = prevRoundRefs.get(prevMatch2Num);
+
+      if (prevMatch1) {
+        await updateDoc(prevMatch1.ref, {
+          nextMatchId: canonicalId,
+          nextMatchSlot: 'sideA',
+        });
+      }
+      if (prevMatch2) {
+        await updateDoc(prevMatch2.ref, {
+          nextMatchId: canonicalId,
+          nextMatchSlot: 'sideB',
+        });
+      }
+    }
+
+    cumulativeMatchCount += thisRoundMatchCount; // V06.36 FIX: Update cumulative AFTER this round's loop
+    prevRoundRefs = thisRoundRefs;
+    prevRoundMatchCount = thisRoundMatchCount;
+  }
+
+  // ============================================
+  // V06.39: Create bronze/3rd place match if configured
+  // Main bracket: controlled by poolPlayMedalsSettings.bronzeMatch === 'yes'
+  // Plate bracket: controlled by seeds.thirdPlaceMatch
+  // ============================================
+  const poolSettings = (divisionFormat as any)?.poolPlayMedalsSettings || {};
+  const shouldCreateBronze = (
+    (bracketType === 'main' && poolSettings.bronzeMatch === 'yes' && seeds.rounds >= 2) ||
+    (bracketType === 'plate' && seeds.thirdPlaceMatch && seeds.rounds >= 2)
+  );
+
+  if (shouldCreateBronze) {
+    const bronzePosition = cumulativeMatchCount + 1;
+    const bronzeId = generateBracketMatchId(divisionId, bracketType, bronzePosition);
+    const bronzeRef = doc(matchesCollection, bronzeId);
+    matchIds.push(bronzeId);
+
+    // Get game settings for bronze match (use thirdPlace settings if available)
+    // V06.40: Pass bracketType so plate bracket uses plateRoundSettings
+    const bronzeGameSettings = getGameSettingsForRound(
+      seeds.rounds,
+      seeds.rounds,
+      true,  // isThirdPlace
+      divisionFormat,
+      defaultGameSettings,
+      bracketType  // V06.40: Pass bracket type for plate settings
+    );
+
+    const bronzeMatch: Partial<Match> = {
+      id: bronzeId,
+      eventType: 'tournament',
+      eventId: tournamentId,
+      tournamentId,
+      divisionId,
+      format: 'pool_play_medals',
+      gameSettings: bronzeGameSettings,
+      stage: 'bracket',
+      bracketType,
+      roundNumber: seeds.rounds,
+      matchNumber: 2,  // Finals is match 1, bronze is match 2
+      bracketPosition: bronzePosition,
+      sideA: { id: 'TBD', name: 'TBD', playerIds: [] },
+      sideB: { id: 'TBD', name: 'TBD', playerIds: [] },
+      status: 'scheduled',
+      scores: [],
+      isThirdPlace: true,
+      testData,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await setDoc(bronzeRef, sanitizeForFirestore(bronzeMatch));
+
+    // Link semi-final losers to bronze match
+    // Semi-finals are the two matches that feed into the final
+    // For an 8-team bracket: R1 = 4 matches (1-4), R2 = 2 (5-6), R3 = 1 (7)
+    // After all rounds, cumulativeMatchCount = 7
+    // Final at position 7, semi-finals at positions 5 and 6
+    // Semi-final positions = cumulativeMatchCount - 2 and cumulativeMatchCount - 1
+    if (seeds.rounds >= 2) {
+      for (let i = 0; i < 2; i++) {
+        const sfPosition = cumulativeMatchCount - 2 + i; // e.g., 5 and 6 for 8-team
+        const sfId = generateBracketMatchId(divisionId, bracketType, sfPosition);
+        const sfRef = doc(matchesCollection, sfId);
+
+        await updateDoc(sfRef, {
+          loserNextMatchId: bronzeId,
+          loserNextMatchSlot: i === 0 ? 'sideA' : 'sideB',
+        });
+
+        console.log(`[generateBracketFromSeeds] Linked SF at pos ${sfPosition} loser -> bronze match`);
+      }
+    }
+
+    console.log(`[generateBracketFromSeeds] Created ${bracketType} bronze/3rd-place match: ${bronzeId}`);
+  }
+
+  // ============================================
+  // FIX C: AUTO-ADVANCE BYE winners into their next matches
+  // This happens AFTER all matches are created and linked
+  // OVERWRITE PROTECTION: Only update if slot is still TBD
+  // ============================================
+  for (const { matchId, winner } of byeMatches) {
+    const matchRef = doc(matchesCollection, matchId);
+    const matchSnap = await getDoc(matchRef);
+    const matchData = matchSnap.data();
+
+    if (matchData?.nextMatchId && matchData?.nextMatchSlot) {
+      const nextMatchRef = doc(matchesCollection, matchData.nextMatchId);
+      const nextMatchSnap = await getDoc(nextMatchRef);
+      const nextMatchData = nextMatchSnap.data();
+
+      // OVERWRITE PROTECTION: Only update if slot is still TBD
+      const currentSlot = nextMatchData?.[matchData.nextMatchSlot];
+      if (currentSlot?.id === 'TBD') {
+        await updateDoc(nextMatchRef, {
+          [matchData.nextMatchSlot]: {
+            id: winner.teamId,
+            name: winner.name,
+            playerIds: [],
+            poolKey: winner.poolKey,
+            poolRank: winner.rank,
+          },
+          updatedAt: now,
+        });
+        console.log(
+          `[generateBracketFromSeeds] Auto-advanced ${winner.name} to ${matchData.nextMatchSlot}`
+        );
+      } else {
+        console.warn(
+          `[generateBracketFromSeeds] Skipped auto-advance: ${matchData.nextMatchSlot} already has ${currentSlot?.name}`
+        );
+      }
+    }
+  }
+
+  console.log(
+    `[generateBracketFromSeeds] Created ${matchIds.length} bracket matches (${byeMatches.length} BYE auto-advances)`
+  );
+  return matchIds;
+};
+
+// ============================================
 // Schedule Publishing (V06.05)
 // ============================================
 
@@ -1349,13 +2059,24 @@ export const publishScheduleTimes = async (
 };
 
 // ============================================
-// Test Mode Functions (V06.03)
+// Test Mode Functions (V06.35)
 // ============================================
 
 /**
  * Clear all test data from matches in a division
- * Resets test-flagged matches back to scheduled status
- * Also clears poolAssignments on the division to allow fresh pool generation
+ *
+ * V06.35 Changes (Fix F):
+ * - DELETE ALL poolResults and bracketSeeds documents (not just testData=true)
+ * - These are derived data that can always be regenerated from matches
+ * - Fixes bug where poolResults created with testData=false weren't deleted
+ *
+ * V06.33 Changes:
+ * - Also DELETE poolResults and bracketSeeds subcollections
+ * - These are derived data and should be deleted, not reset
+ *
+ * Previous behavior (still applies):
+ * - Resets test-flagged matches back to scheduled status
+ * - Clears poolAssignments on the division to allow fresh pool generation
  */
 export const clearTestData = async (
   tournamentId: string,
@@ -1367,7 +2088,7 @@ export const clearTestData = async (
 
   // Get matches from subcollection
   const matchesRef = collection(db, 'tournaments', tournamentId, 'matches');
-  const { getDocs, query, where } = await import('@firebase/firestore');
+  const { getDocs, query, where, deleteDoc } = await import('@firebase/firestore');
 
   // Query for matches with testData: true (legacy) OR isTestData: true (new format)
   const divisionMatchesSnapshot = await getDocs(
@@ -1377,12 +2098,56 @@ export const clearTestData = async (
   // Always clear poolAssignments to allow fresh pool generation
   const divisionRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
 
+  const batch = writeBatch(db);
+  const now = Date.now();
+
+  // ============================================
+  // FIX F: DELETE ALL poolResults (not just testData=true)
+  // These are derived data, always regenerated from matches
+  // ============================================
+  const poolResultsRef = collection(
+    db,
+    'tournaments',
+    tournamentId,
+    'divisions',
+    divisionId,
+    'poolResults'
+  );
+  const poolResultsSnap = await getDocs(poolResultsRef);  // NO WHERE CLAUSE
+  poolResultsSnap.docs.forEach(docSnap => {
+    batch.delete(docSnap.ref);
+  });
+  if (poolResultsSnap.size > 0) {
+    console.log(`[clearTestData] Deleting ALL ${poolResultsSnap.size} poolResults documents`);
+  }
+
+  // ============================================
+  // FIX F: DELETE ALL bracketSeeds (not just testData=true)
+  // These are derived data, always regenerated from poolResults
+  // ============================================
+  const bracketSeedsRef = collection(
+    db,
+    'tournaments',
+    tournamentId,
+    'divisions',
+    divisionId,
+    'bracketSeeds'
+  );
+  const bracketSeedsSnap = await getDocs(bracketSeedsRef);  // NO WHERE CLAUSE
+  bracketSeedsSnap.docs.forEach(docSnap => {
+    batch.delete(docSnap.ref);
+  });
+  if (bracketSeedsSnap.size > 0) {
+    console.log(`[clearTestData] Deleting ALL ${bracketSeedsSnap.size} bracketSeeds documents`);
+  }
+
   if (divisionMatchesSnapshot.empty) {
     // Still clear poolAssignments even if no matches
-    await updateDoc(divisionRef, {
+    batch.update(divisionRef, {
       poolAssignments: null,
-      updatedAt: Date.now(),
+      updatedAt: now,
     });
+    await batch.commit();
     return 0;
   }
 
@@ -1394,15 +2159,13 @@ export const clearTestData = async (
 
   if (testMatches.length === 0) {
     // Still clear poolAssignments even if no test matches
-    await updateDoc(divisionRef, {
+    batch.update(divisionRef, {
       poolAssignments: null,
-      updatedAt: Date.now(),
+      updatedAt: now,
     });
+    await batch.commit();
     return 0;
   }
-
-  const batch = writeBatch(db);
-  const now = Date.now();
 
   testMatches.forEach(docSnap => {
     batch.update(docSnap.ref, {
@@ -1425,6 +2188,7 @@ export const clearTestData = async (
   });
 
   await batch.commit();
+  console.log(`[clearTestData] Reset ${testMatches.length} test matches`);
   return testMatches.length;
 };
 
@@ -1543,6 +2307,11 @@ export const deletePoolMatches = async (
 /**
  * Quick score a match (for test mode)
  * Sets the score directly without going through the normal scoring flow
+ *
+ * V06.35: Now calls updatePoolResultsOnMatchComplete() after scoring
+ * V06.31: Updated to use proper GameScore structure with gameNumber
+ * V06.30: Fixed to use actual team IDs (sideA.id/sideB.id) for winnerId
+ * instead of placeholder 'team1'/'team2' which corrupts standings calculations.
  */
 export const quickScoreMatch = async (
   tournamentId: string,
@@ -1554,23 +2323,57 @@ export const quickScoreMatch = async (
   const matchRef = doc(db, 'tournaments', tournamentId, 'matches', matchId);
   const now = Date.now();
 
-  // Determine winner
-  const winnerId = scoreA > scoreB ? 'team1' : scoreA < scoreB ? 'team2' : null;
+  // V06.30: Read match to get actual team IDs
+  const matchSnap = await getDoc(matchRef);
+  const match = matchSnap.data() as Match | undefined;
+  const sideAId = match?.sideA?.id || match?.teamAId || '';
+  const sideBId = match?.sideB?.id || match?.teamBId || '';
 
-  const gameScore: GameScore = {
+  // V06.30: Use actual team IDs, not placeholder 'team1'/'team2'
+  const winnerId = scoreA > scoreB ? sideAId : scoreA < scoreB ? sideBId : null;
+
+  // V06.31: Use proper GameScore structure with gameNumber
+  const scores = [{
+    gameNumber: 1,
     scoreA,
     scoreB,
-    completedAt: now,
-  };
+  }];
 
   await updateDoc(matchRef, {
-    scores: [gameScore],
+    scores,
     status: 'completed',
     winnerId,
+    winnerTeamId: winnerId,  // V06.30: Also set winnerTeamId for legacy compatibility
     completedAt: now,
     updatedAt: now,
     ...(isTestMode && { testData: true }),
   });
+
+  // V06.35: Update pool results if this is a pool match
+  // DEBUG: Log match data to trace why pool results might not be created
+  console.log('[quickScoreMatch] Match data for pool results:', {
+    matchId,
+    divisionId: match?.divisionId,
+    poolGroup: match?.poolGroup,
+    stage: match?.stage,
+    hasDivisionId: !!match?.divisionId,
+  });
+
+  if (match?.divisionId) {
+    const completedMatch: Match = {
+      ...match,
+      id: matchId,
+      status: 'completed',
+      winnerId: winnerId || undefined,
+      scores,
+      completedAt: now,
+      updatedAt: now,
+    } as Match;
+    console.log('[quickScoreMatch] Calling updatePoolResultsOnMatchComplete...');
+    await updatePoolResultsOnMatchComplete(tournamentId, match.divisionId, completedMatch);
+  } else {
+    console.warn('[quickScoreMatch] SKIPPING pool results - no divisionId on match');
+  }
 };
 
 /**
@@ -1640,6 +2443,74 @@ export const updateTournamentMatchDuprStatus = async (
   await updateMatchDuprStatus(matchId, `tournaments/${tournamentId}/matches`, status);
 };
 
+/**
+ * Generate a valid single game score that respects game settings
+ * V06.31: Helper for simulatePoolCompletion
+ *
+ * @param settings - Game settings (pointsPerGame/pointsToWin, winBy, capAt)
+ * @param aWins - Whether side A wins this game
+ * @returns Valid scoreA and scoreB
+ */
+function generateValidGameScore(
+  settings: { pointsPerGame?: number; pointsToWin?: number; winBy?: number; capAt?: number },
+  aWins: boolean
+): { scoreA: number; scoreB: number } {
+  // V06.31: Support both field names (pointsPerGame and pointsToWin)
+  const pointsPerGame = settings.pointsPerGame ?? settings.pointsToWin ?? 11;
+  const winBy = settings.winBy ?? 2;
+  const capAt = settings.capAt;
+
+  // Winner reaches target or goes to deuce
+  let winScore = pointsPerGame;
+
+  // 30% chance of deuce scenario (only meaningful with winBy: 2)
+  if (winBy === 2 && Math.random() < 0.3) {
+    // Deuce: add 2, 4, or 6 points beyond target
+    const deuceExtra = (Math.floor(Math.random() * 3) + 1) * 2; // 2, 4, or 6
+    winScore = pointsPerGame + deuceExtra;
+    // Clamp to capAt if set
+    if (capAt && winScore > capAt) {
+      winScore = capAt;
+    }
+  }
+
+  // Calculate loser score
+  let loseScore: number;
+
+  if (winScore > pointsPerGame) {
+    // Deuce game: loser is exactly winBy behind (e.g., 13-11, 15-13)
+    loseScore = winScore - winBy;
+  } else {
+    // Non-deuce game: loser randomly between 0 and (pointsPerGame - winBy)
+    const maxLoser = pointsPerGame - winBy;
+    loseScore = Math.floor(Math.random() * (maxLoser + 1));
+  }
+
+  // V06.31: After capAt clamp, ensure loser remains winScore - winBy in deuce
+  if (capAt && winScore === capAt && loseScore > winScore - winBy) {
+    loseScore = winScore - winBy;
+  }
+
+  // Ensure non-negative
+  loseScore = Math.max(0, loseScore);
+
+  return {
+    scoreA: aWins ? winScore : loseScore,
+    scoreB: aWins ? loseScore : winScore,
+  };
+}
+
+/**
+ * Simulate completing all matches in a pool with random scores
+ *
+ * V06.31: Now respects match.gameSettings (pointsPerGame/pointsToWin, winBy, bestOf, capAt)
+ * - Reads game settings from each match
+ * - Generates correct number of games for bestOf 1/3/5
+ * - Uses proper GameScore structure with gameNumber
+ * - Enforces winBy and capAt rules
+ *
+ * V06.30: Fixed to use actual team IDs (sideA.id/sideB.id) for winnerId
+ */
 export const simulatePoolCompletion = async (
   tournamentId: string,
   divisionId: string,
@@ -1672,24 +2543,62 @@ export const simulatePoolCompletion = async (
   const now = Date.now();
 
   snapshot.docs.forEach(docSnap => {
-    // Generate random but realistic scores
-    const winnerScore = Math.random() > 0.3 ? 11 : (Math.random() > 0.5 ? 15 : 21);
-    const loserScore = Math.floor(Math.random() * (winnerScore - 2)); // Loser gets 0 to winnerScore-2
-    const teamAWins = Math.random() > 0.5;
+    const match = docSnap.data();
 
-    const scoreA = teamAWins ? winnerScore : loserScore;
-    const scoreB = teamAWins ? loserScore : winnerScore;
+    // V06.30: Get actual team IDs from match data
+    const sideAId = match?.sideA?.id || match?.teamAId || '';
+    const sideBId = match?.sideB?.id || match?.teamBId || '';
 
-    const gameScore: GameScore = {
-      scoreA,
-      scoreB,
-      completedAt: now,
-    };
+    // V06.31: Read game settings from match (support both field naming conventions)
+    const gs = match.gameSettings || {};
+    const pointsPerGame = gs.pointsPerGame ?? gs.pointsToWin ?? 11;
+    const winBy = gs.winBy ?? 2;
+    const bestOf = gs.bestOf ?? 1;
+    const capAt = gs.capAt;
+
+    const gamesNeeded = Math.ceil(bestOf / 2); // 1 for Bo1, 2 for Bo3, 3 for Bo5
+
+    // Generate games until someone wins the match
+    const scores: { gameNumber: number; scoreA: number; scoreB: number }[] = [];
+    let gamesWonA = 0;
+    let gamesWonB = 0;
+
+    for (let gameNum = 1; gameNum <= bestOf; gameNum++) {
+      // Randomly decide game winner (roughly 50/50)
+      const aWinsThisGame = Math.random() > 0.5;
+
+      const gameScore = generateValidGameScore(
+        { pointsPerGame, winBy, capAt },
+        aWinsThisGame
+      );
+
+      scores.push({
+        gameNumber: gameNum,
+        scoreA: gameScore.scoreA,
+        scoreB: gameScore.scoreB,
+      });
+
+      // Track game wins
+      if (gameScore.scoreA > gameScore.scoreB) {
+        gamesWonA++;
+      } else {
+        gamesWonB++;
+      }
+
+      // Stop when someone wins the match
+      if (gamesWonA >= gamesNeeded || gamesWonB >= gamesNeeded) {
+        break;
+      }
+    }
+
+    // V06.30/V06.31: Determine match winner based on games won, using actual team IDs
+    const winnerId = gamesWonA >= gamesNeeded ? sideAId : sideBId;
 
     batch.update(docSnap.ref, {
-      scores: [gameScore],
+      scores,
       status: 'completed',
-      winnerId: teamAWins ? 'team1' : 'team2',
+      winnerId,
+      winnerTeamId: winnerId,  // Legacy compatibility
       completedAt: now,
       updatedAt: now,
       testData: true,
@@ -1697,5 +2606,36 @@ export const simulatePoolCompletion = async (
   });
 
   await batch.commit();
+
+  // V06.36: Update pool results for each affected pool
+  // Collect unique pool names from the simulated matches
+  const affectedPools = new Set<string>();
+  snapshot.docs.forEach(docSnap => {
+    const match = docSnap.data();
+    if (match.poolGroup) {
+      affectedPools.add(match.poolGroup);
+    }
+  });
+
+  // Call updatePoolResultsOnMatchComplete for one match per pool
+  // (the function recalculates the entire pool's standings)
+  for (const pool of affectedPools) {
+    const poolMatch = snapshot.docs.find(d => d.data().poolGroup === pool);
+    if (poolMatch) {
+      const matchData = poolMatch.data();
+      const completedMatch: Match = {
+        id: poolMatch.id,
+        ...matchData,
+        status: 'completed',
+        completedAt: now,
+        updatedAt: now,
+      } as Match;
+
+      console.log(`[simulatePoolCompletion] Updating pool results for ${pool}`);
+      await updatePoolResultsOnMatchComplete(tournamentId, divisionId, completedMatch);
+    }
+  }
+
+  console.log(`[simulatePoolCompletion] Completed ${snapshot.size} matches, updated ${affectedPools.size} pool results`);
   return snapshot.size;
 };
