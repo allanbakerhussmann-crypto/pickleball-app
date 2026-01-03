@@ -75,3 +75,23 @@ export {
   phone_sendVerificationCode,
   phone_verifyCode,
 } from './phoneVerification';
+
+// ============================================
+// DUPR SUBMISSION FUNCTIONS (V07.04)
+// ============================================
+
+export {
+  dupr_submitMatches,
+  dupr_processQueue,
+  dupr_processCorrections,
+  dupr_getBatchStatus,
+} from './dupr';
+
+// ============================================
+// MIGRATION FUNCTIONS (V07.04)
+// ============================================
+
+export {
+  migrate_toOfficialResult,
+  migrate_dryRun,
+} from './migrations/migrateToOfficialResult';

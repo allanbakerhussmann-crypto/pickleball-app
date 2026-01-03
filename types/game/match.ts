@@ -5,12 +5,26 @@
  * Replaces the separate LeagueMatch, BoxLeagueMatch, Match, MeetupMatch types.
  *
  * FILE LOCATION: types/game/match.ts
- * VERSION: V06.00
+ * VERSION: V07.04
+ *
+ * V07.04 CHANGES:
+ * - Added DUPR-compliant scoring fields (scoreProposal, officialResult, dupr)
+ * - Added ScoreState for workflow tracking
+ * - Added scoreLocked fields for post-finalization protection
+ * - Added TeamSnapshot for signer validation
+ * - Added migration tracking fields
  */
 
 import type { GameSettings } from './gameSettings';
 import type { CompetitionFormat } from '../formats/formatTypes';
-import type { MatchVerificationData } from '../../types';
+import type {
+  MatchVerificationData,
+  ScoreProposal,
+  OfficialResult,
+  DuprSubmissionData,
+  ScoreState,
+  TeamSnapshot,
+} from '../../types';
 
 // ============================================
 // GAME SCORE
@@ -199,22 +213,50 @@ export interface Match {
   verification?: MatchVerificationData;
 
   // ==========================================
-  // DUPR Integration
+  // V07.04 DUPR-COMPLIANT SCORING
   // ==========================================
 
-  /** Is this match eligible for DUPR submission? */
+  /** Player-submitted score proposal (NOT official) */
+  scoreProposal?: ScoreProposal;
+
+  /** Organizer-finalized official result (required for completion) */
+  officialResult?: OfficialResult;
+
+  /** DUPR submission tracking (server-side only) */
+  dupr?: DuprSubmissionData;
+
+  /** Current score state in the workflow */
+  scoreState?: ScoreState;
+
+  /** Score locked after organizer finalizes - blocks player writes */
+  scoreLocked?: boolean;
+  scoreLockedAt?: number;
+  scoreLockedByUserId?: string;
+
+  /** Team snapshot for signer validation */
+  teamSnapshot?: TeamSnapshot;
+
+  /** Migration tracking (for legacy matches) */
+  migratedAt?: number;
+  migratedFromLegacy?: boolean;
+
+  // ==========================================
+  // DUPR Integration (Legacy Fields)
+  // ==========================================
+
+  /** @deprecated Use dupr.eligible instead */
   duprEligible?: boolean;
 
-  /** Has this match been submitted to DUPR? */
+  /** @deprecated Use dupr.submitted instead */
   duprSubmitted?: boolean;
 
-  /** DUPR match ID after submission */
+  /** @deprecated Use dupr.submissionId instead */
   duprMatchId?: string;
 
-  /** When submitted to DUPR */
+  /** @deprecated Use dupr.submittedAt instead */
   duprSubmittedAt?: number;
 
-  /** Error from DUPR submission */
+  /** @deprecated Use dupr.submissionError instead */
   duprError?: string;
 
   // ==========================================

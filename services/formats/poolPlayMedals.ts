@@ -24,10 +24,9 @@
  * - Added debug logging in determineQualifiers for troubleshooting
  */
 
-import type { Match } from '../../types/game/match';
+import type { Match, TournamentMatchType } from '../../types';
 import type { GameSettings } from '../../types/game/gameSettings';
 import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
-import type { TournamentMatchType } from '../../types';
 import {
   generateRoundRobinPairings,
   calculateRoundRobinStandings,
@@ -38,6 +37,10 @@ import {
   generateEliminationBracket,
   type BracketParticipant,
 } from './elimination';
+import {
+  matchCountsForStandings,
+  getMatchWinner,
+} from '../../utils/matchHelpers';
 
 // ============================================
 // TYPES
@@ -356,15 +359,19 @@ export function calculatePoolStandings(
           comparison = b.wins - a.wins;
           break;
         case 'head_to_head':
-          // Head-to-head requires checking direct match
+          // Head-to-head requires checking direct match - V07.04: Use officialResult via matchHelpers
           const directMatch = poolMatches.find(
             m =>
-              m.status === 'completed' &&
+              matchCountsForStandings(m) &&
+              m.sideA?.id && m.sideB?.id &&
               ((m.sideA.id === a.participant.id && m.sideB.id === b.participant.id) ||
                (m.sideA.id === b.participant.id && m.sideB.id === a.participant.id))
           );
-          if (directMatch?.winnerId === a.participant.id) comparison = -1;
-          else if (directMatch?.winnerId === b.participant.id) comparison = 1;
+          if (directMatch) {
+            const directWinnerId = getMatchWinner(directMatch);
+            if (directWinnerId === a.participant.id) comparison = -1;
+            else if (directWinnerId === b.participant.id) comparison = 1;
+          }
           break;
         case 'point_diff':
           comparison = b.pointDifferential - a.pointDifferential;

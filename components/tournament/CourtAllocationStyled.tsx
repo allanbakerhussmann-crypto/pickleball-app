@@ -25,6 +25,9 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import type { Match as UniversalMatch, GameScore } from '../../types/game/match';
+import type { GameSettings } from '../../types/game/gameSettings';
+import { ScoreEntryModal } from '../shared/ScoreEntryModal';
 
 // Import types from original CourtAllocation
 export type MatchStatus = 'WAITING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED';
@@ -63,9 +66,10 @@ interface CourtAllocationStyledProps {
   filteredQueue?: CourtMatch[];
   courtSettings?: TournamentCourtSettings;  // V07.02: Premier court settings
   firestoreCourts?: FirestoreCourt[];  // V07.02: For ID-to-name mapping
+  gameSettings?: GameSettings;  // V07.03: Game settings for ScoreEntryModal
   onAssignMatchToCourt: (matchId: string, courtId: string) => void;
   onStartMatchOnCourt: (courtId: string) => void;
-  onFinishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number) => void;
+  onFinishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number, scores?: GameScore[]) => void;
   onReorderQueue?: (matchIds: string[]) => void;
 }
 
@@ -242,10 +246,8 @@ const CourtCard: React.FC<{
   match?: CourtMatch;
   tier?: CourtTier;  // V07.02: Court tier for badge display
   onStartMatch: () => void;
-  onFinishMatch: (scoreA?: number, scoreB?: number) => void;
-  scoreInputs: { teamA: string; teamB: string };
-  onScoreChange: (team: 'A' | 'B', value: string) => void;
-}> = ({ court, match, tier, onStartMatch, onFinishMatch, scoreInputs, onScoreChange }) => {
+  onOpenScoreModal: () => void;  // V07.03: Open ScoreEntryModal instead of inline inputs
+}> = ({ court, match, tier, onStartMatch, onOpenScoreModal }) => {
   const statusStyles: Record<CourtStatus, { bg: string; text: string; label: string }> = {
     AVAILABLE: { bg: 'bg-lime-500/20 border-lime-500/30', text: 'text-lime-400', label: 'Available' },
     ASSIGNED: { bg: 'bg-blue-500/20 border-blue-500/30', text: 'text-blue-400', label: 'Assigned' },
@@ -304,34 +306,14 @@ const CourtCard: React.FC<{
               {match.division} • {match.roundLabel}
             </div>
 
-            {/* Teams */}
+            {/* Teams - V07.03: Removed inline inputs, using ScoreEntryModal instead */}
             <div className="space-y-2">
               <div className="flex items-center justify-between bg-gray-700/30 rounded-lg px-3 py-2">
                 <span className="text-white font-medium truncate">{match.teamAName}</span>
-                {court.status === 'IN_USE' && (
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={scoreInputs.teamA}
-                    onChange={(e) => onScoreChange('A', e.target.value)}
-                    className="w-16 bg-gray-800 text-white text-center px-2 py-1 rounded border border-gray-600 focus:border-lime-500 outline-none text-sm"
-                  />
-                )}
               </div>
               <div className="text-center text-gray-600 text-xs">vs</div>
               <div className="flex items-center justify-between bg-gray-700/30 rounded-lg px-3 py-2">
                 <span className="text-white font-medium truncate">{match.teamBName}</span>
-                {court.status === 'IN_USE' && (
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={scoreInputs.teamB}
-                    onChange={(e) => onScoreChange('B', e.target.value)}
-                    className="w-16 bg-gray-800 text-white text-center px-2 py-1 rounded border border-gray-600 focus:border-lime-500 outline-none text-sm"
-                  />
-                )}
               </div>
             </div>
 
@@ -358,11 +340,7 @@ const CourtCard: React.FC<{
 
               {court.status === 'IN_USE' && (
                 <button
-                  onClick={() => {
-                    const scoreA = scoreInputs.teamA ? parseInt(scoreInputs.teamA, 10) : undefined;
-                    const scoreB = scoreInputs.teamB ? parseInt(scoreInputs.teamB, 10) : undefined;
-                    onFinishMatch(scoreA, scoreB);
-                  }}
+                  onClick={onOpenScoreModal}
                   className="
                     w-full py-2.5 rounded-lg font-semibold text-sm
                     bg-gradient-to-r from-amber-600 to-amber-500 text-white
@@ -373,9 +351,9 @@ const CourtCard: React.FC<{
                   "
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>
-                  Finish Match
+                  Enter Score
                 </button>
               )}
             </div>
@@ -391,25 +369,75 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
   matches,
   filteredQueue,
   courtSettings,  // V07.02: Premier court settings
-  firestoreCourts,  // V07.02: For ID-to-name mapping
+  firestoreCourts: _firestoreCourts,  // V07.02: For ID-to-name mapping (kept for future use)
+  gameSettings,  // V07.03: Game settings for ScoreEntryModal
   onAssignMatchToCourt,
   onStartMatchOnCourt,
   onFinishMatchOnCourt,
   onReorderQueue,
 }) => {
-  const [scoreInputs, setScoreInputs] = useState<Record<string, { teamA: string; teamB: string }>>({});
+  // V07.03: State for score entry modal
+  const [scoreModalData, setScoreModalData] = useState<{
+    courtId: string;
+    match: CourtMatch;
+  } | null>(null);
+  const [isSubmittingScore, setIsSubmittingScore] = useState(false);
 
-  const getScoresForMatch = (matchId: string) => scoreInputs[matchId] ?? { teamA: '', teamB: '' };
-
-  const handleScoreChange = (matchId: string, team: 'A' | 'B', value: string) => {
-    setScoreInputs(prev => ({
-      ...prev,
-      [matchId]: {
-        teamA: team === 'A' ? value : prev[matchId]?.teamA ?? '',
-        teamB: team === 'B' ? value : prev[matchId]?.teamB ?? '',
-      },
-    }));
+  // V07.03: Default game settings if not provided
+  const defaultGameSettings: GameSettings = gameSettings || {
+    playType: 'doubles',
+    pointsPerGame: 11,
+    winBy: 2,
+    bestOf: 1,
   };
+
+  // V07.03: Handle score submission from modal
+  const handleScoreSubmit = async (scores: GameScore[], _winnerId: string) => {
+    if (!scoreModalData) return;
+
+    setIsSubmittingScore(true);
+    try {
+      // Extract first game score for legacy compatibility
+      const scoreA = scores[0]?.scoreA;
+      const scoreB = scores[0]?.scoreB;
+      onFinishMatchOnCourt(scoreModalData.courtId, scoreA, scoreB, scores);
+      setScoreModalData(null);
+    } catch (error) {
+      console.error('Failed to submit score:', error);
+      alert('Failed to submit score. Please try again.');
+    } finally {
+      setIsSubmittingScore(false);
+    }
+  };
+
+  // V07.03: Convert CourtMatch to Match for ScoreEntryModal
+  const getMatchForModal = (): UniversalMatch | null => {
+    if (!scoreModalData) return null;
+    const { match } = scoreModalData;
+    return {
+      id: match.id,
+      eventType: 'tournament',
+      eventId: '',
+      format: 'pool_play_medals',
+      sideA: {
+        id: match.teamAName,
+        name: match.teamAName,
+        playerIds: [],
+      },
+      sideB: {
+        id: match.teamBName,
+        name: match.teamBName,
+        playerIds: [],
+      },
+      gameSettings: defaultGameSettings,
+      status: 'in_progress',
+      scores: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  };
+
+  // Legacy score input state removed in V07.03 - now using ScoreEntryModal
 
   const waitingMatches = filteredQueue ?? matches.filter(m => m.status === 'WAITING');
 
@@ -511,24 +539,32 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
           <div className="grid gap-4 sm:grid-cols-2">
             {courts.map(court => {
               const match = getMatchForCourt(court);
-              const matchScores = match ? getScoresForMatch(match.id) : { teamA: '', teamB: '' };
 
               return (
                 <CourtCard
                   key={court.id}
                   court={court}
                   match={match}
-                  tier={getCourtTier(court.id)}  // V07.02: Pass court tier for badge display
+                  tier={getCourtTier(court.id)}
                   onStartMatch={() => onStartMatchOnCourt(court.id)}
-                  onFinishMatch={(scoreA, scoreB) => onFinishMatchOnCourt(court.id, scoreA, scoreB)}
-                  scoreInputs={matchScores}
-                  onScoreChange={(team, value) => match && handleScoreChange(match.id, team, value)}
+                  onOpenScoreModal={() => match && setScoreModalData({ courtId: court.id, match })}
                 />
               );
             })}
           </div>
         </GlassCard>
       </div>
+
+      {/* V07.03: Score Entry Modal */}
+      {scoreModalData && (
+        <ScoreEntryModal
+          isOpen={!!scoreModalData}
+          onClose={() => setScoreModalData(null)}
+          match={getMatchForModal()!}
+          onSubmit={handleScoreSubmit}
+          isLoading={isSubmittingScore}
+        />
+      )}
     </div>
   );
 };

@@ -1,5 +1,12 @@
 /**
- * Pickleball Director - Type Definitions V06.00
+ * Pickleball Director - Type Definitions V07.04
+ *
+ * UPDATED V07.04:
+ * - Added DUPR-compliant scoring types (ScoreState, ScoreProposal, OfficialResult)
+ * - Added DuprSubmissionData with batch tracking and retry fields
+ * - Added TeamSnapshot for signer validation
+ * - Added scoreLocked fields to Match for post-finalization protection
+ * - Added migratedAt/migratedFromLegacy for one-time migration tracking
  *
  * UPDATED V06.00:
  * - Added Pool Play → Medals integration to DivisionFormat
@@ -494,7 +501,16 @@ export interface CourtBooking {
 
 export type EventType = 'singles' | 'doubles' | 'mixed_doubles';
 export type GenderCategory = 'open' | 'mens' | 'womens' | 'mixed' | 'men' | 'women';
-export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'bye';
+// V07.03: Extended match status for player flow
+export type MatchStatus =
+  | 'scheduled'            // Match scheduled, not started
+  | 'in_progress'          // Currently being played
+  | 'pending_confirmation' // Score entered, awaiting confirmation
+  | 'completed'            // Match finished and confirmed
+  | 'disputed'             // Score disputed
+  | 'cancelled'            // Match cancelled
+  | 'forfeit'              // One side forfeited / no-show
+  | 'bye';                 // Bye (no opponent)
 export type PaymentStatus = 'pending' | 'processing' | 'paid' | 'failed' | 'refunded';
 
 export interface Tournament {
@@ -813,6 +829,8 @@ export interface Match {
 
   // RESULT - Use winnerId
   winnerId?: string;
+  /** Winner name for display */
+  winnerName?: string;
   /** @deprecated Use winnerId instead */
   winnerTeamId?: string;
   loserId?: string;
@@ -845,6 +863,39 @@ export interface Match {
   nextMatchSlot?: 'team1' | 'team2' | 'teamA' | 'teamB' | 'sideA' | 'sideB' | null;
   loserNextMatchId?: string;
   loserNextMatchSlot?: 'team1' | 'team2';
+
+  // Score submission & verification (V07.03)
+  submittedByUserId?: string;
+  submittedAt?: number;
+  verification?: MatchVerificationData;
+
+  // ============================================
+  // V07.04 DUPR-COMPLIANT SCORING
+  // ============================================
+
+  /** Player-submitted score proposal (NOT official) */
+  scoreProposal?: ScoreProposal;
+
+  /** Organizer-finalized official result (required for completion) */
+  officialResult?: OfficialResult;
+
+  /** DUPR submission tracking (server-side only) */
+  dupr?: DuprSubmissionData;
+
+  /** Current score state in the workflow */
+  scoreState?: ScoreState;
+
+  /** Score locked after organizer finalizes - blocks player writes */
+  scoreLocked?: boolean;
+  scoreLockedAt?: number;
+  scoreLockedByUserId?: string;
+
+  /** Team snapshot for signer validation */
+  teamSnapshot?: TeamSnapshot;
+
+  /** Migration tracking (for legacy matches) */
+  migratedAt?: number;
+  migratedFromLegacy?: boolean;
 
   // Other metadata
   isBye?: boolean;
@@ -2625,5 +2676,134 @@ export interface BracketSeedsDoc {
 
   // Round 1 pairs - bracket generator creates matches DIRECTLY from this
   round1Pairs: Round1Pair[];
+}
+
+// ============================================
+// V07.04 DUPR-COMPLIANT SCORING SYSTEM
+// Three-tier model: scoreProposal → officialResult → dupr
+// ============================================
+
+/**
+ * Score state progression for DUPR compliance
+ * Match is NOT complete until organizer finalises (scoreState = 'official')
+ */
+export type ScoreState =
+  | 'none'              // No score submitted
+  | 'proposed'          // Player submitted score proposal
+  | 'signed'            // Opponent acknowledged proposal
+  | 'disputed'          // Opponent disputed proposal
+  | 'official'          // Organizer finalized official result
+  | 'submittedToDupr';  // Successfully submitted to DUPR
+
+/**
+ * Player-submitted score proposal (NOT the official result)
+ * Becomes immutable once signed/disputed (except organizer can override)
+ */
+export interface ScoreProposal {
+  scores: GameScore[];
+  winnerId: string;
+  winnerName?: string;
+  enteredByUserId: string;
+  enteredAt: number;
+  status: 'proposed' | 'signed' | 'disputed';
+
+  // Signer validation (MUST be on opposing team, not same user)
+  signedByUserId?: string;
+  signedAt?: number;
+
+  // Dispute tracking
+  disputedByUserId?: string;
+  disputedAt?: number;
+  disputeReason?: string;
+
+  // Immutability flag (set true when signed/disputed)
+  locked?: boolean;
+}
+
+/**
+ * Official result - written ONLY by organizer
+ * This is the canonical score used for standings and DUPR submission
+ */
+export interface OfficialResult {
+  scores: GameScore[];
+  winnerId: string;
+  winnerName?: string;
+  finalisedByUserId: string;
+  finalisedAt: number;
+
+  // Versioning for correction workflow
+  version: number;
+  previousVersions?: OfficialResultVersion[];
+}
+
+/**
+ * Archived version of official result (for correction audit trail)
+ */
+export interface OfficialResultVersion {
+  version: number;
+  scores: GameScore[];
+  winnerId: string;
+  finalisedByUserId: string;
+  finalisedAt: number;
+  supersededAt: number;
+  supersededByUserId: string;
+  correctionReason?: string;
+}
+
+/**
+ * DUPR submission tracking - server-side only
+ * No client can directly trigger DUPR submission
+ */
+export interface DuprSubmissionData {
+  eligible: boolean;
+  submitted: boolean;
+  submittedAt?: number;
+  submissionId?: string;
+  submissionError?: string;
+
+  // Server-side tracking (NO client submittedByUserId)
+  batchId?: string;              // Batch submission tracking
+  retryCount?: number;           // Retry attempts
+  lastRetryAt?: number;          // Last retry timestamp
+  nextRetryAt?: number;          // Scheduled retry time
+
+  // Correction workflow
+  needsCorrection?: boolean;     // Set true when officialResult changes post-submission
+  correctionSubmitted?: boolean;
+  correctionSubmittedAt?: number;
+  correctionBatchId?: string;
+}
+
+/**
+ * DUPR submission batch - tracks batch submissions
+ * Collection: dupr_submission_batches
+ */
+export interface DuprSubmissionBatch {
+  id: string;
+  eventId: string;
+  eventType: 'tournament' | 'league';
+  matchIds: string[];
+  status: 'pending' | 'processing' | 'completed' | 'partial_failure';
+  createdAt: number;
+  createdByUserId: string;
+  processedAt?: number;
+  results: {
+    matchId: string;
+    success: boolean;
+    duprMatchId?: string;
+    error?: string;
+  }[];
+  retryCount: number;
+  nextRetryAt?: number;
+}
+
+/**
+ * Snapshot of team player IDs at match creation
+ * Used for signer validation in Firestore rules
+ */
+export interface TeamSnapshot {
+  sideAPlayerIds: string[];
+  sideBPlayerIds: string[];
+  snapshotAt: number;
 }
 

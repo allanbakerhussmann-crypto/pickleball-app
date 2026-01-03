@@ -311,8 +311,19 @@ service cloud.firestore {
       }
       match /matches/{matchId} {
         allow read: if isAuthenticated();
-        // Tournament organizer or app admin can write matches
-        allow write: if isTournamentOrganizer(tournamentId) || isAppAdmin();
+        // Tournament organizer or app admin can write any match field
+        allow create, delete: if isTournamentOrganizer(tournamentId) || isAppAdmin();
+        // Update rules depend on what's being changed
+        allow update: if isTournamentOrganizer(tournamentId) || isAppAdmin() ||
+          // Players can update scoreProposal if:
+          // 1. Score is not locked by organizer
+          // 2. They are a participant in the match
+          // 3. They are NOT writing to restricted fields
+          (isAuthenticated() &&
+           resource.data.scoreLocked != true &&
+           (request.auth.uid in resource.data.sideA.playerIds ||
+            request.auth.uid in resource.data.sideB.playerIds) &&
+           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['officialResult', 'dupr', 'scoreLocked', 'scoreLockedAt', 'scoreLockedByUserId', 'migratedAt', 'migratedFromLegacy']));
       }
       match /courts/{courtId} {
         allow read: if isAuthenticated();
@@ -395,13 +406,17 @@ service cloud.firestore {
         // League admin can do anything
         allow create, delete: if isLeagueAdmin(leagueId);
         // League admin OR match participants can update (for score entry)
+        // V07.04: Players cannot write to restricted DUPR fields or when scoreLocked
         allow update: if isLeagueAdmin(leagueId) ||
-          (isAuthenticated() && (
-            resource.data.userAId == request.auth.uid ||
+          (isAuthenticated() &&
+           resource.data.scoreLocked != true &&
+           (resource.data.userAId == request.auth.uid ||
             resource.data.userBId == request.auth.uid ||
             resource.data.partnerAId == request.auth.uid ||
-            resource.data.partnerBId == request.auth.uid
-          ));
+            resource.data.partnerBId == request.auth.uid ||
+            (resource.data.sideA.playerIds != null && request.auth.uid in resource.data.sideA.playerIds) ||
+            (resource.data.sideB.playerIds != null && request.auth.uid in resource.data.sideB.playerIds)) &&
+           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['officialResult', 'dupr', 'scoreLocked', 'scoreLockedAt', 'scoreLockedByUserId', 'migratedAt', 'migratedFromLegacy']));
       }
       match /challenges/{challengeId} {
         allow read: if isAuthenticated();
@@ -569,6 +584,21 @@ service cloud.firestore {
     match /phone_verification_codes/{codeId} {
       // No direct client access - all via Cloud Functions
       allow read, write: if false;
+    }
+
+    // ============================================
+    // DUPR SUBMISSION COLLECTIONS (V07.04)
+    // ============================================
+
+    // DUPR Submission Batches - Organizers can read their batches
+    match /dupr_submission_batches/{batchId} {
+      allow read: if isAuthenticated() && (
+        resource.data.createdByUserId == request.auth.uid ||
+        (resource.data.eventType == 'tournament' && isTournamentOrganizer(resource.data.eventId)) ||
+        (resource.data.eventType == 'league' && isLeagueAdmin(resource.data.eventId))
+      );
+      // All writes go through Cloud Functions
+      allow write: if false;
     }
 
     // ============================================

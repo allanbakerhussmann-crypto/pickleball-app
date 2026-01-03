@@ -1,0 +1,691 @@
+/**
+ * DUPR-Compliant Scoring Service
+ *
+ * Implements the three-tier scoring model:
+ * 1. scoreProposal - Player-submitted score claims
+ * 2. officialResult - Organizer-finalized official result
+ * 3. dupr - DUPR submission tracking (server-side only)
+ *
+ * Key Rules:
+ * - Match status ONLY becomes 'completed' when officialResult is written
+ * - scoreLocked blocks ALL player writes after organizer finalizes
+ * - Signer must be on opposing team (validated via teamSnapshot)
+ * - Proposal immutable once signed/disputed (except organizer override)
+ *
+ * @version V07.04
+ * @file services/firebase/duprScoring.ts
+ */
+
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  runTransaction,
+} from '@firebase/firestore';
+import { db } from './config';
+import type {
+  Match,
+  GameScore,
+  ScoreProposal,
+  OfficialResult,
+  OfficialResultVersion,
+  ScoreState,
+  TeamSnapshot,
+} from '../../types';
+import {
+  canProposeScore,
+  canSignProposal,
+  canDisputeProposal,
+  canFinalizeResult,
+  canCorrectResult,
+  validateSignerIsOpposingTeam,
+} from '../../utils/scorePermissions';
+
+// ============================================
+// ERROR TYPES
+// ============================================
+
+export class DuprScoringError extends Error {
+  constructor(
+    message: string,
+    public code:
+      | 'PERMISSION_DENIED'
+      | 'SCORE_LOCKED'
+      | 'INVALID_STATE'
+      | 'NOT_FOUND'
+      | 'VALIDATION_FAILED'
+  ) {
+    super(message);
+    this.name = 'DuprScoringError';
+  }
+}
+
+// ============================================
+// MATCH PATH HELPERS
+// ============================================
+
+type EventType = 'tournament' | 'league' | 'meetup';
+
+function getMatchDocPath(
+  eventType: EventType,
+  eventId: string,
+  matchId: string
+): string {
+  switch (eventType) {
+    case 'tournament':
+      return `tournaments/${eventId}/matches/${matchId}`;
+    case 'league':
+      return `leagues/${eventId}/matches/${matchId}`;
+    case 'meetup':
+      return `meetups/${eventId}/matches/${matchId}`;
+    default:
+      throw new DuprScoringError(
+        `Unknown event type: ${eventType}`,
+        'VALIDATION_FAILED'
+      );
+  }
+}
+
+// ============================================
+// PLAYER ACTIONS
+// ============================================
+
+/**
+ * Propose a score for a match (player action)
+ *
+ * Creates a scoreProposal with status 'proposed'.
+ * Can only be called by match participants.
+ * Will fail if scoreLocked or proposal already locked.
+ */
+export async function proposeScore(
+  eventType: EventType,
+  eventId: string,
+  matchId: string,
+  scores: GameScore[],
+  winnerId: string,
+  userId: string
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  await runTransaction(db, async (transaction) => {
+    const matchSnap = await transaction.get(matchRef);
+    if (!matchSnap.exists()) {
+      throw new DuprScoringError('Match not found', 'NOT_FOUND');
+    }
+
+    const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+    // Check permission
+    const permission = canProposeScore(match, userId);
+    if (!permission.allowed) {
+      throw new DuprScoringError(
+        permission.reason || 'Cannot propose score',
+        'PERMISSION_DENIED'
+      );
+    }
+
+    // Validate winnerId is one of the sides
+    if (winnerId !== match.sideA?.id && winnerId !== match.sideB?.id) {
+      throw new DuprScoringError(
+        'Winner must be sideA or sideB',
+        'VALIDATION_FAILED'
+      );
+    }
+
+    // Validate scores array
+    if (!scores || scores.length === 0) {
+      throw new DuprScoringError('Scores are required', 'VALIDATION_FAILED');
+    }
+
+    // Get winner name
+    const winnerName =
+      winnerId === match.sideA?.id ? match.sideA?.name : match.sideB?.name;
+
+    // Create score proposal
+    const scoreProposal: ScoreProposal = {
+      scores,
+      winnerId,
+      winnerName,
+      enteredByUserId: userId,
+      enteredAt: Date.now(),
+      status: 'proposed',
+      locked: false,
+    };
+
+    // Create or update team snapshot if not exists
+    let teamSnapshot = match.teamSnapshot;
+    if (!teamSnapshot) {
+      teamSnapshot = {
+        sideAPlayerIds: match.sideA?.playerIds || [],
+        sideBPlayerIds: match.sideB?.playerIds || [],
+        snapshotAt: Date.now(),
+      };
+    }
+
+    // Update match
+    transaction.update(matchRef, {
+      scoreProposal,
+      scoreState: 'proposed' as ScoreState,
+      teamSnapshot,
+      // Also update legacy fields for compatibility
+      scores,
+      status: 'pending_confirmation',
+      updatedAt: Date.now(),
+    });
+  });
+}
+
+/**
+ * Sign (acknowledge) a score proposal (player action)
+ *
+ * Sets proposal status to 'signed' and locks it.
+ * Can only be called by a player on the OPPOSING team.
+ * Notifies organizer that proposal is ready for finalization.
+ */
+export async function signScore(
+  eventType: EventType,
+  eventId: string,
+  matchId: string,
+  userId: string
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  await runTransaction(db, async (transaction) => {
+    const matchSnap = await transaction.get(matchRef);
+    if (!matchSnap.exists()) {
+      throw new DuprScoringError('Match not found', 'NOT_FOUND');
+    }
+
+    const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+    // Check basic permission
+    const permission = canSignProposal(match, userId);
+    if (!permission.allowed) {
+      throw new DuprScoringError(
+        permission.reason || 'Cannot sign proposal',
+        'PERMISSION_DENIED'
+      );
+    }
+
+    // Additional validation: signer must be on opposing team
+    const proposerUserId = match.scoreProposal!.enteredByUserId;
+    const signerValidation = validateSignerIsOpposingTeam(
+      match,
+      proposerUserId,
+      userId
+    );
+    if (!signerValidation.allowed) {
+      throw new DuprScoringError(
+        signerValidation.reason || 'Invalid signer',
+        'PERMISSION_DENIED'
+      );
+    }
+
+    // Update proposal to signed and lock it
+    const updatedProposal: ScoreProposal = {
+      ...match.scoreProposal!,
+      status: 'signed',
+      signedByUserId: userId,
+      signedAt: Date.now(),
+      locked: true,
+    };
+
+    transaction.update(matchRef, {
+      scoreProposal: updatedProposal,
+      scoreState: 'signed' as ScoreState,
+      updatedAt: Date.now(),
+    });
+  });
+}
+
+/**
+ * Dispute a score proposal (player action)
+ *
+ * Sets proposal status to 'disputed' and locks it.
+ * Can only be called by a player on the OPPOSING team.
+ * Notifies organizer to resolve the dispute.
+ */
+export async function disputeScore(
+  eventType: EventType,
+  eventId: string,
+  matchId: string,
+  userId: string,
+  disputeReason: string
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  await runTransaction(db, async (transaction) => {
+    const matchSnap = await transaction.get(matchRef);
+    if (!matchSnap.exists()) {
+      throw new DuprScoringError('Match not found', 'NOT_FOUND');
+    }
+
+    const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+    // Check basic permission
+    const permission = canDisputeProposal(match, userId);
+    if (!permission.allowed) {
+      throw new DuprScoringError(
+        permission.reason || 'Cannot dispute proposal',
+        'PERMISSION_DENIED'
+      );
+    }
+
+    // Additional validation: disputer must be on opposing team
+    const proposerUserId = match.scoreProposal!.enteredByUserId;
+    const signerValidation = validateSignerIsOpposingTeam(
+      match,
+      proposerUserId,
+      userId
+    );
+    if (!signerValidation.allowed) {
+      throw new DuprScoringError(
+        signerValidation.reason || 'Invalid disputer',
+        'PERMISSION_DENIED'
+      );
+    }
+
+    // Update proposal to disputed and lock it
+    const updatedProposal: ScoreProposal = {
+      ...match.scoreProposal!,
+      status: 'disputed',
+      disputedByUserId: userId,
+      disputedAt: Date.now(),
+      disputeReason: disputeReason || 'No reason provided',
+      locked: true,
+    };
+
+    transaction.update(matchRef, {
+      scoreProposal: updatedProposal,
+      scoreState: 'disputed' as ScoreState,
+      status: 'disputed',
+      updatedAt: Date.now(),
+    });
+  });
+}
+
+// ============================================
+// ORGANIZER ACTIONS
+// ============================================
+
+/**
+ * Finalise the official result (organizer action)
+ *
+ * Creates officialResult, sets status to 'completed', and locks score.
+ * Can accept proposal scores or use organizer-provided scores.
+ * This is THE ONLY way to make a match count for standings.
+ */
+export async function finaliseResult(
+  eventType: EventType,
+  eventId: string,
+  matchId: string,
+  scores: GameScore[],
+  winnerId: string,
+  organizerUserId: string,
+  duprEligible: boolean = true
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  await runTransaction(db, async (transaction) => {
+    const matchSnap = await transaction.get(matchRef);
+    if (!matchSnap.exists()) {
+      throw new DuprScoringError('Match not found', 'NOT_FOUND');
+    }
+
+    const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+    // Check permission (caller must verify isOrganizer before calling)
+    const permission = canFinalizeResult(match, true);
+    if (!permission.allowed) {
+      throw new DuprScoringError(
+        permission.reason || 'Cannot finalize result',
+        'PERMISSION_DENIED'
+      );
+    }
+
+    // Validate winnerId
+    if (winnerId !== match.sideA?.id && winnerId !== match.sideB?.id) {
+      throw new DuprScoringError(
+        'Winner must be sideA or sideB',
+        'VALIDATION_FAILED'
+      );
+    }
+
+    // Validate scores
+    if (!scores || scores.length === 0) {
+      throw new DuprScoringError('Scores are required', 'VALIDATION_FAILED');
+    }
+
+    // Get winner name
+    const winnerName =
+      winnerId === match.sideA?.id ? match.sideA?.name : match.sideB?.name;
+
+    // Create official result
+    const officialResult: OfficialResult = {
+      scores,
+      winnerId,
+      winnerName,
+      finalisedByUserId: organizerUserId,
+      finalisedAt: Date.now(),
+      version: 1,
+    };
+
+    const now = Date.now();
+
+    // Build update object
+    const updates: Partial<Match> & { updatedAt: number } = {
+      officialResult,
+      scoreState: 'official' as ScoreState,
+      status: 'completed',
+      scoreLocked: true,
+      scoreLockedAt: now,
+      scoreLockedByUserId: organizerUserId,
+      // Update canonical fields
+      winnerId,
+      winnerName,
+      scores,
+      completedAt: now,
+      updatedAt: now,
+      // DUPR eligibility
+      dupr: {
+        eligible: duprEligible,
+        submitted: false,
+      },
+    };
+
+    transaction.update(matchRef, updates);
+  });
+}
+
+/**
+ * Correct an existing official result (organizer action)
+ *
+ * Creates a new version of officialResult, archiving the previous.
+ * If already submitted to DUPR, sets needsCorrection flag.
+ */
+export async function correctResult(
+  eventType: EventType,
+  eventId: string,
+  matchId: string,
+  scores: GameScore[],
+  winnerId: string,
+  organizerUserId: string,
+  correctionReason?: string
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  await runTransaction(db, async (transaction) => {
+    const matchSnap = await transaction.get(matchRef);
+    if (!matchSnap.exists()) {
+      throw new DuprScoringError('Match not found', 'NOT_FOUND');
+    }
+
+    const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+    // Check permission
+    const permission = canCorrectResult(match, true);
+    if (!permission.allowed) {
+      throw new DuprScoringError(
+        permission.reason || 'Cannot correct result',
+        'PERMISSION_DENIED'
+      );
+    }
+
+    // Validate winnerId
+    if (winnerId !== match.sideA?.id && winnerId !== match.sideB?.id) {
+      throw new DuprScoringError(
+        'Winner must be sideA or sideB',
+        'VALIDATION_FAILED'
+      );
+    }
+
+    // Get winner name
+    const winnerName =
+      winnerId === match.sideA?.id ? match.sideA?.name : match.sideB?.name;
+
+    // Archive current officialResult
+    const currentResult = match.officialResult!;
+    const previousVersion: OfficialResultVersion = {
+      version: currentResult.version,
+      scores: currentResult.scores,
+      winnerId: currentResult.winnerId,
+      finalisedByUserId: currentResult.finalisedByUserId,
+      finalisedAt: currentResult.finalisedAt,
+      supersededAt: Date.now(),
+      supersededByUserId: organizerUserId,
+      correctionReason,
+    };
+
+    // Collect previous versions
+    const previousVersions = [
+      ...(currentResult.previousVersions || []),
+      previousVersion,
+    ];
+
+    // Create new official result
+    const newOfficialResult: OfficialResult = {
+      scores,
+      winnerId,
+      winnerName,
+      finalisedByUserId: organizerUserId,
+      finalisedAt: Date.now(),
+      version: currentResult.version + 1,
+      previousVersions,
+    };
+
+    // Check if already submitted to DUPR
+    const wasSubmittedToDupr = match.dupr?.submitted === true;
+
+    // Build update object
+    const updates: Partial<Match> & { updatedAt: number } = {
+      officialResult: newOfficialResult,
+      // Update canonical fields
+      winnerId,
+      winnerName,
+      scores,
+      updatedAt: Date.now(),
+    };
+
+    // If already submitted to DUPR, flag for correction
+    if (wasSubmittedToDupr && match.dupr) {
+      updates.dupr = {
+        eligible: match.dupr.eligible,
+        submitted: match.dupr.submitted,
+        submittedAt: match.dupr.submittedAt,
+        submissionId: match.dupr.submissionId,
+        submissionError: match.dupr.submissionError,
+        batchId: match.dupr.batchId,
+        retryCount: match.dupr.retryCount,
+        lastRetryAt: match.dupr.lastRetryAt,
+        nextRetryAt: match.dupr.nextRetryAt,
+        needsCorrection: true,
+        correctionSubmitted: false,
+        correctionSubmittedAt: undefined,
+        correctionBatchId: undefined,
+      };
+    }
+
+    transaction.update(matchRef, updates);
+  });
+}
+
+// ============================================
+// ORGANIZER DUPR ACTIONS
+// ============================================
+
+/**
+ * Set DUPR eligibility for a match (organizer action)
+ *
+ * Marks whether the match can be submitted to DUPR.
+ */
+export async function setDuprEligibility(
+  eventType: EventType,
+  eventId: string,
+  matchId: string,
+  eligible: boolean,
+  _organizerUserId: string
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  const matchSnap = await getDoc(matchRef);
+  if (!matchSnap.exists()) {
+    throw new DuprScoringError('Match not found', 'NOT_FOUND');
+  }
+
+  const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+  // Cannot change if already submitted
+  if (match.dupr?.submitted) {
+    throw new DuprScoringError(
+      'Cannot change eligibility after DUPR submission',
+      'INVALID_STATE'
+    );
+  }
+
+  await updateDoc(matchRef, {
+    'dupr.eligible': eligible,
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Request DUPR submission for a match (organizer action)
+ *
+ * This sets a flag that a Cloud Function will pick up.
+ * The actual API call happens server-side only.
+ */
+export async function requestDuprSubmission(
+  eventType: EventType,
+  eventId: string,
+  matchId: string,
+  _organizerUserId: string
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  const matchSnap = await getDoc(matchRef);
+  if (!matchSnap.exists()) {
+    throw new DuprScoringError('Match not found', 'NOT_FOUND');
+  }
+
+  const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+  // Validate eligibility
+  if (!match.officialResult) {
+    throw new DuprScoringError(
+      'Match must have an official result',
+      'INVALID_STATE'
+    );
+  }
+
+  if (match.status !== 'completed') {
+    throw new DuprScoringError('Match must be completed', 'INVALID_STATE');
+  }
+
+  if (match.scoreState !== 'official') {
+    throw new DuprScoringError(
+      'Score must be officially finalized',
+      'INVALID_STATE'
+    );
+  }
+
+  if (match.dupr?.submitted && !match.dupr?.needsCorrection) {
+    throw new DuprScoringError(
+      'Match has already been submitted to DUPR',
+      'INVALID_STATE'
+    );
+  }
+
+  if (match.dupr?.eligible === false) {
+    throw new DuprScoringError(
+      'Match is not eligible for DUPR submission',
+      'INVALID_STATE'
+    );
+  }
+
+  // Set pending submission flag (Cloud Function will process)
+  await updateDoc(matchRef, {
+    'dupr.pendingSubmission': true,
+    'dupr.pendingSubmissionAt': Date.now(),
+    updatedAt: Date.now(),
+  });
+}
+
+// ============================================
+// TEAM SNAPSHOT HELPERS
+// ============================================
+
+/**
+ * Create team snapshot for a match (called during match creation)
+ *
+ * This captures the player IDs at match creation for validation.
+ */
+export function createTeamSnapshot(match: Match): TeamSnapshot {
+  return {
+    sideAPlayerIds: match.sideA?.playerIds || [],
+    sideBPlayerIds: match.sideB?.playerIds || [],
+    snapshotAt: Date.now(),
+  };
+}
+
+/**
+ * Add team snapshot to match if missing
+ *
+ * Used for retroactive population of existing matches.
+ */
+export async function ensureTeamSnapshot(
+  eventType: EventType,
+  eventId: string,
+  matchId: string
+): Promise<void> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  const matchSnap = await getDoc(matchRef);
+  if (!matchSnap.exists()) {
+    throw new DuprScoringError('Match not found', 'NOT_FOUND');
+  }
+
+  const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+
+  // Skip if already has snapshot
+  if (match.teamSnapshot) {
+    return;
+  }
+
+  const teamSnapshot = createTeamSnapshot(match);
+
+  await updateDoc(matchRef, {
+    teamSnapshot,
+    updatedAt: Date.now(),
+  });
+}
+
+// ============================================
+// QUERY HELPERS
+// ============================================
+
+/**
+ * Get match with full data
+ */
+export async function getMatch(
+  eventType: EventType,
+  eventId: string,
+  matchId: string
+): Promise<Match | null> {
+  const matchPath = getMatchDocPath(eventType, eventId, matchId);
+  const matchRef = doc(db, matchPath);
+
+  const matchSnap = await getDoc(matchRef);
+  if (!matchSnap.exists()) {
+    return null;
+  }
+
+  return { id: matchSnap.id, ...matchSnap.data() } as Match;
+}

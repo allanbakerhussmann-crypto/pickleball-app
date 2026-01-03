@@ -9,9 +9,14 @@
  * VERSION: V06.00
  */
 
-import type { Match, MatchParticipant, GameScore } from '../../types/game/match';
+import type { Match } from '../../types';
 import type { GameSettings } from '../../types/game/gameSettings';
 import type { RoundRobinSettings } from '../../types/formats/formatTypes';
+import {
+  matchCountsForStandings,
+  getMatchWinner,
+  getMatchScores,
+} from '../../utils/matchHelpers';
 
 // ============================================
 // TYPES
@@ -247,11 +252,21 @@ export function calculateRoundRobinStandings(
     });
   }
 
-  // Process completed matches
+  // Process completed matches - V07.04: Use officialResult only via matchHelpers
   for (const match of matches) {
-    if (match.status !== 'completed' || !match.winnerId) {
+    // Skip matches that don't count for standings (no officialResult)
+    if (!matchCountsForStandings(match)) {
       continue;
     }
+
+    // Get winner from officialResult (or legacy fallback for migrated matches)
+    const winnerId = getMatchWinner(match);
+    if (!winnerId) {
+      continue;
+    }
+
+    // Skip if match doesn't have both sides defined
+    if (!match.sideA?.id || !match.sideB?.id) continue;
 
     const standingA = standingsMap.get(match.sideA.id);
     const standingB = standingsMap.get(match.sideB.id);
@@ -263,7 +278,7 @@ export function calculateRoundRobinStandings(
     standingB.matchesPlayed++;
 
     // Update wins/losses
-    if (match.winnerId === match.sideA.id) {
+    if (winnerId === match.sideA.id) {
       standingA.wins++;
       standingB.losses++;
     } else {
@@ -271,19 +286,23 @@ export function calculateRoundRobinStandings(
       standingA.losses++;
     }
 
-    // Calculate games and points from scores
+    // Calculate games and points from official scores
     let gamesA = 0;
     let gamesB = 0;
     let pointsA = 0;
     let pointsB = 0;
 
-    for (const game of match.scores) {
-      pointsA += game.scoreA;
-      pointsB += game.scoreB;
+    // Get scores from officialResult (or legacy for migrated matches)
+    const scores = getMatchScores(match);
+    for (const game of scores) {
+      const scoreA = game.scoreA ?? 0;
+      const scoreB = game.scoreB ?? 0;
+      pointsA += scoreA;
+      pointsB += scoreB;
 
-      if (game.scoreA > game.scoreB) {
+      if (scoreA > scoreB) {
         gamesA++;
-      } else if (game.scoreB > game.scoreA) {
+      } else if (scoreB > scoreA) {
         gamesB++;
       }
     }

@@ -17,7 +17,8 @@
       "Bash(git commit -m \"$\\(cat <<''EOF''\nV06.03 Universal Scoring System - Phase 1 & 2\n\nCore Scoring Types \\(types/scoring.ts\\):\n- LiveScore interface for real-time match state\n- ScoringSettings with side-out scoring support\n- RallyEvent for undo history tracking\n- GameScore, ScoringTeam, AssignedScorer types\n- ScoreboardConfig for multi-court displays\n- DEFAULT_SCORING_SETTINGS constant\n\nScoring Logic Service \\(services/scoring/scoringLogic.ts\\):\n- Traditional side-out scoring rules\n- Server 1/2 tracking for doubles\n- First serve starts as Server 2 \\(only 1 serve\\)\n- Side switch at halfway point\n- Game/match winner detection\n- Rally history for undo functionality\n- createInitialLiveScore, processRally, undoLastRally\n- startGame, pauseGame, resumeGame, startNextGame\n- endMatchEarly for forfeit/injury\n- formatCurrentScore, formatMatchScore helpers\n\nLive Scoring Interface \\(components/scoring/LiveScoringInterface.tsx\\):\n- Visual court-tap UI with team colors\n- Large tap zones for rally winner selection\n- Server indicator \\(which team, server 1 or 2\\)\n- Score display in traditional format \\(4-2-1\\)\n- Undo, Pause, Resume, End Match controls\n- Game history display\n- Haptic feedback on mobile\n- Fullscreen mode support\n- End match early modal\n\nDivision Drag & Drop Fix \\(PlannerStep5Preview.tsx\\):\n- Removed strict ''over'' requirement for drops\n- Improved delta calculation for time positioning\n- Divisions can now overlap on different tracks\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git -C \"c:\\\\Users\\\\allan\\\\OneDrive\\\\Documents\\\\GitHub\\\\pickleball-app\" log --oneline -1 --format=\"%B\")",
       "Bash(npm run typecheck:*)",
-      "Bash(npx firebase deploy --only hosting)"
+      "Bash(npx firebase deploy --only hosting)",
+      "Skill(frontend-design)"
     ]
   }
 }

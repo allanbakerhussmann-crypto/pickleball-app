@@ -247,11 +247,49 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     setError(null);
   };
 
-  const addGame = () => {
-    if (games.length < bestOf) {
-      setGames([...games, { scoreA: '', scoreB: '' }]);
+  // V07.03: Quick score button handler - sets winner to clicked score, loser to score - 2
+  const handleQuickScore = (index: number, score: number, winner: 'A' | 'B') => {
+    const loserScore = Math.max(0, score - 2);
+    const newGames = [...games];
+    if (winner === 'A') {
+      newGames[index] = { scoreA: String(score), scoreB: String(loserScore) };
+    } else {
+      newGames[index] = { scoreA: String(loserScore), scoreB: String(score) };
     }
+    setGames(newGames);
+    setError(null);
   };
+
+  // V07.03: Progressive reveal - auto-add next game when current is valid
+  useEffect(() => {
+    if (bestOf === 1 || hasScore) return;
+    if (games.length >= bestOf) return;
+
+    const lastGame = games[games.length - 1];
+    if (!lastGame || lastGame.scoreA === '' || lastGame.scoreB === '') return;
+
+    const scoreA = parseInt(lastGame.scoreA) || 0;
+    const scoreB = parseInt(lastGame.scoreB) || 0;
+    const validation = validateGame(scoreA, scoreB);
+
+    // If last game is valid and match not decided yet
+    if (validation.valid) {
+      // Calculate win threshold inline to avoid dependency issues
+      const localWinThreshold = Math.ceil(bestOf / 2);
+      let gamesA = 0, gamesB = 0;
+      games.forEach(g => {
+        const sa = parseInt(g.scoreA) || 0;
+        const sb = parseInt(g.scoreB) || 0;
+        if (sa > sb) gamesA++;
+        else if (sb > sa) gamesB++;
+      });
+
+      if (gamesA < localWinThreshold && gamesB < localWinThreshold) {
+        // Auto-add next game
+        setGames(prev => [...prev, { scoreA: '', scoreB: '' }]);
+      }
+    }
+  }, [games, bestOf, hasScore, validateGame]);
 
   const removeGame = (index: number) => {
     if (games.length > 1) {
@@ -432,55 +470,82 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                 Best of {bestOf} • First to {winThreshold} games • Games to {pointsPerGame}
               </div>
 
-              {/* Game Scores */}
-              <div className="space-y-3">
-                {games.map((game, index) => (
-                  <div key={index} className="flex items-center gap-3">
-                    <div className="text-xs text-gray-500 w-16">Game {index + 1}</div>
-                    <div className="flex-1 flex items-center gap-2">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={game.scoreA}
-                        onChange={(e) => handleGameChange(index, 'scoreA', e.target.value)}
-                        disabled={hasScore}
-                        placeholder="0"
-                        className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-blue-500 disabled:opacity-50"
-                      />
-                      <span className="text-gray-500">-</span>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={game.scoreB}
-                        onChange={(e) => handleGameChange(index, 'scoreB', e.target.value)}
-                        disabled={hasScore}
-                        placeholder="0"
-                        className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-blue-500 disabled:opacity-50"
-                      />
+              {/* Game Scores - V07.03: Added quick score buttons */}
+              <div className="space-y-4">
+                {games.map((game, index) => {
+                  const hasGameScore = game.scoreA !== '' || game.scoreB !== '';
+                  return (
+                    <div key={index} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/50">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="text-xs text-gray-500 font-medium">Game {index + 1}</div>
+                        <div className="flex-1 flex items-center gap-2 justify-center">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={game.scoreA}
+                            onChange={(e) => handleGameChange(index, 'scoreA', e.target.value)}
+                            disabled={hasScore}
+                            placeholder="0"
+                            className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-lime-500 disabled:opacity-50 font-bold"
+                          />
+                          <span className="text-gray-500 font-bold">-</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={game.scoreB}
+                            onChange={(e) => handleGameChange(index, 'scoreB', e.target.value)}
+                            disabled={hasScore}
+                            placeholder="0"
+                            className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-lime-500 disabled:opacity-50 font-bold"
+                          />
+                        </div>
+                        {games.length > 1 && !hasScore && (
+                          <button
+                            onClick={() => removeGame(index)}
+                            className="text-gray-500 hover:text-red-400"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* V07.03: Quick score buttons */}
+                      {!hasScore && !hasGameScore && (
+                        <div className="flex items-center justify-center gap-2 pt-2 border-t border-gray-700/30">
+                          <span className="text-xs text-gray-500 mr-1">{match.memberAName?.split(' ')[0]}:</span>
+                          {[11, 15, 21].map(score => (
+                            <button
+                              key={`A-${score}`}
+                              type="button"
+                              onClick={() => handleQuickScore(index, score, 'A')}
+                              className="px-2 py-1 text-xs bg-gray-700 hover:bg-lime-600 hover:text-gray-900 rounded transition-colors"
+                            >
+                              {score}
+                            </button>
+                          ))}
+                          <span className="mx-2 text-gray-600">|</span>
+                          <span className="text-xs text-gray-500 mr-1">{match.memberBName?.split(' ')[0]}:</span>
+                          {[11, 15, 21].map(score => (
+                            <button
+                              key={`B-${score}`}
+                              type="button"
+                              onClick={() => handleQuickScore(index, score, 'B')}
+                              className="px-2 py-1 text-xs bg-gray-700 hover:bg-lime-600 hover:text-gray-900 rounded transition-colors"
+                            >
+                              {score}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    {games.length > 1 && !hasScore && (
-                      <button
-                        onClick={() => removeGame(index)}
-                        className="text-gray-500 hover:text-red-400"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
-              {/* Add Game Button */}
-              {games.length < bestOf && !hasScore && (
-                <button
-                  onClick={addGame}
-                  className="w-full py-2 border border-dashed border-gray-600 text-gray-400 rounded-lg hover:border-gray-500 hover:text-gray-300 transition-colors text-sm"
-                >
-                  + Add Game {games.length + 1}
-                </button>
-              )}
+              {/* V07.03: Progressive reveal - no manual Add Game button needed */}
+              {/* Game is auto-added when previous game is valid */}
 
               {/* Current Score Summary */}
               <div className="bg-gray-900 rounded-lg p-3 text-center">

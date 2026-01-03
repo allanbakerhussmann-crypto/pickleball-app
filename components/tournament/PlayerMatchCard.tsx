@@ -1,31 +1,67 @@
 /**
  * PlayerMatchCard Component
  *
- * Shows a player's current/upcoming match with the ability to start the match.
- * Players can only start matches they are participating in.
+ * Shows a player's current/upcoming match with full player flow:
+ * - "We're Ready" button to start match (any player can tap)
+ * - "Propose Score" button opens ScoreEntryModal (DUPR-compliant label)
+ * - "Sign to Acknowledge" / "Dispute Score" buttons for score verification
+ * - "Report No-Show" button after 10 min timeout
+ *
+ * DUPR-COMPLIANT LABELS (V07.04):
+ * - "Propose Score" (not "Enter Score")
+ * - "Sign to Acknowledge" (not "Confirm")
+ * - "Dispute Score" (not just "Dispute")
+ * - "Awaiting organiser approval" (after opponent signs)
  *
  * FILE LOCATION: components/tournament/PlayerMatchCard.tsx
- * VERSION: V06.07
+ * VERSION: V07.04 - DUPR-Compliant Labels
  */
 
-import React, { useState } from 'react';
-import type { Match } from '../../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import type { Match, GameScore } from '../../types/game/match';
+import type { GameSettings } from '../../types/game/gameSettings';
+import type { DisputeReason, MatchVerificationData } from '../../types';
 import { updateMatchScore } from '../../services/firebase';
+import { ScoreEntryModal } from '../shared/ScoreEntryModal';
 
 interface PlayerMatchCardProps {
   match: Match;
   tournamentId: string;
   currentUserId: string;
+  gameSettings?: GameSettings;
   onMatchStarted?: () => void;
+  onScoreSubmitted?: () => void;
+  onScoreConfirmed?: () => void;
+  onScoreDisputed?: () => void;
+  onNoShowReported?: () => void;
 }
+
+// Default game settings
+const DEFAULT_GAME_SETTINGS: GameSettings = {
+  playType: 'doubles',
+  pointsPerGame: 11,
+  winBy: 2,
+  bestOf: 1,
+};
+
+// No-show timeout in milliseconds (10 minutes)
+const NO_SHOW_TIMEOUT_MS = 10 * 60 * 1000;
 
 export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
   match,
   tournamentId,
   currentUserId,
+  gameSettings = DEFAULT_GAME_SETTINGS,
   onMatchStarted,
+  onScoreSubmitted,
+  onScoreConfirmed,
+  onScoreDisputed,
+  onNoShowReported,
 }) => {
   const [isStarting, setIsStarting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showScoreModal, setShowScoreModal] = useState(false);
+  const [showNoShowTimeout, setShowNoShowTimeout] = useState(false);
 
   // Check if current user is a participant in this match
   const isParticipant =
@@ -39,6 +75,38 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
     ? 'sideB'
     : null;
 
+  // Check if user is on the opponent's side (for confirm/dispute)
+  const isOpponentOfSubmitter = useMemo(() => {
+    if (!match.submittedByUserId) return false;
+    // If the current user did NOT submit, they are the opponent
+    return match.submittedByUserId !== currentUserId && isParticipant;
+  }, [match.submittedByUserId, currentUserId, isParticipant]);
+
+  // Check for no-show timeout (10 minutes after court assignment)
+  useEffect(() => {
+    if (!match.court || match.status !== 'scheduled') {
+      setShowNoShowTimeout(false);
+      return;
+    }
+
+    // Use match.scheduledDate or createdAt as reference for when court was assigned
+    // Note: scheduledDate is a timestamp, scheduledTime is HH:MM string
+    const assignedAt = match.scheduledDate || match.createdAt || Date.now();
+    const now = Date.now();
+    const timeOnCourt = now - assignedAt;
+
+    if (timeOnCourt >= NO_SHOW_TIMEOUT_MS) {
+      setShowNoShowTimeout(true);
+    } else {
+      // Set timer for when timeout will occur
+      const timeUntilTimeout = NO_SHOW_TIMEOUT_MS - timeOnCourt;
+      const timer = setTimeout(() => {
+        setShowNoShowTimeout(true);
+      }, timeUntilTimeout);
+      return () => clearTimeout(timer);
+    }
+  }, [match.court, match.status, match.scheduledDate, match.createdAt]);
+
   // Get team names
   const sideAName = match.sideA?.name || 'Team A';
   const sideBName = match.sideB?.name || 'Team B';
@@ -47,17 +115,19 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
   const isOnCourt = !!match.court;
   const isWaitingToStart = isOnCourt && match.status === 'scheduled';
   const isInProgress = match.status === 'in_progress';
+  const isPendingConfirmation = match.status === 'pending_confirmation';
+  const isDisputed = match.status === 'disputed';
   const isCompleted = match.status === 'completed';
 
-  // Handle starting the match
-  const handleStartMatch = async () => {
+  // Handle "We're Ready" - starts match for all players
+  const handleWeAreReady = async () => {
     if (!isParticipant || !isWaitingToStart) return;
 
     setIsStarting(true);
     try {
       await updateMatchScore(tournamentId, match.id, {
         status: 'in_progress',
-        startTime: Date.now(),
+        startedAt: Date.now(),
       });
       onMatchStarted?.();
     } catch (error) {
@@ -68,12 +138,132 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
     }
   };
 
+  // Handle score submission from modal
+  const handleScoreSubmit = async (scores: GameScore[], winnerId: string) => {
+    setIsSubmitting(true);
+    try {
+      // Cast to any to support winnerName field (types.ts Match doesn't have it yet)
+      await updateMatchScore(tournamentId, match.id, {
+        scores,
+        winnerId,
+        winnerName: winnerId === match.sideA?.id ? sideAName : sideBName,
+        status: 'pending_confirmation',
+        submittedByUserId: currentUserId,
+        submittedAt: Date.now(),
+      } as any);
+      setShowScoreModal(false);
+      onScoreSubmitted?.();
+    } catch (error) {
+      console.error('Failed to submit score:', error);
+      alert('Failed to submit score. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle score confirmation
+  const handleConfirmScore = async () => {
+    if (!isOpponentOfSubmitter) return;
+
+    setIsSubmitting(true);
+    try {
+      await updateMatchScore(tournamentId, match.id, {
+        status: 'completed',
+        completedAt: Date.now(),
+        // Clear court assignment so it becomes available
+        court: undefined,
+      });
+      onScoreConfirmed?.();
+    } catch (error) {
+      console.error('Failed to confirm score:', error);
+      alert('Failed to confirm score. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle score dispute
+  const handleDisputeScore = async () => {
+    if (!isOpponentOfSubmitter) return;
+
+    const reason = prompt('Why are you disputing this score? (optional)');
+
+    setIsSubmitting(true);
+    try {
+      // Build verification data with proper typing
+      const verificationUpdate: MatchVerificationData = {
+        verificationStatus: 'disputed',
+        confirmations: match.verification?.confirmations || [],
+        requiredConfirmations: match.verification?.requiredConfirmations || 1,
+        disputedByUserId: currentUserId,
+        disputeReason: reason ? 'other' as DisputeReason : undefined,
+        disputeNotes: reason || undefined,
+        disputedAt: Date.now(),
+      };
+
+      await updateMatchScore(tournamentId, match.id, {
+        status: 'disputed',
+        // Clear court assignment so it becomes available (dispute resolved offline)
+        court: undefined,
+        verification: verificationUpdate,
+      });
+      onScoreDisputed?.();
+    } catch (error) {
+      console.error('Failed to dispute score:', error);
+      alert('Failed to dispute score. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle no-show report
+  const handleReportNoShow = async () => {
+    if (!confirm('Report opponent as no-show? This will record a forfeit win for you.')) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Determine winner (the reporting player's side wins)
+      const winnerId = userSide === 'sideA' ? match.sideA?.id : match.sideB?.id;
+      const winnerName = userSide === 'sideA' ? sideAName : sideBName;
+
+      // Cast to any to support winnerName field (types.ts Match doesn't have it yet)
+      await updateMatchScore(tournamentId, match.id, {
+        status: 'forfeit',
+        winnerId,
+        winnerName,
+        completedAt: Date.now(),
+        // Clear court assignment
+        court: undefined,
+      } as any);
+      onNoShowReported?.();
+    } catch (error) {
+      console.error('Failed to report no-show:', error);
+      alert('Failed to report no-show. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Format score for display
+  const formatScore = (scores: GameScore[]) => {
+    if (!scores || scores.length === 0) return '-';
+    return scores.map(g => `${g.scoreA}-${g.scoreB}`).join(', ');
+  };
+
   // Status badge
   const renderStatusBadge = () => {
     const base = 'inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold';
 
     if (isCompleted) {
       return <span className={`${base} bg-gray-600 text-white`}>Completed</span>;
+    }
+    if (isDisputed) {
+      return <span className={`${base} bg-red-500 text-white`}>Disputed</span>;
+    }
+    if (isPendingConfirmation) {
+      return <span className={`${base} bg-yellow-500 text-gray-900`}>Score Proposed</span>;
     }
     if (isInProgress) {
       return <span className={`${base} bg-emerald-500 text-gray-900`}>In Progress</span>;
@@ -163,13 +353,36 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
         </div>
       )}
 
+      {/* Pending Acknowledgement Info - DUPR-compliant language */}
+      {isPendingConfirmation && (
+        <div className="mb-4 p-3 bg-yellow-900/30 border border-yellow-600 rounded-lg">
+          <p className="text-sm text-yellow-400">
+            {isOpponentOfSubmitter ? (
+              <>Score proposed: <strong>{formatScore(match.scores || [])}</strong>. Please sign to acknowledge or dispute.</>
+            ) : (
+              <>Score proposed: <strong>{formatScore(match.scores || [])}</strong>. Awaiting opponent acknowledgement.</>
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* Disputed Info - DUPR-compliant language */}
+      {isDisputed && (
+        <div className="mb-4 p-3 bg-red-900/30 border border-red-600 rounded-lg">
+          <p className="text-sm text-red-400">
+            Score disputed. Awaiting organiser to finalise official result.
+          </p>
+        </div>
+      )}
+
       {/* Actions */}
-      <div className="flex gap-2">
-        {isWaitingToStart && (
+      <div className="flex flex-col gap-2">
+        {/* "We're Ready" button - Court assigned, waiting to start */}
+        {isWaitingToStart && !showNoShowTimeout && (
           <button
-            onClick={handleStartMatch}
-            disabled={isStarting}
-            className="flex-1 py-3 px-4 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+            onClick={handleWeAreReady}
+            disabled={isStarting || isSubmitting}
+            className="w-full py-3 px-4 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             {isStarting ? (
               <>
@@ -182,27 +395,110 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
             ) : (
               <>
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                Start Match
+                We're Ready
               </>
             )}
           </button>
         )}
 
-        {isInProgress && (
-          <div className="flex-1 py-3 px-4 bg-emerald-900/50 border border-emerald-600 text-emerald-400 font-semibold rounded-lg text-center">
-            Match in Progress
+        {/* No-show timeout - show both buttons */}
+        {isWaitingToStart && showNoShowTimeout && (
+          <div className="space-y-2">
+            <button
+              onClick={handleWeAreReady}
+              disabled={isStarting || isSubmitting}
+              className="w-full py-3 px-4 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              We're Ready
+            </button>
+            <button
+              onClick={handleReportNoShow}
+              disabled={isSubmitting}
+              className="w-full py-2 px-4 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Report No-Show
+            </button>
           </div>
         )}
 
-        {!isOnCourt && !isCompleted && (
-          <div className="flex-1 py-3 px-4 bg-gray-700 text-gray-400 rounded-lg text-center">
+        {/* "Propose Score" button - Match in progress (DUPR-compliant label) */}
+        {isInProgress && (
+          <button
+            onClick={() => setShowScoreModal(true)}
+            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            Propose Score
+          </button>
+        )}
+
+        {/* Sign/Dispute buttons - Pending confirmation (opponent's view) - DUPR-compliant labels */}
+        {isPendingConfirmation && isOpponentOfSubmitter && (
+          <div className="flex gap-2">
+            <button
+              onClick={handleConfirmScore}
+              disabled={isSubmitting}
+              className="flex-1 py-3 px-4 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              Sign to Acknowledge
+            </button>
+            <button
+              onClick={handleDisputeScore}
+              disabled={isSubmitting}
+              className="flex-1 py-3 px-4 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Dispute Score
+            </button>
+          </div>
+        )}
+
+        {/* Waiting state - Pending confirmation (submitter's view) - DUPR-compliant label */}
+        {isPendingConfirmation && !isOpponentOfSubmitter && (
+          <div className="w-full py-3 px-4 bg-yellow-900/50 border border-yellow-600 text-yellow-400 font-medium rounded-lg text-center">
+            Awaiting opponent acknowledgement...
+          </div>
+        )}
+
+        {/* Waiting for court assignment */}
+        {!isOnCourt && !isCompleted && !isPendingConfirmation && !isDisputed && (
+          <div className="w-full py-3 px-4 bg-gray-700 text-gray-400 rounded-lg text-center">
             Waiting for court assignment...
           </div>
         )}
       </div>
+
+      {/* Score Entry Modal */}
+      <ScoreEntryModal
+        isOpen={showScoreModal}
+        onClose={() => setShowScoreModal(false)}
+        match={{
+          ...match,
+          gameSettings: gameSettings || match.gameSettings || {
+            playType: 'doubles',
+            pointsPerGame: 11,
+            winBy: 2,
+            bestOf: 1,
+          },
+        }}
+        onSubmit={handleScoreSubmit}
+        isLoading={isSubmitting}
+      />
     </div>
   );
 };
