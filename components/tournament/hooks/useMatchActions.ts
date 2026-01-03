@@ -58,6 +58,13 @@ import {
   confirmMatchScore,
   disputeMatchScore,
 } from '../../../services/matchService';
+// V07.04: DUPR-Compliant Scoring
+import {
+  proposeScore,
+  signScore,
+  disputeScore,
+  finaliseResult,
+} from '../../../services/firebase/duprScoring';
 
 interface UseMatchActionsProps {
   tournamentId: string;
@@ -78,7 +85,7 @@ interface UseMatchActionsReturn {
   handleGenerateSchedule: () => Promise<void>;
   handleGenerateFinals: (standings: any[]) => Promise<void>;
 
-  // Score actions
+  // Score actions (legacy - organizer instant-complete)
   handleUpdateScore: (
     matchId: string,
     score1: number,
@@ -92,6 +99,21 @@ interface UseMatchActionsReturn {
     matchId: string,
     scores: GameScore[],
     winnerId: string
+  ) => Promise<void>;
+
+  // V07.04: DUPR-Compliant Scoring
+  handleProposeScore: (
+    matchId: string,
+    scores: GameScore[],
+    winnerId: string
+  ) => Promise<void>;
+  handleSignScore: (matchId: string) => Promise<void>;
+  handleDisputeScore: (matchId: string, reason: string) => Promise<void>;
+  handleFinaliseResult: (
+    matchId: string,
+    scores: GameScore[],
+    winnerId: string,
+    duprEligible?: boolean
   ) => Promise<void>;
 
   // Loading state (V06.21)
@@ -521,6 +543,113 @@ export const useMatchActions = ({
     }
   }, [tournamentId, currentUserId, isOrganizer]);
 
+  // ============================================
+  // V07.04: DUPR-Compliant Score Actions
+  // ============================================
+
+  /**
+   * Propose a score (player action)
+   * Creates a scoreProposal, sets status to 'pending_confirmation'
+   * Opponent must sign or dispute before organizer can finalize
+   */
+  const handleProposeScore = useCallback(async (
+    matchId: string,
+    scores: GameScore[],
+    winnerId: string
+  ) => {
+    if (!currentUserId) {
+      alert('You must be logged in to propose a score.');
+      return;
+    }
+
+    try {
+      await proposeScore(
+        'tournament',
+        tournamentId,
+        matchId,
+        scores,
+        winnerId,
+        currentUserId
+      );
+    } catch (err: any) {
+      console.error('Failed to propose score', err);
+      alert(err.message || 'Failed to propose score. Please try again.');
+    }
+  }, [tournamentId, currentUserId]);
+
+  /**
+   * Sign (acknowledge) a score proposal (player action)
+   * Must be called by player on OPPOSING team
+   */
+  const handleSignScore = useCallback(async (matchId: string) => {
+    if (!currentUserId) {
+      alert('You must be logged in to sign a score.');
+      return;
+    }
+
+    try {
+      await signScore('tournament', tournamentId, matchId, currentUserId);
+    } catch (err: any) {
+      console.error('Failed to sign score', err);
+      alert(err.message || 'Failed to sign score. Please try again.');
+    }
+  }, [tournamentId, currentUserId]);
+
+  /**
+   * Dispute a score proposal (player action)
+   * Must be called by player on OPPOSING team
+   */
+  const handleDisputeScore = useCallback(async (matchId: string, reason: string) => {
+    if (!currentUserId) {
+      alert('You must be logged in to dispute a score.');
+      return;
+    }
+
+    try {
+      await disputeScore('tournament', tournamentId, matchId, currentUserId, reason);
+    } catch (err: any) {
+      console.error('Failed to dispute score', err);
+      alert(err.message || 'Failed to dispute score. Please try again.');
+    }
+  }, [tournamentId, currentUserId]);
+
+  /**
+   * Finalise the official result (organizer action)
+   * Creates officialResult, sets status to 'completed', locks score
+   * This is THE ONLY way to make a match count for standings
+   */
+  const handleFinaliseResult = useCallback(async (
+    matchId: string,
+    scores: GameScore[],
+    winnerId: string,
+    duprEligible: boolean = true
+  ) => {
+    if (!currentUserId) {
+      alert('You must be logged in to finalize a result.');
+      return;
+    }
+
+    if (!isOrganizer) {
+      alert('Only organizers can finalize match results.');
+      return;
+    }
+
+    try {
+      await finaliseResult(
+        'tournament',
+        tournamentId,
+        matchId,
+        scores,
+        winnerId,
+        currentUserId,
+        duprEligible
+      );
+    } catch (err: any) {
+      console.error('Failed to finalize result', err);
+      alert(err.message || 'Failed to finalize result. Please try again.');
+    }
+  }, [tournamentId, currentUserId, isOrganizer]);
+
   return {
     handleAddTeam,
     handleRemoveTeam,
@@ -528,6 +657,11 @@ export const useMatchActions = ({
     handleGenerateFinals,
     handleUpdateScore,
     handleUpdateMultiGameScore,  // V06.42
+    // V07.04: DUPR-Compliant Scoring
+    handleProposeScore,
+    handleSignScore,
+    handleDisputeScore,
+    handleFinaliseResult,
     isGeneratingSchedule, // V06.21: Loading state for UI
   };
 };

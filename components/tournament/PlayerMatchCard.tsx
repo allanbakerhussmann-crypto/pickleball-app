@@ -20,9 +20,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import type { Match, GameScore } from '../../types/game/match';
 import type { GameSettings } from '../../types/game/gameSettings';
-import type { DisputeReason, MatchVerificationData } from '../../types';
+// V07.04: DisputeReason and MatchVerificationData no longer needed (using DUPR scoring)
 import { updateMatchScore } from '../../services/firebase';
 import { ScoreEntryModal } from '../shared/ScoreEntryModal';
+// V07.04: DUPR-Compliant Scoring
+import {
+  proposeScore,
+  signScore,
+  disputeScore,
+} from '../../services/firebase/duprScoring';
 
 interface PlayerMatchCardProps {
   match: Match;
@@ -75,12 +81,15 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
     ? 'sideB'
     : null;
 
-  // Check if user is on the opponent's side (for confirm/dispute)
+  // Check if user is on the opponent's side (for sign/dispute)
+  // V07.04: Use scoreProposal.enteredByUserId for DUPR compliance
   const isOpponentOfSubmitter = useMemo(() => {
-    if (!match.submittedByUserId) return false;
+    // Check scoreProposal first (new DUPR system)
+    const proposerId = match.scoreProposal?.enteredByUserId || match.submittedByUserId;
+    if (!proposerId) return false;
     // If the current user did NOT submit, they are the opponent
-    return match.submittedByUserId !== currentUserId && isParticipant;
-  }, [match.submittedByUserId, currentUserId, isParticipant]);
+    return proposerId !== currentUserId && isParticipant;
+  }, [match.scoreProposal?.enteredByUserId, match.submittedByUserId, currentUserId, isParticipant]);
 
   // Check for no-show timeout (10 minutes after court assignment)
   useEffect(() => {
@@ -112,12 +121,14 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
   const sideBName = match.sideB?.name || 'Team B';
 
   // Determine match status display
+  // V07.04: Use scoreState for DUPR compliance
   const isOnCourt = !!match.court;
   const isWaitingToStart = isOnCourt && match.status === 'scheduled';
   const isInProgress = match.status === 'in_progress';
-  const isPendingConfirmation = match.status === 'pending_confirmation';
-  const isDisputed = match.status === 'disputed';
-  const isCompleted = match.status === 'completed';
+  const isPendingConfirmation = match.status === 'pending_confirmation' || match.scoreState === 'proposed';
+  const isSigned = match.scoreState === 'signed';  // V07.04: Awaiting organizer
+  const isDisputed = match.status === 'disputed' || match.scoreState === 'disputed';
+  const isCompleted = match.status === 'completed' || match.scoreState === 'official';
 
   // Handle "We're Ready" - starts match for all players
   const handleWeAreReady = async () => {
@@ -138,51 +149,53 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
     }
   };
 
-  // Handle score submission from modal
+  // Handle score submission from modal - V07.04: Use proposeScore for DUPR compliance
   const handleScoreSubmit = async (scores: GameScore[], winnerId: string) => {
     setIsSubmitting(true);
     try {
-      // Cast to any to support winnerName field (types.ts Match doesn't have it yet)
-      await updateMatchScore(tournamentId, match.id, {
+      // V07.04: Use DUPR-compliant proposeScore
+      await proposeScore(
+        'tournament',
+        tournamentId,
+        match.id,
         scores,
         winnerId,
-        winnerName: winnerId === match.sideA?.id ? sideAName : sideBName,
-        status: 'pending_confirmation',
-        submittedByUserId: currentUserId,
-        submittedAt: Date.now(),
-      } as any);
+        currentUserId
+      );
       setShowScoreModal(false);
       onScoreSubmitted?.();
-    } catch (error) {
-      console.error('Failed to submit score:', error);
-      alert('Failed to submit score. Please try again.');
+    } catch (error: any) {
+      console.error('Failed to propose score:', error);
+      alert(error.message || 'Failed to propose score. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle score confirmation
+  // Handle score confirmation - V07.04: Use signScore for DUPR compliance
+  // Note: This only signs the proposal. Organizer must finalize for match to complete.
   const handleConfirmScore = async () => {
     if (!isOpponentOfSubmitter) return;
 
     setIsSubmitting(true);
     try {
-      await updateMatchScore(tournamentId, match.id, {
-        status: 'completed',
-        completedAt: Date.now(),
-        // Clear court assignment so it becomes available
-        court: undefined,
-      });
+      // V07.04: Use DUPR-compliant signScore
+      await signScore(
+        'tournament',
+        tournamentId,
+        match.id,
+        currentUserId
+      );
       onScoreConfirmed?.();
-    } catch (error) {
-      console.error('Failed to confirm score:', error);
-      alert('Failed to confirm score. Please try again.');
+    } catch (error: any) {
+      console.error('Failed to sign score:', error);
+      alert(error.message || 'Failed to sign score. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle score dispute
+  // Handle score dispute - V07.04: Use disputeScore for DUPR compliance
   const handleDisputeScore = async () => {
     if (!isOpponentOfSubmitter) return;
 
@@ -190,27 +203,18 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
 
     setIsSubmitting(true);
     try {
-      // Build verification data with proper typing
-      const verificationUpdate: MatchVerificationData = {
-        verificationStatus: 'disputed',
-        confirmations: match.verification?.confirmations || [],
-        requiredConfirmations: match.verification?.requiredConfirmations || 1,
-        disputedByUserId: currentUserId,
-        disputeReason: reason ? 'other' as DisputeReason : undefined,
-        disputeNotes: reason || undefined,
-        disputedAt: Date.now(),
-      };
-
-      await updateMatchScore(tournamentId, match.id, {
-        status: 'disputed',
-        // Clear court assignment so it becomes available (dispute resolved offline)
-        court: undefined,
-        verification: verificationUpdate,
-      });
+      // V07.04: Use DUPR-compliant disputeScore
+      await disputeScore(
+        'tournament',
+        tournamentId,
+        match.id,
+        currentUserId,
+        reason || 'No reason provided'
+      );
       onScoreDisputed?.();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to dispute score:', error);
-      alert('Failed to dispute score. Please try again.');
+      alert(error.message || 'Failed to dispute score. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -252,7 +256,7 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
     return scores.map(g => `${g.scoreA}-${g.scoreB}`).join(', ');
   };
 
-  // Status badge
+  // Status badge - V07.04: Handle DUPR-compliant states
   const renderStatusBadge = () => {
     const base = 'inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold';
 
@@ -261,6 +265,10 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
     }
     if (isDisputed) {
       return <span className={`${base} bg-red-500 text-white`}>Disputed</span>;
+    }
+    // V07.04: Show "Awaiting Organiser" when signed but not yet finalized
+    if (isSigned) {
+      return <span className={`${base} bg-purple-500 text-white`}>Awaiting Organiser</span>;
     }
     if (isPendingConfirmation) {
       return <span className={`${base} bg-yellow-500 text-gray-900`}>Score Proposed</span>;
@@ -375,6 +383,15 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
         </div>
       )}
 
+      {/* V07.04: Signed Info - Awaiting organiser approval */}
+      {isSigned && (
+        <div className="mb-4 p-3 bg-purple-900/30 border border-purple-600 rounded-lg">
+          <p className="text-sm text-purple-400">
+            Score acknowledged: <strong>{formatScore(match.scores || match.scoreProposal?.scores || [])}</strong>. Awaiting organiser approval.
+          </p>
+        </div>
+      )}
+
       {/* Actions */}
       <div className="flex flex-col gap-2">
         {/* "We're Ready" button - Court assigned, waiting to start */}
@@ -443,7 +460,8 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
         )}
 
         {/* Sign/Dispute buttons - Pending confirmation (opponent's view) - DUPR-compliant labels */}
-        {isPendingConfirmation && isOpponentOfSubmitter && (
+        {/* V07.04: Don't show if already signed */}
+        {isPendingConfirmation && isOpponentOfSubmitter && !isSigned && (
           <div className="flex gap-2">
             <button
               onClick={handleConfirmScore}
@@ -469,14 +487,16 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
         )}
 
         {/* Waiting state - Pending confirmation (submitter's view) - DUPR-compliant label */}
-        {isPendingConfirmation && !isOpponentOfSubmitter && (
+        {/* V07.04: Don't show if already signed */}
+        {isPendingConfirmation && !isOpponentOfSubmitter && !isSigned && (
           <div className="w-full py-3 px-4 bg-yellow-900/50 border border-yellow-600 text-yellow-400 font-medium rounded-lg text-center">
             Awaiting opponent acknowledgement...
           </div>
         )}
 
         {/* Waiting for court assignment */}
-        {!isOnCourt && !isCompleted && !isPendingConfirmation && !isDisputed && (
+        {/* V07.04: Also exclude isSigned state */}
+        {!isOnCourt && !isCompleted && !isPendingConfirmation && !isDisputed && !isSigned && (
           <div className="w-full py-3 px-4 bg-gray-700 text-gray-400 rounded-lg text-center">
             Waiting for court assignment...
           </div>
