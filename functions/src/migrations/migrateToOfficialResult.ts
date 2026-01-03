@@ -143,7 +143,7 @@ async function migrateCollection(
       const data = matchDoc.data() as Match;
       if (!data.officialResult && data.winnerId) {
         matchesToMigrate.push(matchDoc.ref);
-        matchDocs.push({ id: matchDoc.id, ...data });
+        matchDocs.push({ ...data, id: matchDoc.id });
       }
     }
 
