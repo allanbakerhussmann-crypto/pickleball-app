@@ -856,6 +856,7 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
               <FormatCards
                 value={selectedFormat === 'casual' ? '' : selectedFormat}
                 onChange={handleFormatSelect}
+                eventType="meetup"
                 theme="dark"
               />
             </div>

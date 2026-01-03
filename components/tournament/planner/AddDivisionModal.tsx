@@ -23,7 +23,7 @@ interface AddDivisionModalProps {
   paymentMode?: TournamentPaymentMode;
 }
 
-const FORMATS: { value: CompetitionFormat; label: string; icon: string; description: string }[] = [
+const FORMATS: { value: CompetitionFormat; label: string; icon: string; description: string; comingSoon?: boolean }[] = [
   {
     value: 'pool_play_medals',
     label: 'Pool → Medals',
@@ -35,12 +35,14 @@ const FORMATS: { value: CompetitionFormat; label: string; icon: string; descript
     label: 'Round Robin',
     icon: '🔄',
     description: 'Everyone plays everyone',
+    comingSoon: true,
   },
   {
     value: 'singles_elimination',
     label: 'Single Elimination',
     icon: '🏆',
     description: 'Bracket, one loss = out',
+    comingSoon: true,
   },
 ];
 
@@ -392,17 +394,25 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
               {FORMATS.map((f) => (
                 <button
                   key={f.value}
-                  onClick={() => setFormat(f.value)}
-                  className={`p-3 rounded-lg text-center transition-all ${
-                    format === f.value
-                      ? 'bg-blue-600 ring-2 ring-blue-400'
-                      : 'bg-gray-700 hover:bg-gray-600'
+                  onClick={() => !f.comingSoon && setFormat(f.value)}
+                  disabled={f.comingSoon}
+                  className={`p-3 rounded-lg text-center transition-all relative ${
+                    f.comingSoon
+                      ? 'bg-gray-800 opacity-50 cursor-not-allowed'
+                      : format === f.value
+                        ? 'bg-blue-600 ring-2 ring-blue-400'
+                        : 'bg-gray-700 hover:bg-gray-600'
                   }`}
                 >
                   <span className="text-xl mb-1 block">{f.icon}</span>
                   <span className="text-white text-sm font-medium block">
                     {f.label}
                   </span>
+                  {f.comingSoon && (
+                    <span className="absolute top-1 right-1 px-1.5 py-0.5 text-[10px] bg-gray-600 text-gray-300 rounded">
+                      Soon
+                    </span>
+                  )}
                 </button>
               ))}
             </div>

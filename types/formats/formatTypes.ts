@@ -60,6 +60,12 @@ export interface FormatOption {
 
   /** Icon for UI (optional) */
   icon?: string;
+
+  /** Grey out with "Coming Soon" badge - format not yet implemented */
+  comingSoon?: boolean;
+
+  /** Disable in specific event types (tournament, league, meetup) */
+  disabledIn?: ('tournament' | 'league' | 'meetup')[];
 }
 
 /**
@@ -76,6 +82,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: false, // Bracket generated after pools complete
     icon: '🏅',
+    disabledIn: ['league', 'meetup'],
   },
   {
     value: 'round_robin',
@@ -84,6 +91,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '🔄',
+    comingSoon: true,
   },
   {
     value: 'rotating_doubles_box',
@@ -92,6 +100,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '📦',
+    comingSoon: true,
   },
   {
     value: 'fixed_doubles_box',
@@ -101,6 +110,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     requiresTeams: true,
     generatesMatchesUpfront: true,
     icon: '📦',
+    comingSoon: true,
   },
   {
     value: 'singles_elimination',
@@ -109,6 +119,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles'],
     generatesMatchesUpfront: true,
     icon: '🏆',
+    comingSoon: true,
   },
   {
     value: 'doubles_elimination',
@@ -118,6 +129,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     requiresTeams: true,
     generatesMatchesUpfront: true,
     icon: '🏆',
+    comingSoon: true,
   },
   {
     value: 'king_of_court',
@@ -126,6 +138,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: false,
     icon: '👑',
+    comingSoon: true,
   },
   {
     value: 'team_league_interclub',
@@ -135,6 +148,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     requiresTeams: true,
     generatesMatchesUpfront: true,
     icon: '🏢',
+    comingSoon: true,
   },
   {
     value: 'swiss',
@@ -143,6 +157,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: false,
     icon: '🎯',
+    comingSoon: true,
   },
   {
     value: 'ladder',
@@ -151,6 +166,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: false,
     icon: '🪜',
+    comingSoon: true,
   },
 ];
 

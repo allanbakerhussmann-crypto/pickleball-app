@@ -26,6 +26,8 @@ interface FormatSelectorProps {
   onChange: (format: CompetitionFormat) => void;
   /** Play type to filter formats (optional) */
   playType?: PlayType;
+  /** Event type context (for context-specific disabling) */
+  eventType?: 'tournament' | 'league' | 'meetup';
   /** Label text (default: "Competition Format") */
   label?: string;
   /** Show descriptions under each option */
@@ -46,6 +48,7 @@ export const FormatSelector: React.FC<FormatSelectorProps> = ({
   value,
   onChange,
   playType,
+  eventType,
   label = 'Competition Format',
   showDescriptions = true,
   error,
@@ -56,6 +59,13 @@ export const FormatSelector: React.FC<FormatSelectorProps> = ({
   const availableFormats: FormatOption[] = playType
     ? getFormatsForPlayType(playType)
     : COMPETITION_FORMATS;
+
+  // Helper to check if format is disabled in current context
+  const isFormatDisabled = (format: FormatOption): boolean => {
+    if (format.comingSoon) return true;
+    if (eventType && format.disabledIn?.includes(eventType)) return true;
+    return false;
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newValue = e.target.value as CompetitionFormat;
@@ -85,11 +95,19 @@ export const FormatSelector: React.FC<FormatSelectorProps> = ({
         `}
       >
         <option value="">Select a format...</option>
-        {availableFormats.map(format => (
-          <option key={format.value} value={format.value}>
-            {format.icon ? `${format.icon} ` : ''}{format.label}
-          </option>
-        ))}
+        {availableFormats.map(format => {
+          const formatDisabled = isFormatDisabled(format);
+          return (
+            <option
+              key={format.value}
+              value={format.value}
+              disabled={formatDisabled}
+            >
+              {format.icon ? `${format.icon} ` : ''}{format.label}
+              {formatDisabled ? ' (Coming Soon)' : ''}
+            </option>
+          );
+        })}
       </select>
 
       {/* Description of selected format */}
@@ -138,12 +156,13 @@ export const FormatCard: React.FC<FormatCardProps> = ({
   theme = 'light',
 }) => {
   const isDark = theme === 'dark';
+  const isDisabled = disabled || format.comingSoon;
 
   return (
     <button
       type="button"
       onClick={onSelect}
-      disabled={disabled}
+      disabled={isDisabled}
       className={`
         w-full p-4 text-left border-2 rounded-lg transition-all
         ${selected
@@ -154,7 +173,7 @@ export const FormatCard: React.FC<FormatCardProps> = ({
             ? 'border-gray-700 bg-gray-900 hover:border-gray-600'
             : 'border-gray-200 hover:border-gray-300'
         }
-        ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+        ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
       `}
     >
       <div className="flex items-start gap-3">
@@ -175,6 +194,13 @@ export const FormatCard: React.FC<FormatCardProps> = ({
               Requires Teams
             </span>
           )}
+          {format.comingSoon && (
+            <span className={`inline-block mt-2 ml-1 px-2 py-0.5 text-xs rounded ${
+              isDark ? 'bg-gray-700 text-gray-400' : 'bg-gray-200 text-gray-500'
+            }`}>
+              Coming Soon
+            </span>
+          )}
         </div>
         {selected && (
           <svg className={`w-5 h-5 ${isDark ? 'text-blue-500' : 'text-green-500'}`} fill="currentColor" viewBox="0 0 20 20">
@@ -190,6 +216,7 @@ interface FormatCardsProps {
   value: CompetitionFormat | '';
   onChange: (format: CompetitionFormat) => void;
   playType?: PlayType;
+  eventType?: 'tournament' | 'league' | 'meetup';
   disabled?: boolean;
   className?: string;
   /** Theme variant */
@@ -200,6 +227,7 @@ export const FormatCards: React.FC<FormatCardsProps> = ({
   value,
   onChange,
   playType,
+  eventType,
   disabled = false,
   className = '',
   theme = 'light',
@@ -207,6 +235,13 @@ export const FormatCards: React.FC<FormatCardsProps> = ({
   const availableFormats = playType
     ? getFormatsForPlayType(playType)
     : COMPETITION_FORMATS;
+
+  // Helper to check if format is disabled in current context
+  const isFormatDisabled = (format: FormatOption): boolean => {
+    if (format.comingSoon) return true;
+    if (eventType && format.disabledIn?.includes(eventType)) return true;
+    return false;
+  };
 
   return (
     <div className={`grid gap-3 ${className}`}>
@@ -216,7 +251,7 @@ export const FormatCards: React.FC<FormatCardsProps> = ({
           format={format}
           selected={value === format.value}
           onSelect={() => onChange(format.value)}
-          disabled={disabled}
+          disabled={disabled || isFormatDisabled(format)}
           theme={theme}
         />
       ))}

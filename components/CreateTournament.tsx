@@ -1185,6 +1185,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                                   value={selectedFormat}
                                   onChange={handleFormatSelect}
                                   playType={newDivBasic.type === 'singles' ? 'singles' : 'doubles'}
+                                  eventType="tournament"
                                   theme="dark"
                               />
                           </div>

@@ -501,6 +501,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 value={selectedFormat}
                 onChange={setSelectedFormat}
                 playType={mapLegacyType(basic.type)}
+                eventType="league"
                 theme="dark"
               />
             </div>
