@@ -1,15 +1,16 @@
 /**
- * AdminOrganizerRequests Component
- * 
+ * AdminOrganizerRequests Component V07.05
+ *
  * Admin page for managing organizer access requests.
  * Shows pending requests with approve/deny actions.
- * 
+ *
  * Features:
  * - View all pending requests
  * - Approve requests (auto-promotes to organizer)
  * - Deny requests with optional reason
  * - View request history
- * 
+ * - Display agreement acceptance info (V07.05)
+ *
  * FILE LOCATION: components/admin/AdminOrganizerRequests.tsx
  */
 
@@ -341,6 +342,68 @@ export const AdminOrganizerRequests: React.FC<AdminOrganizerRequestsProps> = ({ 
                 <div className="mt-3 bg-gray-900/50 rounded-lg p-3">
                   <p className="text-sm text-gray-500 mb-1">Experience:</p>
                   <p className="text-gray-300 text-sm">{request.experience}</p>
+                </div>
+              )}
+
+              {/* Associated Club */}
+              {request.associatedClub && (
+                <div className="mt-3 bg-gray-900/50 rounded-lg p-3">
+                  <p className="text-sm text-gray-500 mb-1">Associated club/venue:</p>
+                  <p className="text-gray-300 text-sm">{request.associatedClub}</p>
+                </div>
+              )}
+
+              {/* Agreement Info (V07.05) */}
+              {request.agreement && (
+                <div className="mt-3 bg-lime-900/20 border border-lime-600/30 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <svg className="w-4 h-4 text-lime-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-sm font-medium text-lime-400">
+                      Agreement {request.agreement.version} Accepted
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {formatDate(request.agreement.acceptedAt)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className={`px-2 py-0.5 rounded ${
+                      request.agreement.acceptedCheckboxes?.mainAcceptance
+                        ? 'bg-lime-600/20 text-lime-300'
+                        : 'bg-red-600/20 text-red-300'
+                    }`}>
+                      {request.agreement.acceptedCheckboxes?.mainAcceptance ? '✓' : '✕'} Main Terms
+                    </span>
+                    <span className={`px-2 py-0.5 rounded ${
+                      request.agreement.acceptedCheckboxes?.integrityConfirmation
+                        ? 'bg-lime-600/20 text-lime-300'
+                        : 'bg-red-600/20 text-red-300'
+                    }`}>
+                      {request.agreement.acceptedCheckboxes?.integrityConfirmation ? '✓' : '✕'} Integrity
+                    </span>
+                    <span className={`px-2 py-0.5 rounded ${
+                      request.agreement.acceptedCheckboxes?.privacyConfirmation
+                        ? 'bg-lime-600/20 text-lime-300'
+                        : 'bg-red-600/20 text-red-300'
+                    }`}>
+                      {request.agreement.acceptedCheckboxes?.privacyConfirmation ? '✓' : '✕'} Privacy
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* No Agreement Warning */}
+              {!request.agreement && (
+                <div className="mt-3 bg-yellow-900/20 border border-yellow-600/30 rounded-lg p-3">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span className="text-sm text-yellow-400">
+                      Legacy request - No agreement on file
+                    </span>
+                  </div>
                 </div>
               )}
 

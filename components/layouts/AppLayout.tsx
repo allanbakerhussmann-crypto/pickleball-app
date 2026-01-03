@@ -13,6 +13,7 @@ import { Header } from '../Header';
 import { BottomNav } from '../BottomNav';
 import { LoginModal } from '../auth/LoginModal';
 import { CookieConsentBanner } from '../shared/CookieConsentBanner';
+import { OrganizerAgreementBlockingModal } from '../shared/OrganizerAgreementBlockingModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { ROUTES, getRoute } from '../../router/routes';
 import { ensureRegistrationForUser } from '../../services/firebase';
@@ -76,7 +77,7 @@ const VerificationBanner: React.FC = () => {
 export const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, userProfile, logout } = useAuth();
+  const { currentUser, userProfile, logout, isOrganizerBlocked } = useAuth();
   
   const [isLoginModalOpen, setLoginModalOpen] = useState(false);
 
@@ -234,6 +235,9 @@ export const AppLayout: React.FC = () => {
 
       {/* Cookie/Storage Consent Banner */}
       <CookieConsentBanner />
+
+      {/* Organizer Agreement Blocking Modal (V07.05) */}
+      {isOrganizerBlocked && <OrganizerAgreementBlockingModal />}
     </div>
   );
 };

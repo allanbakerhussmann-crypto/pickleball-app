@@ -95,3 +95,12 @@ export {
   migrate_toOfficialResult,
   migrate_dryRun,
 } from './migrations/migrateToOfficialResult';
+
+// ============================================
+// MIGRATION FUNCTIONS (V07.05) - Organizer Agreement
+// ============================================
+
+export {
+  migrate_markOrganizersForAgreement,
+  migrate_getOrganizerAgreementStats,
+} from './migrations/markOrganizersForAgreement';

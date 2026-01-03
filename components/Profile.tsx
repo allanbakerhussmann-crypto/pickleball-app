@@ -20,6 +20,7 @@ import { UserStripeConnect } from './profile/UserStripeConnect';
 import { DuprConnect } from './profile/DuprConnect';
 import { DeleteAccountModal } from './profile/DeleteAccountModal';
 import { DataExportButton } from './profile/DataExportButton';
+import { BecomeOrganizerSection } from './profile/BecomeOrganizerSection';
 import { PhoneVerificationModal } from './auth/PhoneVerificationModal';
 import { PhoneInput } from './shared/PhoneInput';
 
@@ -412,6 +413,14 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                 {/* ============================================ */}
                 <div className="mt-8 pt-8 border-t border-gray-700">
                     <UserStripeConnect />
+                </div>
+
+                {/* ============================================ */}
+                {/* ORGANIZER STATUS SECTION (V07.05) */}
+                {/* ============================================ */}
+                <div className="mt-8 pt-8 border-t border-gray-700">
+                    <h3 className="text-lg font-bold text-white mb-4">Organiser Status</h3>
+                    <BecomeOrganizerSection />
                 </div>
 
                 {/* ============================================ */}

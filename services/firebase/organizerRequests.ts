@@ -1,9 +1,13 @@
 /**
- * Organizer Requests Service
- * 
+ * Organizer Requests Service V07.05
+ *
  * Manages requests from players who want to become organizers.
  * Admins can approve or deny requests from the admin panel.
- * 
+ *
+ * V07.05 Changes:
+ * - Added agreement field to OrganizerRequest
+ * - createOrganizerRequest now requires agreement parameter
+ *
  * FILE LOCATION: services/firebase/organizerRequests.ts
  */
 
@@ -22,6 +26,7 @@ import {
 } from '@firebase/firestore';
 import { db } from './config';
 import { promoteToOrganizer } from './users';
+import type { OrganizerAgreement } from '../../types';
 
 // ============================================
 // TYPES
@@ -35,21 +40,25 @@ export interface OrganizerRequest {
   userEmail: string;
   userName: string;
   userPhotoURL?: string;
-  
+
   // Request details
   reason: string;
   experience?: string;
-  
+  associatedClub?: string;  // V07.05: Optional club/venue association
+
+  // Agreement acceptance (V07.05)
+  agreement: OrganizerAgreement;
+
   // Status
   status: OrganizerRequestStatus;
-  
+
   // Admin response
   reviewedByUserId?: string;
   reviewedByName?: string;
   reviewedAt?: number;
   adminNotes?: string;
   denialReason?: string;
-  
+
   // Timestamps
   createdAt: number;
   updatedAt: number;
@@ -62,6 +71,8 @@ export interface CreateOrganizerRequestInput {
   userPhotoURL?: string;
   reason: string;
   experience?: string;
+  associatedClub?: string;  // V07.05: Optional club/venue
+  agreement: OrganizerAgreement;  // V07.05: Required agreement
 }
 
 // ============================================
@@ -100,6 +111,8 @@ export const createOrganizerRequest = async (
     userPhotoURL: input.userPhotoURL,
     reason: input.reason,
     experience: input.experience,
+    associatedClub: input.associatedClub,
+    agreement: input.agreement,  // V07.05: Store agreement acceptance
     status: 'pending',
     createdAt: Date.now(),
     updatedAt: Date.now(),

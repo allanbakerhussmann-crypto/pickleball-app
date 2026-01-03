@@ -16,7 +16,7 @@ import {
 import { httpsCallable } from '@firebase/functions';
 import { ref, uploadBytes, getDownloadURL } from '@firebase/storage';
 import { db, storage, functions } from './config';
-import type { UserProfile } from '../../types';
+import type { UserProfile, OrganizerAgreement } from '../../types';
 
 // ============================================
 // User Profile CRUD
@@ -220,5 +220,38 @@ export const demoteFromPlayer = async (userId: string): Promise<void> => {
   await updateDoc(userRef, {
     roles: [],
     updatedAt: Date.now()
+  });
+};
+
+// ============================================
+// ORGANIZER AGREEMENT (V07.05)
+// ============================================
+
+/**
+ * Update organizer agreement for a user
+ * Used when an existing organizer accepts a new agreement version
+ * or when a new organizer's request is approved
+ */
+export const updateOrganizerAgreement = async (
+  userId: string,
+  agreement: OrganizerAgreement
+): Promise<void> => {
+  const userRef = doc(db, 'users', userId);
+  await updateDoc(userRef, {
+    organizerAgreement: agreement,
+    organizerAgreementRequired: false,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Mark an organizer as requiring agreement re-acceptance
+ * Used during migrations when agreement version changes
+ */
+export const markOrganizerAgreementRequired = async (userId: string): Promise<void> => {
+  const userRef = doc(db, 'users', userId);
+  await updateDoc(userRef, {
+    organizerAgreementRequired: true,
+    updatedAt: Date.now(),
   });
 };

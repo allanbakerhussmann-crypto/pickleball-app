@@ -1,5 +1,9 @@
 /**
- * Pickleball Director - Type Definitions V07.04
+ * Pickleball Director - Type Definitions V07.05
+ *
+ * UPDATED V07.05:
+ * - Added OrganizerAgreement interface for organizer agreement tracking
+ * - Added organizerAgreement and organizerAgreementRequired to UserProfile
  *
  * UPDATED V07.04:
  * - Added DUPR-compliant scoring types (ScoreState, ScoreProposal, OfficialResult)
@@ -123,6 +127,26 @@ export function getDefaultCourtSettings(courts: Court[]): TournamentCourtSetting
 
 export type UserRole = 'player' | 'organizer' | 'app_admin';
 
+// ============================================
+// ORGANIZER AGREEMENT TYPES (V07.05)
+// ============================================
+
+/**
+ * Organizer Agreement acceptance tracking.
+ * Stores which version was accepted and all required confirmations.
+ */
+export interface OrganizerAgreement {
+  version: string;                    // e.g., "V1.7"
+  acceptedAt: number;                 // Timestamp when accepted
+  acceptedCheckboxes: {
+    mainAcceptance: boolean;          // Main agreement acceptance
+    integrityConfirmation: boolean;   // Integrity confirmation
+    privacyConfirmation: boolean;     // Privacy confirmation
+  };
+  ipAddress?: string;                 // Optional audit field
+  userAgent?: string;                 // Optional audit field
+}
+
 export interface UserProfile {
   id?: string;
   odUserId: string;
@@ -175,6 +199,9 @@ export interface UserProfile {
   organizerRequestDate?: number;
   organizerApprovedDate?: number;
   isApprovedOrganizer?: boolean;
+  // Organizer Agreement (V07.05)
+  organizerAgreement?: OrganizerAgreement;
+  organizerAgreementRequired?: boolean;  // True if organizer needs to re-accept agreement
   // Privacy Consent (V06.04)
   privacyPolicyConsentAt?: number;      // Timestamp when privacy policy accepted
   termsOfServiceConsentAt?: number;     // Timestamp when ToS accepted

@@ -38,7 +38,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
+exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -90,4 +90,24 @@ Object.defineProperty(exports, "sendBulkSMS", { enumerable: true, get: function 
 var phoneVerification_1 = require("./phoneVerification");
 Object.defineProperty(exports, "phone_sendVerificationCode", { enumerable: true, get: function () { return phoneVerification_1.phone_sendVerificationCode; } });
 Object.defineProperty(exports, "phone_verifyCode", { enumerable: true, get: function () { return phoneVerification_1.phone_verifyCode; } });
+// ============================================
+// DUPR SUBMISSION FUNCTIONS (V07.04)
+// ============================================
+var dupr_1 = require("./dupr");
+Object.defineProperty(exports, "dupr_submitMatches", { enumerable: true, get: function () { return dupr_1.dupr_submitMatches; } });
+Object.defineProperty(exports, "dupr_processQueue", { enumerable: true, get: function () { return dupr_1.dupr_processQueue; } });
+Object.defineProperty(exports, "dupr_processCorrections", { enumerable: true, get: function () { return dupr_1.dupr_processCorrections; } });
+Object.defineProperty(exports, "dupr_getBatchStatus", { enumerable: true, get: function () { return dupr_1.dupr_getBatchStatus; } });
+// ============================================
+// MIGRATION FUNCTIONS (V07.04)
+// ============================================
+var migrateToOfficialResult_1 = require("./migrations/migrateToOfficialResult");
+Object.defineProperty(exports, "migrate_toOfficialResult", { enumerable: true, get: function () { return migrateToOfficialResult_1.migrate_toOfficialResult; } });
+Object.defineProperty(exports, "migrate_dryRun", { enumerable: true, get: function () { return migrateToOfficialResult_1.migrate_dryRun; } });
+// ============================================
+// MIGRATION FUNCTIONS (V07.05) - Organizer Agreement
+// ============================================
+var markOrganizersForAgreement_1 = require("./migrations/markOrganizersForAgreement");
+Object.defineProperty(exports, "migrate_markOrganizersForAgreement", { enumerable: true, get: function () { return markOrganizersForAgreement_1.migrate_markOrganizersForAgreement; } });
+Object.defineProperty(exports, "migrate_getOrganizerAgreementStats", { enumerable: true, get: function () { return markOrganizersForAgreement_1.migrate_getOrganizerAgreementStats; } });
 //# sourceMappingURL=index.js.map

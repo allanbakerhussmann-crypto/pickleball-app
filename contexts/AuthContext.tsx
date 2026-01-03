@@ -17,6 +17,7 @@ import {
 
 import { getAuth, createUserProfile, getUserProfile, updateUserProfileDoc } from '../services/firebase';
 import type { UserProfile, UserRole } from '../types';
+import { isAgreementCurrent } from '../constants/organizerAgreement';
 
 // Consent data passed during signup
 export interface SignupConsent {
@@ -41,6 +42,8 @@ interface AuthContextType {
   isOrganizer: boolean;
   isAdmin: boolean;
   isAppAdmin: boolean;
+  isOrganizerBlocked: boolean;  // V07.05: True if organizer needs to accept agreement
+  refreshUserProfile: () => Promise<void>;  // V07.05: Force refresh user profile
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -252,6 +255,20 @@ useEffect(() => {
                      !!userProfile?.roles?.includes('admin');
   const isOrganizer = isAppAdmin || !!userProfile?.roles?.includes('organizer');
 
+  // V07.05: Check if organizer needs to accept agreement
+  // Blocked if: is organizer AND (no agreement OR agreement not current)
+  const isOrganizerBlocked = isOrganizer && !isAgreementCurrent(userProfile?.organizerAgreement);
+
+  // V07.05: Force refresh user profile (for after agreement acceptance)
+  const refreshUserProfile = useCallback(async () => {
+    if (currentUser) {
+      const profile = await getUserProfile(currentUser.uid);
+      if (profile) {
+        setUserProfile(profile);
+      }
+    }
+  }, [currentUser]);
+
   const value = {
     currentUser,
     userProfile,
@@ -267,7 +284,9 @@ useEffect(() => {
     updateUserEmail,
     isOrganizer,
     isAdmin: isAppAdmin,
-    isAppAdmin
+    isAppAdmin,
+    isOrganizerBlocked,
+    refreshUserProfile
   };
 
   return (
