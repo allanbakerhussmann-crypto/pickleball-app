@@ -4,7 +4,17 @@
  * Manages court allocation, match assignment, and queue management.
  *
  * FILE LOCATION: components/tournament/hooks/useCourtManagement.ts
- * VERSION: V06.36 - Pool results on Live Courts match completion
+ * VERSION: V07.02 - Premier Courts & Finals Scheduling
+ *
+ * V07.02 Changes:
+ * - Added courtSettings prop for premier court configuration
+ * - Added getPreferredCourtForMatch() helper for matchType-based court assignment
+ * - Added canFinalsMatchPlay() helper for finals dependency checking
+ * - Finals (gold, bronze, plate_final, plate_bronze) wait for their designated courts
+ * - Semi-finals prefer semi courts but fall back to any available court
+ * - Pool/bracket matches use any available court (no tier restrictions)
+ * - Bronze match only plays after Gold final completes
+ * - Plate bronze only plays after Plate final completes
  *
  * V06.36 Changes:
  * - Added updatePoolResultsOnMatchComplete() call to finishMatchOnCourt()
@@ -64,7 +74,7 @@
  */
 
 import { useMemo, useCallback, useEffect, useRef } from 'react';
-import type { Match, Court, Division } from '../../../types';
+import type { Match, Court, Division, TournamentCourtSettings, TournamentMatchType } from '../../../types';
 import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment, updatePoolResultsOnMatchComplete } from '../../../services/firebase';
 import { validateGameScore } from '../../../services/game/scoreValidation';
 import type { GameSettings } from '../../../types/game/gameSettings';
@@ -84,6 +94,7 @@ interface UseCourtManagementProps {
   divisions: Division[];
   autoAssignOnRestComplete?: boolean; // Auto-assign matches when rest time ends
   options?: CourtManagementOptions;   // V06.27: Additional options (testMode, etc.)
+  courtSettings?: TournamentCourtSettings;  // V07.02: Premier court settings
 }
 
 interface CourtViewModel {
@@ -142,11 +153,63 @@ export const useCourtManagement = ({
   divisions,
   autoAssignOnRestComplete = false,
   options = {},
+  courtSettings,
 }: UseCourtManagementProps): UseCourtManagementReturn => {
 
   // V06.27: Use shorter rest time in test mode for faster iteration
   const { testMode = false } = options;
   const effectiveRestTime = testMode ? TEST_REST_TIME_MINIMUM_MS : REST_TIME_MINIMUM_MS;
+
+  // V07.02: Helper to get preferred court for a match based on matchType
+  const getPreferredCourtForMatch = useCallback((match: Match): string | string[] | null => {
+    if (!courtSettings) return null;
+
+    const matchType = match.matchType as TournamentMatchType | undefined;
+    if (!matchType) return null;
+
+    switch (matchType) {
+      case 'final':
+      case 'bronze':
+        return courtSettings.goldCourtId || null;
+      case 'plate_final':
+      case 'plate_bronze':
+        return courtSettings.plateCourtId || null;
+      case 'semifinal':
+        return courtSettings.semiCourtIds || null;
+      default:
+        return null;  // Pool/bracket matches can use any court
+    }
+  }, [courtSettings]);
+
+  // V07.02: Helper to check if a finals match can play (dependency checking)
+  const canFinalsMatchPlay = useCallback((match: Match, allMatches: Match[]): boolean => {
+    const matchType = match.matchType as TournamentMatchType | undefined;
+    if (!matchType) return true;
+
+    // Bronze can only play after Gold final is complete
+    if (matchType === 'bronze') {
+      const goldFinal = allMatches.find(m => m.matchType === 'final' && m.bracketType !== 'plate');
+      return goldFinal?.status === 'completed';
+    }
+
+    // Plate bronze can only play after Plate final is complete
+    if (matchType === 'plate_bronze') {
+      const plateFinal = allMatches.find(m => m.matchType === 'plate_final');
+      return plateFinal?.status === 'completed';
+    }
+
+    // Finals can only play after all semis are complete
+    if (matchType === 'final' || matchType === 'plate_final') {
+      const bracketType = match.bracketType || 'main';
+      const semis = allMatches.filter(m =>
+        m.matchType === 'semifinal' &&
+        (m.bracketType || 'main') === bracketType
+      );
+      return semis.length === 0 || semis.every(s => s.status === 'completed');
+    }
+
+    return true;
+  }, []);
 
   // Safeguard: ensure arrays are never undefined
   const safeMatches = matches || [];
@@ -1029,56 +1092,137 @@ export const useCourtManagement = ({
       return;
     }
 
+    // V07.02: Filter eligible matches to check finals dependencies
+    const eligibleWithDependencies = eligible.filter(m => canFinalsMatchPlay(m, safeMatches));
+
+    if (eligibleWithDependencies.length === 0) {
+      if (!silent) alert('No waiting matches available for auto-assignment (finals may be waiting for earlier rounds to complete).');
+      return;
+    }
+
     const updates: Promise<void>[] = [];
     const notifications: Promise<void>[] = [];
     const assignedMatchIds = new Set<string>();
     const assignedPlayerIds = new Set<string>(); // Track players we've assigned
     const assignedTeamNames = new Set<string>(); // Track team names we've assigned
+    const assignedCourtIds = new Set<string>();  // V07.02: Track courts we've assigned
 
-    for (const court of freeCourts) {
-      // Find next eligible match that hasn't been assigned and doesn't conflict with already assigned players
-      const matchToAssign = eligible.find(m => {
-        if (assignedMatchIds.has(m.id)) return false;
+    // V07.02: First, try to assign finals/semis to their preferred courts
+    const finalsMatches = ['final', 'bronze', 'plate_final', 'plate_bronze', 'semifinal'];
+    const priorityMatches = eligibleWithDependencies.filter(m =>
+      finalsMatches.includes(m.matchType as string)
+    );
+    const regularMatches = eligibleWithDependencies.filter(m =>
+      !finalsMatches.includes(m.matchType as string)
+    );
 
-        const teamAId = m.teamAId || m.sideA?.id;
-        const teamBId = m.teamBId || m.sideB?.id;
-        const teamAName = m.sideA?.name || '';
-        const teamBName = m.sideB?.name || '';
+    // Helper to check if match conflicts with assigned
+    const hasConflict = (m: Match): boolean => {
+      if (assignedMatchIds.has(m.id)) return true;
 
-        // Check if any players OR teams in this match are already assigned in this batch
-        const playerIdsA = m.sideA?.playerIds || [];
-        const playerIdsB = m.sideB?.playerIds || [];
-        const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      const teamAName = m.sideA?.name || '';
+      const teamBName = m.sideB?.name || '';
+      const playerIdsA = m.sideA?.playerIds || [];
+      const playerIdsB = m.sideB?.playerIds || [];
+      const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
 
-        // Check player IDs, team IDs, and team names
-        const hasConflict = allPlayerIds.some(pid => assignedPlayerIds.has(pid)) ||
-                           (teamAId && assignedPlayerIds.has(teamAId)) ||
-                           (teamBId && assignedPlayerIds.has(teamBId)) ||
-                           (teamAName && assignedTeamNames.has(teamAName.toLowerCase())) ||
-                           (teamBName && assignedTeamNames.has(teamBName.toLowerCase()));
+      return allPlayerIds.some(pid => assignedPlayerIds.has(pid)) ||
+             (teamAId && assignedPlayerIds.has(teamAId)) ||
+             (teamBId && assignedPlayerIds.has(teamBId)) ||
+             (teamAName && assignedTeamNames.has(teamAName.toLowerCase())) ||
+             (teamBName && assignedTeamNames.has(teamBName.toLowerCase()));
+    };
 
-        return !hasConflict;
-      });
+    // Helper to mark match as assigned
+    const markAssigned = (m: Match, courtId: string): void => {
+      assignedMatchIds.add(m.id);
+      assignedCourtIds.add(courtId);
 
-      if (!matchToAssign) continue;
+      const teamAId = m.teamAId || m.sideA?.id;
+      const teamBId = m.teamBId || m.sideB?.id;
+      const teamAName = m.sideA?.name || '';
+      const teamBName = m.sideB?.name || '';
+      const playerIdsA = m.sideA?.playerIds || [];
+      const playerIdsB = m.sideB?.playerIds || [];
 
-      // Mark this match and its players AND teams as assigned
-      assignedMatchIds.add(matchToAssign.id);
-      const teamAId = matchToAssign.teamAId || matchToAssign.sideA?.id;
-      const teamBId = matchToAssign.teamBId || matchToAssign.sideB?.id;
-      const teamAName = matchToAssign.sideA?.name || '';
-      const teamBName = matchToAssign.sideB?.name || '';
-      const playerIdsA = matchToAssign.sideA?.playerIds || [];
-      const playerIdsB = matchToAssign.sideB?.playerIds || [];
-
-      // Add player IDs
       [...playerIdsA, ...playerIdsB].filter(Boolean).forEach(pid => assignedPlayerIds.add(pid));
-      // Also add team IDs as fallback
       if (teamAId) assignedPlayerIds.add(teamAId);
       if (teamBId) assignedPlayerIds.add(teamBId);
-      // Also add team names
       if (teamAName) assignedTeamNames.add(teamAName.toLowerCase());
       if (teamBName) assignedTeamNames.add(teamBName.toLowerCase());
+    };
+
+    // V07.02: Process priority matches (finals/semis) first - assign to preferred courts
+    for (const match of priorityMatches) {
+      if (hasConflict(match)) continue;
+
+      const preferredCourt = getPreferredCourtForMatch(match);
+      let assignedCourt: Court | undefined;
+
+      if (preferredCourt) {
+        if (Array.isArray(preferredCourt)) {
+          // Semi-finals can use any of the preferred courts
+          assignedCourt = freeCourts.find(c =>
+            preferredCourt.includes(c.id) && !assignedCourtIds.has(c.id)
+          );
+        } else {
+          // Finals/bronze must use their specific court
+          assignedCourt = freeCourts.find(c =>
+            c.id === preferredCourt && !assignedCourtIds.has(c.id)
+          );
+        }
+      }
+
+      // For non-finals priority matches (semis), fall back to any court if preferred not available
+      if (!assignedCourt && match.matchType === 'semifinal') {
+        assignedCourt = freeCourts.find(c => !assignedCourtIds.has(c.id));
+      }
+
+      // Finals MUST wait for their designated court
+      if (!assignedCourt && (match.matchType === 'final' || match.matchType === 'bronze' ||
+                             match.matchType === 'plate_final' || match.matchType === 'plate_bronze')) {
+        continue;  // Skip - finals must wait for their court
+      }
+
+      if (!assignedCourt) continue;
+
+      markAssigned(match, assignedCourt.id);
+
+      updates.push(
+        updateMatchScore(tournamentId, match.id, {
+          court: assignedCourt.name,
+          status: 'scheduled',
+        })
+      );
+
+      // Queue notification
+      const playerIds = [...(match.sideA?.playerIds || []), ...(match.sideB?.playerIds || [])].filter(Boolean);
+      if (playerIds.length > 0) {
+        notifications.push(
+          notifyCourtAssignment(
+            playerIds,
+            tournamentId,
+            match.id,
+            assignedCourt.name,
+            `${match.sideA?.name || 'Team A'} vs ${match.sideB?.name || 'Team B'}`
+          ).catch(err => console.error('Failed to send notification:', err))
+        );
+      }
+    }
+
+    // V07.02: Process regular matches (pools/brackets) - assign to any available court
+    for (const court of freeCourts) {
+      if (assignedCourtIds.has(court.id)) continue;
+
+      const matchToAssign = regularMatches.find(m => !hasConflict(m));
+      if (!matchToAssign) continue;
+
+      markAssigned(matchToAssign, court.id);
+
+      const playerIdsA = matchToAssign.sideA?.playerIds || [];
+      const playerIdsB = matchToAssign.sideB?.playerIds || [];
 
       updates.push(
         updateMatchScore(tournamentId, matchToAssign.id, {
@@ -1118,7 +1262,7 @@ export const useCourtManagement = ({
     // Execute court assignments first, then notifications (don't wait for notifications)
     await Promise.all(updates);
     Promise.all(notifications).catch(() => {}); // Fire and forget notifications
-  }, [tournamentId, safeCourts, safeMatches, getEligibleMatches]);
+  }, [tournamentId, safeCourts, safeMatches, getEligibleMatches, getPreferredCourtForMatch, canFinalsMatchPlay]);
 
   // ============================================
   // Auto-assign when rest time ends OR ready matches exist

@@ -23,7 +23,6 @@ import {
   validateMatchScores,
   calculateMatchWinner,
   isMatchComplete,
-  getQuickScoreButtons,
   createEmptyGameScore,
 } from '../../services/game';
 
@@ -234,8 +233,8 @@ export const ScoreEntryModal: React.FC<ScoreEntryModalProps> = ({
     }
   }, [isOpen, match.scores, bestOf]);
 
-  // Quick score buttons
-  const quickScores = useMemo(() => getQuickScoreButtons(settings), [settings]);
+  // Quick score buttons - standard pickleball game point options
+  const quickScores = [11, 15, 21];
 
   // Calculate current winner state
   const winnerState = useMemo(() => {
@@ -255,6 +254,49 @@ export const ScoreEntryModal: React.FC<ScoreEntryModalProps> = ({
     if (!game) return { valid: false, error: 'No game' };
     return validateGameScore(game.scoreA, game.scoreB, settings);
   }, [scores, activeGame, settings]);
+
+  // Calculate how many games should be visible based on progressive reveal
+  const getVisibleGamesCount = (): number => {
+    // Best of 1: always just 1 game
+    if (bestOf === 1) return 1;
+
+    // Start with at least 1 game visible
+    let visibleCount = 1;
+
+    // Check each completed game to see if next should be visible
+    for (let i = 0; i < scores.length && i < bestOf - 1; i++) {
+      const game = scores[i];
+      const gameValid = validateGameScore(game.scoreA, game.scoreB, settings).valid;
+
+      if (gameValid) {
+        // Check if match is decided
+        const gamesWonA = scores.slice(0, i + 1).filter(g => g.scoreA > g.scoreB).length;
+        const gamesWonB = scores.slice(0, i + 1).filter(g => g.scoreB > g.scoreA).length;
+        const gamesNeededToWin = Math.ceil(bestOf / 2);
+
+        // If match not decided, next game should be visible
+        if (gamesWonA < gamesNeededToWin && gamesWonB < gamesNeededToWin) {
+          visibleCount = i + 2; // Show next game
+        }
+      }
+    }
+
+    return Math.min(visibleCount, bestOf);
+  };
+
+  // Auto-create next game when previous is complete (progressive reveal)
+  useEffect(() => {
+    if (bestOf === 1) return; // No progressive reveal for best of 1
+
+    const visibleCount = getVisibleGamesCount();
+
+    // Auto-add next game if needed and match not complete
+    if (visibleCount > scores.length && scores.length < bestOf && !matchComplete) {
+      const newGame = createEmptyGameScore(scores.length + 1);
+      setScores(prev => [...prev, newGame]);
+      setActiveGame(scores.length); // Focus new game
+    }
+  }, [scores, bestOf, matchComplete]);
 
   // Update a game score
   const updateScore = (gameIndex: number, side: 'scoreA' | 'scoreB', value: number) => {
@@ -291,15 +333,6 @@ export const ScoreEntryModal: React.FC<ScoreEntryModalProps> = ({
       return updated;
     });
     setError(null);
-  };
-
-  // Add next game
-  const addGame = () => {
-    if (scores.length < bestOf && !matchComplete) {
-      const newGame = createEmptyGameScore(scores.length + 1);
-      setScores(prev => [...prev, newGame]);
-      setActiveGame(scores.length);
-    }
   };
 
   // Remove last game
@@ -466,20 +499,6 @@ export const ScoreEntryModal: React.FC<ScoreEntryModalProps> = ({
                   />
                 );
               })}
-
-              {/* Add Game Button */}
-              {scores.length < bestOf && !matchComplete && (
-                <button
-                  type="button"
-                  onClick={addGame}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-lime-500 hover:text-lime-400 hover:bg-lime-500/10 rounded-lg transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                  </svg>
-                  Add Game
-                </button>
-              )}
             </div>
           </div>
         )}

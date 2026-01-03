@@ -248,6 +248,12 @@ export interface Match {
   /** Stage of competition (pool, bracket, plate, finals) */
   stage?: 'pool' | 'bracket' | 'plate' | 'finals' | 'third_place';
 
+  /** V07.02: Match type for premier court scheduling */
+  matchType?: 'pool' | 'bracket' | 'semifinal' | 'final' | 'bronze' | 'plate_final' | 'plate_bronze';
+
+  /** Is this a third place / bronze match? */
+  isThirdPlace?: boolean;
+
   /** Challenge ID (for ladder format) */
   challengeId?: string;
 

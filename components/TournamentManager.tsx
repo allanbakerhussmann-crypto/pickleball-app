@@ -5,7 +5,9 @@ import type {
   Match,
   SeedingMethod,
   StandingsEntry,
+  TournamentCourtSettings,
 } from '../types';
+import { getDefaultCourtSettings } from '../types';
 import type { GameSettings } from '../types/game/gameSettings';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -32,6 +34,10 @@ import { TournamentSeedButton } from './tournament/TournamentSeedButton';
 import { PoolGroupStandings } from './tournament/PoolGroupStandings';
 import { PoolEditor } from './tournament/PoolEditor';
 import { TiebreakerSettings } from './tournament/TiebreakerSettings';
+import { DivisionSettingsTab } from './tournament/DivisionSettingsTab';
+import { LiveCourtsTab } from './tournament/LiveCourtsTab';
+import { PoolStageTab } from './tournament/PoolStageTab';
+import { MedalBracketTab } from './tournament/MedalBracketTab';
 import { PoolDrawPreview } from './tournament/PoolDrawPreview';
 import { generatePoolAssignments, savePoolAssignments } from '../services/firebase/poolAssignments';
 import { TestModeWrapper } from './tournament/TestModeWrapper';
@@ -132,6 +138,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     divisions,
     autoAssignOnRestComplete: autoAllocateCourts,
     options: { testMode: tournament.testMode || false },  // V06.27: 10s rest in test mode
+    courtSettings: tournament.courtSettings,  // V07.02: Premier court settings
   });
   // Match Actions (using new hook)
   const {
@@ -1632,361 +1639,177 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* V07.02: Premier Courts Settings */}
+              <div className="mt-8 pt-4 border-t border-gray-700">
+                <div className="flex items-center gap-2 mb-4">
+                  <h4 className="text-white font-bold">Premier Courts</h4>
+                  <span className="text-xs text-gray-400">Finals will be played on these designated courts</span>
+                </div>
+
+                {(courts || []).length === 0 ? (
+                  <p className="text-gray-500 text-sm">Add courts above to configure premier court settings.</p>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Gold Court - Finals & Bronze */}
+                    <div className="bg-gray-800 p-4 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">🥇</span>
+                        <span className="text-white font-semibold">Gold Court</span>
+                        <span className="text-xs text-gray-400">(Finals + Bronze Match)</span>
+                      </div>
+                      <select
+                        value={tournament.courtSettings?.goldCourtId || ''}
+                        onChange={(e) => {
+                          const newSettings: TournamentCourtSettings = {
+                            ...tournament.courtSettings,
+                            goldCourtId: e.target.value || undefined,
+                          };
+                          onUpdateTournament({ ...tournament, courtSettings: newSettings });
+                        }}
+                        className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600"
+                      >
+                        <option value="">Auto (first court)</option>
+                        {(courts || []).filter(c => c.active !== false).map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Plate Court - Plate Finals & Plate 3rd */}
+                    <div className="bg-gray-800 p-4 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">🥈</span>
+                        <span className="text-white font-semibold">Plate Court</span>
+                        <span className="text-xs text-gray-400">(Plate Final + Plate 3rd)</span>
+                      </div>
+                      <select
+                        value={tournament.courtSettings?.plateCourtId || ''}
+                        onChange={(e) => {
+                          const newSettings: TournamentCourtSettings = {
+                            ...tournament.courtSettings,
+                            plateCourtId: e.target.value || undefined,
+                          };
+                          onUpdateTournament({ ...tournament, courtSettings: newSettings });
+                        }}
+                        className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600"
+                      >
+                        <option value="">Auto (second court)</option>
+                        {(courts || []).filter(c => c.active !== false).map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Semi-Final Courts */}
+                    <div className="bg-gray-800 p-4 rounded-lg">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">⭐</span>
+                        <span className="text-white font-semibold">Semi-Final Courts</span>
+                        <span className="text-xs text-gray-400">(Preferred for semi-finals)</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(courts || []).filter(c => c.active !== false).map(c => {
+                          const isSelected = (tournament.courtSettings?.semiCourtIds || []).includes(c.id);
+                          return (
+                            <label
+                              key={c.id}
+                              className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
+                                isSelected ? 'bg-lime-900/30 border border-lime-600' : 'bg-gray-900 border border-gray-700 hover:border-gray-500'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  const currentIds = tournament.courtSettings?.semiCourtIds || [];
+                                  const newIds = e.target.checked
+                                    ? [...currentIds, c.id]
+                                    : currentIds.filter(id => id !== c.id);
+                                  const newSettings: TournamentCourtSettings = {
+                                    ...tournament.courtSettings,
+                                    semiCourtIds: newIds.length > 0 ? newIds : undefined,
+                                  };
+                                  onUpdateTournament({ ...tournament, courtSettings: newSettings });
+                                }}
+                                className="rounded"
+                              />
+                              <span className="text-white text-sm">{c.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Reset to Defaults Button */}
+                    <button
+                      onClick={() => {
+                        const defaults = getDefaultCourtSettings(courts || []);
+                        onUpdateTournament({ ...tournament, courtSettings: defaults });
+                      }}
+                      className="text-sm text-blue-400 hover:text-blue-300"
+                    >
+                      Reset to Smart Defaults
+                    </button>
+
+                    {/* Info Box */}
+                    <div className="bg-gray-800/50 rounded-lg p-3 text-xs text-gray-400 space-y-1">
+                      <p><strong>How it works:</strong></p>
+                      <p>• During pool stage & early brackets: All courts are used equally</p>
+                      <p>• Semi-finals: Preferred on selected semi-final courts</p>
+                      <p>• Gold Final: Played on Gold Court, then Bronze Match on same court</p>
+                      <p>• Plate Final: Played on Plate Court, then Plate 3rd on same court</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
           {/* Pool Stage Tab - for pool_play_medals format */}
           {adminTab === 'pool-stage' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
-            <div className="space-y-6">
-              {/* Pool Standings */}
-              <div className="bg-gray-900 p-4 rounded border border-gray-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-white font-bold text-lg">Pool Standings</h3>
-                  <div className="flex gap-2">
-                    {/* Generate Finals button if pools complete */}
-                    {(() => {
-                      const poolMatches = (divisionMatches || []).filter(m =>
-                        m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
-                      );
-                      const completedPoolMatches = poolMatches.filter(m => m.status === 'completed');
-                      const allPoolsComplete = poolMatches.length > 0 && completedPoolMatches.length === poolMatches.length;
-
-                      // V06.22: Check if bracket already generated
-                      const bracketMatches = (divisionMatches || []).filter(m =>
-                        m.stage === 'bracket' || m.stage === 'medal' || m.bracketType === 'main'
-                      );
-                      const isBracketGenerated = bracketMatches.length > 0;
-
-                      return (
-                        <button
-                          onClick={() => {
-                            // V06.26: Show confirmation modal instead of direct generate
-                            setPendingStandings(standings);
-                            setShowMedalConfirmModal(true);
-                          }}
-                          disabled={poolMatches.length === 0 || !allPoolsComplete || isBracketGenerated}
-                          className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded font-bold text-sm disabled:bg-gray-700 disabled:cursor-not-allowed"
-                          title={isBracketGenerated ? 'Medal bracket already generated' : undefined}
-                        >
-                          {isBracketGenerated ? 'Bracket Generated' : 'Generate Medal Bracket'}
-                        </button>
-                      );
-                    })()}
-                  </div>
-                </div>
-                <PoolGroupStandings
-                  teams={divisionTeams || []}
-                  matches={(divisionMatches || []).filter(m =>
-                    m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
-                  )}
-                  poolSettings={activeDivision?.format?.poolPlayMedalsSettings}
-                  plateSettings={{
-                    plateEnabled: (activeDivision?.format as any)?.plateEnabled,
-                    plateThirdPlace: (activeDivision?.format as any)?.plateThirdPlace,
-                    plateName: (activeDivision?.format as any)?.plateName,
-                  }}
-                  getTeamPlayers={getTeamPlayers}
-                />
-              </div>
-
-              {/* Pool Editor */}
-              <div className="bg-gray-900 p-4 rounded border border-gray-700">
-                <h3 className="text-white font-bold text-lg mb-4">Edit Pool Assignments</h3>
-                <PoolEditor
-                  tournamentId={tournament.id}
-                  divisionId={activeDivision.id}
-                  teams={divisionTeams || []}
-                  matches={divisionMatches || []}
-                  initialAssignments={activeDivision.poolAssignments}
-                  poolSize={activeDivision.format.teamsPerPool || 4}
-                  getTeamDisplayName={getTeamDisplayName}
-                  onDeleteScheduleAndSave={async (newAssignments) => {
-                    // Delete all pool matches first
-                    await deletePoolMatches(tournament.id, activeDivision.id);
-                    // Save new pool assignments
-                    await savePoolAssignments(tournament.id, activeDivision.id, newAssignments);
-                    // Data auto-refreshes via Firebase subscriptions
-                    console.log('[PoolEditor] Schedule deleted and pools saved');
-                  }}
-                  onSave={() => console.log('[PoolEditor] Pools saved')}
-                />
-              </div>
-
-              {/* Generate Schedule Button */}
-              <div className="bg-gray-900 p-4 rounded border border-gray-700">
-                <h3 className="text-white font-bold text-lg mb-4">Schedule Generation</h3>
-                {(() => {
-                  const poolMatches = (divisionMatches || []).filter(m =>
-                    m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
-                  );
-                  const hasSchedule = poolMatches.length > 0;
-                  const playHasStarted = poolMatches.some(m => m.status === 'in_progress' || m.status === 'completed');
-                  const teamsCount = (divisionTeams || []).length;
-
-                  return (
-                    <div className="space-y-3">
-                      {hasSchedule ? (
-                        <>
-                          <div className="flex items-center gap-2 text-green-400">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                            <span className="font-medium">Schedule generated ({poolMatches.length} matches)</span>
-                          </div>
-                          {playHasStarted && (
-                            <p className="text-amber-400 text-sm">
-                              Play has started. To regenerate, use "Delete Schedule & Save" in Pool Assignments above.
-                            </p>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-gray-400 text-sm mb-3">
-                            Generate round-robin matches for all pools. Teams must be assigned to pools first.
-                          </p>
-                          <button
-                            onClick={handleGenerateSchedule}
-                            disabled={teamsCount < 2}
-                            className="w-full bg-blue-600 text-white font-bold py-3 rounded hover:bg-blue-500 disabled:bg-gray-700 disabled:cursor-not-allowed transition-colors"
-                          >
-                            {teamsCount < 2 ? `Need at least 2 teams (have ${teamsCount})` : 'Generate Pool Schedule'}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Pool Matches List - Grouped by Pool */}
-              <div className="bg-gray-900 p-4 rounded border border-gray-700">
-                <h3 className="text-white font-bold text-lg mb-4">Match List</h3>
-                {(() => {
-                  const poolMatches = (divisionMatches || []).filter(m =>
-                    m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play' || !m.stage
-                  );
-
-                  if (poolMatches.length === 0) {
-                    return <p className="text-gray-500 text-center py-4">No pool matches generated yet. Use the "Generate Pool Schedule" button above.</p>;
-                  }
-
-                  // Helper to derive pool from team assignment if poolGroup not set
-                  const getMatchPool = (match: any): string => {
-                    if (match.poolGroup) return match.poolGroup;
-
-                    // Try to derive pool from team's pool assignment
-                    const assignments = activeDivision?.poolAssignments || [];
-                    const teamAId = match.teamAId || match.sideA?.id;
-                    const teamBId = match.teamBId || match.sideB?.id;
-
-                    for (const pa of assignments) {
-                      if (pa.teamId === teamAId || pa.teamId === teamBId) {
-                        return pa.poolName || `Pool ${String.fromCharCode(65 + (pa.poolIndex || 0))}`;
-                      }
-                    }
-
-                    // Fallback: derive from round number if available
-                    // Matches are typically grouped: Pool A = rounds 1-3, Pool B = rounds 4-6, etc.
-                    const roundNum = match.roundNumber || 1;
-                    const teamsPerPool = activeDivision?.format?.teamsPerPool || 4;
-                    const matchesPerPool = (teamsPerPool * (teamsPerPool - 1)) / 2;
-                    const poolIndex = Math.floor((match.matchNumber || 0) / matchesPerPool);
-                    return `Pool ${String.fromCharCode(65 + poolIndex)}`;
-                  };
-
-                  // Get unique pool groups
-                  const poolGroups = [...new Set(poolMatches.map(m => getMatchPool(m)))].sort();
-
-                  // Helper to render match
-                  const renderMatch = (match: any) => (
-                    <div
-                      key={match.id}
-                      className={`p-3 rounded border ${
-                        match.status === 'completed' ? 'border-green-700 bg-green-900/20' :
-                        match.status === 'in_progress' ? 'border-yellow-700 bg-yellow-900/20' :
-                        'border-gray-600 bg-gray-800'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="text-sm">
-                          <span className="text-white">{getTeamDisplayName(match.teamAId || match.sideA?.id)}</span>
-                          <span className="text-gray-500"> vs </span>
-                          <span className="text-white">{getTeamDisplayName(match.teamBId || match.sideB?.id)}</span>
-                        </div>
-                        <div className="text-sm">
-                          {match.status === 'completed' && (
-                            <span className="text-green-400">
-                              {match.scores?.map((s: any) => `${s.scoreA}-${s.scoreB}`).join(', ') ||
-                                `${match.scoreTeamAGames?.[0] || 0}-${match.scoreTeamBGames?.[0] || 0}`}
-                            </span>
-                          )}
-                          {match.status === 'in_progress' && <span className="text-yellow-400">In Progress</span>}
-                          {match.status === 'scheduled' && <span className="text-gray-400">Scheduled</span>}
-                        </div>
-                      </div>
-                    </div>
-                  );
-
-                  return (
-                    <div className="space-y-4">
-                      {poolGroups.map(poolName => {
-                        const matches = poolMatches
-                          .filter(m => getMatchPool(m) === poolName)
-                          .sort((a, b) => (a.matchNumber || 0) - (b.matchNumber || 0));
-                        const completedCount = matches.filter(m => m.status === 'completed').length;
-
-                        return (
-                          <div key={poolName} className="border border-gray-700 rounded-lg overflow-hidden">
-                            {/* Pool Header */}
-                            <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-lg font-bold text-white">{poolName}</span>
-                                <span className="text-xs text-gray-400">({matches.length} matches)</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {completedCount === matches.length && matches.length > 0 ? (
-                                  <span className="text-xs px-2 py-0.5 bg-green-900/50 text-green-400 rounded">Complete</span>
-                                ) : (
-                                  <span className="text-xs text-gray-400">{completedCount}/{matches.length} played</span>
-                                )}
-                              </div>
-                            </div>
-                            {/* Pool Matches */}
-                            <div className="p-3 space-y-2">
-                              {matches.map(renderMatch)}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
+            <PoolStageTab
+              tournament={tournament}
+              activeDivision={activeDivision}
+              divisionTeams={divisionTeams}
+              divisionMatches={divisionMatches}
+              standings={standings}
+              getTeamDisplayName={getTeamDisplayName}
+              getTeamPlayers={getTeamPlayers}
+              handleGenerateSchedule={handleGenerateSchedule}
+              deletePoolMatches={deletePoolMatches}
+              savePoolAssignments={savePoolAssignments}
+              setPendingStandings={setPendingStandings}
+              setShowMedalConfirmModal={setShowMedalConfirmModal}
+            />
           )}
 
           {/* Medal Bracket Tab - for pool_play_medals format */}
           {adminTab === 'medal-bracket' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (() => {
-            // Filter bracket matches (main bracket - not pool, not plate)
-            const mainBracketMatches = (divisionMatches || []).filter(m =>
-              (m.stage === 'bracket' || m.stage === 'Finals' || m.stage === 'finals' || m.stage === 'Medal' ||
-               m.bracketType === 'main' || (!m.poolGroup && !m.stage?.toLowerCase().includes('pool'))) &&
-              m.bracketType !== 'plate'
-            );
+            // Save medal rules handler
+            const handleSaveMedalRulesLocal = async () => {
+              if (!activeDivision) return;
+              const mainBracketMatches = (divisionMatches || []).filter(m =>
+                (m.stage === 'bracket' || m.stage === 'Finals' || m.stage === 'finals' || m.stage === 'Medal' ||
+                 m.bracketType === 'main' || (!m.poolGroup && !m.stage?.toLowerCase().includes('pool'))) &&
+                m.bracketType !== 'plate'
+              );
+              const isBracketLocked = mainBracketMatches.length > 0;
+              if (isBracketLocked) return;
 
-            // Filter plate bracket matches
-            const plateMatches = (divisionMatches || []).filter(m =>
-              m.bracketType === 'plate' || m.stage?.toLowerCase().includes('plate')
-            );
-
-            // Convert to UI format for BracketViewer
-            const mainBracketUiMatches = mainBracketMatches.map(m => {
-              const teamAId = m.teamAId || m.sideA?.id || '';
-              const teamBId = m.teamBId || m.sideB?.id || '';
-              return {
-                id: m.id,
-                team1: {
-                  id: teamAId,
-                  name: m.sideA?.name || getTeamDisplayName(teamAId),
-                  players: getTeamPlayers(teamAId),
-                },
-                team2: {
-                  id: teamBId,
-                  name: m.sideB?.name || getTeamDisplayName(teamBId),
-                  players: getTeamPlayers(teamBId),
-                },
-                // V06.42: Include gameSettings for multi-game support
-                gameSettings: m.gameSettings,
-                // V06.45: Include full scores array for multi-game display
-                scores: m.scores,
-                score1: m.scores?.[0]?.scoreA ?? m.scoreTeamAGames?.[0] ?? null,
-                score2: m.scores?.[0]?.scoreB ?? m.scoreTeamBGames?.[0] ?? null,
-                status: m.status || 'scheduled',
-                roundNumber: m.roundNumber,
-                bracketPosition: m.bracketPosition,
-                isThirdPlace: m.isThirdPlace,
-              };
-            });
-
-            const plateUiMatches = plateMatches.map(m => {
-              const teamAId = m.teamAId || m.sideA?.id || '';
-              const teamBId = m.teamBId || m.sideB?.id || '';
-              return {
-                id: m.id,
-                team1: {
-                  id: teamAId,
-                  name: m.sideA?.name || getTeamDisplayName(teamAId),
-                  players: getTeamPlayers(teamAId),
-                },
-                team2: {
-                  id: teamBId,
-                  name: m.sideB?.name || getTeamDisplayName(teamBId),
-                  players: getTeamPlayers(teamBId),
-                },
-                // V06.42: Include gameSettings for multi-game support
-                gameSettings: m.gameSettings,
-                // V06.45: Include full scores array for multi-game display
-                scores: m.scores,
-                score1: m.scores?.[0]?.scoreA ?? m.scoreTeamAGames?.[0] ?? null,
-                score2: m.scores?.[0]?.scoreB ?? m.scoreTeamBGames?.[0] ?? null,
-                status: m.status || 'scheduled',
-                roundNumber: m.roundNumber,
-                bracketPosition: m.bracketPosition,
-                isThirdPlace: m.isThirdPlace,
-              };
-            });
-
-            // Check if bracket is locked (matches already generated)
-            // V06.22: Only lock if actual bracket matches exist - timestamp alone shouldn't lock
-            // (allows editing if bracket was deleted but timestamp remains)
-            const isBracketLocked = mainBracketMatches.length > 0;
-
-            // Compute total rounds from bracket matches
-            const totalRounds = mainBracketMatches.length > 0
-              ? Math.max(...mainBracketMatches.filter(m => !m.isThirdPlace).map(m => m.roundNumber || 1))
-              : 0;
-            const showQuarterFinals = totalRounds >= 3; // 3 rounds = QF, SF, F
-            const showBronzeRow = activeDivision?.format?.hasBronzeMatch !== false;
-
-            // Get current medal round settings (state is at component top level)
-            const format = activeDivision?.format;
-            const poolSettings = {
-              bestOf: format?.bestOfGames || 1,
-              points: format?.pointsPerGame || 11,
-              winBy: format?.winBy || 2,
-            };
-
-            // Save medal rules to division
-            const handleSaveMedalRules = async () => {
-              if (!activeDivision || isBracketLocked) return;
               try {
-                // Build medal round settings (omit undefined to avoid Firestore errors)
                 const newMedalRoundSettings: Record<string, any> = {};
-                if (localMedalSettings.quarterFinals) {
-                  newMedalRoundSettings.quarterFinals = localMedalSettings.quarterFinals;
-                }
-                if (localMedalSettings.semiFinals) {
-                  newMedalRoundSettings.semiFinals = localMedalSettings.semiFinals;
-                }
-                if (localMedalSettings.finals) {
-                  newMedalRoundSettings.finals = localMedalSettings.finals;
-                }
-                if (localMedalSettings.bronze) {
-                  newMedalRoundSettings.bronze = localMedalSettings.bronze;
-                }
+                if (localMedalSettings.quarterFinals) newMedalRoundSettings.quarterFinals = localMedalSettings.quarterFinals;
+                if (localMedalSettings.semiFinals) newMedalRoundSettings.semiFinals = localMedalSettings.semiFinals;
+                if (localMedalSettings.finals) newMedalRoundSettings.finals = localMedalSettings.finals;
+                if (localMedalSettings.bronze) newMedalRoundSettings.bronze = localMedalSettings.bronze;
 
-                // V06.40: Build plate round settings if plate is enabled
                 const newPlateRoundSettings: Record<string, any> = {};
                 if ((activeDivision.format as any)?.plateEnabled) {
-                  if (localMedalSettings.plateFinals) {
-                    newPlateRoundSettings.plateFinals = localMedalSettings.plateFinals;
-                  }
-                  if (localMedalSettings.plateBronze) {
-                    newPlateRoundSettings.plateBronze = localMedalSettings.plateBronze;
-                  }
+                  if (localMedalSettings.plateFinals) newPlateRoundSettings.plateFinals = localMedalSettings.plateFinals;
+                  if (localMedalSettings.plateBronze) newPlateRoundSettings.plateBronze = localMedalSettings.plateBronze;
                 }
 
-                // V06.40: Use updateDivision for proper Firestore merge (not saveTournament which overwrites)
                 await updateDivision(tournament.id, activeDivision.id, {
                   format: {
                     ...activeDivision.format,
@@ -1994,7 +1817,6 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     ...(localMedalSettings.useSeparateMedalSettings && Object.keys(newMedalRoundSettings).length > 0 && {
                       medalRoundSettings: newMedalRoundSettings,
                     }),
-                    // V06.40: Include plate round settings if plate is enabled
                     ...(Object.keys(newPlateRoundSettings).length > 0 && {
                       plateRoundSettings: newPlateRoundSettings,
                     }),
@@ -2008,412 +1830,21 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             };
 
             return (
-              <div className="space-y-8">
-                {/* Medal Match Rules Panel (Organizer Only) */}
-                {permissions.isFullAdmin && (
-                  <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-                    <h3 className="text-white font-bold mb-4">Medal Match Rules</h3>
-
-                    {isBracketLocked && (
-                      <div className="mb-4 p-3 bg-amber-900/30 border border-amber-700/50 rounded text-amber-200 text-sm">
-                        Medal rules are locked after bracket generation. Delete/re-generate bracket to change.
-                      </div>
-                    )}
-
-                    {/* Toggle for separate medal settings */}
-                    <div className="flex items-center gap-3 mb-4">
-                      <span className="text-gray-400">Customize bracket game rules (Best Of)</span>
-                      <button
-                        onClick={() => !isBracketLocked && setLocalMedalSettings(prev => ({
-                          ...prev,
-                          useSeparateMedalSettings: !prev.useSeparateMedalSettings,
-                        }))}
-                        disabled={isBracketLocked}
-                        className={`relative w-12 h-6 rounded-full transition-colors ${
-                          localMedalSettings.useSeparateMedalSettings ? 'bg-blue-600' : 'bg-gray-500'
-                        } ${isBracketLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        <div
-                          className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-transform ${
-                            localMedalSettings.useSeparateMedalSettings ? 'translate-x-6' : 'translate-x-0.5'
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Pool Play rules (read-only reference) */}
-                    <div className="mb-4 p-3 bg-gray-700 rounded">
-                      <div className="text-xs text-gray-400 mb-1">Pool Play rules (reference):</div>
-                      <div className="text-sm text-white">
-                        Best Of: {poolSettings.bestOf} &nbsp;|&nbsp; Points: {poolSettings.points} &nbsp;|&nbsp; Win By: {poolSettings.winBy}
-                      </div>
-                    </div>
-
-                    {/* Medal round rules table */}
-                    {localMedalSettings.useSeparateMedalSettings && (
-                      <div className="mb-4">
-                        <div className="text-xs text-gray-400 mb-2">Medal round rules (applies when generating bracket):</div>
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="text-gray-400 text-xs">
-                              <th className="text-left py-2">Round</th>
-                              <th className="text-center py-2">Best Of</th>
-                              <th className="text-center py-2">Points</th>
-                              <th className="text-center py-2">Win By</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {/* Quarter-Finals (only show if bracket has QF) */}
-                            {(showQuarterFinals || !isBracketLocked) && (
-                              <tr className="border-t border-gray-600">
-                                <td className="py-2 text-white">Quarter-Finals</td>
-                                <td className="py-2 text-center">
-                                  <select
-                                    value={localMedalSettings.quarterFinals?.bestOf || 1}
-                                    onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                      ...prev,
-                                      quarterFinals: { ...prev.quarterFinals, bestOf: parseInt(e.target.value) as 1|3|5 },
-                                    }))}
-                                    disabled={isBracketLocked}
-                                    className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                  >
-                                    <option value={1}>1</option>
-                                    <option value={3}>3</option>
-                                    <option value={5}>5</option>
-                                  </select>
-                                </td>
-                                <td className="py-2 text-center">
-                                  <select
-                                    value={localMedalSettings.quarterFinals?.pointsToWin || 11}
-                                    onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                      ...prev,
-                                      quarterFinals: { ...prev.quarterFinals, pointsToWin: parseInt(e.target.value) as 11|15|21 },
-                                    }))}
-                                    disabled={isBracketLocked}
-                                    className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                  >
-                                    <option value={11}>11</option>
-                                    <option value={15}>15</option>
-                                    <option value={21}>21</option>
-                                  </select>
-                                </td>
-                                <td className="py-2 text-center">
-                                  <select
-                                    value={localMedalSettings.quarterFinals?.winBy || 2}
-                                    onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                      ...prev,
-                                      quarterFinals: { ...prev.quarterFinals, winBy: parseInt(e.target.value) as 1|2 },
-                                    }))}
-                                    disabled={isBracketLocked}
-                                    className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                  >
-                                    <option value={1}>1</option>
-                                    <option value={2}>2</option>
-                                  </select>
-                                </td>
-                              </tr>
-                            )}
-                            {/* Semi-Finals */}
-                            <tr className="border-t border-gray-600">
-                              <td className="py-2 text-white">Semi-Finals</td>
-                              <td className="py-2 text-center">
-                                <select
-                                  value={localMedalSettings.semiFinals?.bestOf || 1}
-                                  onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                    ...prev,
-                                    semiFinals: { ...prev.semiFinals, bestOf: parseInt(e.target.value) as 1|3|5 },
-                                  }))}
-                                  disabled={isBracketLocked}
-                                  className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                >
-                                  <option value={1}>1</option>
-                                  <option value={3}>3</option>
-                                  <option value={5}>5</option>
-                                </select>
-                              </td>
-                              <td className="py-2 text-center">
-                                <select
-                                  value={localMedalSettings.semiFinals?.pointsToWin || 11}
-                                  onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                    ...prev,
-                                    semiFinals: { ...prev.semiFinals, pointsToWin: parseInt(e.target.value) as 11|15|21 },
-                                  }))}
-                                  disabled={isBracketLocked}
-                                  className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                >
-                                  <option value={11}>11</option>
-                                  <option value={15}>15</option>
-                                  <option value={21}>21</option>
-                                </select>
-                              </td>
-                              <td className="py-2 text-center">
-                                <select
-                                  value={localMedalSettings.semiFinals?.winBy || 2}
-                                  onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                    ...prev,
-                                    semiFinals: { ...prev.semiFinals, winBy: parseInt(e.target.value) as 1|2 },
-                                  }))}
-                                  disabled={isBracketLocked}
-                                  className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                >
-                                  <option value={1}>1</option>
-                                  <option value={2}>2</option>
-                                </select>
-                              </td>
-                            </tr>
-                            {/* Gold Match (Finals) */}
-                            <tr className="border-t border-gray-600 bg-amber-900/20">
-                              <td className="py-2 text-amber-200">Gold Match</td>
-                              <td className="py-2 text-center">
-                                <select
-                                  value={localMedalSettings.finals?.bestOf || 3}
-                                  onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                    ...prev,
-                                    finals: { ...prev.finals, bestOf: parseInt(e.target.value) as 1|3|5 },
-                                  }))}
-                                  disabled={isBracketLocked}
-                                  className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                >
-                                  <option value={1}>1</option>
-                                  <option value={3}>3</option>
-                                  <option value={5}>5</option>
-                                </select>
-                              </td>
-                              <td className="py-2 text-center">
-                                <select
-                                  value={localMedalSettings.finals?.pointsToWin || 11}
-                                  onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                    ...prev,
-                                    finals: { ...prev.finals, pointsToWin: parseInt(e.target.value) as 11|15|21 },
-                                  }))}
-                                  disabled={isBracketLocked}
-                                  className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                >
-                                  <option value={11}>11</option>
-                                  <option value={15}>15</option>
-                                  <option value={21}>21</option>
-                                </select>
-                              </td>
-                              <td className="py-2 text-center">
-                                <select
-                                  value={localMedalSettings.finals?.winBy || 2}
-                                  onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                    ...prev,
-                                    finals: { ...prev.finals, winBy: parseInt(e.target.value) as 1|2 },
-                                  }))}
-                                  disabled={isBracketLocked}
-                                  className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                >
-                                  <option value={1}>1</option>
-                                  <option value={2}>2</option>
-                                </select>
-                              </td>
-                            </tr>
-                            {/* Bronze Match */}
-                            {showBronzeRow && (
-                              <tr className="border-t border-gray-600 bg-amber-800/20">
-                                <td className="py-2 text-amber-300">Bronze Match</td>
-                                <td className="py-2 text-center">
-                                  <select
-                                    value={localMedalSettings.bronze?.bestOf || 3}
-                                    onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                      ...prev,
-                                      bronze: { ...prev.bronze, bestOf: parseInt(e.target.value) as 1|3|5 },
-                                    }))}
-                                    disabled={isBracketLocked}
-                                    className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                  >
-                                    <option value={1}>1</option>
-                                    <option value={3}>3</option>
-                                    <option value={5}>5</option>
-                                  </select>
-                                </td>
-                                <td className="py-2 text-center">
-                                  <select
-                                    value={localMedalSettings.bronze?.pointsToWin || 11}
-                                    onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                      ...prev,
-                                      bronze: { ...prev.bronze, pointsToWin: parseInt(e.target.value) as 11|15|21 },
-                                    }))}
-                                    disabled={isBracketLocked}
-                                    className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                  >
-                                    <option value={11}>11</option>
-                                    <option value={15}>15</option>
-                                    <option value={21}>21</option>
-                                  </select>
-                                </td>
-                                <td className="py-2 text-center">
-                                  <select
-                                    value={localMedalSettings.bronze?.winBy || 2}
-                                    onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                      ...prev,
-                                      bronze: { ...prev.bronze, winBy: parseInt(e.target.value) as 1|2 },
-                                    }))}
-                                    disabled={isBracketLocked}
-                                    className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                  >
-                                    <option value={1}>1</option>
-                                    <option value={2}>2</option>
-                                  </select>
-                                </td>
-                              </tr>
-                            )}
-                            {/* V06.40: Plate Bracket Settings */}
-                            {(activeDivision?.format as any)?.plateEnabled && (
-                              <>
-                                <tr>
-                                  <td colSpan={4} className="pt-4 pb-2 text-amber-400 font-semibold text-sm border-t border-gray-600">
-                                    {(activeDivision?.format as any)?.plateName || 'Plate'} Bracket
-                                  </td>
-                                </tr>
-                                {/* Plate Finals Row */}
-                                <tr className="bg-amber-900/20">
-                                  <td className="py-2 text-amber-300">
-                                    {(activeDivision?.format as any)?.plateName || 'Plate'} Final
-                                  </td>
-                                  <td className="py-2 text-center">
-                                    <select
-                                      value={localMedalSettings.plateFinals?.bestOf || 1}
-                                      onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                        ...prev,
-                                        plateFinals: { ...prev.plateFinals, bestOf: parseInt(e.target.value) as 1|3|5 },
-                                      }))}
-                                      disabled={isBracketLocked}
-                                      className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                    >
-                                      <option value={1}>1</option>
-                                      <option value={3}>3</option>
-                                      <option value={5}>5</option>
-                                    </select>
-                                  </td>
-                                  <td className="py-2 text-center">
-                                    <select
-                                      value={localMedalSettings.plateFinals?.pointsToWin || 11}
-                                      onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                        ...prev,
-                                        plateFinals: { ...prev.plateFinals, pointsToWin: parseInt(e.target.value) as 11|15|21 },
-                                      }))}
-                                      disabled={isBracketLocked}
-                                      className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                    >
-                                      <option value={11}>11</option>
-                                      <option value={15}>15</option>
-                                      <option value={21}>21</option>
-                                    </select>
-                                  </td>
-                                  <td className="py-2 text-center">
-                                    <select
-                                      value={localMedalSettings.plateFinals?.winBy || 2}
-                                      onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                        ...prev,
-                                        plateFinals: { ...prev.plateFinals, winBy: parseInt(e.target.value) as 1|2 },
-                                      }))}
-                                      disabled={isBracketLocked}
-                                      className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                    >
-                                      <option value={1}>1</option>
-                                      <option value={2}>2</option>
-                                    </select>
-                                  </td>
-                                </tr>
-                                {/* Plate Bronze Row - only if plateThirdPlace enabled */}
-                                {(activeDivision?.format as any)?.plateThirdPlace && (
-                                  <tr className="bg-amber-900/20">
-                                    <td className="py-2 text-amber-300">
-                                      {(activeDivision?.format as any)?.plateName || 'Plate'} Bronze
-                                    </td>
-                                    <td className="py-2 text-center">
-                                      <select
-                                        value={localMedalSettings.plateBronze?.bestOf || 1}
-                                        onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                          ...prev,
-                                          plateBronze: { ...prev.plateBronze, bestOf: parseInt(e.target.value) as 1|3|5 },
-                                        }))}
-                                        disabled={isBracketLocked}
-                                        className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                      >
-                                        <option value={1}>1</option>
-                                        <option value={3}>3</option>
-                                        <option value={5}>5</option>
-                                      </select>
-                                    </td>
-                                    <td className="py-2 text-center">
-                                      <select
-                                        value={localMedalSettings.plateBronze?.pointsToWin || 11}
-                                        onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                          ...prev,
-                                          plateBronze: { ...prev.plateBronze, pointsToWin: parseInt(e.target.value) as 11|15|21 },
-                                        }))}
-                                        disabled={isBracketLocked}
-                                        className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                      >
-                                        <option value={11}>11</option>
-                                        <option value={15}>15</option>
-                                        <option value={21}>21</option>
-                                      </select>
-                                    </td>
-                                    <td className="py-2 text-center">
-                                      <select
-                                        value={localMedalSettings.plateBronze?.winBy || 2}
-                                        onChange={(e) => !isBracketLocked && setLocalMedalSettings(prev => ({
-                                          ...prev,
-                                          plateBronze: { ...prev.plateBronze, winBy: parseInt(e.target.value) as 1|2 },
-                                        }))}
-                                        disabled={isBracketLocked}
-                                        className="bg-gray-700 text-white rounded px-2 py-1 text-sm disabled:opacity-50"
-                                      >
-                                        <option value={1}>1</option>
-                                        <option value={2}>2</option>
-                                      </select>
-                                    </td>
-                                  </tr>
-                                )}
-                              </>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
-                    {/* Save Button */}
-                    {!isBracketLocked && (
-                      <button
-                        onClick={handleSaveMedalRules}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium"
-                      >
-                        Save Medal Rules
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Main Medal Bracket */}
-                <BracketViewer
-                  matches={mainBracketUiMatches}
-                  onUpdateScore={handleUpdateScore}
-                  onUpdateMultiGameScore={handleUpdateMultiGameScore}
-                  isVerified={isVerified}
-                  bracketTitle="Medal Bracket"
-                  bracketType="main"
-                  finalsLabel="Gold Medal Match"
-                  isOrganizer={isOrganizer}
-                />
-
-                {/* Plate Bracket (if enabled and has matches) */}
-                {activeDivision?.format?.plateEnabled && plateUiMatches.length > 0 && (
-                  <BracketViewer
-                    matches={plateUiMatches}
-                    onUpdateScore={handleUpdateScore}
-                    onUpdateMultiGameScore={handleUpdateMultiGameScore}
-                    isVerified={isVerified}
-                    bracketTitle={`${activeDivision?.format?.plateName || 'Plate'} Bracket`}
-                    bracketType="plate"
-                    finalsLabel={`${activeDivision?.format?.plateName || 'Plate'} Final`}
-                    isOrganizer={isOrganizer}
-                  />
-                )}
-              </div>
+              <MedalBracketTab
+                tournament={tournament}
+                activeDivision={activeDivision}
+                divisionMatches={divisionMatches}
+                getTeamDisplayName={getTeamDisplayName}
+                getTeamPlayers={getTeamPlayers}
+                handleUpdateScore={handleUpdateScore}
+                handleUpdateMultiGameScore={handleUpdateMultiGameScore}
+                isVerified={isVerified}
+                isOrganizer={isOrganizer}
+                permissions={permissions}
+                localMedalSettings={localMedalSettings}
+                setLocalMedalSettings={setLocalMedalSettings}
+                handleSaveMedalRules={handleSaveMedalRulesLocal}
+              />
             );
           })()}
 
@@ -2609,504 +2040,20 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           )}
 
           {adminTab === 'settings' && (
-            <div className="space-y-6">
-              <div className="bg-gray-900 p-4 rounded border border-gray-700">
-                <h3 className="text-white font-bold mb-4">
-                  Division Settings – {activeDivision.name}
-                </h3>
-
-                {/* Rating Limits (DUPR brackets) */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Min Rating (DUPR)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                      value={divisionSettings.minRating}
-                      onChange={e =>
-                        setDivisionSettings(prev => ({
-                          ...prev,
-                          minRating: e.target.value,
-                        }))
-                      }
-                      placeholder="e.g. 3.0"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Max Rating (DUPR)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                      value={divisionSettings.maxRating}
-                      onChange={e =>
-                        setDivisionSettings(prev => ({
-                          ...prev,
-                          maxRating: e.target.value,
-                        }))
-                      }
-                      placeholder="e.g. 4.0 (leave blank for open)"
-                    />
-                  </div>
-                </div>
-
-                {/* Age Limits */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Min Age (Years)
-                    </label>
-                    <input
-                      type="number"
-                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                      value={divisionSettings.minAge}
-                      onChange={e =>
-                        setDivisionSettings(prev => ({
-                          ...prev,
-                          minAge: e.target.value,
-                        }))
-                      }
-                      placeholder="e.g. 50"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Max Age (Years)
-                    </label>
-                    <input
-                      type="number"
-                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                      value={divisionSettings.maxAge}
-                      onChange={e =>
-                        setDivisionSettings(prev => ({
-                          ...prev,
-                          maxAge: e.target.value,
-                        }))
-                      }
-                      placeholder="leave blank for no max"
-                    />
-                  </div>
-                </div>
-
-                {/* Seeding method */}
-                <div className="mb-4">
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Seeding Method
-                  </label>
-                  <select
-                    className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                    value={divisionSettings.seedingMethod}
-                    onChange={e =>
-                      setDivisionSettings(prev => ({
-                        ...prev,
-                        seedingMethod: e.target.value as SeedingMethod,
-                      }))
-                    }
-                  >
-                    <option value="rating">Rating Based (DUPR)</option>
-                    <option value="random">Random</option>
-                  </select>
-                  <p className="text-[10px] text-gray-500 mt-1">
-                    Used when generating pools/brackets for this division.
-                  </p>
-                </div>
-
-                {/* Day Assignment - only for multi-day tournaments */}
-                {tournament.days && tournament.days.length > 1 && (
-                  <div className="mb-4">
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Tournament Day
-                    </label>
-                    <select
-                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                      value={divisionSettings.tournamentDayId}
-                      onChange={e =>
-                        setDivisionSettings(prev => ({
-                          ...prev,
-                          tournamentDayId: e.target.value,
-                        }))
-                      }
-                    >
-                      <option value="">-- Select Day --</option>
-                      {tournament.days.map((day, idx) => (
-                        <option key={day.id} value={day.id}>
-                          {day.label || `Day ${idx + 1}`} ({day.date})
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-[10px] text-gray-500 mt-1">
-                      Which day this division is scheduled to play.
-                    </p>
-                  </div>
-                )}
-
-                {/* Pool Size Setting - only for pool_play_medals format */}
-                {(activeDivision.format?.competitionFormat === 'pool_play_medals' ||
-                  activeDivision.format?.stageMode === 'two_stage') && (
-                  <div className="mb-4">
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Teams Per Pool
-                    </label>
-                    <select
-                      className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
-                      value={activeDivision.format?.teamsPerPool || 4}
-                      onChange={async e => {
-                        const newPoolSize = parseInt(e.target.value, 10);
-                        try {
-                          // Import doc and updateDoc for direct Firestore update with dot notation
-                          const { doc, updateDoc } = await import('@firebase/firestore');
-                          const { db } = await import('../services/firebase/config');
-
-                          const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
-
-                          // Use dot notation for nested field update - more reliable with Firestore
-                          await updateDoc(divisionRef, {
-                            'format.teamsPerPool': newPoolSize,
-                            updatedAt: Date.now(),
-                          });
-
-                          // Regenerate pool assignments with new size
-                          const newAssignments = generatePoolAssignments({
-                            teams: divisionTeams,
-                            poolSize: newPoolSize,
-                          });
-                          await savePoolAssignments(tournament.id, activeDivision.id, newAssignments);
-                        } catch (err) {
-                          const errorMessage = err instanceof Error ? err.message : String(err);
-                          console.error('Failed to update pool size:', errorMessage, err);
-                          alert(`Failed to update pool size: ${errorMessage}`);
-                        }
-                      }}
-                      disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
-                    >
-                      <option value={3}>3 teams per pool</option>
-                      <option value={4}>4 teams per pool</option>
-                      <option value={5}>5 teams per pool</option>
-                      <option value={6}>6 teams per pool</option>
-                    </select>
-                    <p className="text-[10px] text-gray-500 mt-1">
-                      {(divisionTeams || []).length} teams ÷ {activeDivision.format?.teamsPerPool || 4} = {Math.ceil((divisionTeams || []).length / (activeDivision.format?.teamsPerPool || 4))} pools
-                      {(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed') && (
-                        <span className="text-yellow-500 ml-2">(Locked - matches have started)</span>
-                      )}
-                    </p>
-                  </div>
-                )}
-
-                {/* V06.37: Tiebreaker Settings */}
-                {(activeDivision.format?.competitionFormat === 'pool_play_medals' ||
-                  activeDivision.format?.stageMode === 'two_stage') && (
-                  <TiebreakerSettings
-                    tiebreakers={
-                      (activeDivision.format as any)?.poolPlayMedalsSettings?.tiebreakers ||
-                      ['wins', 'head_to_head', 'point_diff', 'points_scored']
-                    }
-                    onChange={async (newOrder) => {
-                      try {
-                        const { doc, updateDoc } = await import('@firebase/firestore');
-                        const { db } = await import('../services/firebase/config');
-                        const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
-
-                        // Get current poolPlayMedalsSettings or create default
-                        const currentSettings = (activeDivision.format as any)?.poolPlayMedalsSettings || {};
-
-                        await updateDoc(divisionRef, {
-                          'format.poolPlayMedalsSettings': {
-                            ...currentSettings,
-                            tiebreakers: newOrder,
-                          },
-                          updatedAt: Date.now(),
-                        });
-                      } catch (err) {
-                        console.error('Failed to update tiebreaker order:', err);
-                        alert('Failed to update tiebreaker order');
-                      }
-                    }}
-                    disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
-                  />
-                )}
-
-                {/* Plate/Consolation Bracket Settings */}
-                {(activeDivision.format?.competitionFormat === 'pool_play_medals' ||
-                  activeDivision.format?.stageMode === 'two_stage') && (
-                  <div className="mb-4 p-4 bg-gray-700/30 rounded-lg border border-gray-600">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={activeDivision.format?.plateEnabled === true}
-                        onChange={async (e) => {
-                          const newValue = e.target.checked;
-                          try {
-                            const { doc, updateDoc } = await import('@firebase/firestore');
-                            const { db } = await import('../services/firebase/config');
-                            const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
-                            await updateDoc(divisionRef, {
-                              'format.plateEnabled': newValue,
-                              updatedAt: Date.now(),
-                            });
-                          } catch (err) {
-                            console.error('Failed to update plate settings:', err);
-                            alert('Failed to update plate settings');
-                          }
-                        }}
-                        className="w-4 h-4 rounded border border-gray-500 bg-gray-700 checked:bg-green-500 checked:border-green-500 focus:ring-green-500 focus:ring-offset-gray-800"
-                        disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
-                      />
-                      <span className="text-sm text-gray-300 font-medium">Enable Plate Bracket (for pool losers)</span>
-                    </label>
-
-                    {activeDivision.format?.plateEnabled && (
-                      <div className="mt-4 space-y-4 pl-6 border-l-2 border-gray-600">
-                        {/* Plate Name */}
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">Bracket Name</label>
-                          <input
-                            type="text"
-                            placeholder="Plate"
-                            value={activeDivision.format?.plateName || 'Plate'}
-                            onChange={async (e) => {
-                              try {
-                                const { doc, updateDoc } = await import('@firebase/firestore');
-                                const { db } = await import('../services/firebase/config');
-                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
-                                await updateDoc(divisionRef, {
-                                  'format.plateName': e.target.value,
-                                  updatedAt: Date.now(),
-                                });
-                              } catch (err) {
-                                console.error('Failed to update plate name:', err);
-                              }
-                            }}
-                            className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
-                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
-                          />
-                        </div>
-
-                        {/* Teams advancing to plate per pool */}
-                        <div className="relative">
-                          <label className="block text-xs text-gray-400 mb-1">Teams to Plate (per pool)</label>
-                          <select
-                            value={String(activeDivision.format?.advanceToPlatePerPool ?? 1)}
-                            onChange={async (e) => {
-                              e.stopPropagation();
-                              const newValue = parseInt(e.target.value, 10);
-                              try {
-                                const { doc, updateDoc } = await import('@firebase/firestore');
-                                const { db } = await import('../services/firebase/config');
-                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
-                                await updateDoc(divisionRef, {
-                                  'format.advanceToPlatePerPool': newValue,
-                                  updatedAt: Date.now(),
-                                });
-                              } catch (err) {
-                                console.error('Failed to update plate advancement:', err);
-                              }
-                            }}
-                            className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm relative z-10"
-                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
-                          >
-                            <option value="1">Next 1 after cutoff → Plate</option>
-                            <option value="2">Next 2 after cutoff → Plate</option>
-                          </select>
-                        </div>
-
-                        {/* Plate Format */}
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">Plate Format</label>
-                          <select
-                            value={activeDivision.format?.plateFormat || 'single_elim'}
-                            onChange={async (e) => {
-                              try {
-                                const { doc, updateDoc } = await import('@firebase/firestore');
-                                const { db } = await import('../services/firebase/config');
-                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
-                                await updateDoc(divisionRef, {
-                                  'format.plateFormat': e.target.value,
-                                  updatedAt: Date.now(),
-                                });
-                              } catch (err) {
-                                console.error('Failed to update plate format:', err);
-                              }
-                            }}
-                            className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none text-sm"
-                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
-                          >
-                            <option value="single_elim">Single Elimination</option>
-                            <option value="round_robin">Round Robin</option>
-                          </select>
-                        </div>
-
-                        {/* 3rd Place Match in Plate */}
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={activeDivision.format?.plateThirdPlace === true}
-                            onChange={async (e) => {
-                              e.stopPropagation();
-                              const newValue = e.target.checked;
-                              try {
-                                const { doc, updateDoc } = await import('@firebase/firestore');
-                                const { db } = await import('../services/firebase/config');
-                                const divisionRef = doc(db, 'tournaments', tournament.id, 'divisions', activeDivision.id);
-                                await updateDoc(divisionRef, {
-                                  'format.plateThirdPlace': newValue,
-                                  updatedAt: Date.now(),
-                                });
-                              } catch (err) {
-                                console.error('Failed to update plate 3rd place setting:', err);
-                              }
-                            }}
-                            className="w-4 h-4 rounded border border-gray-500 bg-gray-700 checked:bg-green-500 checked:border-green-500 focus:ring-green-500 focus:ring-offset-gray-800 accent-green-500"
-                            disabled={(divisionMatches || []).some(m => m.status === 'in_progress' || m.status === 'completed')}
-                          />
-                          <span className="text-xs text-gray-400">Include 3rd place match in Plate bracket</span>
-                        </label>
-
-                        <p className="text-[10px] text-gray-500">
-                          Bottom finishers from each pool will compete in a separate "{activeDivision.format?.plateName || 'Plate'}" bracket
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Test Mode Toggle (App Admin Only) */}
-                {isAppAdmin && (
-                  <div className="mb-4 p-4 bg-yellow-900/30 border-2 border-yellow-600/50 rounded-lg">
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={tournament.testMode === true}
-                        onChange={async (e) => {
-                          const newValue = e.target.checked;
-                          if (newValue) {
-                            // Show confirmation dialog
-                            if (!confirm('Enable Test Mode?\n\nYou will be able to score any match and test features.\nChanges affect real data but can be cleared with the "Clear Test Data" button.')) {
-                              return;
-                            }
-                          }
-                          await onUpdateTournament({ ...tournament, testMode: newValue });
-                        }}
-                        className="w-5 h-5 rounded border border-yellow-500 bg-gray-700 checked:bg-yellow-500 checked:border-yellow-500 focus:ring-yellow-500"
-                      />
-                      <div>
-                        <span className="text-yellow-300 font-bold text-lg flex items-center gap-2">
-                          <span>🧪</span> Test Mode
-                        </span>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          Score any match, simulate completions, test features. Changes are flagged for cleanup.
-                        </p>
-                      </div>
-                    </label>
-                  </div>
-                )}
-
-                <div className="flex justify-end mt-4">
-                  <button
-                    onClick={handleSaveDivisionSettings}
-                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded font-bold"
-                  >
-                    Save Settings
-                  </button>
-                </div>
-              </div>
-
-              {/* General & Match Rules */}
-              <div className="bg-gray-900 p-6 rounded border border-gray-700">
-                <h4 className="text-white font-bold mb-4 text-lg">
-                  General & Match Rules
-                </h4>
-                <div className="grid grid-cols-1 gap-6">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">
-                      Division Name
-                    </label>
-                    <input
-                      className="w-full bg-gray-800 text-white p-3 rounded border border-gray-600 focus:border-green-500 focus:outline-none"
-                      defaultValue={activeDivision.name}
-                      onBlur={e => {
-                        if (e.target.value !== activeDivision.name) {
-                          handleUpdateDivisionSettings({ name: e.target.value });
-                        }
-                      }}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">
-                        Best Of (Games)
-                      </label>
-                      <select
-                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600"
-                        value={activeDivision.format.bestOfGames}
-                        onChange={e =>
-                          handleUpdateDivisionSettings({
-                            format: {
-                              ...activeDivision.format,
-                              bestOfGames: parseInt(e.target.value, 10) as any,
-                            },
-                          })
-                        }
-                      >
-                        <option value="1">1</option>
-                        <option value="3">3</option>
-                        <option value="5">5</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">
-                        Points
-                      </label>
-                      <select
-                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600"
-                        value={activeDivision.format.pointsPerGame}
-                        onChange={e =>
-                          handleUpdateDivisionSettings({
-                            format: {
-                              ...activeDivision.format,
-                              pointsPerGame: parseInt(e.target.value, 10) as any,
-                            },
-                          })
-                        }
-                      >
-                        <option value="11">11</option>
-                        <option value="15">15</option>
-                        <option value="21">21</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">
-                        Win By
-                      </label>
-                      <select
-                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600"
-                        value={activeDivision.format.winBy}
-                        onChange={e =>
-                          handleUpdateDivisionSettings({
-                            format: {
-                              ...activeDivision.format,
-                              winBy: parseInt(e.target.value, 10) as any,
-                            },
-                          })
-                        }
-                      >
-                        <option value="1">1</option>
-                        <option value="2">2</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-4 text-xs text-gray-500 italic">
-                  Changes to Name and Match Rules save automatically.
-                </div>
-              </div>
-            </div>
+            <DivisionSettingsTab
+              tournament={tournament}
+              activeDivision={activeDivision}
+              divisionTeams={divisionTeams}
+              divisionMatches={divisionMatches as any}
+              divisionSettings={divisionSettings}
+              setDivisionSettings={setDivisionSettings}
+              isAppAdmin={isAppAdmin}
+              onUpdateTournament={onUpdateTournament}
+              handleSaveDivisionSettings={handleSaveDivisionSettings}
+              handleUpdateDivisionSettings={handleUpdateDivisionSettings}
+              generatePoolAssignments={generatePoolAssignments}
+              savePoolAssignments={savePoolAssignments}
+            />
           )}
 
           {adminTab === 'sponsors' && (
@@ -3139,135 +2086,21 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           )}
 
           {adminTab === 'livecourts' && (
-            <div className="space-y-6">
-              {/* Live Status Bar */}
-              <div className="flex flex-wrap items-center gap-4 p-4 rounded-xl bg-gray-900/50 border border-white/5">
-                {/* Live Indicator */}
-                <div className="flex items-center gap-2">
-                  <span className="relative flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                  </span>
-                  <span className="text-sm font-semibold text-green-400 uppercase tracking-wide">Live</span>
-                </div>
-
-                <div className="h-4 w-px bg-gray-700" />
-
-                {/* Stats */}
-                <div className="flex flex-wrap items-center gap-6 text-sm">
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    </svg>
-                    <span className="text-white font-semibold">
-                      {(courtMatchModels || []).filter(m => m.status === 'IN_PROGRESS').length}
-                    </span>
-                    <span className="text-gray-400">in progress</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span className="text-white font-semibold">{(queue || []).length}</span>
-                    <span className="text-gray-400">waiting</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span className="text-white font-semibold">
-                      {(courts || []).filter(c => c.active && !(courtMatchModels || []).some(m => m.courtName === c.name && m.status === 'IN_PROGRESS')).length}
-                    </span>
-                    <span className="text-gray-400">courts free</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Mode Toggle & Actions */}
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                {/* Mode Toggle */}
-                <div className="inline-flex rounded-xl bg-gray-900 p-1.5 border border-white/10">
-                  <button
-                    type="button"
-                    onClick={() => setAutoAllocateCourts(false)}
-                    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
-                      !autoAllocateCourts
-                        ? 'bg-white/10 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" />
-                    </svg>
-                    Manual
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAutoAllocateCourts(true)}
-                    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
-                      autoAllocateCourts
-                        ? 'bg-green-600 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    Auto-Allocate
-                  </button>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex items-center gap-3">
-                  {/* V06.27: Test Mode Rest Time Badge */}
-                  {tournament.testMode && (
-                    <span className="text-xs bg-yellow-600/30 text-yellow-400 px-2 py-1 rounded font-medium">
-                      Test Mode: 10s rest
-                    </span>
-                  )}
-                  {!autoAllocateCourts && (
-                    <button
-                      type="button"
-                      onClick={() => autoAssignFreeCourts()}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-lg shadow-indigo-600/20"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      Fill Free Courts
-                    </button>
-                  )}
-                  {autoAllocateCourts && (
-                    <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-500/10 border border-green-500/20">
-                      <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      <span className="text-sm text-green-400">
-                        Auto-allocation active
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Court Allocation Component */}
-              <CourtAllocation
-                courts={courtViewModels}
-                matches={courtMatchModels}
-                filteredQueue={queueMatchModels}
-                onAssignMatchToCourt={async (matchId, courtId) => {
-                  const court = (courts || []).find(c => c.id === courtId);
-                  if (!court) return;
-                  await assignMatchToCourt(matchId, court.name);
-                }}
-                onStartMatchOnCourt={async courtId => {
-                  await startMatchOnCourt(courtId);
-                }}
-                onFinishMatchOnCourt={finishMatchOnCourt}
-              />
-            </div>
+            <LiveCourtsTab
+              tournament={tournament}
+              courts={courts || []}
+              matches={matches}  // V07.02: Pass matches for finals detection
+              courtViewModels={courtViewModels}
+              courtMatchModels={courtMatchModels}
+              queueMatchModels={queueMatchModels}
+              queue={queue}
+              autoAllocateCourts={autoAllocateCourts}
+              setAutoAllocateCourts={setAutoAllocateCourts}
+              autoAssignFreeCourts={autoAssignFreeCourts}
+              assignMatchToCourt={assignMatchToCourt}
+              startMatchOnCourt={startMatchOnCourt}
+              finishMatchOnCourt={finishMatchOnCourt}
+            />
           )}
           </div>
           {/* End Tab Content */}

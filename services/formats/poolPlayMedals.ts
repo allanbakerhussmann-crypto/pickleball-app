@@ -27,6 +27,7 @@
 import type { Match } from '../../types/game/match';
 import type { GameSettings } from '../../types/game/gameSettings';
 import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
+import type { TournamentMatchType } from '../../types';
 import {
   generateRoundRobinPairings,
   calculateRoundRobinStandings,
@@ -286,6 +287,7 @@ export function generatePoolStage(config: PoolPlayConfig): PoolPlayResult {
           roundNumber: round.roundNumber,
           matchNumber: globalMatchNumber++,
           poolGroup: pool.poolName,
+          matchType: 'pool' as TournamentMatchType,  // V07.02: Premier courts scheduling
           status: 'scheduled',
           scores: [],
         };
@@ -764,11 +766,28 @@ export function generateMedalBracket(config: MedalBracketConfig): MedalBracketRe
     preserveOrder: true,  // V06.30: Don't re-sort, use pair-order from cross-pool seeding
   });
 
-  // Update format to pool_play_medals
-  const bracketMatches = bracketResult.matches.map(m => ({
-    ...m,
-    format: 'pool_play_medals' as const,
-  }));
+  // V07.02: Calculate total rounds for matchType determination
+  const totalRounds = bracketResult.rounds;
+
+  // Update format to pool_play_medals and set matchType for court allocation
+  const bracketMatches = bracketResult.matches.map(m => {
+    // Determine matchType based on round position
+    let matchType: TournamentMatchType = 'bracket';
+
+    if (m.isThirdPlace) {
+      matchType = 'bronze';
+    } else if (m.roundNumber === totalRounds) {
+      matchType = 'final';
+    } else if (m.roundNumber === totalRounds - 1 && totalRounds >= 2) {
+      matchType = 'semifinal';
+    }
+
+    return {
+      ...m,
+      format: 'pool_play_medals' as const,
+      matchType,
+    };
+  });
 
   // Extract bronze match if present
   let bronzeMatchData: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> | null = null;
@@ -858,6 +877,7 @@ export function generatePlateBracket(
           matchNumber: matchNumber++,
           stage: 'plate',
           bracketType: 'plate',
+          matchType: 'bracket' as TournamentMatchType,  // V07.02: Plate RR uses bracket type (no finals)
           status: 'scheduled',
           scores: [],
         };
@@ -887,13 +907,30 @@ export function generatePlateBracket(
     format: gameSettings.playType === 'singles' ? 'singles_elimination' : 'doubles_elimination',
   });
 
-  // Mark all matches as plate bracket
-  const plateMatches = bracketResult.matches.map(m => ({
-    ...m,
-    format: 'pool_play_medals' as const,
-    stage: 'plate' as const,
-    bracketType: 'plate' as const,
-  }));
+  // V07.02: Calculate total rounds for matchType determination
+  const totalRounds = bracketResult.rounds;
+
+  // Mark all matches as plate bracket with appropriate matchType
+  const plateMatches = bracketResult.matches.map(m => {
+    // Determine matchType for plate bracket
+    let matchType: TournamentMatchType = 'bracket';
+
+    if (m.isThirdPlace) {
+      matchType = 'plate_bronze';
+    } else if (m.roundNumber === totalRounds) {
+      matchType = 'plate_final';
+    } else if (m.roundNumber === totalRounds - 1 && totalRounds >= 2) {
+      matchType = 'semifinal';  // Plate semi-finals (still uses semi courts)
+    }
+
+    return {
+      ...m,
+      format: 'pool_play_medals' as const,
+      stage: 'plate' as const,
+      bracketType: 'plate' as const,
+      matchType,
+    };
+  });
 
   // Extract plate 3rd place match if present
   let plateThirdPlaceMatch: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> | null = null;

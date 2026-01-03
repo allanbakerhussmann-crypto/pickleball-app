@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   DndContext,
   DragEndEvent,
@@ -587,15 +588,18 @@ export const PoolEditor: React.FC<PoolEditorProps> = ({
           ))}
         </div>
 
-        {/* Drag Overlay */}
-        <DragOverlay>
-          {activeTeam && (
-            <TeamDragOverlay
-              team={activeTeam}
-              displayName={getTeamDisplayName(activeTeam.id)}
-            />
-          )}
-        </DragOverlay>
+        {/* Drag Overlay - portaled to body to avoid CSS transform issues */}
+        {createPortal(
+          <DragOverlay>
+            {activeTeam && (
+              <TeamDragOverlay
+                team={activeTeam}
+                displayName={getTeamDisplayName(activeTeam.id)}
+              />
+            )}
+          </DragOverlay>,
+          document.body
+        )}
       </DndContext>
 
       {/* Pool Stats */}

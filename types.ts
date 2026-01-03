@@ -37,6 +37,80 @@ export type TieBreaker =
   | 'games_won';
 
 // ============================================
+// PREMIER COURTS & FINALS SCHEDULING (V07.02)
+// ============================================
+
+/**
+ * Court tier for premier court scheduling.
+ * Finals are played on designated premier courts.
+ */
+export type CourtTier = 'gold' | 'plate' | 'semi' | 'regular';
+
+/**
+ * Match type for tournament matches.
+ * Used to identify match stage for court allocation.
+ */
+export type TournamentMatchType =
+  | 'pool'          // Pool stage match
+  | 'bracket'       // Early bracket rounds (quarters, etc.)
+  | 'semifinal'     // Semi-final match
+  | 'final'         // Gold final (1st place main bracket)
+  | 'bronze'        // Bronze match (3rd place main bracket)
+  | 'plate_final'   // Plate final (1st place plate bracket)
+  | 'plate_bronze'; // Plate 3rd place
+
+/**
+ * Tournament court settings for premier court scheduling.
+ * Configures which courts are used for finals and semi-finals.
+ */
+export interface TournamentCourtSettings {
+  /** Court ID for Gold final and Bronze match */
+  goldCourtId?: string;
+  /** Court ID for Plate final and Plate 3rd place */
+  plateCourtId?: string;
+  /** Court IDs preferred for semi-finals */
+  semiCourtIds?: string[];
+}
+
+/**
+ * Helper to calculate smart default court settings based on court count.
+ * Returns optimal court tier assignments for the number of available courts.
+ */
+export function getDefaultCourtSettings(courts: Court[]): TournamentCourtSettings {
+  const count = courts.length;
+  const ids = courts.map(c => c.id);
+
+  if (count === 0) {
+    return {};
+  }
+
+  if (count === 1) {
+    // Single court: everything on Court 1 (sequential)
+    return {
+      goldCourtId: ids[0],
+      plateCourtId: ids[0],
+      semiCourtIds: [ids[0]],
+    };
+  }
+
+  if (count === 2) {
+    // 2 courts: Gold on 1, Plate on 2, semis on both
+    return {
+      goldCourtId: ids[0],
+      plateCourtId: ids[1],
+      semiCourtIds: ids.slice(0, 2),
+    };
+  }
+
+  // 3+ courts: Full tier system
+  return {
+    goldCourtId: ids[0],
+    plateCourtId: ids[1],
+    semiCourtIds: ids.slice(0, Math.min(4, count)),
+  };
+}
+
+// ============================================
 // USER & PROFILE TYPES
 // ============================================
 
@@ -466,6 +540,8 @@ export interface Tournament {
   sponsorSettings?: SponsorDisplaySettings;
   /** User IDs of tournament staff who can manage live courts and scoring */
   staffIds?: string[];
+  /** Premier court settings for finals scheduling (V07.02) */
+  courtSettings?: TournamentCourtSettings;
 }
 
 /**
@@ -716,6 +792,8 @@ export interface Match {
   poolGroup?: string;
   poolKey?: string;  // V06.21: Normalized pool key for validation/queries
   bracketType?: 'main' | 'plate' | 'consolation';
+  /** Match type for court allocation (V07.02) */
+  matchType?: TournamentMatchType;
 
   // @deprecated Use sideA.id / sideB.id instead
   team1Id?: string;
