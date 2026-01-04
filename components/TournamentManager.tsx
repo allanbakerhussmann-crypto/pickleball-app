@@ -37,6 +37,7 @@ import { TiebreakerSettings } from './tournament/TiebreakerSettings';
 import { DivisionSettingsTab } from './tournament/DivisionSettingsTab';
 import { LiveCourtsTab } from './tournament/LiveCourtsTab';
 import { DayPlannerTab } from './tournament/DayPlannerTab';
+import { CommsTab } from './tournament/CommsTab';
 import { PoolStageTab } from './tournament/PoolStageTab';
 import { MedalBracketTab, IllustrativeBracket } from './tournament/MedalBracketTab';
 import { PoolDrawPreview } from './tournament/PoolDrawPreview';
@@ -162,7 +163,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
     'participants' | 'courts' | 'settings' | 'sponsors' | 'staff' | 'livecourts' | 'pools' |
-    'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder' | 'dayplanner'
+    'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder' | 'dayplanner' | 'comms'
   >('livecourts');
 
   
@@ -423,6 +424,49 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         };
       }),
     [divisionMatches, getTeamDisplayName, getTeamPlayers, matchFlags, activeDivision]
+  );
+
+  // V07.07: All UI matches across ALL divisions (for Live Courts display - shows who's on each court regardless of division)
+  const allUiMatches = useMemo(
+    () =>
+      (matches || []).map(m => {
+        const teamAId = m.teamAId || m.sideA?.id || '';
+        const teamBId = m.teamBId || m.sideB?.id || '';
+        const teamAPlayers = teamAId ? getTeamPlayers(teamAId) : [];
+        const teamBPlayers = teamBId ? getTeamPlayers(teamBId) : [];
+
+        let score1 = null;
+        let score2 = null;
+        if (m.scoreTeamAGames && m.scoreTeamAGames.length > 0) {
+          score1 = m.scoreTeamAGames[0] ?? null;
+          score2 = m.scoreTeamBGames?.[0] ?? null;
+        } else if (m.scores && m.scores.length > 0) {
+          score1 = m.scores[0]?.scoreA ?? null;
+          score2 = m.scores[0]?.scoreB ?? null;
+        }
+
+        return {
+          id: m.id,
+          team1: {
+            id: teamAId,
+            name: m.sideA?.name || (teamAId ? getTeamDisplayName(teamAId) : 'TBD'),
+            players: teamAPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
+          },
+          team2: {
+            id: teamBId,
+            name: m.sideB?.name || (teamBId ? getTeamDisplayName(teamBId) : 'TBD'),
+            players: teamBPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
+          },
+          score1,
+          score2,
+          scores: m.scores,
+          status: m.status || 'not_started',
+          court: m.court,
+          courtName: m.court,
+          divisionId: m.divisionId,  // Include division for reference
+        };
+      }),
+    [matches, getTeamDisplayName, getTeamPlayers]
   );
 
   // Find current user's active match (assigned to court but not completed)
@@ -1342,10 +1386,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               >
                 {/* Settings first (admin only) */}
                 {permissions.isFullAdmin && <option value="settings">⚙️ Settings</option>}
-                {/* Day Planner (multi-day tournaments only, admin only) */}
-                {permissions.isFullAdmin && tournament.days && tournament.days.length > 1 && (
-                  <option value="dayplanner">📅 Day Planner</option>
-                )}
+                {/* Day Planner (admin only) - V07.07: Show for all tournaments */}
+                {permissions.isFullAdmin && <option value="dayplanner">📅 Day Planner</option>}
                 {/* Live Courts (visible to staff) */}
                 <option value="livecourts">📺 Live Courts</option>
                 {/* Format-specific tabs (visible to all with admin view) */}
@@ -1379,14 +1421,18 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                     </svg>
                   )},
-                  // Day Planner (multi-day tournaments only, admin only)
-                  ...(tournament.days && tournament.days.length > 1 ? [{
-                    id: 'dayplanner', label: 'Day Planner', adminOnly: true, icon: (
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                    ),
-                  }] : []),
+                  // Day Planner (admin only) - V07.07: Show for all tournaments
+                  { id: 'dayplanner', label: 'Day Planner', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  )},
+                  // Communications (admin only) - V07.08
+                  { id: 'comms', label: 'Comms', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  )},
                   // Live Courts (visible to staff)
                   { id: 'livecourts', label: 'Live Courts', adminOnly: false, icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2103,17 +2149,43 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             />
           )}
 
-          {adminTab === 'dayplanner' && tournament.days && tournament.days.length > 1 && (
+          {/* V07.07: Day Planner now shows for all tournaments */}
+          {adminTab === 'dayplanner' && (
             <DayPlannerTab
               tournament={tournament}
               divisions={divisions}
               teams={teams}
               courtCount={courts?.length || 4}
+              isAdmin={permissions.isFullAdmin}
               onDivisionDayChange={async (divisionId, newDayId) => {
-                await updateDivision(tournament.id, divisionId, {
-                  tournamentDayId: newDayId || undefined,
-                });
+                try {
+                  // Use null to unassign (clears the field), or the day ID to assign
+                  await updateDivision(tournament.id, divisionId, {
+                    tournamentDayId: newDayId === '' ? null : newDayId,
+                  });
+                } catch (err) {
+                  console.error('Failed to update division day:', err);
+                  // Show more details in console for debugging
+                  console.error('Tournament ID:', tournament.id, 'Division ID:', divisionId, 'New Day ID:', newDayId);
+                }
               }}
+              onTournamentUpdate={async () => {
+                const updated = await getTournament(tournament.id);
+                if (updated) {
+                  await onUpdateTournament(updated);
+                }
+              }}
+            />
+          )}
+
+          {/* V07.08: Communications Tab */}
+          {adminTab === 'comms' && (
+            <CommsTab
+              tournament={tournament}
+              divisions={divisions}
+              teams={teams}
+              playersCache={playersCache}
+              currentUserId={currentUser?.uid || ''}
             />
           )}
 
@@ -2212,12 +2284,18 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             {activeTab === 'details' && (
               <Schedule
                 matches={uiMatches}
+                allMatches={allUiMatches}  // V07.07: All matches for Live Courts (cross-division)
                 courts={courts}
                 queue={queue}
                 queueMatchModels={queueMatchModels}
                 waitTimes={waitTimes}
                 onUpdateScore={handleUpdateScore}
                 isVerified={isVerified}
+                // V07.07: Hide match list for pool_play_medals - matches shown in Pool Stage tab
+                hideMatchList={
+                  activeDivision?.format?.competitionFormat === 'pool_play_medals' ||
+                  activeDivision?.format?.stageMode === 'two_stage'
+                }
               />
             )}
 

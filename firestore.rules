@@ -284,7 +284,11 @@ service cloud.firestore {
 
       match /divisions/{divisionId} {
         allow read: if isAuthenticated();
-        allow write: if isTournamentOrganizer(tournamentId);
+        // V07.08: Allow organizer, app admin, or tournament staff to write divisions
+        allow write: if isTournamentOrganizer(tournamentId) ||
+          isAppAdmin() ||
+          (isAuthenticated() &&
+           request.auth.uid in get(/databases/$(database)/documents/tournaments/$(tournamentId)).data.staffIds);
 
         // V06.33 Results Table Architecture - Pool Results subcollection
         match /poolResults/{poolKey} {
@@ -333,6 +337,22 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         allow create: if isAuthenticated();
         allow update, delete: if isTournamentOrganizer(tournamentId);
+      }
+
+      // Tournament Communications Queue - V07.08
+      // Messages queue for SMS/Email notifications to players
+      match /comms_queue/{messageId} {
+        // Only tournament organizers can read the queue
+        allow read: if isTournamentOrganizer(tournamentId);
+        // Organizers can create pending messages (must match tournament)
+        allow create: if isTournamentOrganizer(tournamentId) &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.tournamentId == tournamentId;
+        // Status updates only via Cloud Functions (lockedAt, sentAt, failedAt, etc.)
+        allow update: if false;
+        // Organizers can delete pending messages only
+        allow delete: if isTournamentOrganizer(tournamentId) &&
+          resource.data.status == 'pending';
       }
     }
 
@@ -584,6 +604,18 @@ service cloud.firestore {
     match /phone_verification_codes/{codeId} {
       // No direct client access - all via Cloud Functions
       allow read, write: if false;
+    }
+
+    // ============================================
+    // COMMUNICATIONS (V07.08)
+    // ============================================
+
+    // Message Templates - Global templates for tournaments/leagues
+    match /comms_templates/{templateId} {
+      // All authenticated users can read templates
+      allow read: if isAuthenticated();
+      // Only app admins can create/update/delete templates
+      allow write: if isAppAdmin();
     }
 
     // ============================================

@@ -1,5 +1,10 @@
 /**
- * Pickleball Director - Type Definitions V07.05
+ * Pickleball Director - Type Definitions V07.08
+ *
+ * UPDATED V07.08:
+ * - Added CommsMessageType, CommsMessageStatus, CommsTemplateCategory union types
+ * - Added CommsTemplate interface for comms_templates collection
+ * - Added CommsQueueMessage interface for tournament comms_queue subcollection
  *
  * UPDATED V07.05:
  * - Added OrganizerAgreement interface for organizer agreement tracking
@@ -577,6 +582,8 @@ export interface Tournament {
   testMode?: boolean;
   /** Tournament day schedule (for multi-day events) */
   days?: TournamentDay[];
+  /** Currently active tournament day ID */
+  activeDayId?: string;
   /** Tournament sponsors */
   sponsors?: TournamentSponsor[];
   /** Sponsor display settings */
@@ -669,8 +676,15 @@ export interface Division {
   /** Manual pool assignments (if organizer edited pools) */
   poolAssignments?: PoolAssignment[];
 
-  /** Day assignment for multi-day tournaments */
+  /** Day assignment for multi-day tournaments (single day - backwards compatible) */
   tournamentDayId?: string;
+  /**
+   * Multiple day assignments for divisions that span multiple days (V07.08)
+   * When a division is split across days, this array contains all assigned day IDs.
+   * If this is set, it takes precedence over tournamentDayId.
+   * Example: A 15-hour division split across Day 1 and Day 2
+   */
+  tournamentDayIds?: string[];
   /** Scheduled start time for this division (e.g., "09:00") */
   scheduledStartTime?: string;
   /** Scheduled end time for this division (e.g., "14:30") */
@@ -2832,5 +2846,100 @@ export interface TeamSnapshot {
   sideAPlayerIds: string[];
   sideBPlayerIds: string[];
   snapshotAt: number;
+}
+
+// ============================================
+// TOURNAMENT COMMUNICATIONS (V07.08)
+// ============================================
+
+/**
+ * Message channel type
+ */
+export type CommsMessageType = 'sms' | 'email';
+
+/**
+ * Message delivery status (MVP: simple flow)
+ * pending → sent | failed
+ */
+export type CommsMessageStatus = 'pending' | 'sent' | 'failed';
+
+/**
+ * Template category for organizing message templates
+ */
+export type CommsTemplateCategory =
+  | 'briefing'           // Day briefing, welcome messages
+  | 'score_reminder'     // Missing score notifications
+  | 'match_notification' // Match assignments, court calls
+  | 'court_assignment'   // Court assignment notifications
+  | 'results'            // Match results, standings updates
+  | 'custom';            // Custom/ad-hoc messages
+
+/**
+ * Reusable message template
+ * Collection: comms_templates/{templateId}
+ *
+ * Templates use {{placeholder}} syntax for variable substitution.
+ * The `variables` array documents expected placeholders.
+ */
+export interface CommsTemplate {
+  // Note: id comes from Firestore document ID, not stored in document
+  name: string;
+  type: CommsMessageType;
+  category: CommsTemplateCategory;
+  subject: string | null;  // Email subject (null for SMS)
+  body: string;            // Message body with {{placeholders}}
+  variables: string[];     // Expected placeholder names
+  isActive: boolean;
+  createdBy: string;       // User ID
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Queued message for sending via Cloud Functions
+ * Collection: tournaments/{tournamentId}/comms_queue/{messageId}
+ *
+ * This collection serves as both queue (pending) and history (sent/failed).
+ * Cloud Functions process pending messages and update status.
+ */
+export interface CommsQueueMessage {
+  // Note: id comes from Firestore document ID, not stored in document
+  type: CommsMessageType;
+  status: CommsMessageStatus;
+
+  // Recipient (required)
+  recipientId: string;           // User ID
+  recipientName: string;         // Display name
+  recipientEmail: string | null; // Required for email type
+  recipientPhone: string | null; // Required for SMS type (E.164 format)
+
+  // Content
+  body: string;                  // Resolved message body (required)
+  subject?: string | null;       // Resolved subject (for email)
+  templateId?: string | null;    // Reference to template used
+  templateData?: Record<string, string> | null; // Merge field values
+
+  // Scope
+  tournamentId: string;          // Parent tournament
+  divisionId?: string | null;    // Optional division filter
+  poolGroup?: string | null;     // Optional pool filter
+  matchId?: string | null;       // Related match (for score reminders)
+
+  // Timestamps
+  createdAt: number;
+  createdBy: string;             // User ID who queued message
+  sentAt?: number | null;        // When successfully sent
+  failedAt?: number | null;      // When failed (final)
+
+  // Error info
+  error?: string | null;         // Error message if failed
+
+  // Concurrency control (MVP safe sending)
+  lockedAt?: number | null;      // When Cloud Function claimed message
+  lockedBy?: string | null;      // Function instance ID
+
+  // Retry tracking
+  retried: boolean;              // True if this is a retry attempt
+  retryOf?: string | null;       // Original message ID if retried
 }
 

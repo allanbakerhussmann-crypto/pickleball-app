@@ -104,3 +104,11 @@ export {
   migrate_markOrganizersForAgreement,
   migrate_getOrganizerAgreementStats,
 } from './migrations/markOrganizersForAgreement';
+
+// ============================================
+// COMMS FUNCTIONS (V07.08) - Tournament Communications
+// ============================================
+
+export {
+  comms_processQueue,
+} from './comms';
