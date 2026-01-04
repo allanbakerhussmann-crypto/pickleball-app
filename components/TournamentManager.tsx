@@ -1384,11 +1384,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 onChange={(e) => setAdminTab(e.target.value as any)}
                 className="md:hidden w-full bg-gray-800 text-white border border-white/10 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500"
               >
-                {/* Settings first (admin only) */}
-                {permissions.isFullAdmin && <option value="settings">⚙️ Settings</option>}
-                {/* Day Planner (admin only) - V07.07: Show for all tournaments */}
-                {permissions.isFullAdmin && <option value="dayplanner">📅 Day Planner</option>}
-                {/* Live Courts (visible to staff) */}
+                {/* Live Courts first (visible to staff) */}
                 <option value="livecourts">📺 Live Courts</option>
                 {/* Format-specific tabs (visible to all with admin view) */}
                 {(activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
@@ -1405,35 +1401,20 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) && (
                   <option value="standings">📊 Standings</option>
                 )}
-                {/* Remaining admin-only tabs */}
+                {/* Admin-only tabs */}
+                {permissions.isFullAdmin && <option value="comms">💬 Comms</option>}
                 {permissions.isFullAdmin && <option value="participants">👥 Teams</option>}
                 {permissions.isFullAdmin && <option value="courts">🏟️ Courts</option>}
                 {permissions.isFullAdmin && <option value="sponsors">🏢 Sponsors</option>}
                 {permissions.isFullAdmin && <option value="staff">👷 Staff</option>}
+                {permissions.isFullAdmin && <option value="dayplanner">📅 Day Planner</option>}
+                {permissions.isFullAdmin && <option value="settings">⚙️ Settings</option>}
               </select>
 
               {/* Desktop Admin Tabs */}
               <div className="hidden md:flex gap-1">
                 {[
-                  // Settings first (admin only)
-                  { id: 'settings', label: 'Settings', adminOnly: true, icon: (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                    </svg>
-                  )},
-                  // Day Planner (admin only) - V07.07: Show for all tournaments
-                  { id: 'dayplanner', label: 'Day Planner', adminOnly: true, icon: (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  )},
-                  // Communications (admin only) - V07.08
-                  { id: 'comms', label: 'Comms', adminOnly: true, icon: (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                  )},
-                  // Live Courts (visible to staff)
+                  // Live Courts first (visible to staff)
                   { id: 'livecourts', label: 'Live Courts', adminOnly: false, icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -1470,6 +1451,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       </svg>
                     )},
                   ] : []),
+                  // Communications (admin only) - V07.08
+                  { id: 'comms', label: 'Comms', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                  )},
                   // Teams (admin only)
                   { id: 'participants', label: 'Teams', adminOnly: true, icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1492,6 +1479,18 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   { id: 'staff', label: 'Staff', adminOnly: true, icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                    </svg>
+                  )},
+                  // Day Planner (admin only)
+                  { id: 'dayplanner', label: 'Day Planner', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  )},
+                  // Settings last (admin only)
+                  { id: 'settings', label: 'Settings', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                     </svg>
                   )},
                 ]
