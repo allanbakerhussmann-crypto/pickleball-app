@@ -2,7 +2,13 @@
  * Match Management and Schedule Generation
  *
  * FILE LOCATION: services/firebase/matches.ts
- * VERSION: V06.39 - Bronze Match & Plate Bracket Support
+ * VERSION: V07.04 - DUPR-Compliant teamSnapshot
+ *
+ * Key changes in V07.04:
+ * - Added teamSnapshot to pool matches (sideAPlayerIds, sideBPlayerIds, snapshotAt)
+ * - Added teamSnapshot to bracket matches (populated empty, updated on advancement)
+ * - completeMatchWithAdvancement now updates teamSnapshot when advancing to next match
+ * - teamSnapshot used by Firestore rules to validate signer is on opposing team
  *
  * Key changes in V06.39:
  * - generateBracketFromSeeds() now creates bronze/3rd place match when configured
@@ -164,19 +170,45 @@ export const completeMatchWithAdvancement = async (
   // Build modern scores array
   const scoresModern = scores.map((s, i) => ({
     gameNumber: i + 1,
-    scoreA: s.team1Score ?? s.teamAScore ?? 0,
-    scoreB: s.team2Score ?? s.teamBScore ?? 0,
+    scoreA: s.team1Score ?? s.teamAScore ?? s.scoreA ?? 0,
+    scoreB: s.team2Score ?? s.teamBScore ?? s.scoreB ?? 0,
   }));
 
-  // Update current match with BOTH legacy and modern formats
+  // Get winner name for officialResult
+  const sideAId = match.sideA?.id || match.teamAId || '';
+  const sideBId = match.sideB?.id || match.teamBId || '';
+  const isWinnerSideA = winnerId === sideAId;
+  const winnerName = isWinnerSideA ? match.sideA?.name : match.sideB?.name;
+
+  // V07.10: DUPR Compliance Guardrail
+  // ALL match completions MUST write officialResult + scoreLocked in same batch
+  // This ensures standings/brackets only count officially finalized matches
+  const officialResult = {
+    scores: scoresModern,
+    winnerId,
+    winnerName: winnerName || `Team ${winnerId.slice(0, 4)}`,
+    finalisedByUserId: userId || 'system',
+    finalisedAt: now,
+    version: 1,
+  };
+
+  // Update current match with BOTH legacy and modern formats + officialResult
   batch.update(matchRef, {
+    // DUPR-compliant official result (guardrail)
+    officialResult,
+    scoreState: 'official',
+    scoreLocked: true,
+    scoreLockedAt: now,
+    scoreLockedByUserId: userId || 'system',
+    // Standard completion fields
     status: 'completed',
     completedAt: now,
     winnerId: winnerId,
     winnerTeamId: winnerId,
     scores: scoresModern,
-    scoreTeamAGames: scores.map(s => s.team1Score ?? s.teamAScore ?? 0),
-    scoreTeamBGames: scores.map(s => s.team2Score ?? s.teamBScore ?? 0),
+    // Legacy fields for backward compatibility
+    scoreTeamAGames: scores.map(s => s.team1Score ?? s.teamAScore ?? s.scoreA ?? 0),
+    scoreTeamBGames: scores.map(s => s.team2Score ?? s.teamBScore ?? s.scoreB ?? 0),
     endTime: now,
     lastUpdatedBy: userId || null,
     lastUpdatedAt: now,
@@ -185,11 +217,7 @@ export const completeMatchWithAdvancement = async (
   // ============================================
   // Determine winner and loser side data
   // ============================================
-  // Get the winning side's full data (id, name, playerIds)
-  const sideAId = match.sideA?.id || match.teamAId || '';
-  const sideBId = match.sideB?.id || match.teamBId || '';
-
-  const isWinnerSideA = winnerId === sideAId;
+  // Note: sideAId, sideBId, isWinnerSideA already declared above for officialResult
   const winnerSide = isWinnerSideA ? match.sideA : match.sideB;
   const loserSide = isWinnerSideA ? match.sideB : match.sideA;
 
@@ -227,17 +255,21 @@ export const completeMatchWithAdvancement = async (
     const isSideA = match.nextMatchSlot === 'teamA' || match.nextMatchSlot === 'sideA';
 
     if (isSideA) {
-      // Update sideA (modern) + teamAId (legacy)
+      // Update sideA (modern) + teamAId (legacy) + teamSnapshot (V07.04)
       batch.update(nextMatchRef, {
         sideA: winnerData,
         teamAId: winnerId,
+        'teamSnapshot.sideAPlayerIds': winnerData.playerIds || [],
+        'teamSnapshot.snapshotAt': now,
         lastUpdatedAt: now,
       });
     } else {
-      // Update sideB (modern) + teamBId (legacy)
+      // Update sideB (modern) + teamBId (legacy) + teamSnapshot (V07.04)
       batch.update(nextMatchRef, {
         sideB: winnerData,
         teamBId: winnerId,
+        'teamSnapshot.sideBPlayerIds': winnerData.playerIds || [],
+        'teamSnapshot.snapshotAt': now,
         lastUpdatedAt: now,
       });
     }
@@ -256,17 +288,21 @@ export const completeMatchWithAdvancement = async (
     const isLoserSideA = loserNextMatchSlot === 'teamA' || loserNextMatchSlot === 'sideA';
 
     if (isLoserSideA) {
-      // Update sideA (modern) + teamAId (legacy)
+      // Update sideA (modern) + teamAId (legacy) + teamSnapshot (V07.04)
       batch.update(loserMatchRef, {
         sideA: loserData,
         teamAId: loserId,
+        'teamSnapshot.sideAPlayerIds': loserData.playerIds || [],
+        'teamSnapshot.snapshotAt': now,
         lastUpdatedAt: now,
       });
     } else {
-      // Update sideB (modern) + teamBId (legacy)
+      // Update sideB (modern) + teamBId (legacy) + teamSnapshot (V07.04)
       batch.update(loserMatchRef, {
         sideB: loserData,
         teamBId: loserId,
+        'teamSnapshot.sideBPlayerIds': loserData.playerIds || [],
+        'teamSnapshot.snapshotAt': now,
         lastUpdatedAt: now,
       });
     }
@@ -754,6 +790,12 @@ export const generatePoolPlaySchedule = async (
         stage: 'pool',
         createdAt: now,
         updatedAt: now,
+        // V07.04: Team snapshot for score verification (signer must be on opposing team)
+        teamSnapshot: {
+          sideAPlayerIds: matchData.sideA?.playerIds || [],
+          sideBPlayerIds: matchData.sideB?.playerIds || [],
+          snapshotAt: now,
+        },
       };
 
       const cleanedMatch = removeUndefined(match as Record<string, unknown>);
@@ -1790,6 +1832,13 @@ export const generateBracketFromSeeds = async (
       testData,
       createdAt: now,
       updatedAt: now,
+      // V07.04: Team snapshot for score verification
+      // Note: playerIds empty here, populated when teams are looked up or on advancement
+      teamSnapshot: {
+        sideAPlayerIds: [],
+        sideBPlayerIds: [],
+        snapshotAt: now,
+      },
     };
 
     // Only add winnerId/winnerTeamId/completedAt for BYE matches
@@ -1871,6 +1920,12 @@ export const generateBracketFromSeeds = async (
         testData,
         createdAt: now,
         updatedAt: now,
+        // V07.04: Team snapshot - empty for TBD matches, populated on advancement
+        teamSnapshot: {
+          sideAPlayerIds: [],
+          sideBPlayerIds: [],
+          snapshotAt: now,
+        },
       };
 
       await setDoc(matchRef, sanitizeForFirestore(match));
@@ -1949,6 +2004,12 @@ export const generateBracketFromSeeds = async (
       testData,
       createdAt: now,
       updatedAt: now,
+      // V07.04: Team snapshot - empty for TBD matches, populated on advancement
+      teamSnapshot: {
+        sideAPlayerIds: [],
+        sideBPlayerIds: [],
+        snapshotAt: now,
+      },
     };
 
     await setDoc(bronzeRef, sanitizeForFirestore(bronzeMatch));

@@ -22,7 +22,8 @@ import {
   updateDoc,
   runTransaction,
 } from '@firebase/firestore';
-import { db } from './config';
+import { httpsCallable } from '@firebase/functions';
+import { db, functions } from './config';
 import type {
   Match,
   GameScore,
@@ -615,6 +616,93 @@ export async function requestDuprSubmission(
     'dupr.pendingSubmissionAt': Date.now(),
     updatedAt: Date.now(),
   });
+}
+
+/**
+ * Request bulk DUPR submission for all eligible matches (organizer action)
+ *
+ * This calls the Cloud Function to queue all eligible matches for submission.
+ * The actual API calls happen server-side only.
+ *
+ * @returns Object with batchId and counts
+ */
+export async function requestBulkDuprSubmission(
+  eventType: EventType,
+  eventId: string,
+  _organizerUserId: string
+): Promise<{ batchId: string; queuedCount: number; skippedCount: number; failedCount: number }> {
+  const submitMatches = httpsCallable<
+    { eventType: string; eventId: string; matchIds?: string[] },
+    { success: boolean; batchId?: string; eligibleCount?: number; ineligibleCount?: number; error?: string }
+  >(functions, 'dupr_submitMatches');
+
+  try {
+    // Call Cloud Function without specific matchIds to submit all eligible
+    const result = await submitMatches({
+      eventType,
+      eventId,
+    });
+
+    if (!result.data.success) {
+      throw new DuprScoringError(
+        result.data.error || 'Failed to queue matches for DUPR submission',
+        'VALIDATION_FAILED'
+      );
+    }
+
+    return {
+      batchId: result.data.batchId || '',
+      queuedCount: result.data.eligibleCount || 0,
+      skippedCount: result.data.ineligibleCount || 0,
+      failedCount: 0,
+    };
+  } catch (error: any) {
+    throw new DuprScoringError(
+      error.message || 'Failed to request bulk DUPR submission',
+      'VALIDATION_FAILED'
+    );
+  }
+}
+
+/**
+ * Retry failed DUPR submissions (organizer action)
+ *
+ * This calls the Cloud Function to retry all failed submissions.
+ * Increments attemptCount and creates a new batch.
+ */
+export async function retryFailedDuprSubmissions(
+  eventType: EventType,
+  eventId: string,
+  _organizerUserId: string
+): Promise<{ batchId: string; retriedCount: number }> {
+  const retryFailed = httpsCallable<
+    { eventType: string; eventId: string },
+    { success: boolean; batchId?: string; retriedCount?: number; error?: string }
+  >(functions, 'dupr_retryFailed');
+
+  try {
+    const result = await retryFailed({
+      eventType,
+      eventId,
+    });
+
+    if (!result.data.success) {
+      throw new DuprScoringError(
+        result.data.error || 'Failed to retry failed submissions',
+        'VALIDATION_FAILED'
+      );
+    }
+
+    return {
+      batchId: result.data.batchId || '',
+      retriedCount: result.data.retriedCount || 0,
+    };
+  } catch (error: any) {
+    throw new DuprScoringError(
+      error.message || 'Failed to retry failed DUPR submissions',
+      'VALIDATION_FAILED'
+    );
+  }
 }
 
 // ============================================

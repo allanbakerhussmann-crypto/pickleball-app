@@ -52,6 +52,7 @@ import { ClubBrandingSection } from './shared/ClubBrandingSection';
 import { useTournamentPermissions } from '../hooks/useTournamentPermissions';
 import { clearTestData, quickScoreMatch, simulatePoolCompletion, deleteCorruptedSelfMatches, deletePoolMatches } from '../services/firebase/matches';
 import { getTournament } from '../services/firebase/tournaments';
+import { DuprControlPanel } from './shared/DuprControlPanel';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -163,7 +164,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
     'participants' | 'courts' | 'settings' | 'sponsors' | 'staff' | 'livecourts' | 'pools' |
-    'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder' | 'dayplanner' | 'comms'
+    'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder' | 'dayplanner' | 'comms' | 'dupr'
   >('livecourts');
 
   
@@ -1408,6 +1409,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 {permissions.isFullAdmin && <option value="sponsors">🏢 Sponsors</option>}
                 {permissions.isFullAdmin && <option value="staff">👷 Staff</option>}
                 {permissions.isFullAdmin && <option value="dayplanner">📅 Day Planner</option>}
+                {permissions.isFullAdmin && <option value="dupr">📊 DUPR</option>}
                 {permissions.isFullAdmin && <option value="settings">⚙️ Settings</option>}
               </select>
 
@@ -1485,6 +1487,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   { id: 'dayplanner', label: 'Day Planner', adminOnly: true, icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  )},
+                  // DUPR (admin only) - V07.10
+                  { id: 'dupr', label: 'DUPR', adminOnly: true, icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                     </svg>
                   )},
                   // Settings last (admin only)
@@ -2100,6 +2108,20 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 })()}
               </div>
             </div>
+          )}
+
+          {adminTab === 'dupr' && permissions.isFullAdmin && (
+            <DuprControlPanel
+              eventType="tournament"
+              eventId={tournament.id}
+              eventName={tournament.name}
+              matches={divisionMatches}
+              divisionId={activeDivisionId}
+              divisionName={activeDivision?.name}
+              isOrganizer={permissions.isFullAdmin}
+              currentUserId={currentUser?.uid || ''}
+              playersCache={playersCache}
+            />
           )}
 
           {adminTab === 'settings' && (

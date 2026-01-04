@@ -37,6 +37,7 @@ import type {
 } from '../../types';
 import type { BoxLeaguePlayer } from '../../types/boxLeague';
 import { LeagueStandings } from './LeagueStandings';
+import { DuprControlPanel } from '../shared/DuprControlPanel';
 
 // ============================================
 // TYPES
@@ -47,7 +48,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'players' | 'schedule' | 'info';
+type TabType = 'standings' | 'matches' | 'players' | 'schedule' | 'dupr' | 'info';
 
 // ============================================
 // COMPONENT
@@ -491,9 +492,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const isOrganizer = currentUser?.uid === league.createdByUserId;
   const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active');
 
-  // Determine which tabs to show - Schedule and Players tabs only for organizers
+  // Determine which tabs to show - Schedule, Players, and DUPR tabs only for organizers
   const availableTabs: TabType[] = isOrganizer
-    ? ['standings', 'matches', 'players', 'schedule', 'info']
+    ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info']
     : ['standings', 'matches', 'info'];
 
   return (
@@ -795,8 +796,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {tab === 'matches' && '🎾 '}
             {tab === 'players' && '👥 '}
             {tab === 'schedule' && '📅 '}
+            {tab === 'dupr' && '📊 '}
             {tab === 'info' && 'ℹ️ '}
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab === 'dupr' ? 'DUPR' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
       </div>
@@ -907,6 +909,21 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           matches={matches}
           divisions={divisions}
           onScheduleGenerated={handleScheduleGenerated}
+        />
+      )}
+
+      {/* DUPR TAB - Organizer Only */}
+      {activeTab === 'dupr' && isOrganizer && (
+        <DuprControlPanel
+          eventType="league"
+          eventId={leagueId}
+          eventName={league.name}
+          matches={filteredMatches as any[]}
+          isOrganizer={isOrganizer}
+          currentUserId={currentUser?.uid || ''}
+          onMatchUpdate={() => {
+            // Matches will auto-update via subscription
+          }}
         />
       )}
 
