@@ -127,7 +127,12 @@ export async function proposeScore(
     }
 
     // Validate winnerId is one of the sides
-    if (winnerId !== match.sideA?.id && winnerId !== match.sideB?.id) {
+    // Support both tournament format (sideA.id/sideB.id) and league format (memberAId/memberBId)
+    const leagueMatch = match as any;
+    const sideAId = match.sideA?.id || leagueMatch.memberAId;
+    const sideBId = match.sideB?.id || leagueMatch.memberBId;
+
+    if (winnerId !== sideAId && winnerId !== sideBId) {
       throw new DuprScoringError(
         'Winner must be sideA or sideB',
         'VALIDATION_FAILED'
@@ -140,8 +145,9 @@ export async function proposeScore(
     }
 
     // Get winner name
-    const winnerName =
-      winnerId === match.sideA?.id ? match.sideA?.name : match.sideB?.name;
+    const sideAName = match.sideA?.name || leagueMatch.memberAName;
+    const sideBName = match.sideB?.name || leagueMatch.memberBName;
+    const winnerName = winnerId === sideAId ? sideAName : sideBName;
 
     // Create score proposal
     const scoreProposal: ScoreProposal = {
@@ -157,9 +163,15 @@ export async function proposeScore(
     // Create or update team snapshot if not exists
     let teamSnapshot = match.teamSnapshot;
     if (!teamSnapshot) {
+      // Build player IDs from tournament format or league format
+      const sideAPlayerIds = match.sideA?.playerIds ||
+        [leagueMatch.userAId, leagueMatch.partnerAId].filter(Boolean);
+      const sideBPlayerIds = match.sideB?.playerIds ||
+        [leagueMatch.userBId, leagueMatch.partnerBId].filter(Boolean);
+
       teamSnapshot = {
-        sideAPlayerIds: match.sideA?.playerIds || [],
-        sideBPlayerIds: match.sideB?.playerIds || [],
+        sideAPlayerIds,
+        sideBPlayerIds,
         snapshotAt: Date.now(),
       };
     }

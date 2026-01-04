@@ -299,8 +299,16 @@ export function isUserOnSideA(match: Match, userId: string): boolean {
   if (match.teamSnapshot?.sideAPlayerIds) {
     return match.teamSnapshot.sideAPlayerIds.includes(userId);
   }
-  // Fall back to current sideA
-  return match.sideA?.playerIds?.includes(userId) ?? false;
+  // Check sideA.playerIds (tournament format)
+  if (match.sideA?.playerIds?.includes(userId)) {
+    return true;
+  }
+  // Check league match fields (userAId, partnerAId)
+  const leagueMatch = match as any;
+  if (leagueMatch.userAId === userId || leagueMatch.partnerAId === userId) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -311,8 +319,16 @@ export function isUserOnSideB(match: Match, userId: string): boolean {
   if (match.teamSnapshot?.sideBPlayerIds) {
     return match.teamSnapshot.sideBPlayerIds.includes(userId);
   }
-  // Fall back to current sideB
-  return match.sideB?.playerIds?.includes(userId) ?? false;
+  // Check sideB.playerIds (tournament format)
+  if (match.sideB?.playerIds?.includes(userId)) {
+    return true;
+  }
+  // Check league match fields (userBId, partnerBId)
+  const leagueMatch = match as any;
+  if (leagueMatch.userBId === userId || leagueMatch.partnerBId === userId) {
+    return true;
+  }
+  return false;
 }
 
 /**
