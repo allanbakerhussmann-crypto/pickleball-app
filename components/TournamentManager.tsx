@@ -36,8 +36,9 @@ import { PoolEditor } from './tournament/PoolEditor';
 import { TiebreakerSettings } from './tournament/TiebreakerSettings';
 import { DivisionSettingsTab } from './tournament/DivisionSettingsTab';
 import { LiveCourtsTab } from './tournament/LiveCourtsTab';
+import { DayPlannerTab } from './tournament/DayPlannerTab';
 import { PoolStageTab } from './tournament/PoolStageTab';
-import { MedalBracketTab } from './tournament/MedalBracketTab';
+import { MedalBracketTab, IllustrativeBracket } from './tournament/MedalBracketTab';
 import { PoolDrawPreview } from './tournament/PoolDrawPreview';
 import { generatePoolAssignments, savePoolAssignments } from '../services/firebase/poolAssignments';
 import { TestModeWrapper } from './tournament/TestModeWrapper';
@@ -161,7 +162,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
     'participants' | 'courts' | 'settings' | 'sponsors' | 'staff' | 'livecourts' | 'pools' |
-    'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder'
+    'pool-stage' | 'medal-bracket' | 'bracket' | 'standings' | 'swiss-rounds' | 'ladder' | 'dayplanner'
   >('livecourts');
 
   
@@ -406,8 +407,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           },
           score1,
           score2,
+          scores: m.scores,  // Full scores array for multi-game display
           status: m.status || 'not_started',
           roundNumber: m.roundNumber || 1,
+          bracketPosition: m.bracketPosition,  // Position within round for ordering
+          bracketType: m.bracketType,  // main or plate
+          matchType: m.matchType,  // final, semifinal, etc.
+          isThirdPlace: m.isThirdPlace,  // Bronze match flag
           court: m.court,
           courtName: m.court,
           poolGroup: m.poolGroup,  // Include pool group for pool stage display
@@ -1336,6 +1342,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               >
                 {/* Settings first (admin only) */}
                 {permissions.isFullAdmin && <option value="settings">⚙️ Settings</option>}
+                {/* Day Planner (multi-day tournaments only, admin only) */}
+                {permissions.isFullAdmin && tournament.days && tournament.days.length > 1 && (
+                  <option value="dayplanner">📅 Day Planner</option>
+                )}
                 {/* Live Courts (visible to staff) */}
                 <option value="livecourts">📺 Live Courts</option>
                 {/* Format-specific tabs (visible to all with admin view) */}
@@ -1369,6 +1379,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                     </svg>
                   )},
+                  // Day Planner (multi-day tournaments only, admin only)
+                  ...(tournament.days && tournament.days.length > 1 ? [{
+                    id: 'dayplanner', label: 'Day Planner', adminOnly: true, icon: (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    ),
+                  }] : []),
                   // Live Courts (visible to staff)
                   { id: 'livecourts', label: 'Live Courts', adminOnly: false, icon: (
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2085,6 +2103,20 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             />
           )}
 
+          {adminTab === 'dayplanner' && tournament.days && tournament.days.length > 1 && (
+            <DayPlannerTab
+              tournament={tournament}
+              divisions={divisions}
+              teams={teams}
+              courtCount={courts?.length || 4}
+              onDivisionDayChange={async (divisionId, newDayId) => {
+                await updateDivision(tournament.id, divisionId, {
+                  tournamentDayId: newDayId || undefined,
+                });
+              }}
+            />
+          )}
+
           {adminTab === 'livecourts' && (
             <LiveCourtsTab
               tournament={tournament}
@@ -2320,20 +2352,32 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 (m as any).stage === 'plate'
               );
 
+              // Separate bronze matches
+              const mainRegular = bracketMatches.filter(m => !(m as any).isThirdPlace);
+              const mainBronze = bracketMatches.filter(m => (m as any).isThirdPlace);
+              const plateRegular = plateMatches.filter(m => !(m as any).isThirdPlace);
+              const plateBronze = plateMatches.filter(m => (m as any).isThirdPlace);
+
               const plateEnabled = activeDivision?.format?.plateEnabled === true;
               const plateName = activeDivision?.format?.plateName || 'Plate';
-              const hasMainBracket = bracketMatches.length > 0;
-              const hasPlateBracket = plateMatches.length > 0;
+              const hasMainBracket = mainRegular.length > 0;
+              const hasPlateBracket = plateRegular.length > 0;
+
+              // No-op handlers for public view (read-only)
+              const noOpUpdateScore = () => {};
+              const noOpOpenModal = () => {};
+              const noEditAllowed = () => false;
 
               return (
                 <div className="space-y-8">
                   {/* Main Bracket */}
                   {hasMainBracket ? (
-                    <BracketViewer
-                      matches={bracketMatches}
-                      onUpdateScore={handleUpdateScore}
-                      onUpdateMultiGameScore={handleUpdateMultiGameScore}
-                      isVerified={isVerified}
+                    <IllustrativeBracket
+                      matches={mainRegular}
+                      bronzeMatches={mainBronze}
+                      onUpdateScore={noOpUpdateScore}
+                      onOpenScoreModal={noOpOpenModal}
+                      canEditMatch={noEditAllowed}
                       bracketTitle="Main Bracket"
                       bracketType="main"
                       finalsLabel="Gold Medal Match"
@@ -2350,11 +2394,12 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   {/* Plate Bracket (if enabled) */}
                   {plateEnabled && (
                     hasPlateBracket ? (
-                      <BracketViewer
-                        matches={plateMatches}
-                        onUpdateScore={handleUpdateScore}
-                        onUpdateMultiGameScore={handleUpdateMultiGameScore}
-                        isVerified={isVerified}
+                      <IllustrativeBracket
+                        matches={plateRegular}
+                        bronzeMatches={plateBronze}
+                        onUpdateScore={noOpUpdateScore}
+                        onOpenScoreModal={noOpOpenModal}
+                        canEditMatch={noEditAllowed}
                         bracketTitle={`${plateName} Bracket`}
                         bracketType="plate"
                         finalsLabel={`${plateName} Final`}

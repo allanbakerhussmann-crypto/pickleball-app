@@ -120,6 +120,61 @@ interface CourtMatchModel {
   isReady: boolean;       // True if match can be assigned now (no rest needed)
 }
 
+/**
+ * Generate a descriptive round label for court display
+ * Examples: "Gold Final", "Bronze Match", "Plate Semi", "Pool A", "Quarter-Final"
+ */
+function getMatchRoundLabel(m: Match): string {
+  // Use matchType for most descriptive labeling
+  switch (m.matchType) {
+    case 'final':
+      return 'Gold Final';
+    case 'bronze':
+      return 'Bronze Match';
+    case 'plate_final':
+      return 'Plate Final';
+    case 'plate_bronze':
+      return 'Plate 3rd';
+    case 'semifinal':
+      if (m.bracketType === 'plate') {
+        return 'Plate Semi';
+      }
+      return 'Semi-Final';
+    case 'bracket':
+      // For bracket matches, try to determine round name
+      if (m.stage && m.stage !== 'bracket') {
+        return m.stage;
+      }
+      // Check roundNumber for quarter-finals, etc.
+      if (m.roundNumber) {
+        const roundNames: Record<number, string> = {
+          1: 'Round of 16',
+          2: 'Quarter-Final',
+          3: 'Semi-Final',
+          4: 'Final',
+        };
+        const label = roundNames[m.roundNumber] || `Round ${m.roundNumber}`;
+        const bracketPrefix = m.bracketType === 'plate' ? 'Plate ' : '';
+        return `${bracketPrefix}${label}`;
+      }
+      return m.bracketType === 'plate' ? 'Plate Bracket' : 'Bracket';
+    case 'pool':
+      if (m.poolGroup) {
+        return `Pool ${m.poolGroup}`;
+      }
+      return 'Pool Play';
+    default:
+      // Fallback: use stage or round number
+      if (m.stage && m.stage !== 'bracket' && m.stage !== 'Unknown') {
+        return m.stage;
+      }
+      if (m.poolGroup) {
+        return `Pool ${m.poolGroup}`;
+      }
+      return `Round ${m.roundNumber || 1}`;
+  }
+}
+
 interface UseCourtManagementReturn {
   // View models
   courtViewModels: CourtViewModel[];
@@ -137,7 +192,7 @@ interface UseCourtManagementReturn {
   // Actions
   assignMatchToCourt: (matchId: string, courtName: string) => Promise<void>;
   startMatchOnCourt: (courtId: string) => Promise<void>;
-  finishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number) => Promise<void>;
+  finishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number, scores?: Array<{ gameNumber?: number; scoreA: number; scoreB: number }>) => Promise<void>;
   handleAssignCourt: (matchId: string) => Promise<void>;
   autoAssignFreeCourts: (options?: { silent?: boolean }) => Promise<void>;
 }
@@ -634,8 +689,8 @@ export const useCourtManagement = ({
 
       return {
         id: m.id,
-        division: division?.name || 'Unknown',
-        roundLabel: m.stage || `Round ${m.roundNumber || 1}`,
+        division: division?.name || '',
+        roundLabel: getMatchRoundLabel(m),
         matchLabel: `Match ${m.matchNumber ?? m.id.slice(-4)}`,
         teamAName,
         teamBName,
@@ -712,8 +767,8 @@ export const useCourtManagement = ({
 
       return {
         id: m.id,
-        division: division?.name || 'Unknown',
-        roundLabel: m.stage || `Round ${m.roundNumber || 1}`,
+        division: division?.name || '',
+        roundLabel: getMatchRoundLabel(m),
         matchLabel: `Match ${m.matchNumber ?? m.id.slice(-4)}`,
         teamAName,
         teamBName,
@@ -871,18 +926,36 @@ export const useCourtManagement = ({
   const finishMatchOnCourt = useCallback(async (
     courtId: string,
     scoreTeamA?: number,
-    scoreTeamB?: number
+    scoreTeamB?: number,
+    scoresFromModal?: Array<{ gameNumber?: number; scoreA: number; scoreB: number }>
   ) => {
+    console.log('[finishMatchOnCourt] Called with:', { courtId, scoreTeamA, scoreTeamB, scoresFromModal });
+    console.log('[finishMatchOnCourt] Available courts:', safeCourts.map(c => ({ id: c.id, name: c.name })));
+
     const court = safeCourts.find(c => c.id === courtId);
-    if (!court) return;
+    if (!court) {
+      console.error('[finishMatchOnCourt] Court not found! courtId:', courtId);
+      return;
+    }
+    console.log('[finishMatchOnCourt] Found court:', court.name);
 
     const currentMatch = safeMatches.find(
       m => m.court === court.name && m.status !== 'completed'
     );
     if (!currentMatch) {
+      console.error('[finishMatchOnCourt] No match found on court:', court.name);
       alert('No active match found on this court.');
       return;
     }
+    console.log('[finishMatchOnCourt] Found match:', currentMatch.id, 'status:', currentMatch.status);
+
+    // Check if scores were passed from ScoreEntryModal (V07.07: new parameter)
+    const hasModalScores =
+      Array.isArray(scoresFromModal) &&
+      scoresFromModal.length > 0 &&
+      scoresFromModal[0]?.scoreA !== undefined &&
+      scoresFromModal[0]?.scoreB !== undefined;
+    console.log('[finishMatchOnCourt] hasModalScores:', hasModalScores);
 
     // Support both OLD (scoreTeamAGames) and NEW (scores[]) formats
     const existingHasOldScores =
@@ -905,7 +978,7 @@ export const useCourtManagement = ({
       typeof scoreTeamB === 'number' &&
       !Number.isNaN(scoreTeamB);
 
-    if (!existingHasScores && !inlineHasScores) {
+    if (!hasModalScores && !existingHasScores && !inlineHasScores) {
       alert('Please enter scores for both teams before finishing this match.');
       return;
     }
@@ -916,7 +989,16 @@ export const useCourtManagement = ({
     let gamesWonB = 0;
     let allScores: Array<{ scoreA: number; scoreB: number }> = [];
 
-    if (existingHasOldScores) {
+    // V07.07: Prioritize scores from modal (most reliable source)
+    if (hasModalScores) {
+      for (const game of scoresFromModal!) {
+        const scoreA = game.scoreA ?? 0;
+        const scoreB = game.scoreB ?? 0;
+        allScores.push({ scoreA, scoreB });
+        if (scoreA > scoreB) gamesWonA++;
+        else if (scoreB > scoreA) gamesWonB++;
+      }
+    } else if (existingHasOldScores) {
       // Legacy format: scoreTeamAGames[] and scoreTeamBGames[]
       const scoresA = currentMatch.scoreTeamAGames!;
       const scoresB = currentMatch.scoreTeamBGames!;
@@ -958,10 +1040,14 @@ export const useCourtManagement = ({
       bestOf: fmt?.bestOfGames ?? gs?.bestOf ?? 1,
     };
 
+    console.log('[finishMatchOnCourt] allScores:', allScores);
+    console.log('[finishMatchOnCourt] gameSettings for validation:', gameSettings);
+
     // Validate all scores against game rules
     for (let i = 0; i < allScores.length; i++) {
       const game = allScores[i];
       const validation = validateGameScore(game.scoreA, game.scoreB, gameSettings);
+      console.log('[finishMatchOnCourt] Validation result for game', i + 1, ':', validation);
       if (!validation.valid) {
         alert(`Game ${i + 1} score invalid: ${validation.error}\n\nRules: First to ${gameSettings.pointsPerGame}, win by ${gameSettings.winBy}`);
         return;
@@ -971,6 +1057,7 @@ export const useCourtManagement = ({
     // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
     const teamAId = currentMatch.teamAId || currentMatch.sideA?.id || '';
     const teamBId = currentMatch.teamBId || currentMatch.sideB?.id || '';
+    console.log('[finishMatchOnCourt] teamAId:', teamAId, 'teamBId:', teamBId);
 
     // Winner is determined by who won more GAMES, not just first game
     const winnerId = gamesWonA > gamesWonB ? teamAId : teamBId;
@@ -1015,7 +1102,9 @@ export const useCourtManagement = ({
         scoreTeamBGames: allScores.map(s => s.scoreB),
       };
 
+      console.log('[finishMatchOnCourt] Saving updates to match:', currentMatch.id, updates);
       await updateMatchScore(tournamentId, currentMatch.id, updates);
+      console.log('[finishMatchOnCourt] Save completed successfully!');
 
       // V06.36: Update pool results if this is a pool match
       if (currentMatch.divisionId) {

@@ -113,9 +113,14 @@ export const SponsorManagement: React.FC<SponsorManagementProps> = ({
         // Update existing sponsor
         const updates: Partial<TournamentSponsor> = {
           name: name.trim(),
-          websiteUrl: websiteUrl.trim() || undefined,
           tier,
         };
+
+        // Only include websiteUrl if it has a value (Firestore doesn't allow undefined)
+        const trimmedWebsiteUrl = websiteUrl.trim();
+        if (trimmedWebsiteUrl) {
+          updates.websiteUrl = trimmedWebsiteUrl;
+        }
 
         // Upload new logo if provided
         if (logoFile) {
@@ -129,13 +134,19 @@ export const SponsorManagement: React.FC<SponsorManagementProps> = ({
         const tempId = `temp_${Date.now()}`;
         const logoUrl = await uploadSponsorLogo(tournamentId, tempId, logoFile!);
 
-        await addTournamentSponsor(tournamentId, {
+        // Build sponsor data, only including websiteUrl if it has a value
+        const trimmedWebsiteUrl = websiteUrl.trim();
+        const sponsorData: Partial<TournamentSponsor> & { name: string; logoUrl: string; tier: SponsorTier; isActive: boolean } = {
           name: name.trim(),
           logoUrl,
-          websiteUrl: websiteUrl.trim() || undefined,
           tier,
           isActive: true,
-        });
+        };
+        if (trimmedWebsiteUrl) {
+          sponsorData.websiteUrl = trimmedWebsiteUrl;
+        }
+
+        await addTournamentSponsor(tournamentId, sponsorData);
       }
 
       resetForm();

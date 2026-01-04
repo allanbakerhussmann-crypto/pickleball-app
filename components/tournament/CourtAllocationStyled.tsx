@@ -1,8 +1,13 @@
 /**
- * CourtAllocationStyled - V07.02
+ * CourtAllocationStyled - V07.04
  *
  * Redesigned Court Allocation with "Sports Command Center" aesthetic.
  * Matches the visual style of DivisionSettingsTab.
+ *
+ * V07.04: DUPR-Compliant Scoring
+ * - Added isOrganizer and onFinaliseResult props for DUPR-compliant finalization
+ * - Uses FinaliseScoreModal for organizers when onFinaliseResult is provided
+ * - Organizer finalization creates officialResult and sets scoreLocked
  *
  * @file components/tournament/CourtAllocationStyled.tsx
  */
@@ -28,6 +33,7 @@ import { CSS } from '@dnd-kit/utilities';
 import type { Match as UniversalMatch, GameScore } from '../../types/game/match';
 import type { GameSettings } from '../../types/game/gameSettings';
 import { ScoreEntryModal } from '../shared/ScoreEntryModal';
+import { FinaliseScoreModal } from '../shared/FinaliseScoreModal';
 
 // Import types from original CourtAllocation
 export type MatchStatus = 'WAITING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED';
@@ -67,9 +73,12 @@ interface CourtAllocationStyledProps {
   courtSettings?: TournamentCourtSettings;  // V07.02: Premier court settings
   firestoreCourts?: FirestoreCourt[];  // V07.02: For ID-to-name mapping
   gameSettings?: GameSettings;  // V07.03: Game settings for ScoreEntryModal
+  isOrganizer?: boolean;  // V07.04: For DUPR-compliant finalization
   onAssignMatchToCourt: (matchId: string, courtId: string) => void;
   onStartMatchOnCourt: (courtId: string) => void;
-  onFinishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number, scores?: GameScore[]) => void;
+  onFinishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number, scores?: GameScore[]) => Promise<void>;
+  // V07.04: DUPR-compliant finalization callback
+  onFinaliseResult?: (matchId: string, scores: GameScore[], winnerId: string, duprEligible: boolean) => Promise<void>;
   onReorderQueue?: (matchIds: string[]) => void;
 }
 
@@ -301,9 +310,9 @@ const CourtCard: React.FC<{
 
         {match && (court.status === 'ASSIGNED' || court.status === 'IN_USE') && (
           <div className="space-y-3">
-            {/* Match info */}
+            {/* Match info - descriptive round label with division */}
             <div className="text-xs text-gray-500 mb-2">
-              {match.division} • {match.roundLabel}
+              {match.roundLabel}{match.division ? ` • ${match.division}` : ''}
             </div>
 
             {/* Teams - V07.03: Removed inline inputs, using ScoreEntryModal instead */}
@@ -371,9 +380,11 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
   courtSettings,  // V07.02: Premier court settings
   firestoreCourts: _firestoreCourts,  // V07.02: For ID-to-name mapping (kept for future use)
   gameSettings,  // V07.03: Game settings for ScoreEntryModal
+  isOrganizer = true,  // V07.04: Default true since this is organizer UI
   onAssignMatchToCourt,
   onStartMatchOnCourt,
   onFinishMatchOnCourt,
+  onFinaliseResult,  // V07.04: DUPR-compliant finalization
   onReorderQueue,
 }) => {
   // V07.03: State for score entry modal
@@ -383,13 +394,21 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
   } | null>(null);
   const [isSubmittingScore, setIsSubmittingScore] = useState(false);
 
+  // V07.04: State for finalise score modal (organizer DUPR-compliant finalization)
+  const [finaliseModalData, setFinaliseModalData] = useState<{
+    courtId: string;
+    match: CourtMatch;
+  } | null>(null);
+  const [isFinalisingScore, setIsFinalisingScore] = useState(false);
+
   // V07.03: Default game settings if not provided
-  const defaultGameSettings: GameSettings = gameSettings || {
+  // V07.07: Memoize to prevent downstream useMemo invalidation on every render
+  const defaultGameSettings: GameSettings = React.useMemo(() => gameSettings || {
     playType: 'doubles',
     pointsPerGame: 11,
     winBy: 2,
     bestOf: 1,
-  };
+  }, [gameSettings]);
 
   // V07.03: Handle score submission from modal
   const handleScoreSubmit = async (scores: GameScore[], _winnerId: string) => {
@@ -400,7 +419,8 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
       // Extract first game score for legacy compatibility
       const scoreA = scores[0]?.scoreA;
       const scoreB = scores[0]?.scoreB;
-      onFinishMatchOnCourt(scoreModalData.courtId, scoreA, scoreB, scores);
+      // V07.07: Must await to ensure save completes before closing modal
+      await onFinishMatchOnCourt(scoreModalData.courtId, scoreA, scoreB, scores);
       setScoreModalData(null);
     } catch (error) {
       console.error('Failed to submit score:', error);
@@ -410,8 +430,40 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
     }
   };
 
+  // V07.04: Handle DUPR-compliant finalisation from organizer
+  const handleFinaliseSubmit = async (
+    scores: GameScore[],
+    winnerId: string,
+    duprEligible: boolean,
+    _correctionReason?: string
+  ) => {
+    if (!finaliseModalData) return;
+
+    setIsFinalisingScore(true);
+    try {
+      if (onFinaliseResult) {
+        // Use DUPR-compliant finalization
+        await onFinaliseResult(finaliseModalData.match.id, scores, winnerId, duprEligible);
+      } else {
+        // Fallback to legacy finish
+        const scoreA = scores[0]?.scoreA;
+        const scoreB = scores[0]?.scoreB;
+        // V07.07: Must await to ensure save completes
+        await onFinishMatchOnCourt(finaliseModalData.courtId, scoreA, scoreB, scores);
+      }
+      setFinaliseModalData(null);
+    } catch (error) {
+      console.error('Failed to finalise score:', error);
+      throw error; // Re-throw so FinaliseScoreModal can show the error
+    } finally {
+      setIsFinalisingScore(false);
+    }
+  };
+
   // V07.03: Convert CourtMatch to Match for ScoreEntryModal
-  const getMatchForModal = (): UniversalMatch | null => {
+  // V07.07: CRITICAL - memoize to prevent useEffect in ScoreEntryModal from
+  // resetting scores on every parent re-render (match prop reference must be stable)
+  const matchForModal = React.useMemo((): UniversalMatch | null => {
     if (!scoreModalData) return null;
     const { match } = scoreModalData;
     return {
@@ -435,7 +487,35 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-  };
+  }, [scoreModalData, defaultGameSettings]);
+
+  // V07.04: Convert CourtMatch to Match for FinaliseScoreModal
+  // V07.07: Memoize to prevent score reset on re-renders
+  const matchForFinaliseModal = React.useMemo((): UniversalMatch | null => {
+    if (!finaliseModalData) return null;
+    const { match } = finaliseModalData;
+    return {
+      id: match.id,
+      eventType: 'tournament',
+      eventId: '',
+      format: 'pool_play_medals',
+      sideA: {
+        id: match.teamAName,
+        name: match.teamAName,
+        playerIds: [],
+      },
+      sideB: {
+        id: match.teamBName,
+        name: match.teamBName,
+        playerIds: [],
+      },
+      gameSettings: defaultGameSettings,
+      status: 'in_progress',
+      scores: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  }, [finaliseModalData, defaultGameSettings]);
 
   // Legacy score input state removed in V07.03 - now using ScoreEntryModal
 
@@ -547,7 +627,15 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
                   match={match}
                   tier={getCourtTier(court.id)}
                   onStartMatch={() => onStartMatchOnCourt(court.id)}
-                  onOpenScoreModal={() => match && setScoreModalData({ courtId: court.id, match })}
+                  onOpenScoreModal={() => {
+                    if (!match) return;
+                    // V07.04: Use FinaliseScoreModal for organizers
+                    if (isOrganizer && onFinaliseResult) {
+                      setFinaliseModalData({ courtId: court.id, match });
+                    } else {
+                      setScoreModalData({ courtId: court.id, match });
+                    }
+                  }}
                 />
               );
             })}
@@ -555,14 +643,27 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
         </GlassCard>
       </div>
 
-      {/* V07.03: Score Entry Modal */}
-      {scoreModalData && (
+      {/* V07.03: Score Entry Modal (fallback for non-DUPR flow) */}
+      {/* V07.07: Use memoized matchForModal to prevent score reset on re-renders */}
+      {scoreModalData && matchForModal && (
         <ScoreEntryModal
           isOpen={!!scoreModalData}
           onClose={() => setScoreModalData(null)}
-          match={getMatchForModal()!}
+          match={matchForModal}
           onSubmit={handleScoreSubmit}
           isLoading={isSubmittingScore}
+        />
+      )}
+
+      {/* V07.04: Finalise Score Modal (organizer DUPR-compliant finalization) */}
+      {/* V07.07: Use memoized matchForFinaliseModal to prevent score reset on re-renders */}
+      {finaliseModalData && matchForFinaliseModal && (
+        <FinaliseScoreModal
+          isOpen={!!finaliseModalData}
+          onClose={() => setFinaliseModalData(null)}
+          match={matchForFinaliseModal}
+          onSubmit={handleFinaliseSubmit}
+          isLoading={isFinalisingScore}
         />
       )}
     </div>
