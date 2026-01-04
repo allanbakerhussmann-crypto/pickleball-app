@@ -7,7 +7,7 @@
  * FILE LOCATION: components/layouts/AppLayout.tsx
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { Header } from '../Header';
 import { BottomNav } from '../BottomNav';
@@ -80,6 +80,18 @@ export const AppLayout: React.FC = () => {
   const { currentUser, userProfile, logout, isOrganizerBlocked } = useAuth();
   
   const [isLoginModalOpen, setLoginModalOpen] = useState(false);
+
+  // V07.12: Check for ?login=1 URL parameter to auto-open login modal
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.search);
+    if (searchParams.get('login') === '1' && !currentUser) {
+      setLoginModalOpen(true);
+      // Remove the parameter from URL to prevent re-opening on refresh
+      searchParams.delete('login');
+      const newSearch = searchParams.toString();
+      navigate(location.pathname + (newSearch ? `?${newSearch}` : ''), { replace: true });
+    }
+  }, [location.search, currentUser, navigate, location.pathname]);
 
   // Get current view name from path for Header/BottomNav
   const getActiveView = (): string => {
@@ -180,7 +192,7 @@ export const AppLayout: React.FC = () => {
 
   const handleLogout = async () => {
     await logout();
-    navigate(ROUTES.TOURNAMENTS);
+    navigate(ROUTES.HOME);
   };
 
   return (

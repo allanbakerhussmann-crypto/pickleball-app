@@ -528,7 +528,80 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 theme="dark"
               />
             </div>
-            
+
+            {/* V07.12: Round Robin Type Selection - Shows when round_robin format selected */}
+            {basic.format === 'round_robin' && (
+              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                <label className="block text-sm text-gray-400 mb-3">Round Robin Type *</label>
+                <div className="space-y-2">
+                  {/* Standard Round Robin */}
+                  <label
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                      !rr.weeklyFullRoundRobin
+                        ? 'bg-lime-900/20 border-lime-600'
+                        : 'bg-gray-900/50 border-gray-700 hover:border-gray-600'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="roundRobinType"
+                      checked={!rr.weeklyFullRoundRobin}
+                      onChange={() => setRr({ ...rr, weeklyFullRoundRobin: false })}
+                      className="mt-1 accent-lime-500"
+                    />
+                    <div className="flex-1">
+                      <div className="text-white font-medium">Standard Round Robin</div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Each player plays every other player once, but matches are scheduled across multiple weeks rather than all in the same week.
+                      </p>
+                    </div>
+                  </label>
+
+                  {/* Weekly Full Round Robin */}
+                  <label
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                      rr.weeklyFullRoundRobin
+                        ? 'bg-lime-900/20 border-lime-600'
+                        : 'bg-gray-900/50 border-gray-700 hover:border-gray-600'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="roundRobinType"
+                      checked={rr.weeklyFullRoundRobin || false}
+                      onChange={() => setRr({ ...rr, weeklyFullRoundRobin: true })}
+                      className="mt-1 accent-lime-500"
+                    />
+                    <div className="flex-1">
+                      <div className="text-white font-medium">Weekly Full Round Robin</div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Every week is a full round robin where each player plays all other players once. The same format repeats every week.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Max Players for Round Robin */}
+                <div className="mt-4 pt-4 border-t border-gray-700">
+                  <label className="block text-sm text-gray-400 mb-2">Maximum Players</label>
+                  <input
+                    type="number"
+                    value={singleDiv.maxParticipants || ''}
+                    onChange={e => setSingleDiv({ ...singleDiv, maxParticipants: e.target.value ? parseInt(e.target.value) : null })}
+                    className="w-32 bg-gray-900 text-white p-2 rounded border border-gray-600"
+                    placeholder="Unlimited"
+                    min={3}
+                    max={32}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    {rr.weeklyFullRoundRobin
+                      ? 'Recommended: 4-8 players. More players = more matches per week.'
+                      : 'Recommended: 4-16 players for manageable scheduling.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {clubs.length > 0 && (
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Link to Club (optional)</label>
@@ -788,7 +861,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
         return (
           <div className="space-y-4">
             <h2 className="text-xl font-bold text-white">Scoring & Rules</h2>
-            
+
             {/* Points System */}
             <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
               <h3 className="font-semibold text-white mb-2">🏆 Points System</h3>
@@ -842,6 +915,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 settings={verificationSettings}
                 onChange={setVerificationSettings}
                 leagueFormat={basic.format}
+                duprMode={duprSettings.mode}
               />
             </div>
 
@@ -894,35 +968,27 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               {/* Additional DUPR Options (only show if not 'none') */}
               {duprSettings.mode !== 'none' && (
                 <div className="space-y-3 pt-3 border-t border-gray-700">
-                  {/* Auto Submit Toggle */}
+                  {/* DUPR Compliance Notice - V07.12 */}
+                  <div className="p-3 bg-lime-900/20 rounded-lg border border-lime-700/50">
+                    <p className="text-xs text-lime-300">
+                      <strong>DUPR Compliance:</strong> Only organiser-finalised results can be submitted to DUPR.
+                      Players may propose and acknowledge scores, but the organiser must approve the official result.
+                    </p>
+                  </div>
+
+                  {/* Auto-Queue Toggle (renamed from Auto-Submit) - V07.12 */}
                   <label className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg cursor-pointer">
                     <div>
-                      <div className="text-white font-medium text-sm">Auto-Submit to DUPR</div>
-                      <div className="text-xs text-gray-500">Automatically submit eligible matches</div>
+                      <div className="text-white font-medium text-sm">Auto-queue matches for DUPR review</div>
+                      <div className="text-xs text-gray-500">Eligible matches are added to the organiser's DUPR review queue. An organiser must finalise the official result and submit.</div>
                     </div>
-                    <input 
-                      type="checkbox" 
-                      checked={duprSettings.autoSubmit} 
-                      onChange={e => setDuprSettings({ ...duprSettings, autoSubmit: e.target.checked })} 
+                    <input
+                      type="checkbox"
+                      checked={duprSettings.autoSubmit}
+                      onChange={e => setDuprSettings({ ...duprSettings, autoSubmit: e.target.checked })}
                       className="w-5 h-5 accent-purple-500"
                     />
                   </label>
-
-                  {/* Submit Trigger (only if auto-submit enabled) */}
-                  {duprSettings.autoSubmit && (
-                    <div className="p-3 bg-gray-900/50 rounded-lg">
-                      <label className="block text-xs text-gray-500 mb-1">When to Submit</label>
-                      <select 
-                        value={duprSettings.submitTrigger} 
-                        onChange={e => setDuprSettings({ ...duprSettings, submitTrigger: e.target.value as 'on_confirmation' | 'on_completion' | 'manual' })} 
-                        className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600"
-                      >
-                        <option value="on_confirmation">When opponent confirms score</option>
-                        <option value="on_completion">When match marked complete</option>
-                        <option value="manual">Manual only (organizer submits)</option>
-                      </select>
-                    </div>
-                  )}
 
                   {/* DUPR Rating Restrictions */}
                   <label className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg cursor-pointer">
@@ -980,10 +1046,10 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                     </div>
                   )}
 
-                  {/* Info Box */}
+                  {/* Info Box - V07.12 Updated */}
                   <div className="p-3 bg-blue-900/20 rounded-lg border border-blue-800/50">
                     <p className="text-xs text-blue-300">
-                      <strong>ℹ️ Note:</strong> DUPR submission requires all players to have linked DUPR accounts. 
+                      <strong>ℹ️ Note:</strong> DUPR submissions require all players to have linked DUPR accounts and an organiser-finalised official result.
                       {duprSettings.mode === 'optional' && ' Players without DUPR can still participate but their matches won\'t be submitted.'}
                       {duprSettings.mode === 'required' && ' Players must link their DUPR account before joining.'}
                     </p>
@@ -999,45 +1065,6 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 <div className="grid grid-cols-2 gap-3">
                   <div><label className="block text-xs text-gray-500">Challenge Range</label><input type="number" value={challenge.challengeRange} onChange={e => setChallenge({ ...challenge, challengeRange: parseInt(e.target.value) || 3 })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600" min={1} max={10}/><span className="text-xs text-gray-500">positions up</span></div>
                   <div><label className="block text-xs text-gray-500">Response Time (hrs)</label><input type="number" value={challenge.responseDeadlineHours} onChange={e => setChallenge({ ...challenge, responseDeadlineHours: parseInt(e.target.value) || 48 })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600"/></div>
-                </div>
-              </div>
-            )}
-
-            {basic.format === 'round_robin' && (
-              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                <h3 className="font-semibold text-white mb-3">🔄 Round Robin</h3>
-
-                {/* V07.11: Weekly Full Round Robin Toggle */}
-                <label className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg cursor-pointer mb-3">
-                  <div>
-                    <div className="text-white font-medium text-sm">Weekly Full Round Robin</div>
-                    <div className="text-xs text-gray-500">Each week = complete round robin (all play all)</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={rr.weeklyFullRoundRobin || false}
-                    onChange={e => setRr({ ...rr, weeklyFullRoundRobin: e.target.checked })}
-                    className="w-5 h-5 accent-lime-500"
-                  />
-                </label>
-
-                <div>
-                  <label className="block text-xs text-gray-500">
-                    {rr.weeklyFullRoundRobin ? 'Number of Weeks' : 'Rounds (play everyone X times)'}
-                  </label>
-                  <input
-                    type="number"
-                    value={rr.rounds}
-                    onChange={e => setRr({ ...rr, rounds: parseInt(e.target.value) || 1 })}
-                    className="w-24 bg-gray-900 text-white p-2 rounded border border-gray-600"
-                    min={1}
-                    max={rr.weeklyFullRoundRobin ? 52 : 4}
-                  />
-                  {rr.weeklyFullRoundRobin && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Same pairings repeat each week. Stats accumulate across all weeks.
-                    </p>
-                  )}
                 </div>
               </div>
             )}

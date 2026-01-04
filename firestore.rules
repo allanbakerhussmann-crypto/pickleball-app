@@ -232,8 +232,8 @@ service cloud.firestore {
 
     // Users - SECURED: Users can only modify their own profile
     match /users/{userId} {
-      // Anyone authenticated can read profiles (needed for player search, team display)
-      allow read: if isAuthenticated();
+      // V07.12: Allow public read for viewing player profiles in standings/brackets
+      allow read: if true;
       // Users can only write their own profile
       // IMPORTANT: Role changes (admin, organizer) should go through Cloud Functions
       allow create: if isOwner(userId);
@@ -244,19 +244,22 @@ service cloud.firestore {
     }
 
     // Meetups collection - SECURED
+    // V07.12: Allow public read so users can browse meetups before signing in
     match /meetups/{meetupId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create: if isAuthenticated();
       allow update, delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
 
       match /rsvps/{odUserId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for viewing meetup attendees
+        allow read: if true;
         allow write: if isAuthenticated() && request.auth.uid == odUserId;
       }
 
       // Meetup matches subcollection (V06.16)
       match /matches/{matchId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for viewing meetup results
+        allow read: if true;
         // Organizer can create/delete matches
         allow create, delete: if isAuthenticated() &&
           get(/databases/$(database)/documents/meetups/$(meetupId)).data.createdByUserId == request.auth.uid;
@@ -270,20 +273,23 @@ service cloud.firestore {
 
       // Meetup standings subcollection (V06.16)
       match /standings/{odUserId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for viewing meetup standings
+        allow read: if true;
         // Standings are updated automatically when matches complete
         allow write: if isAuthenticated();
       }
     }
 
     // Tournaments - SECURED: Only organizers or app admins can modify
+    // V07.12: Allow public read so users can browse tournaments before signing in
     match /tournaments/{tournamentId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create: if isAuthenticated();
       allow update, delete: if isTournamentOrganizer(tournamentId) || isAppAdmin();
 
       match /divisions/{divisionId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for browsing tournament brackets
+        allow read: if true;
         // V07.08: Allow organizer, app admin, or tournament staff to write divisions
         allow write: if isTournamentOrganizer(tournamentId) ||
           isAppAdmin() ||
@@ -303,7 +309,8 @@ service cloud.firestore {
         }
       }
       match /teams/{teamId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for viewing tournament brackets
+        allow read: if true;
         // Teams can be created by authenticated users (registration)
         allow create: if isAuthenticated();
         // Only organizers, team members, or app admin can update
@@ -314,7 +321,8 @@ service cloud.firestore {
         allow delete: if isTournamentOrganizer(tournamentId) || isAppAdmin();
       }
       match /matches/{matchId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for viewing tournament brackets
+        allow read: if true;
         // Tournament organizer or app admin can write any match field
         allow create, delete: if isTournamentOrganizer(tournamentId) || isAppAdmin();
         // Update rules depend on what's being changed
@@ -357,8 +365,9 @@ service cloud.firestore {
     }
 
     // Clubs - SECURED: Only admins can modify club settings
+    // V07.12: Allow public read so users can browse clubs before signing in
     match /clubs/{clubId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create: if isAuthenticated();
       // Club admins, creator, owner, or app admins can update/delete the club
       allow update: if isClubAdmin(clubId) ||
@@ -404,13 +413,21 @@ service cloud.firestore {
     }
 
     // Leagues - SECURED: Only league admins can modify
+    // V07.12: Allow public read so users can browse leagues before signing in
     match /leagues/{leagueId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create: if isAuthenticated();
-      allow update, delete: if isLeagueAdmin(leagueId);
+      // V07.12: Allow authenticated users to update memberCount when joining
+      // Full update/delete still requires league admin
+      allow update: if isLeagueAdmin(leagueId) ||
+        (isAuthenticated() &&
+         // Only allow memberCount and updatedAt to be modified by non-admins (for joining)
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt']));
+      allow delete: if isLeagueAdmin(leagueId);
 
       match /members/{memberId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for viewing league standings
+        allow read: if true;
         // Users can join leagues (create their membership)
         allow create: if isAuthenticated();
         // League admin, app admin, member owner, or any league member can update stats
@@ -422,22 +439,22 @@ service cloud.firestore {
         allow delete: if isLeagueAdmin(leagueId);
       }
       match /matches/{matchId} {
-        allow read: if isAuthenticated();
+        // V07.12: Allow public read for viewing league match results
+        allow read: if true;
         // League admin can do anything
         allow create, delete: if isLeagueAdmin(leagueId);
         // League admin OR match participants can update (for score entry)
         // V07.10: Players cannot write to restricted DUPR fields or when scoreLocked
-        // Check userAId/userBId/partnerAId/partnerBId first (legacy league format)
-        // Then check sideA/sideB.playerIds if they exist (unified format)
+        // Use get() with default to safely check fields that may not exist
         allow update: if isLeagueAdmin(leagueId) ||
           (isAuthenticated() &&
-           resource.data.scoreLocked != true &&
-           (resource.data.userAId == request.auth.uid ||
-            resource.data.userBId == request.auth.uid ||
-            resource.data.partnerAId == request.auth.uid ||
-            resource.data.partnerBId == request.auth.uid ||
-            ('sideA' in resource.data && resource.data.sideA.playerIds != null && request.auth.uid in resource.data.sideA.playerIds) ||
-            ('sideB' in resource.data && resource.data.sideB.playerIds != null && request.auth.uid in resource.data.sideB.playerIds)) &&
+           resource.data.get('scoreLocked', false) != true &&
+           (resource.data.get('userAId', '') == request.auth.uid ||
+            resource.data.get('userBId', '') == request.auth.uid ||
+            resource.data.get('partnerAId', '') == request.auth.uid ||
+            resource.data.get('partnerBId', '') == request.auth.uid ||
+            (request.auth.uid in resource.data.get('sideA', {}).get('playerIds', [])) ||
+            (request.auth.uid in resource.data.get('sideB', {}).get('playerIds', []))) &&
            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['officialResult', 'dupr', 'scoreLocked', 'scoreLockedAt', 'scoreLockedByUserId', 'migratedAt', 'migratedFromLegacy']));
       }
       match /challenges/{challengeId} {

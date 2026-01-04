@@ -9,9 +9,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { getMeetups, subscribeToTournaments, subscribeToLeagues } from '../services/firebase';
+import { getMeetups, subscribeToTournaments, subscribeToLeagues, getAllClubs } from '../services/firebase';
 import { ROUTES, getRoute } from '../router/routes';
-import type { Meetup, Tournament, League } from '../types';
+import type { Meetup, Tournament, League, Club } from '../types';
 import { formatTimestamp } from '../utils/timeFormat';
 import { useLiveMatches } from '../hooks/useLiveMatches';
 import { LiveNowSection } from '../components/home/LiveNowSection';
@@ -29,6 +29,7 @@ const HomePage: React.FC = () => {
   const [meetups, setMeetups] = useState<Meetup[]>([]);
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [leagues, setLeagues] = useState<League[]>([]);
+  const [clubs, setClubs] = useState<Club[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Live matches feed
@@ -47,6 +48,20 @@ const HomePage: React.FC = () => {
       } catch (e) {
         console.error('Error loading meetups:', e);
       }
+
+      try {
+        // Load clubs
+        const clubsData = await getAllClubs();
+        // Show active clubs, sorted by member count
+        const activeClubs = clubsData
+          .filter(c => c.status !== 'inactive')
+          .sort((a, b) => (b.memberCount || 0) - (a.memberCount || 0))
+          .slice(0, 4);
+        setClubs(activeClubs);
+      } catch (e) {
+        console.error('Error loading clubs:', e);
+      }
+
       setLoading(false);
     };
 
@@ -114,6 +129,93 @@ const HomePage: React.FC = () => {
         totalCount={liveTotalCount}
         loading={liveLoading}
       />
+
+      {/* ==================== CLUBS SECTION ==================== */}
+      <section>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-orange-600 rounded-lg flex items-center justify-center">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-white">Clubs</h2>
+              <p className="text-sm text-gray-400">Find a club near you</p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate(ROUTES.CLUBS)}
+            className="text-orange-400 hover:text-orange-300 text-sm font-semibold flex items-center gap-1"
+          >
+            View All
+            <ChevronRightIcon />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map(i => (
+              <div key={i} className="bg-gray-800 rounded-xl p-4 border border-gray-700 animate-pulse">
+                <div className="h-5 bg-gray-700 rounded w-3/4 mb-3"></div>
+                <div className="h-4 bg-gray-700 rounded w-1/2 mb-2"></div>
+                <div className="h-4 bg-gray-700 rounded w-2/3"></div>
+              </div>
+            ))}
+          </div>
+        ) : clubs.length === 0 ? (
+          <div className="bg-gray-800/50 rounded-xl p-8 text-center border border-gray-700">
+            <p className="text-gray-400">No clubs available</p>
+            {isOrganizer && (
+              <button
+                onClick={() => navigate(ROUTES.CLUBS)}
+                className="mt-3 text-orange-400 hover:text-orange-300 text-sm font-semibold"
+              >
+                Create a Club →
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {clubs.map(club => (
+              <button
+                key={club.id}
+                onClick={() => navigate(getRoute.clubDetail(club.id))}
+                className="bg-gray-800 rounded-xl p-4 border border-gray-700 hover:border-orange-600 transition-colors text-left"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-bold text-white truncate">{club.name}</h3>
+                </div>
+                <div className="text-sm text-gray-400 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span>{club.memberCount || 0} members</span>
+                  </div>
+                  {club.courtCount && club.courtCount > 0 && (
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                      </svg>
+                      <span>{club.courtCount} courts</span>
+                    </div>
+                  )}
+                  {club.location && (
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      <span className="truncate">{club.location}</span>
+                    </div>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* ==================== MEETUPS SECTION ==================== */}
       <section>
@@ -379,7 +481,7 @@ const HomePage: React.FC = () => {
           <h2 className="text-xl font-bold text-white mb-2">Ready to Play?</h2>
           <p className="text-gray-400 mb-4">Sign in to join meetups, leagues, and tournaments</p>
           <button
-            onClick={() => navigate(ROUTES.TOURNAMENTS)}
+            onClick={() => navigate('/?login=1')}
             className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-semibold"
           >
             Get Started

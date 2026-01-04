@@ -77,6 +77,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [paymentCancelled, setPaymentCancelled] = useState(false);
   const [selectedMatch, setSelectedMatch] = useState<LeagueMatch | null>(null);
   const [showScoreEntryModal, setShowScoreEntryModal] = useState(false);
+  const [showDuprAcknowledgement, setShowDuprAcknowledgement] = useState(false); // V07.12
+  const [duprAcknowledged, setDuprAcknowledged] = useState(false); // V07.12
   const [editForm, setEditForm] = useState({
     // Basic Info
     name: '',
@@ -387,28 +389,43 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
   const handleJoin = async () => {
     if (!currentUser || !userProfile) return;
-    
+
     // Debug: Log payment check
     console.log('Join clicked - Payment check:', {
       pricingEnabled: league?.pricing?.enabled,
       entryFee: league?.pricing?.entryFee,
       organizerStripeAccountId: league?.organizerStripeAccountId,
     });
-    
+
+    // V07.12: Check if DUPR league requires acknowledgement
+    // Note: duprSettings is stored inside league.settings.duprSettings
+    const duprMode = league?.settings?.duprSettings?.mode;
+    const isDuprLeague = duprMode === 'optional' || duprMode === 'required';
+    console.log('DUPR check:', {
+      duprSettings: league?.settings?.duprSettings,
+      mode: duprMode,
+      isDuprLeague,
+      duprAcknowledged,
+    });
+    if (isDuprLeague && !duprAcknowledged) {
+      setShowDuprAcknowledgement(true);
+      return;
+    }
+
     // Check if league requires payment
     if (league?.pricing?.enabled && league.pricing.entryFee > 0) {
       // Show payment modal instead of direct join
       setShowPaymentModal(true);
       return;
     }
-    
+
     // Free league - join directly
     setJoining(true);
     try {
       // TODO: For doubles/mixed, show partner selection modal
       await joinLeague(
-        leagueId, 
-        currentUser.uid, 
+        leagueId,
+        currentUser.uid,
         userProfile.displayName || 'Player',
         selectedDivisionId
       );
@@ -421,6 +438,14 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   };
   
+  // V07.12: Handle DUPR acknowledgement confirmation
+  const handleDuprAcknowledge = () => {
+    setDuprAcknowledged(true);
+    setShowDuprAcknowledgement(false);
+    // Continue with join flow
+    handleJoin();
+  };
+
   // Handle free registration (after payment or for free leagues)
   const handleFreeJoin = async () => {
     if (!currentUser || !userProfile) return;
@@ -563,11 +588,24 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </svg>
               Organizer Controls
             </h3>
-            <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-1 rounded">
-              Status: {league.status.toUpperCase()}
-            </span>
+            <div className="flex items-center gap-2">
+              {/* V07.12: Registration capacity indicator */}
+              {league.settings?.maxMembers && (
+                <span className={`text-xs px-2 py-1 rounded ${
+                  members.length >= league.settings.maxMembers
+                    ? 'bg-red-600/30 text-red-300'
+                    : 'bg-gray-600/30 text-gray-300'
+                }`}>
+                  {members.length}/{league.settings.maxMembers} players
+                  {members.length >= league.settings.maxMembers && ' (FULL)'}
+                </span>
+              )}
+              <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-1 rounded">
+                Status: {league.status.toUpperCase()}
+              </span>
+            </div>
           </div>
-          
+
           <div className="flex flex-wrap gap-2">
             {/* Draft -> Open Registration */}
             {league.status === 'draft' && (
@@ -585,12 +623,32 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 🚀 Open Registration
               </button>
             )}
-            
-            {/* Registration -> Active (Start League) */}
+
+            {/* V07.12: Close Registration (when registration is open) */}
             {league.status === 'registration' && (
               <button
                 onClick={async () => {
-                  if (confirm('Start the league? Registration will close and play will begin.')) {
+                  if (confirm('Close registration? No more players will be able to join.')) {
+                    await updateLeague(leagueId, { status: 'registration_closed' });
+                    const updated = await getLeague(leagueId);
+                    if (updated) setLeague(updated);
+                  }
+                }}
+                className="bg-orange-600 hover:bg-orange-500 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                🔒 Close Registration
+              </button>
+            )}
+
+            {/* Registration/Registration Closed -> Active (Start League) */}
+            {(league.status === 'registration' || league.status === 'registration_closed') && (
+              <button
+                onClick={async () => {
+                  if (members.length < 2) {
+                    alert('Need at least 2 players to start the league.');
+                    return;
+                  }
+                  if (confirm(`Start the league with ${members.length} players? Play will begin.`)) {
                     const { startLeague } = await import('../../services/firebase');
                     await startLeague(leagueId);
                     const updated = await getLeague(leagueId);
@@ -602,7 +660,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 ▶️ Start League
               </button>
             )}
-            
+
             {/* Active -> Complete */}
             {league.status === 'active' && (
               <button
@@ -619,9 +677,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 🏆 Complete League
               </button>
             )}
-            
+
             {/* Cancel (available for draft/registration) */}
-            {(league.status === 'draft' || league.status === 'registration') && (
+            {(league.status === 'draft' || league.status === 'registration' || league.status === 'registration_closed') && (
               <button
                 onClick={async () => {
                   if (confirm('Cancel this league? This cannot be undone.')) {
@@ -1020,6 +1078,98 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     PART 2 OF LeagueDetail.tsx V05.37
     Paste this DIRECTLY after Part 1 (remove this comment block)
     ================================================ */}
+
+      {/* V07.12: DUPR Participation Acknowledgement Modal */}
+      {showDuprAcknowledgement && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-800 w-full max-w-lg rounded-xl border border-gray-700 overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="bg-purple-900/50 px-6 py-4 border-b border-purple-600/50">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span className="text-2xl">📊</span> DUPR League Participation Notice
+                </h2>
+                <button onClick={() => setShowDuprAcknowledgement(false)} className="text-gray-400 hover:text-white">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              <p className="text-gray-300 mb-4">
+                This league is connected to the <strong className="text-purple-300">DUPR rating system</strong>.
+              </p>
+              <p className="text-gray-400 mb-4">
+                By joining this league, you acknowledge and agree that:
+              </p>
+              <ul className="space-y-3 text-sm text-gray-400 mb-6">
+                <li className="flex items-start gap-2">
+                  <span className="text-purple-400 mt-0.5">•</span>
+                  <span>Match results from this league may be submitted to DUPR and may affect your DUPR rating.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-purple-400 mt-0.5">•</span>
+                  <span>Players may propose and acknowledge scores, but only the organiser can finalise official results.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-purple-400 mt-0.5">•</span>
+                  <span>Only organiser-finalised results are eligible for DUPR submission.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-purple-400 mt-0.5">•</span>
+                  <span>If a score is disputed, the organiser will review the dispute and make the final decision.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-purple-400 mt-0.5">•</span>
+                  <span>Not all matches are guaranteed to be DUPR-eligible (for example, incomplete or invalid matches).</span>
+                </li>
+                {league?.settings?.duprSettings?.mode === 'required' && (
+                  <li className="flex items-start gap-2">
+                    <span className="text-purple-400 mt-0.5">•</span>
+                    <span><strong className="text-white">This league requires DUPR.</strong> You must have a linked DUPR account before participating.</span>
+                  </li>
+                )}
+                <li className="flex items-start gap-2">
+                  <span className="text-purple-400 mt-0.5">•</span>
+                  <span>By participating, you consent to your match results and relevant player identifiers being shared with DUPR for rating purposes.</span>
+                </li>
+              </ul>
+
+              <label className="flex items-start gap-3 p-4 bg-gray-900/50 rounded-lg border border-gray-700 cursor-pointer hover:border-purple-600/50 transition-colors">
+                <input
+                  type="checkbox"
+                  id="duprAcknowledgeCheckbox"
+                  className="w-5 h-5 mt-0.5 accent-purple-500"
+                />
+                <span className="text-white text-sm">
+                  I understand and agree to the DUPR participation rules for this league.
+                </span>
+              </label>
+            </div>
+            <div className="px-6 py-4 bg-gray-900 border-t border-gray-700 flex justify-end gap-3">
+              <button
+                onClick={() => setShowDuprAcknowledgement(false)}
+                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const checkbox = document.getElementById('duprAcknowledgeCheckbox') as HTMLInputElement;
+                  if (checkbox?.checked) {
+                    handleDuprAcknowledge();
+                  } else {
+                    alert('Please check the box to confirm you understand the DUPR participation rules.');
+                  }
+                }}
+                className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg transition-colors"
+              >
+                Continue to Join
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Payment Modal for Paid Leagues */}
       {showPaymentModal && league?.pricing?.enabled && (() => {

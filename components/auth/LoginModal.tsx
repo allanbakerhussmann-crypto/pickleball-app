@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { ROUTES } from '../../router/routes';
 import type { UserRole } from '../../types';
 import { isFirebaseConfigured } from '../../services/firebase';
 import { PhoneVerificationModal } from './PhoneVerificationModal';
@@ -45,6 +46,7 @@ const getFriendlyErrorMessage = (error: any): string => {
 };
 
 export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig }) => {
+  const navigate = useNavigate();
   const [isLoginView, setIsLoginView] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -60,7 +62,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
   const [isConfigError, setIsConfigError] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   const { login, signup, resetPassword, updateUserExtendedProfile } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -108,6 +110,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
       if (isLoginView) {
         await login(email, password);
         onClose();
+        navigate(ROUTES.DASHBOARD);
       } else {
         // Pass consent data to signup for Privacy Act 2020 compliance
         await signup(email, password, roleChoice, name, {
@@ -389,6 +392,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
           onVerified={() => {
             setShowPhoneVerification(false);
             onClose();
+            navigate(ROUTES.DASHBOARD);
           }}
           initialPhone={phone}
           canSkip={false}
