@@ -1834,10 +1834,35 @@ export interface LeagueMatch {
   // Score verification (NEW V05.44)
   verification?: MatchVerificationData | null;
 
+  // V07.10: Unified sideA/sideB format for Firestore rules compatibility
+  sideA?: {
+    id: string;
+    name: string;
+    playerIds: string[];
+  };
+  sideB?: {
+    id: string;
+    name: string;
+    playerIds: string[];
+  };
+
+  // V07.04: Team snapshot for score verification
+  teamSnapshot?: TeamSnapshot;
+
+  // V07.04: DUPR-compliant scoring fields
+  scoreProposal?: ScoreProposal;
+  officialResult?: OfficialResult;
+  scoreState?: ScoreState;
+  scoreLocked?: boolean;
+  scoreLockedAt?: number;
+  scoreLockedByUserId?: string;
+  dupr?: DuprSubmissionData;
+
   // Timestamps
   createdAt: number;
   playedAt?: number | null;
   completedAt?: number | null;
+  updatedAt?: number;
 }
 
 // ============================================

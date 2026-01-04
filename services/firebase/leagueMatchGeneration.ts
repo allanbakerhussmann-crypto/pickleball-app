@@ -1,15 +1,18 @@
 /**
  * League Match Generation Service
- * 
+ *
  * Generates match schedules for different league formats:
  * - Round Robin: Everyone plays everyone
  * - Swiss: Paired by similar records
  * - Box League: Small groups with promotion/relegation
- * 
+ *
  * NOTE: Ladder format doesn't use pre-generated matches (uses challenges instead)
- * 
+ *
+ * V07.04: Added teamSnapshot to league matches for DUPR-compliant score verification.
+ * teamSnapshot contains sideAPlayerIds and sideBPlayerIds for Firestore rules validation.
+ *
  * FILE LOCATION: services/firebase/leagueMatchGeneration.ts
- * VERSION: V05.32
+ * VERSION: V07.04
  */
 
 import {
@@ -485,7 +488,12 @@ function createMatchFromPairing(
   boxNumber?: number
 ): LeagueMatch {
   const matchRef = doc(collection(db, 'leagues', leagueId, 'matches'));
-  
+  const now = Date.now();
+
+  // V07.04: Build teamSnapshot for score verification (signer must be on opposing team)
+  const sideAPlayerIds = [pairing.userAId, pairing.partnerAId].filter((id): id is string => !!id);
+  const sideBPlayerIds = [pairing.userBId, pairing.partnerBId].filter((id): id is string => !!id);
+
   return {
     id: matchRef.id,
     leagueId,
@@ -514,9 +522,26 @@ function createMatchFromPairing(
     submittedByUserId: null,
     confirmedByUserId: null,
     disputeReason: null,
-    createdAt: Date.now(),
+    createdAt: now,
     playedAt: null,
     completedAt: null,
+    // V07.10: Unified sideA/sideB format for Firestore rules compatibility
+    sideA: {
+      id: pairing.memberAId,
+      name: pairing.memberAName,
+      playerIds: sideAPlayerIds,
+    },
+    sideB: {
+      id: pairing.memberBId,
+      name: pairing.memberBName,
+      playerIds: sideBPlayerIds,
+    },
+    // V07.04: Team snapshot for score verification
+    teamSnapshot: {
+      sideAPlayerIds,
+      sideBPlayerIds,
+      snapshotAt: now,
+    },
   };
 }
 

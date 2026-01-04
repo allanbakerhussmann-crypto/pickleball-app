@@ -176,11 +176,26 @@ export async function proposeScore(
       };
     }
 
+    // V07.10: Ensure sideA/sideB exist for Firestore rules compatibility
+    // This populates them on existing league matches that were created before V07.10
+    const sideA = match.sideA || {
+      id: sideAId,
+      name: sideAName,
+      playerIds: teamSnapshot.sideAPlayerIds,
+    };
+    const sideB = match.sideB || {
+      id: sideBId,
+      name: sideBName,
+      playerIds: teamSnapshot.sideBPlayerIds,
+    };
+
     // Update match
     transaction.update(matchRef, {
       scoreProposal,
       scoreState: 'proposed' as ScoreState,
       teamSnapshot,
+      sideA,
+      sideB,
       // Also update legacy fields for compatibility
       scores,
       status: 'pending_confirmation',
