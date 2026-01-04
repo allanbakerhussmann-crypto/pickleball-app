@@ -26,6 +26,7 @@ import type {
   LeagueRoundRobinSettings, LeagueSwissSettings, LeagueBoxSettings,
   LeagueTiebreaker, Club, GenderCategory, EventType, LeaguePrizePool,
   LeagueDuprSettings, LeagueDuprMode, ScoreVerificationSettings,
+  PointsSystemPreset,
 } from '../../types';
 import { DEFAULT_SCORE_VERIFICATION, mapLegacyType, mapFormatToLegacy } from '../../types';
 import type { CompetitionFormat } from '../../types/formats';
@@ -96,6 +97,19 @@ const DUPR_MODE_OPTIONS: { value: LeagueDuprMode; label: string; desc: string; i
   { value: 'none', label: 'No DUPR', desc: 'Casual league - no DUPR accounts required', icon: '🎾' },
   { value: 'optional', label: 'DUPR Optional', desc: 'Players can link DUPR, submit if eligible', icon: '📊' },
   { value: 'required', label: 'DUPR Required', desc: 'All players must have linked DUPR accounts', icon: '✅' },
+];
+
+// V07.11: Points system presets for weekly round robin
+const POINTS_PRESETS: { value: PointsSystemPreset; label: string; win: number; loss: number; desc: string }[] = [
+  { value: 'win_only', label: 'Win Only (1-0)', win: 1, loss: 0, desc: 'Simple: 1 point for win, 0 for loss' },
+  { value: 'enhanced', label: 'Enhanced (2-0)', win: 2, loss: 0, desc: 'Faster ladder movement' },
+  { value: 'participation', label: 'Participation (2-1)', win: 2, loss: 1, desc: 'Everyone earns points' },
+  { value: 'custom', label: 'Custom', win: 3, loss: 0, desc: 'Set your own values' },
+];
+
+// V07.11: Default tiebreakers for weekly round robin
+const WEEKLY_RR_TIEBREAKERS: LeagueTiebreaker[] = [
+  'league_points', 'wins', 'point_diff', 'points_for', 'head_to_head'
 ];
 
 // ============================================
@@ -209,21 +223,23 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   });
   
   // Step 5: Scoring & Rules
-  const [scoring, setScoring] = useState({ 
-    pointsForWin: 3, pointsForDraw: 1, pointsForLoss: 0, pointsForForfeit: -1, pointsForNoShow: -2 
+  const [scoring, setScoring] = useState({
+    pointsForWin: 1, pointsForDraw: 0, pointsForLoss: 0, pointsForForfeit: -1, pointsForNoShow: -2
   });
-  const [matchFmt, setMatchFmt] = useState<LeagueMatchFormat>({ bestOf: 3, gamesTo: 11, winBy: 2 });
+  // V07.11: Points preset selector
+  const [pointsPreset, setPointsPreset] = useState<PointsSystemPreset>('win_only');
+  const [matchFmt, setMatchFmt] = useState<LeagueMatchFormat>({ bestOf: 1, gamesTo: 11, winBy: 2 });
   const [scoreRep, setScoreRep] = useState({ matchDeadlineDays: 7 });
-  const [challenge, setChallenge] = useState<LeagueChallengeRules>({ 
-    challengeRange: 3, responseDeadlineHours: 48, matchDeadlineHours: 168, 
-    maxActiveChallenges: 2, cooldownDays: 3 
+  const [challenge, setChallenge] = useState<LeagueChallengeRules>({
+    challengeRange: 3, responseDeadlineHours: 48, matchDeadlineHours: 168,
+    maxActiveChallenges: 2, cooldownDays: 3
   });
   const [rr, setRr] = useState<LeagueRoundRobinSettings>({ rounds: 1, scheduleGeneration: 'auto' });
   const [swiss, setSwiss] = useState<LeagueSwissSettings>({ rounds: 4, pairingMethod: 'adjacent' });
-  const [box, setBox] = useState<LeagueBoxSettings>({ 
-    playersPerBox: 4, promotionSpots: 1, relegationSpots: 1, roundsPerBox: 1 
+  const [box, setBox] = useState<LeagueBoxSettings>({
+    playersPerBox: 4, promotionSpots: 1, relegationSpots: 1, roundsPerBox: 1
   });
-  const [tiebreakers] = useState<LeagueTiebreaker[]>(['head_to_head', 'game_diff', 'games_won']);
+  const [tiebreakers, setTiebreakers] = useState<LeagueTiebreaker[]>(['head_to_head', 'game_diff', 'games_won']);
   
   // DUPR Settings (NEW V05.36)
   const [duprSettings, setDuprSettings] = useState<LeagueDuprSettings>({
@@ -280,6 +296,13 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     const legacyFormat = mapFormatToLegacy(selectedFormat);
     setBasic(b => ({ ...b, format: legacyFormat }));
   }, [selectedFormat]);
+
+  // V07.11: Auto-update tiebreakers when weekly full RR is enabled
+  useEffect(() => {
+    if (rr.weeklyFullRoundRobin) {
+      setTiebreakers(WEEKLY_RR_TIEBREAKERS);
+    }
+  }, [rr.weeklyFullRoundRobin]);
 
   const generatedDates = useMemo(() => {
     return generateMatchDates(scheduleConfig.startDate, scheduleConfig.numberOfWeeks, 
@@ -769,11 +792,37 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
             {/* Points System */}
             <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
               <h3 className="font-semibold text-white mb-2">🏆 Points System</h3>
-              <div className="grid grid-cols-5 gap-2">
-                {[{ k: 'pointsForWin', l: 'Win' }, { k: 'pointsForDraw', l: 'Draw' }, { k: 'pointsForLoss', l: 'Loss' }, { k: 'pointsForForfeit', l: 'Forfeit' }, { k: 'pointsForNoShow', l: 'No-Show' }].map(p => (
-                  <div key={p.k}><label className="block text-xs text-gray-500">{p.l}</label><input type="number" value={(scoring as any)[p.k]} onChange={e => setScoring({ ...scoring, [p.k]: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600 text-center"/></div>
-                ))}
+
+              {/* V07.11: Preset dropdown */}
+              <div className="mb-3">
+                <label className="block text-xs text-gray-500 mb-1">Points Preset</label>
+                <select
+                  value={pointsPreset}
+                  onChange={(e) => {
+                    const preset = e.target.value as PointsSystemPreset;
+                    setPointsPreset(preset);
+                    const config = POINTS_PRESETS.find(p => p.value === preset);
+                    if (config && preset !== 'custom') {
+                      setScoring(s => ({ ...s, pointsForWin: config.win, pointsForLoss: config.loss, pointsForDraw: 0 }));
+                    }
+                  }}
+                  className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"
+                >
+                  {POINTS_PRESETS.map(p => (
+                    <option key={p.value} value={p.value}>{p.label}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">{POINTS_PRESETS.find(p => p.value === pointsPreset)?.desc}</p>
               </div>
+
+              {/* Show full manual inputs only for custom */}
+              {pointsPreset === 'custom' && (
+                <div className="grid grid-cols-5 gap-2">
+                  {[{ k: 'pointsForWin', l: 'Win' }, { k: 'pointsForDraw', l: 'Draw' }, { k: 'pointsForLoss', l: 'Loss' }, { k: 'pointsForForfeit', l: 'Forfeit' }, { k: 'pointsForNoShow', l: 'No-Show' }].map(p => (
+                    <div key={p.k}><label className="block text-xs text-gray-500">{p.l}</label><input type="number" value={(scoring as any)[p.k]} onChange={e => setScoring({ ...scoring, [p.k]: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600 text-center"/></div>
+                  ))}
+                </div>
+              )}
             </div>
             
             {/* Match Format */}
@@ -956,8 +1005,40 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
 
             {basic.format === 'round_robin' && (
               <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                <h3 className="font-semibold text-white mb-2">🔄 Round Robin</h3>
-                <div><label className="block text-xs text-gray-500">Rounds (play everyone X times)</label><input type="number" value={rr.rounds} onChange={e => setRr({ ...rr, rounds: parseInt(e.target.value) || 1 })} className="w-24 bg-gray-900 text-white p-2 rounded border border-gray-600" min={1} max={4}/></div>
+                <h3 className="font-semibold text-white mb-3">🔄 Round Robin</h3>
+
+                {/* V07.11: Weekly Full Round Robin Toggle */}
+                <label className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg cursor-pointer mb-3">
+                  <div>
+                    <div className="text-white font-medium text-sm">Weekly Full Round Robin</div>
+                    <div className="text-xs text-gray-500">Each week = complete round robin (all play all)</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={rr.weeklyFullRoundRobin || false}
+                    onChange={e => setRr({ ...rr, weeklyFullRoundRobin: e.target.checked })}
+                    className="w-5 h-5 accent-lime-500"
+                  />
+                </label>
+
+                <div>
+                  <label className="block text-xs text-gray-500">
+                    {rr.weeklyFullRoundRobin ? 'Number of Weeks' : 'Rounds (play everyone X times)'}
+                  </label>
+                  <input
+                    type="number"
+                    value={rr.rounds}
+                    onChange={e => setRr({ ...rr, rounds: parseInt(e.target.value) || 1 })}
+                    className="w-24 bg-gray-900 text-white p-2 rounded border border-gray-600"
+                    min={1}
+                    max={rr.weeklyFullRoundRobin ? 52 : 4}
+                  />
+                  {rr.weeklyFullRoundRobin && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Same pairings repeat each week. Stats accumulate across all weeks.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
 

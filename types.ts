@@ -1196,7 +1196,9 @@ export interface LeagueRoundRobinSettings {
   rounds: number;
   matchesPerWeek?: number;
   scheduleGeneration: 'auto' | 'manual';
-  // NEW V05.37: Pool support
+  // V07.11: Weekly Full Round Robin - each week is a complete round robin
+  weeklyFullRoundRobin?: boolean;
+  // V05.37: Pool support
   numberOfPools?: number;
   poolNames?: string[];
   poolAssignment?: 'random' | 'seeded' | 'manual';
@@ -1236,9 +1238,12 @@ export interface LeaguePartnerSettings {
 }
 
 /**
- * Tiebreaker options
+ * Tiebreaker options (V07.11: extended for weekly round robin)
  */
-export type LeagueTiebreaker = 
+export type LeagueTiebreaker =
+  | 'league_points'   // Total league points from wins
+  | 'wins'            // Number of wins
+  | 'point_diff'      // Points For - Points Against
   | 'head_to_head'
   | 'game_diff'
   | 'games_won'
@@ -1246,6 +1251,11 @@ export type LeagueTiebreaker =
   | 'points_for'
   | 'points_against'
   | 'recent_form';
+
+/**
+ * Points system presets for leagues (V07.11)
+ */
+export type PointsSystemPreset = 'win_only' | 'enhanced' | 'participation' | 'custom';
 
 // ============================================
 // LEAGUE DUPR SETTINGS (V05.36)

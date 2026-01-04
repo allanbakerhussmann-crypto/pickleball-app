@@ -90,24 +90,46 @@ export const generateRoundRobinSchedule = async (
     const allMatches: LeagueMatch[] = [];
     const pairings = generateRoundRobinPairings(divisionMembers);
     
+    // V07.11: Check if weekly full round robin mode
+    const isWeeklyFullRR = settings.weeklyFullRoundRobin === true;
+
     // Create matches for each round
     for (let roundNum = 1; roundNum <= rounds; roundNum++) {
-      let weekNumber = 0;
-      
-      for (const weekPairings of pairings) {
-        weekNumber++;
-        const actualWeek = (roundNum - 1) * pairings.length + weekNumber;
-        
-        for (const pairing of weekPairings) {
-          const match = createMatchFromPairing(
-            league.id,
-            divisionId || null,
-            pairing,
-            'regular',
-            actualWeek,
-            roundNum
-          );
-          allMatches.push(match);
+      if (isWeeklyFullRR) {
+        // Weekly Full Round Robin: ALL pairings in this round get weekNumber = roundNum
+        // This means each week is a complete round robin (everyone plays everyone)
+        for (const weekPairings of pairings) {
+          for (const pairing of weekPairings) {
+            const match = createMatchFromPairing(
+              league.id,
+              divisionId || null,
+              pairing,
+              'regular',
+              roundNum,  // weekNumber = round number (all matches same week)
+              roundNum
+            );
+            allMatches.push(match);
+          }
+        }
+      } else {
+        // Standard mode: spread round robin across multiple weeks
+        let weekNumber = 0;
+
+        for (const weekPairings of pairings) {
+          weekNumber++;
+          const actualWeek = (roundNum - 1) * pairings.length + weekNumber;
+
+          for (const pairing of weekPairings) {
+            const match = createMatchFromPairing(
+              league.id,
+              divisionId || null,
+              pairing,
+              'regular',
+              actualWeek,
+              roundNum
+            );
+            allMatches.push(match);
+          }
         }
       }
     }

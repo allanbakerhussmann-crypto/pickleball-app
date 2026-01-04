@@ -1,14 +1,15 @@
 /**
- * LeagueStandings Component V05.33
- * 
+ * LeagueStandings Component V07.11
+ *
  * Enhanced standings display with rankings, stats, form, and visual improvements.
  * Supports ladder challenge buttons for ladder format leagues.
- * 
+ * V07.11: Added tiebreaker-based sorting for weekly round robin mode.
+ *
  * FILE LOCATION: components/leagues/LeagueStandings.tsx
  */
 
 import React, { useState, useMemo } from 'react';
-import type { LeagueMember, LeagueFormat, LeagueType } from '../../types';
+import type { LeagueMember, LeagueFormat, LeagueType, LeagueTiebreaker } from '../../types';
 
 // ============================================
 // TYPES
@@ -24,6 +25,9 @@ interface LeagueStandingsProps {
   myMembership?: LeagueMember | null;
   challengeRange?: number;
   compact?: boolean;
+  // V07.11: Tiebreaker support for weekly round robin
+  tiebreakers?: LeagueTiebreaker[];
+  isWeeklyFullRR?: boolean;
 }
 
 type SortField = 'rank' | 'points' | 'wins' | 'played' | 'winRate' | 'streak';
@@ -63,6 +67,45 @@ const getStreakDisplay = (streak: number): { text: string; color: string } => {
   return { text: '-', color: 'text-gray-500' };
 };
 
+// V07.11: Compare two members by a single tiebreaker (higher is better, returns negative if a > b)
+const compareTiebreaker = (a: LeagueMember, b: LeagueMember, tb: LeagueTiebreaker): number => {
+  const aStats = a.stats || {};
+  const bStats = b.stats || {};
+
+  switch (tb) {
+    case 'league_points':
+      return (bStats.points || 0) - (aStats.points || 0);
+    case 'wins':
+      return (bStats.wins || 0) - (aStats.wins || 0);
+    case 'point_diff':
+      const aDiff = (aStats.pointsFor || 0) - (aStats.pointsAgainst || 0);
+      const bDiff = (bStats.pointsFor || 0) - (bStats.pointsAgainst || 0);
+      return bDiff - aDiff;
+    case 'points_for':
+      return (bStats.pointsFor || 0) - (aStats.pointsFor || 0);
+    case 'points_against':
+      return (aStats.pointsAgainst || 0) - (bStats.pointsAgainst || 0); // Lower is better
+    case 'game_diff':
+      const aGDiff = (aStats.gamesWon || 0) - (aStats.gamesLost || 0);
+      const bGDiff = (bStats.gamesWon || 0) - (bStats.gamesLost || 0);
+      return bGDiff - aGDiff;
+    case 'games_won':
+      return (bStats.gamesWon || 0) - (aStats.gamesWon || 0);
+    case 'games_lost':
+      return (aStats.gamesLost || 0) - (bStats.gamesLost || 0); // Lower is better
+    case 'head_to_head':
+      // Head-to-head requires match lookup - not implemented, return 0 (tie)
+      return 0;
+    case 'recent_form':
+      // Recent form comparison - count recent wins
+      const aWins = (aStats.recentForm || []).filter((r: string) => r === 'W').length;
+      const bWins = (bStats.recentForm || []).filter((r: string) => r === 'W').length;
+      return bWins - aWins;
+    default:
+      return 0;
+  }
+};
+
 // ============================================
 // COMPONENT
 // ============================================
@@ -77,6 +120,8 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
   myMembership,
   challengeRange = 3,
   compact = false,
+  tiebreakers,
+  isWeeklyFullRR = false,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -86,14 +131,19 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
   const isTeamBased = leagueType === 'doubles' || leagueType === 'mixed_doubles' || leagueType === 'team';
   const entityLabel = isTeamBased ? 'Team' : 'Player';
 
+  // V07.11: Default tiebreakers for weekly RR mode
+  const effectiveTiebreakers = tiebreakers || (isWeeklyFullRR
+    ? ['league_points', 'wins', 'point_diff', 'points_for', 'head_to_head'] as LeagueTiebreaker[]
+    : ['wins', 'game_diff', 'games_won'] as LeagueTiebreaker[]);
+
   // Sort and filter members
   const sortedMembers = useMemo(() => {
     let filtered = (members || []).filter(m => m.status === 'active');
-    
+
     // Search filter
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      filtered = filtered.filter(m => 
+      filtered = filtered.filter(m =>
         m.displayName.toLowerCase().includes(term) ||
         (m.partnerDisplayName && m.partnerDisplayName.toLowerCase().includes(term))
       );
@@ -101,8 +151,17 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
 
     // Sort
     return [...filtered].sort((a, b) => {
+      // V07.11: When sorting by rank in weekly RR mode, use tiebreakers
+      if (sortField === 'rank' && isWeeklyFullRR) {
+        for (const tb of effectiveTiebreakers) {
+          const diff = compareTiebreaker(a, b, tb);
+          if (diff !== 0) return diff;
+        }
+        return 0;
+      }
+
       let aVal: number, bVal: number;
-      
+
       switch (sortField) {
         case 'rank':
           aVal = a.currentRank || 999;
@@ -140,7 +199,7 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
       }
       return diff;
     });
-  }, [members, searchTerm, sortField, sortDirection]);
+  }, [members, searchTerm, sortField, sortDirection, isWeeklyFullRR, effectiveTiebreakers]);
 
   // Handle sort toggle
   const handleSort = (field: SortField) => {

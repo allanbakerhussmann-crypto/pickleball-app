@@ -725,6 +725,12 @@ export const submitLeagueMatchResult = async (
 ): Promise<void> => {
   const now = Date.now();
 
+  // V07.11: Get league settings for points calculation
+  const leagueDoc = await getDoc(doc(db, 'leagues', leagueId));
+  const leagueData = leagueDoc.data() as League | undefined;
+  const pointsForWin = leagueData?.settings?.pointsForWin ?? 1;
+  const pointsForLoss = leagueData?.settings?.pointsForLoss ?? 0;
+
   // If organizer submits, auto-finalize the match
   if (isOrganizer) {
     // First get the match to find both member IDs
@@ -792,7 +798,8 @@ export const submitLeagueMatchResult = async (
         const newGamesLost = (currentStats.gamesLost || 0) + gamesLost;
         const newPointsFor = (currentStats.pointsFor || 0) + pointsFor;
         const newPointsAgainst = (currentStats.pointsAgainst || 0) + pointsAgainst;
-        const newPoints = (currentStats.points || 0) + (isWinner ? 3 : 0);
+        // V07.11: Use league settings for points
+        const newPoints = (currentStats.points || 0) + (isWinner ? pointsForWin : pointsForLoss);
 
         // Update streak
         let newStreak = currentStats.currentStreak || 0;
@@ -869,6 +876,12 @@ export const confirmLeagueMatchResult = async (
 ): Promise<void> => {
   const now = Date.now();
 
+  // V07.11: Get league settings for points calculation
+  const leagueDoc = await getDoc(doc(db, 'leagues', leagueId));
+  const leagueData = leagueDoc.data() as League | undefined;
+  const pointsForWin = leagueData?.settings?.pointsForWin ?? 1;
+  const pointsForLoss = leagueData?.settings?.pointsForLoss ?? 0;
+
   // Get match data to find both members and scores
   const matchDoc = await getDoc(doc(db, 'leagues', leagueId, 'matches', matchId));
   const matchData = matchDoc.data() as LeagueMatch | undefined;
@@ -932,7 +945,8 @@ export const confirmLeagueMatchResult = async (
       const newGamesLost = (currentStats.gamesLost || 0) + gamesLost;
       const newPointsFor = (currentStats.pointsFor || 0) + pointsFor;
       const newPointsAgainst = (currentStats.pointsAgainst || 0) + pointsAgainst;
-      const newPoints = (currentStats.points || 0) + (isWinner ? 3 : 0);
+      // V07.11: Use league settings for points
+      const newPoints = (currentStats.points || 0) + (isWinner ? pointsForWin : pointsForLoss);
 
       // Update streak
       let newStreak = currentStats.currentStreak || 0;
