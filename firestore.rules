@@ -426,7 +426,9 @@ service cloud.firestore {
         // League admin can do anything
         allow create, delete: if isLeagueAdmin(leagueId);
         // League admin OR match participants can update (for score entry)
-        // V07.04: Players cannot write to restricted DUPR fields or when scoreLocked
+        // V07.10: Players cannot write to restricted DUPR fields or when scoreLocked
+        // Check userAId/userBId/partnerAId/partnerBId first (legacy league format)
+        // Then check sideA/sideB.playerIds if they exist (unified format)
         allow update: if isLeagueAdmin(leagueId) ||
           (isAuthenticated() &&
            resource.data.scoreLocked != true &&
@@ -434,8 +436,8 @@ service cloud.firestore {
             resource.data.userBId == request.auth.uid ||
             resource.data.partnerAId == request.auth.uid ||
             resource.data.partnerBId == request.auth.uid ||
-            (resource.data.sideA.playerIds != null && request.auth.uid in resource.data.sideA.playerIds) ||
-            (resource.data.sideB.playerIds != null && request.auth.uid in resource.data.sideB.playerIds)) &&
+            ('sideA' in resource.data && resource.data.sideA.playerIds != null && request.auth.uid in resource.data.sideA.playerIds) ||
+            ('sideB' in resource.data && resource.data.sideB.playerIds != null && request.auth.uid in resource.data.sideB.playerIds)) &&
            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['officialResult', 'dupr', 'scoreLocked', 'scoreLockedAt', 'scoreLockedByUserId', 'migratedAt', 'migratedFromLegacy']));
       }
       match /challenges/{challengeId} {
