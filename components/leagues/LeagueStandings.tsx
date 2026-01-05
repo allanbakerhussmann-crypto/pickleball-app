@@ -1,9 +1,10 @@
 /**
- * LeagueStandings Component V07.11
+ * LeagueStandings Component V07.13
  *
  * Enhanced standings display with rankings, stats, form, and visual improvements.
  * Supports ladder challenge buttons for ladder format leagues.
  * V07.11: Added tiebreaker-based sorting for weekly round robin mode.
+ * V07.13: Added showPointsForAgainst prop for displaying PF/PA columns.
  *
  * FILE LOCATION: components/leagues/LeagueStandings.tsx
  */
@@ -28,6 +29,8 @@ interface LeagueStandingsProps {
   // V07.11: Tiebreaker support for weekly round robin
   tiebreakers?: LeagueTiebreaker[];
   isWeeklyFullRR?: boolean;
+  // V07.13: Show Points For/Against columns (for Overall view)
+  showPointsForAgainst?: boolean;
 }
 
 type SortField = 'rank' | 'points' | 'wins' | 'played' | 'winRate' | 'streak';
@@ -122,6 +125,7 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
   compact = false,
   tiebreakers,
   isWeeklyFullRR = false,
+  showPointsForAgainst = false,
 }) => {
   const [sortField, setSortField] = useState<SortField>('rank');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -354,12 +358,18 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
                     W <SortIcon field="wins" />
                   </th>
                   <th className="py-3 px-4 text-center">L</th>
-                  <th 
+                  <th
                     className="py-3 px-4 text-center hidden sm:table-cell cursor-pointer hover:bg-gray-800 transition-colors"
                     onClick={() => handleSort('winRate')}
                   >
                     Win% <SortIcon field="winRate" />
                   </th>
+                  {showPointsForAgainst && (
+                    <>
+                      <th className="py-3 px-4 text-center hidden md:table-cell">PF</th>
+                      <th className="py-3 px-4 text-center hidden md:table-cell">PA</th>
+                    </>
+                  )}
                   <th className="py-3 px-4 text-center hidden md:table-cell">GD</th>
                   <th 
                     className="py-3 px-4 text-center cursor-pointer hover:bg-gray-800 transition-colors"
@@ -451,14 +461,28 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
                       {/* Win Rate */}
                       <td className="py-3 px-4 text-center hidden sm:table-cell">
                         <span className={`font-medium ${
-                          winRate >= 60 ? 'text-green-400' : 
-                          winRate >= 40 ? 'text-gray-300' : 
+                          winRate >= 60 ? 'text-green-400' :
+                          winRate >= 40 ? 'text-gray-300' :
                           'text-red-400'
                         }`}>
                           {winRate}%
                         </span>
                       </td>
-                      
+
+                      {/* Points For (PF) - Only show when showPointsForAgainst is true */}
+                      {showPointsForAgainst && (
+                        <td className="py-3 px-4 text-center hidden md:table-cell">
+                          <span className="text-green-400">{member.stats?.pointsFor || 0}</span>
+                        </td>
+                      )}
+
+                      {/* Points Against (PA) - Only show when showPointsForAgainst is true */}
+                      {showPointsForAgainst && (
+                        <td className="py-3 px-4 text-center hidden md:table-cell">
+                          <span className="text-red-400">{member.stats?.pointsAgainst || 0}</span>
+                        </td>
+                      )}
+
                       {/* Game Difference */}
                       <td className="py-3 px-4 text-center hidden md:table-cell">
                         <span className={

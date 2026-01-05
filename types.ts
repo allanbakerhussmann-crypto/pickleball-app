@@ -1097,7 +1097,7 @@ export interface MeetupRSVP {
 
 export type LeagueType = 'singles' | 'doubles' | 'mixed_doubles';
 export type LeagueFormat = 'ladder' | 'round_robin' | 'swiss' | 'box_league';
-export type LeagueStatus = 'draft' | 'registration' | 'active' | 'completed' | 'cancelled';
+export type LeagueStatus = 'draft' | 'registration' | 'registration_closed' | 'active' | 'completed' | 'cancelled';
 
 /**
  * Match format settings
@@ -1156,7 +1156,18 @@ export interface LeaguePricing {
   lateRegistrationStart?: number | null;
   prizePool?: LeaguePrizePool;
   feesPaidBy: 'player' | 'organizer';
-  refundPolicy: 'full' | 'partial' | 'none';
+  /**
+   * Refund policy options:
+   * - full: 100% refund before league starts
+   * - full_7days: 100% refund up to 7 days before start
+   * - full_14days: 100% refund up to 14 days before start
+   * - 75_percent: 75% refund before league starts
+   * - partial (50_percent): 50% refund before league starts
+   * - 25_percent: 25% refund before league starts
+   * - admin_fee_only: Refund minus $5 admin fee
+   * - none: No refunds
+   */
+  refundPolicy: 'full' | 'full_7days' | 'full_14days' | '75_percent' | 'partial' | '25_percent' | 'admin_fee_only' | 'none';
   refundDeadline?: number | null;
   currency: string;
 }
@@ -1616,6 +1627,7 @@ export interface League {
   
   // Stats (auto-updated)
   memberCount: number;
+  maxMembers?: number | null; // V07.15: Maximum players/teams allowed
   matchesPlayed: number;
   paidMemberCount?: number;
   totalCollected?: number;
@@ -1840,6 +1852,10 @@ export interface LeagueMatch {
   duprSubmittedAt?: number | null;
   duprSubmittedBy?: string | null;
   duprError?: string | null;
+
+  // V07.14: DUPR exclusion (match doesn't count for league standings)
+  duprExcluded?: boolean;
+  duprExclusionReason?: string;
 
   // Score verification (NEW V05.44)
   verification?: MatchVerificationData | null;
@@ -2695,6 +2711,77 @@ export interface PoolResultDoc {
   testData: boolean;
   matchesUpdatedAtMax: number;  // Watermark: latest match.updatedAt used
   rows: PoolResultRow[];
+}
+
+// ============================================
+// LEAGUE STANDINGS (V07.14)
+// Same pattern as tournament poolResults
+// ============================================
+
+/**
+ * League standings row - one entry per member
+ *
+ * V07.14: Stored at leagues/{leagueId}/standings/{standingsKey}
+ */
+export interface LeagueStandingsRow {
+  rank: number;
+  memberId: string;
+  displayName: string;
+  partnerDisplayName?: string | null;
+
+  // Core stats
+  wins: number;
+  losses: number;
+  played: number;
+
+  // Points (game scores)
+  pointsFor: number;      // Total points scored
+  pointsAgainst: number;  // Total points conceded
+  pointDiff: number;      // PF - PA
+
+  // Games (in multi-game matches)
+  gamesWon: number;
+  gamesLost: number;
+  gameDiff: number;
+
+  // League points (3 for win, 0 for loss, etc.)
+  leaguePoints: number;
+
+  // Win rate for display
+  winRate: number;        // 0-100
+}
+
+/**
+ * League standings document - stored at leagues/{leagueId}/standings/{standingsKey}
+ *
+ * Canonical, persisted standings that UI reads directly.
+ * Matches are truth - this is a calculated snapshot.
+ *
+ * V07.14: Same pattern as tournament PoolResultDoc
+ * - Freshness tracking with matchesUpdatedAtMax
+ * - Fail loudly if data is broken
+ * - DUPR aware - exclude rejected matches
+ */
+export interface LeagueStandingsDoc {
+  // Identity
+  standingsKey: string;           // "overall", "week-1", "week-2", etc.
+  leagueId: string;
+  weekNumber: number | null;      // null for overall, 1+ for weekly
+
+  // Freshness tracking (CRITICAL for stale detection)
+  generatedAt: number;            // When this snapshot was calculated
+  matchesUpdatedAtMax: number;    // Latest match.updatedAt used in calculation
+  calculationVersion: string;     // "v07.14" - tracks algorithm changes
+
+  // Stats
+  totalMatches: number;           // Total matches used in calculation
+  completedMatches: number;       // Completed matches counted
+
+  // The standings rows
+  rows: LeagueStandingsRow[];
+
+  // Validation
+  errors: string[];               // Any data issues found (for debugging)
 }
 
 /**

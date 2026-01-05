@@ -1,12 +1,17 @@
 /**
- * LeagueDetail Component V05.50
+ * LeagueDetail Component V07.14
  *
  * Shows league details, standings, matches, and allows joining/playing.
  * Now includes player management with drag-and-drop for organizers.
  * Auto-updates league status based on registration dates.
+ * V07.13: Added week-based match organization with sub-tabs (Week 1, 2, ..., Overall, Finals).
+ * V07.14: League standings as stored snapshots (same pattern as tournament poolResults).
+ *         - Standings are derived from match data
+ *         - Freshness tracking with staleness indicator
+ *         - Recalculate button for organizers
  *
  * FILE LOCATION: components/leagues/LeagueDetail.tsx
- * VERSION: V05.50
+ * VERSION: V07.14
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -23,6 +28,10 @@ import {
   updateLeague,
   subscribeToBoxLeaguePlayers,
   checkAndUpdateLeagueStatus,
+  // V07.14: League standings snapshots
+  getAllLeagueStandings,
+  getStandingsStatus,
+  rebuildAllStandings,
 } from '../../services/firebase';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
 import { BoxPlayerDragDrop } from './boxLeague';
@@ -34,10 +43,12 @@ import type {
   LeagueMember,
   LeagueMatch,
   LeagueDivision,
+  LeagueStandingsDoc,
 } from '../../types';
 import type { BoxLeaguePlayer } from '../../types/boxLeague';
 import { LeagueStandings } from './LeagueStandings';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
+import { StandingsPointsCard, RoundsSlider, type StandingsPointsConfig } from '../shared/PointsSlider';
 
 // ============================================
 // TYPES
@@ -65,11 +76,19 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [matches, setMatches] = useState<LeagueMatch[]>([]);
   const [myMembership, setMyMembership] = useState<LeagueMember | null>(null);
   const [boxPlayers, setBoxPlayers] = useState<BoxLeaguePlayer[]>([]);
-  
+
+  // V07.14: Standings snapshots
+  const [overallStandings, setOverallStandings] = useState<LeagueStandingsDoc | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_weekStandings, setWeekStandings] = useState<Map<number, LeagueStandingsDoc>>(new Map());
+  const [standingsStatus, setStandingsStatus] = useState<'current' | 'stale' | 'missing'>('missing');
+  const [isRecalculating, setIsRecalculating] = useState(false);
+
   // UI state
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('standings');
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
+  const [activeWeekTab, setActiveWeekTab] = useState<string>(''); // For matches sub-tabs
   const [joining, setJoining] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -79,6 +98,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [showScoreEntryModal, setShowScoreEntryModal] = useState(false);
   const [showDuprAcknowledgement, setShowDuprAcknowledgement] = useState(false); // V07.12
   const [duprAcknowledged, setDuprAcknowledged] = useState(false); // V07.12
+  const [duprCheckboxChecked, setDuprCheckboxChecked] = useState(false); // V07.15: Local state for checkbox
   const [editForm, setEditForm] = useState({
     // Basic Info
     name: '',
@@ -120,7 +140,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     entryFee: 0,
     entryFeeType: 'per_player' as 'per_player' | 'per_team',
     feesPaidBy: 'player' as 'player' | 'organizer',
-    refundPolicy: 'partial' as 'full' | 'partial' | 'none',
+    refundPolicy: 'partial' as 'full' | 'full_7days' | 'full_14days' | '75_percent' | 'partial' | '25_percent' | 'admin_fee_only' | 'none',
     
     // Early Bird
     earlyBirdEnabled: false,
@@ -315,6 +335,41 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   }, [leagueId, currentUser, members]);
 
+  // V07.14: Load standings snapshots from Firestore
+  useEffect(() => {
+    const loadStandings = async () => {
+      try {
+        // Load all standings (overall + weeks)
+        const allStandings = await getAllLeagueStandings(leagueId);
+
+        // Separate overall from week standings
+        const overall = allStandings.find(s => s.standingsKey === 'overall') || null;
+        setOverallStandings(overall);
+
+        // Build week standings map
+        const weekMap = new Map<number, LeagueStandingsDoc>();
+        allStandings
+          .filter(s => s.weekNumber !== null)
+          .forEach(s => weekMap.set(s.weekNumber!, s));
+        setWeekStandings(weekMap);
+
+        // Check staleness
+        if (overall && matches.length > 0) {
+          const status = getStandingsStatus(overall, matches);
+          setStandingsStatus(status.status);
+        } else if (!overall && matches.some(m => m.status === 'completed')) {
+          setStandingsStatus('missing');
+        } else {
+          setStandingsStatus('current');
+        }
+      } catch (err) {
+        console.error('[LeagueDetail] Failed to load standings:', err);
+      }
+    };
+
+    loadStandings();
+  }, [leagueId, matches]);
+
   // ============================================
   // HELPERS
   // ============================================
@@ -383,12 +438,85 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       : matches;
   }, [matches, selectedDivisionId]);
 
+  // Group matches by week for sub-tabs
+  const matchesByWeek = useMemo(() => {
+    const grouped: Record<number, LeagueMatch[]> = {};
+    filteredMatches.forEach(match => {
+      const week = match.weekNumber || 0;
+      if (!grouped[week]) grouped[week] = [];
+      grouped[week].push(match);
+    });
+    return grouped;
+  }, [filteredMatches]);
+
+  // Get sorted weeks array
+  const weeks = useMemo(() => {
+    return Object.keys(matchesByWeek).map(Number).filter(w => w > 0).sort((a, b) => a - b);
+  }, [matchesByWeek]);
+
+  // Get finals matches (weekNumber === 0 or isFinal flag)
+  const finalsMatches = useMemo(() => {
+    return filteredMatches.filter(m => (m as any).isFinal || m.weekNumber === 0);
+  }, [filteredMatches]);
+
+  // Find last played week (has completed matches)
+  const lastPlayedWeek = useMemo(() => {
+    let lastWeek = weeks[0] || 1;
+    weeks.forEach(week => {
+      if ((matchesByWeek[week] || []).some(m => m.status === 'completed')) {
+        lastWeek = week;
+      }
+    });
+    return lastWeek;
+  }, [weeks, matchesByWeek]);
+
+  // Default to last played week on mount (only when matches tab is active)
+  useEffect(() => {
+    if (activeTab === 'matches' && !activeWeekTab && weeks.length > 0) {
+      setActiveWeekTab(`week-${lastPlayedWeek}`);
+    }
+  }, [activeTab, activeWeekTab, lastPlayedWeek, weeks]);
+
   // ============================================
   // ACTIONS
   // ============================================
 
+  // V07.14: Recalculate standings from matches
+  const handleRecalculateStandings = async () => {
+    if (!league) return;
+    setIsRecalculating(true);
+    try {
+      await rebuildAllStandings(leagueId, members, matches, league.settings);
+
+      // Reload standings after rebuild
+      const allStandings = await getAllLeagueStandings(leagueId);
+      const overall = allStandings.find(s => s.standingsKey === 'overall') || null;
+      setOverallStandings(overall);
+
+      const weekMap = new Map<number, LeagueStandingsDoc>();
+      allStandings
+        .filter(s => s.weekNumber !== null)
+        .forEach(s => weekMap.set(s.weekNumber!, s));
+      setWeekStandings(weekMap);
+
+      setStandingsStatus('current');
+      console.log('[LeagueDetail] Standings recalculated successfully');
+    } catch (err) {
+      console.error('[LeagueDetail] Failed to recalculate standings:', err);
+      alert('Failed to recalculate standings. Check console for details.');
+    } finally {
+      setIsRecalculating(false);
+    }
+  };
+
   const handleJoin = async () => {
     if (!currentUser || !userProfile) return;
+
+    // V07.15: Check if league is full before attempting to join
+    if (league?.maxMembers && (league.memberCount || 0) >= league.maxMembers) {
+      alert(`League is full (${league.maxMembers}/${league.maxMembers} players)`);
+      return;
+    }
 
     // Debug: Log payment check
     console.log('Join clicked - Payment check:', {
@@ -408,6 +536,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       duprAcknowledged,
     });
     if (isDuprLeague && !duprAcknowledged) {
+      setDuprCheckboxChecked(false); // V07.15: Reset checkbox when modal opens
       setShowDuprAcknowledgement(true);
       return;
     }
@@ -515,7 +644,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
   const isDoublesOrMixed = league.type === 'doubles' || league.type === 'mixed_doubles';
   const isOrganizer = currentUser?.uid === league.createdByUserId;
-  const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active');
+  const isFull = league.maxMembers ? (league.memberCount || 0) >= league.maxMembers : false;
+  const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active') && !isFull;
 
   // Determine which tabs to show - Schedule, Players, and DUPR tabs only for organizers
   const availableTabs: TabType[] = isOrganizer
@@ -716,10 +846,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {!myMembership && (league.status === 'draft' || league.status === 'registration' || league.status === 'active') && (
               <button
                 onClick={handleJoin}
-                disabled={joining}
+                disabled={joining || isFull}
                 className="bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
               >
-                {joining ? 'Joining...' : '👤 Join as Player'}
+                {isFull ? '🚫 League Full' : joining ? 'Joining...' : '👤 Join as Player'}
               </button>
             )}
           </div>
@@ -863,56 +993,226 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
       {/* STANDINGS TAB */}
       {activeTab === 'standings' && league && (
-        <LeagueStandings
-          members={filteredMembers}
-          format={league.format}
-          leagueType={league.type}
-          currentUserId={currentUser?.uid}
-          myMembership={myMembership}
-          onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
-          challengeRange={league.settings?.challengeRules?.challengeRange || 3}
-        />
+        <div className="space-y-4">
+          {/* V07.14: Staleness indicator for organizers */}
+          {isOrganizer && standingsStatus === 'stale' && (
+            <div className="bg-yellow-900/30 border border-yellow-600/50 p-3 rounded-lg flex items-center justify-between">
+              <span className="text-yellow-400 text-sm">
+                ⚠️ Standings may be outdated - a match was edited after last calculation
+              </span>
+              <button
+                onClick={handleRecalculateStandings}
+                disabled={isRecalculating}
+                className="bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+              >
+                {isRecalculating ? 'Recalculating...' : 'Recalculate'}
+              </button>
+            </div>
+          )}
+          {isOrganizer && standingsStatus === 'missing' && matches.some(m => m.status === 'completed') && (
+            <div className="bg-blue-900/30 border border-blue-600/50 p-3 rounded-lg flex items-center justify-between">
+              <span className="text-blue-400 text-sm">
+                📊 Standings snapshot not yet created - click to generate from match results
+              </span>
+              <button
+                onClick={handleRecalculateStandings}
+                disabled={isRecalculating}
+                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+              >
+                {isRecalculating ? 'Generating...' : 'Generate Standings'}
+              </button>
+            </div>
+          )}
+          {overallStandings && (
+            <div className="text-xs text-gray-500 text-right">
+              Last updated: {new Date(overallStandings.generatedAt).toLocaleString()} •
+              {overallStandings.completedMatches} of {overallStandings.totalMatches} matches completed
+            </div>
+          )}
+          <LeagueStandings
+            members={filteredMembers}
+            format={league.format}
+            leagueType={league.type}
+            currentUserId={currentUser?.uid}
+            myMembership={myMembership}
+            onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
+            challengeRange={league.settings?.challengeRules?.challengeRange || 3}
+          />
+        </div>
       )}
 
       {/* MATCHES TAB */}
       {activeTab === 'matches' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
+          {/* Week Sub-Tabs */}
+          <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-700">
+            {weeks.map(week => {
+              const weekMatches = matchesByWeek[week] || [];
+              const completedCount = weekMatches.filter(m => m.status === 'completed').length;
+              const isCurrentWeek = activeWeekTab === `week-${week}`;
+
+              return (
+                <button
+                  key={`week-${week}`}
+                  onClick={() => setActiveWeekTab(`week-${week}`)}
+                  className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isCurrentWeek
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Week {week}
+                  {completedCount > 0 && (
+                    <span className={`ml-1 text-xs ${isCurrentWeek ? 'text-blue-200' : 'text-gray-500'}`}>
+                      ({completedCount}/{weekMatches.length})
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {/* Overall Tab - Season Leaderboard */}
+            <button
+              onClick={() => setActiveWeekTab('overall')}
+              className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeWeekTab === 'overall'
+                  ? 'bg-yellow-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Overall
+            </button>
+
+            {/* Finals Tab - Only show if there are finals matches */}
+            {finalsMatches.length > 0 && (
+              <button
+                onClick={() => setActiveWeekTab('finals')}
+                className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeWeekTab === 'finals'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                Finals
+              </button>
+            )}
+          </div>
+
+          {/* Content based on selected sub-tab */}
           {filteredMatches.length === 0 ? (
             <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center text-gray-400">
               No matches yet
             </div>
-          ) : (
-            filteredMatches.map(match => (
-              <LeagueMatchCard
-                key={match.id}
-                match={match}
+          ) : activeWeekTab === 'overall' ? (
+            /* Overall: Season Leaderboard */
+            <div>
+              <div className="bg-gray-800/50 rounded-lg p-3 mb-4 border border-gray-700">
+                <p className="text-sm text-gray-400">
+                  Season standings showing cumulative stats from all completed matches.
+                </p>
+              </div>
+              <LeagueStandings
+                members={filteredMembers}
+                format={league.format}
+                leagueType={league.type}
                 currentUserId={currentUser?.uid}
-                isOrganizer={isOrganizer}
-                showWeek={league?.format === 'round_robin'}
-                showRound={league?.format === 'swiss' || league?.format === 'box_league'}
-                verificationSettings={league?.settings?.scoreVerification || undefined}
-                onEnterScore={(m) => {
-                  setSelectedMatch(m);
-                  setShowScoreEntryModal(true);
-                }}
-                onViewDetails={(m) => {
-                  setSelectedMatch(m);
-                  setShowScoreEntryModal(true);
-                }}
-                onConfirmScore={(m) => {
-                  setSelectedMatch(m);
-                  setShowScoreEntryModal(true);
-                }}
-                onDisputeScore={(m) => {
-                  setSelectedMatch(m);
-                  setShowScoreEntryModal(true);
-                }}
-                leagueId={leagueId}
-                duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
-                leagueName={league?.name}
-                showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
+                myMembership={myMembership}
+                onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
+                challengeRange={league.settings?.challengeRules?.challengeRange || 3}
+                showPointsForAgainst={true}
               />
-            ))
+            </div>
+          ) : activeWeekTab === 'finals' ? (
+            /* Finals Matches */
+            <div className="space-y-3">
+              <div className="bg-purple-900/30 rounded-lg p-4 border border-purple-600/50 mb-4">
+                <h3 className="font-semibold text-purple-300 flex items-center gap-2">
+                  Finals Evening
+                </h3>
+                <p className="text-sm text-gray-400 mt-1">
+                  Playoff matches to determine the league champion.
+                </p>
+              </div>
+              {finalsMatches.map(match => (
+                <LeagueMatchCard
+                  key={match.id}
+                  match={match}
+                  currentUserId={currentUser?.uid}
+                  isOrganizer={isOrganizer}
+                  showWeek={false}
+                  showRound={true}
+                  verificationSettings={league?.settings?.scoreVerification || undefined}
+                  onEnterScore={(m) => {
+                    setSelectedMatch(m);
+                    setShowScoreEntryModal(true);
+                  }}
+                  onViewDetails={(m) => {
+                    setSelectedMatch(m);
+                    setShowScoreEntryModal(true);
+                  }}
+                  onConfirmScore={(m) => {
+                    setSelectedMatch(m);
+                    setShowScoreEntryModal(true);
+                  }}
+                  onDisputeScore={(m) => {
+                    setSelectedMatch(m);
+                    setShowScoreEntryModal(true);
+                  }}
+                  leagueId={leagueId}
+                  duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
+                  leagueName={league?.name}
+                  showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
+                />
+              ))}
+            </div>
+          ) : (
+            /* Week Matches */
+            <div className="space-y-3">
+              {(() => {
+                const currentWeekNumber = parseInt(activeWeekTab.replace('week-', ''), 10) || lastPlayedWeek;
+                const weekMatches = matchesByWeek[currentWeekNumber] || [];
+
+                if (weekMatches.length === 0) {
+                  return (
+                    <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center text-gray-400">
+                      No matches scheduled for Week {currentWeekNumber}
+                    </div>
+                  );
+                }
+
+                return weekMatches.map(match => (
+                  <LeagueMatchCard
+                    key={match.id}
+                    match={match}
+                    currentUserId={currentUser?.uid}
+                    isOrganizer={isOrganizer}
+                    showWeek={false}
+                    showRound={league?.format === 'swiss' || league?.format === 'box_league'}
+                    verificationSettings={league?.settings?.scoreVerification || undefined}
+                    onEnterScore={(m) => {
+                      setSelectedMatch(m);
+                      setShowScoreEntryModal(true);
+                    }}
+                    onViewDetails={(m) => {
+                      setSelectedMatch(m);
+                      setShowScoreEntryModal(true);
+                    }}
+                    onConfirmScore={(m) => {
+                      setSelectedMatch(m);
+                      setShowScoreEntryModal(true);
+                    }}
+                    onDisputeScore={(m) => {
+                      setSelectedMatch(m);
+                      setShowScoreEntryModal(true);
+                    }}
+                    leagueId={leagueId}
+                    duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
+                    leagueName={league?.name}
+                    showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
+                  />
+                ));
+              })()}
+            </div>
           )}
         </div>
       )}
@@ -1054,8 +1354,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 </p>
               )}
               <p className="text-xs text-gray-500 mt-2">
-                Refund policy: {league.pricing.refundPolicy === 'full' ? 'Full refund before start' : 
-                               league.pricing.refundPolicy === 'partial' ? '50% refund before start' : 'No refunds'}
+                Refund policy: {
+                  league.pricing.refundPolicy === 'full' ? '100% refund before start' :
+                  league.pricing.refundPolicy === 'full_14days' ? '100% refund up to 14 days before' :
+                  league.pricing.refundPolicy === 'full_7days' ? '100% refund up to 7 days before' :
+                  league.pricing.refundPolicy === '75_percent' ? '75% refund before start' :
+                  league.pricing.refundPolicy === 'partial' ? '50% refund before start' :
+                  league.pricing.refundPolicy === '25_percent' ? '25% refund before start' :
+                  league.pricing.refundPolicy === 'admin_fee_only' ? 'Full minus $5 admin fee' :
+                  'No refunds'
+                }
               </p>
             </div>
           )}
@@ -1139,6 +1447,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 <input
                   type="checkbox"
                   id="duprAcknowledgeCheckbox"
+                  checked={duprCheckboxChecked}
+                  onChange={(e) => setDuprCheckboxChecked(e.target.checked)}
                   className="w-5 h-5 mt-0.5 accent-purple-500"
                 />
                 <span className="text-white text-sm">
@@ -1155,8 +1465,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </button>
               <button
                 onClick={() => {
-                  const checkbox = document.getElementById('duprAcknowledgeCheckbox') as HTMLInputElement;
-                  if (checkbox?.checked) {
+                  if (duprCheckboxChecked) {
                     handleDuprAcknowledge();
                   } else {
                     alert('Please check the box to confirm you understand the DUPR participation rules.');
@@ -1246,7 +1555,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 )}
               </div>
               <div className="text-xs text-gray-500 mb-6 text-center">
-                Refund Policy: {league.pricing.refundPolicy === 'full' ? 'Full refund before league starts' : league.pricing.refundPolicy === 'partial' ? '50% refund before league starts' : 'No refunds'}
+                Refund Policy: {
+                  league.pricing.refundPolicy === 'full' ? '100% refund before league starts' :
+                  league.pricing.refundPolicy === 'full_14days' ? '100% refund up to 14 days before' :
+                  league.pricing.refundPolicy === 'full_7days' ? '100% refund up to 7 days before' :
+                  league.pricing.refundPolicy === '75_percent' ? '75% refund before league starts' :
+                  league.pricing.refundPolicy === 'partial' ? '50% refund before league starts' :
+                  league.pricing.refundPolicy === '25_percent' ? '25% refund before league starts' :
+                  league.pricing.refundPolicy === 'admin_fee_only' ? 'Full minus $5 admin fee' :
+                  'No refunds'
+                }
               </div>
               <div className="space-y-3">
                 <button
@@ -1429,55 +1747,48 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 </div>
               </div>
 
-              {/* FORMAT SPECIFIC */}
-              {(league?.format === 'round_robin' || league?.format === 'swiss') && (
-                <div className="bg-gray-900/50 rounded-lg p-4">
-                  <h3 className="text-sm font-bold text-cyan-400 uppercase mb-4 flex items-center gap-2"><span>🔄</span> {league.format === 'round_robin' ? 'Round Robin Settings' : 'Swiss Settings'}</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    {league.format === 'round_robin' && (
-                      <div>
-                        <label className="block text-sm text-gray-400 mb-1">Number of Rounds</label>
-                        <input type="number" value={editForm.roundRobinRounds} onChange={(e) => setEditForm({ ...editForm, roundRobinRounds: parseInt(e.target.value) || 1 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="1" max="5" />
-                        <p className="text-xs text-gray-500 mt-1">How many times each player plays each opponent</p>
-                      </div>
-                    )}
-                    {league.format === 'swiss' && (
-                      <div>
-                        <label className="block text-sm text-gray-400 mb-1">Number of Rounds</label>
-                        <input type="number" value={editForm.swissRounds} onChange={(e) => setEditForm({ ...editForm, swissRounds: parseInt(e.target.value) || 4 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="1" max="10" />
-                        <p className="text-xs text-gray-500 mt-1">Total rounds to play</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
+              {/* FORMAT SPECIFIC - Round Robin */}
+              {league?.format === 'round_robin' && (
+                <RoundsSlider
+                  value={editForm.roundRobinRounds}
+                  onChange={(v) => setEditForm({ ...editForm, roundRobinRounds: v })}
+                  min={1}
+                  max={5}
+                  label="Number of Rounds"
+                  hint="How many times each player plays each opponent"
+                />
+              )}
+
+              {/* FORMAT SPECIFIC - Swiss */}
+              {league?.format === 'swiss' && (
+                <RoundsSlider
+                  value={editForm.swissRounds}
+                  onChange={(v) => setEditForm({ ...editForm, swissRounds: v })}
+                  min={1}
+                  max={10}
+                  label="Swiss Rounds"
+                  hint="Total rounds to play"
+                />
               )}
 
               {/* SCORING POINTS */}
-              <div className="bg-gray-900/50 rounded-lg p-4">
-                <h3 className="text-sm font-bold text-orange-400 uppercase mb-4 flex items-center gap-2"><span>🏆</span> Standings Points</h3>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Win</label>
-                    <input type="number" value={editForm.pointsForWin} onChange={(e) => setEditForm({ ...editForm, pointsForWin: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Draw</label>
-                    <input type="number" value={editForm.pointsForDraw} onChange={(e) => setEditForm({ ...editForm, pointsForDraw: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Loss</label>
-                    <input type="number" value={editForm.pointsForLoss} onChange={(e) => setEditForm({ ...editForm, pointsForLoss: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Forfeit</label>
-                    <input type="number" value={editForm.pointsForForfeit} onChange={(e) => setEditForm({ ...editForm, pointsForForfeit: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">No-Show</label>
-                    <input type="number" value={editForm.pointsForNoShow} onChange={(e) => setEditForm({ ...editForm, pointsForNoShow: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" />
-                  </div>
-                </div>
-              </div>
+              <StandingsPointsCard
+                values={{
+                  win: editForm.pointsForWin,
+                  draw: editForm.pointsForDraw,
+                  loss: editForm.pointsForLoss,
+                  forfeit: editForm.pointsForForfeit,
+                  noShow: editForm.pointsForNoShow,
+                }}
+                onChange={(newValues: StandingsPointsConfig) => setEditForm({
+                  ...editForm,
+                  pointsForWin: newValues.win,
+                  pointsForDraw: newValues.draw,
+                  pointsForLoss: newValues.loss,
+                  pointsForForfeit: newValues.forfeit,
+                  pointsForNoShow: newValues.noShow,
+                })}
+              />
 
               {/* PRICING */}
               <div className="bg-gray-900/50 rounded-lg p-4">
@@ -1491,7 +1802,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       <div>
                         <label className="block text-sm text-gray-400 mb-1">Entry Fee ($)</label>
-                        <input type="number" value={(editForm.entryFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, entryFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="0.01" />
+                        <input type="number" value={(editForm.entryFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, entryFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="1" />
                       </div>
                       <div>
                         <label className="block text-sm text-gray-400 mb-1">Fee Type</label>
@@ -1510,9 +1821,14 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                     </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Refund Policy</label>
-                      <select value={editForm.refundPolicy} onChange={(e) => setEditForm({ ...editForm, refundPolicy: e.target.value as 'full' | 'partial' | 'none' })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
-                        <option value="full">Full refund before league starts</option>
+                      <select value={editForm.refundPolicy} onChange={(e) => setEditForm({ ...editForm, refundPolicy: e.target.value as 'full' | 'full_7days' | 'full_14days' | '75_percent' | 'partial' | '25_percent' | 'admin_fee_only' | 'none' })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500">
+                        <option value="full">100% refund before league starts</option>
+                        <option value="full_14days">100% refund up to 14 days before</option>
+                        <option value="full_7days">100% refund up to 7 days before</option>
+                        <option value="75_percent">75% refund before league starts</option>
                         <option value="partial">50% refund before league starts</option>
+                        <option value="25_percent">25% refund before league starts</option>
+                        <option value="admin_fee_only">Full refund minus $5 admin fee</option>
                         <option value="none">No refunds</option>
                       </select>
                     </div>
@@ -1526,7 +1842,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                         <div className="grid grid-cols-2 gap-4 ml-6">
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Early Bird Fee ($)</label>
-                            <input type="number" value={(editForm.earlyBirdFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, earlyBirdFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="0.01" />
+                            <input type="number" value={(editForm.earlyBirdFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, earlyBirdFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="1" />
                           </div>
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Early Bird Deadline</label>
@@ -1545,7 +1861,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                         <div className="grid grid-cols-2 gap-4 ml-6">
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Late Fee ($)</label>
-                            <input type="number" value={(editForm.lateFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, lateFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="0.01" />
+                            <input type="number" value={(editForm.lateFee / 100).toFixed(2)} onChange={(e) => setEditForm({ ...editForm, lateFee: Math.round(parseFloat(e.target.value) * 100) || 0 })} className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg focus:outline-none focus:border-blue-500" min="0" step="1" />
                           </div>
                           <div>
                             <label className="block text-sm text-gray-400 mb-1">Late Fee Starts</label>

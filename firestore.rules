@@ -469,6 +469,14 @@ service cloud.firestore {
           ));
         allow delete: if isLeagueAdmin(leagueId);
       }
+      // V07.14: League standings subcollection (same pattern as tournament poolResults)
+      // Standings are derived snapshots - matches are truth
+      match /standings/{standingsKey} {
+        // Anyone can read standings (public data)
+        allow read: if true;
+        // Only league admin or app admin can write (auto-updated by app)
+        allow write: if isLeagueAdmin(leagueId) || isAppAdmin();
+      }
     }
 
     // Tournament Registrations - SECURED

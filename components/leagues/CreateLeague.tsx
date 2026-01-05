@@ -1,21 +1,16 @@
 /**
- * CreateLeague Component - 7-Step Wizard V06.00
+ * CreateLeague Component - 7-Step Wizard V07.15
  *
- * UPDATED V06.00:
- * - Replaced FORMATS constant with FormatCards component
- * - Now uses unified CompetitionFormat from types/formats
- * - Shows all 10 formats with dark theme styling
- * - Filters formats by play type (singles/doubles/mixed)
- *
- * UPDATED V05.50:
- * - Added payment mode selector (Free/External/Stripe) in Step 6
- *
- * UPDATED V05.44:
- * - Added Score Verification Settings in Step 5
- * - Uses VerificationSettingsForm component
+ * UPDATED V07.15:
+ * - Complete UI redesign with "Sports Command Center" aesthetic
+ * - New animated step indicator with icons
+ * - Glass-morphism cards with subtle depth
+ * - Improved typography and visual hierarchy
+ * - Touch-friendly inputs with smooth animations
+ * - Consistent lime/cyan/amber accent system
  *
  * FILE LOCATION: components/leagues/CreateLeague.tsx
- * VERSION: V06.00
+ * VERSION: V07.15
  */
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -34,6 +29,7 @@ import { getFormatOption } from '../../types/formats';
 import { VerificationSettingsForm } from './verification';
 import { FormatCards } from '../shared/FormatSelector';
 import { formatTime } from '../../utils/timeFormat';
+import { StandingsPointsCard, RoundsSlider, type StandingsPointsConfig } from '../shared/PointsSlider';
 
 // ============================================
 // LOCAL TYPES
@@ -75,7 +71,16 @@ interface DivisionDraft {
 // CONSTANTS
 // ============================================
 
-const STEPS = ['Basics', 'Schedule', 'Divisions', 'Partners', 'Scoring', 'Payment', 'Review'];
+// Step configuration with icons and descriptions
+const STEPS = [
+  { label: 'Basics', icon: '🎾', desc: 'Name & Format' },
+  { label: 'Schedule', icon: '📅', desc: 'Dates & Times' },
+  { label: 'Divisions', icon: '🏆', desc: 'Skill Levels' },
+  { label: 'Partners', icon: '👥', desc: 'Team Rules' },
+  { label: 'Scoring', icon: '📊', desc: 'Points & Rules' },
+  { label: 'Payment', icon: '💳', desc: 'Fees & Refunds' },
+  { label: 'Review', icon: '✓', desc: 'Confirm & Create' },
+];
 
 const WEEKDAYS: { value: DayOfWeek; label: string; short: string }[] = [
   { value: 'monday', label: 'Monday', short: 'Mon' },
@@ -304,6 +309,14 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     }
   }, [rr.weeklyFullRoundRobin]);
 
+  // V07.13: Sync rounds with numberOfWeeks for Weekly Full RR
+  // This ensures all weeks of matches are generated at once
+  useEffect(() => {
+    if (rr.weeklyFullRoundRobin) {
+      setRr(prev => ({ ...prev, rounds: scheduleConfig.numberOfWeeks }));
+    }
+  }, [rr.weeklyFullRoundRobin, scheduleConfig.numberOfWeeks]);
+
   const generatedDates = useMemo(() => {
     return generateMatchDates(scheduleConfig.startDate, scheduleConfig.numberOfWeeks, 
       scheduleConfig.matchDays, scheduleConfig.skippedDates);
@@ -488,38 +501,104 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       // ==================== STEP 1: BASICS ====================
       case 1:
         return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white">Basic Info</h2>
-            
+          <div className="space-y-8">
+            {/* Section Header */}
             <div>
-              <label className="block text-sm text-gray-400 mb-1">League Name *</label>
-              <input type="text" value={basic.name} onChange={e => setBasic({ ...basic, name: e.target.value })} 
-                className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg" 
-                placeholder="e.g., Tuesday Night Ladder League"/>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-lime-500/20 text-lime-400 flex items-center justify-center text-xl">🎾</span>
+                Basic Info
+              </h2>
+              <p className="text-gray-500 mt-2">Give your league a name and choose the competition format</p>
             </div>
-            
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Description</label>
-              <textarea value={basic.description} onChange={e => setBasic({ ...basic, description: e.target.value })} 
-                className="w-full bg-gray-900 border border-gray-700 text-white p-3 rounded-lg min-h-[80px]" 
-                placeholder="Optional description..."/>
+
+            {/* League Name */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-300">
+                League Name <span className="text-lime-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={basic.name}
+                onChange={e => setBasic({ ...basic, name: e.target.value })}
+                className="
+                  w-full bg-gray-800/50 border-2 border-gray-700/50 text-white p-4 rounded-xl
+                  placeholder-gray-500 text-lg
+                  focus:outline-none focus:border-lime-500/50 focus:bg-gray-800
+                  transition-all duration-200
+                "
+                placeholder="e.g., Tuesday Night Ladder League"
+              />
             </div>
-            
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">Type *</label>
-              <div className="grid grid-cols-3 gap-2">
+
+            {/* Description */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-300">
+                Description <span className="text-gray-600">(optional)</span>
+              </label>
+              <textarea
+                value={basic.description}
+                onChange={e => setBasic({ ...basic, description: e.target.value })}
+                className="
+                  w-full bg-gray-800/50 border-2 border-gray-700/50 text-white p-4 rounded-xl
+                  placeholder-gray-500 min-h-[100px] resize-none
+                  focus:outline-none focus:border-lime-500/50 focus:bg-gray-800
+                  transition-all duration-200
+                "
+                placeholder="Tell players what makes this league special..."
+              />
+            </div>
+
+            {/* Play Type Selection */}
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-gray-300">
+                Play Type <span className="text-lime-500">*</span>
+              </label>
+              <div className="grid grid-cols-3 gap-3">
                 {TYPES.map(t => (
-                  <label key={t.value} className={`flex flex-col items-center p-3 rounded-lg border cursor-pointer transition-colors ${basic.type === t.value ? 'bg-blue-900/30 border-blue-500' : 'bg-gray-900 border-gray-700 hover:border-gray-600'}`}>
-                    <input type="radio" checked={basic.type === t.value} onChange={() => setBasic({ ...basic, type: t.value })} className="sr-only"/>
-                    <span className="text-white font-semibold">{t.label}</span>
-                    <span className="text-xs text-gray-500">{t.desc}</span>
+                  <label
+                    key={t.value}
+                    className={`
+                      relative flex flex-col items-center p-5 rounded-xl border-2 cursor-pointer
+                      transition-all duration-200 group
+                      ${basic.type === t.value
+                        ? 'bg-lime-500/10 border-lime-500/50 shadow-lg shadow-lime-500/10'
+                        : 'bg-gray-800/30 border-gray-700/50 hover:border-gray-600 hover:bg-gray-800/50'
+                      }
+                    `}
+                  >
+                    <input
+                      type="radio"
+                      checked={basic.type === t.value}
+                      onChange={() => setBasic({ ...basic, type: t.value })}
+                      className="sr-only"
+                    />
+                    {/* Selection Indicator */}
+                    {basic.type === t.value && (
+                      <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-lime-500 flex items-center justify-center">
+                        <span className="text-xs text-gray-900">✓</span>
+                      </div>
+                    )}
+                    <span className={`
+                      text-2xl mb-2
+                      ${basic.type === t.value ? 'scale-110' : 'group-hover:scale-105'}
+                      transition-transform
+                    `}>
+                      {t.value === 'singles' ? '👤' : t.value === 'doubles' ? '👥' : '👫'}
+                    </span>
+                    <span className={`font-semibold ${basic.type === t.value ? 'text-lime-400' : 'text-white'}`}>
+                      {t.label}
+                    </span>
+                    <span className="text-xs text-gray-500 mt-1">{t.desc}</span>
                   </label>
                 ))}
               </div>
             </div>
-            
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">Format *</label>
+
+            {/* Format Selection */}
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-gray-300">
+                Competition Format <span className="text-lime-500">*</span>
+              </label>
               <FormatCards
                 value={selectedFormat}
                 onChange={setSelectedFormat}
@@ -623,57 +702,101 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       // ==================== STEP 2: SCHEDULE ====================
       case 2:
         return (
-          <div className="space-y-5">
-            <h2 className="text-xl font-bold text-white">Schedule & Venue</h2>
-            
-            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-3">📅 League Duration</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Number of Weeks *</label>
-                  <div className="flex items-center gap-2">
-                    <input type="number" value={scheduleConfig.numberOfWeeks} 
-                      onChange={e => setScheduleConfig({ ...scheduleConfig, numberOfWeeks: parseInt(e.target.value) || 1 })} 
-                      className="w-24 bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg text-center" min={1} max={52}/>
+          <div className="space-y-8">
+            {/* Section Header */}
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xl">📅</span>
+                Schedule & Venue
+              </h2>
+              <p className="text-gray-500 mt-2">Set up when and where matches will be played</p>
+            </div>
+
+            {/* League Duration */}
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50">
+              <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                <span className="text-cyan-400">📅</span> League Duration
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Number of Weeks <span className="text-lime-500">*</span>
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      value={scheduleConfig.numberOfWeeks}
+                      onChange={e => setScheduleConfig({ ...scheduleConfig, numberOfWeeks: parseInt(e.target.value) || 1 })}
+                      className="w-24 bg-gray-800 border-2 border-gray-700/50 text-white p-3 rounded-xl text-center text-lg font-semibold focus:outline-none focus:border-cyan-500/50 transition-all"
+                      min={1}
+                      max={52}
+                    />
                     <span className="text-gray-400">weeks</span>
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">First Match Night *</label>
-                  <input type="date" value={scheduleConfig.startDate} 
-                    onChange={e => setScheduleConfig({ ...scheduleConfig, startDate: e.target.value })} 
-                    className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg"/>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-300">
+                    First Match Night <span className="text-lime-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={scheduleConfig.startDate}
+                    onChange={e => setScheduleConfig({ ...scheduleConfig, startDate: e.target.value })}
+                    className="w-full bg-gray-800 border-2 border-gray-700/50 text-white p-3 rounded-xl focus:outline-none focus:border-cyan-500/50 transition-all"
+                  />
                 </div>
               </div>
             </div>
 
-            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-3">🔄 Match Day(s)</h3>
-              <p className="text-sm text-gray-400 mb-3">Select which day(s) matches will be played each week</p>
+            {/* Match Days */}
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50">
+              <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
+                <span className="text-cyan-400">🔄</span> Match Day(s)
+              </h3>
+              <p className="text-sm text-gray-500 mb-4">Select which day(s) matches will be played each week</p>
               <div className="flex flex-wrap gap-2">
                 {WEEKDAYS.map(day => (
-                  <button key={day.value} type="button" onClick={() => toggleMatchDay(day.value)}
-                    className={`px-4 py-2 rounded-lg border font-medium transition-colors ${scheduleConfig.matchDays.includes(day.value) ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600'}`}>
+                  <button
+                    key={day.value}
+                    type="button"
+                    onClick={() => toggleMatchDay(day.value)}
+                    className={`
+                      px-5 py-3 rounded-xl border-2 font-medium transition-all duration-200
+                      ${scheduleConfig.matchDays.includes(day.value)
+                        ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-lg shadow-cyan-500/10'
+                        : 'bg-gray-800 border-gray-700/50 text-gray-400 hover:border-gray-600 hover:text-gray-300'
+                      }
+                    `}
+                  >
                     {day.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-3">🕐 Match Times</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Start Time</label>
-                  <input type="time" value={scheduleConfig.matchStartTime} 
-                    onChange={e => setScheduleConfig({ ...scheduleConfig, matchStartTime: e.target.value })} 
-                    className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg"/>
+            {/* Match Times */}
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50">
+              <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                <span className="text-cyan-400">🕐</span> Match Times
+              </h3>
+              <div className="grid grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-300">Start Time</label>
+                  <input
+                    type="time"
+                    value={scheduleConfig.matchStartTime}
+                    onChange={e => setScheduleConfig({ ...scheduleConfig, matchStartTime: e.target.value })}
+                    className="w-full bg-gray-800 border-2 border-gray-700/50 text-white p-3 rounded-xl focus:outline-none focus:border-cyan-500/50 transition-all"
+                  />
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">End Time</label>
-                  <input type="time" value={scheduleConfig.matchEndTime} 
-                    onChange={e => setScheduleConfig({ ...scheduleConfig, matchEndTime: e.target.value })} 
-                    className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg"/>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-300">End Time</label>
+                  <input
+                    type="time"
+                    value={scheduleConfig.matchEndTime}
+                    onChange={e => setScheduleConfig({ ...scheduleConfig, matchEndTime: e.target.value })}
+                    className="w-full bg-gray-800 border-2 border-gray-700/50 text-white p-3 rounded-xl focus:outline-none focus:border-cyan-500/50 transition-all"
+                  />
                 </div>
               </div>
             </div>
@@ -777,15 +900,38 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       // ==================== STEP 3: DIVISIONS ====================
       case 3:
         return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white">Divisions</h2>
-            
-            <label className="flex items-center justify-between p-4 bg-gray-800 rounded-lg border border-gray-700 cursor-pointer">
-              <div><div className="font-semibold text-white">Multiple Divisions</div><div className="text-sm text-gray-400">e.g., A/B grades, age groups</div></div>
-              <button type="button" onClick={() => setHasDivs(!hasDivs)} className={`w-12 h-6 rounded-full ${hasDivs ? 'bg-blue-600' : 'bg-gray-600'}`}>
-                <div className={`w-5 h-5 bg-white rounded-full transition-transform ${hasDivs ? 'translate-x-6' : 'translate-x-1'}`}/>
-              </button>
-            </label>
+          <div className="space-y-8">
+            {/* Section Header */}
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl">🏆</span>
+                Divisions
+              </h2>
+              <p className="text-gray-500 mt-2">Optionally split players into skill levels or age groups</p>
+            </div>
+
+            {/* Multiple Divisions Toggle */}
+            <div
+              onClick={() => setHasDivs(!hasDivs)}
+              className={`
+                flex items-center justify-between p-5 rounded-xl border-2 cursor-pointer transition-all duration-200
+                ${hasDivs
+                  ? 'bg-amber-500/10 border-amber-500/50'
+                  : 'bg-gray-800/50 border-gray-700/50 hover:border-gray-600'
+                }
+              `}
+            >
+              <div className="flex items-center gap-4">
+                <span className="text-2xl">{hasDivs ? '📊' : '📋'}</span>
+                <div>
+                  <div className="font-semibold text-white">Multiple Divisions</div>
+                  <div className="text-sm text-gray-400">e.g., A/B grades, age groups, skill levels</div>
+                </div>
+              </div>
+              <div className={`w-14 h-8 rounded-full transition-all duration-200 flex items-center ${hasDivs ? 'bg-amber-500 justify-end' : 'bg-gray-700 justify-start'}`}>
+                <div className="w-6 h-6 bg-white rounded-full mx-1 shadow-md" />
+              </div>
+            </div>
             
             {!hasDivs ? (
               <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 space-y-3">
@@ -821,10 +967,22 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
 
       // ==================== STEP 4: PARTNERS ====================
       case 4:
-        if (!isDoubles) return <div className="text-center py-8 text-gray-400">Partner settings for doubles only</div>;
+        if (!isDoubles) return (
+          <div className="text-center py-16">
+            <span className="text-6xl mb-4 block">👤</span>
+            <p className="text-gray-400 text-lg">Partner settings are only available for doubles leagues</p>
+          </div>
+        );
         return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white">Partner Settings</h2>
+          <div className="space-y-8">
+            {/* Section Header */}
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center text-xl">👥</span>
+                Partner Settings
+              </h2>
+              <p className="text-gray-500 mt-2">Configure how players find and manage their partners</p>
+            </div>
             <label className="flex items-center justify-between p-4 bg-gray-800 rounded-lg border border-gray-700 cursor-pointer">
               <div><div className="text-white font-semibold">Invite Partner</div><div className="text-sm text-gray-400">Players can invite specific partner</div></div>
               <input type="checkbox" checked={partner.allowInvitePartner} onChange={e => setPartner({ ...partner, allowInvitePartner: e.target.checked })} className="w-5 h-5 accent-blue-500"/>
@@ -859,12 +1017,21 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       // ==================== STEP 5: SCORING & DUPR ====================
       case 5:
         return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white">Scoring & Rules</h2>
+          <div className="space-y-8">
+            {/* Section Header */}
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-orange-500/20 text-orange-400 flex items-center justify-center text-xl">📊</span>
+                Scoring & Rules
+              </h2>
+              <p className="text-gray-500 mt-2">Set up points system, match format, and competition rules</p>
+            </div>
 
             {/* Points System */}
-            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-2">🏆 Points System</h3>
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50">
+              <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                <span className="text-orange-400">🏆</span> Points System
+              </h3>
 
               {/* V07.11: Preset dropdown */}
               <div className="mb-3">
@@ -888,12 +1055,26 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 <p className="text-xs text-gray-500 mt-1">{POINTS_PRESETS.find(p => p.value === pointsPreset)?.desc}</p>
               </div>
 
-              {/* Show full manual inputs only for custom */}
+              {/* Show full manual inputs only for custom - using new slider UI */}
               {pointsPreset === 'custom' && (
-                <div className="grid grid-cols-5 gap-2">
-                  {[{ k: 'pointsForWin', l: 'Win' }, { k: 'pointsForDraw', l: 'Draw' }, { k: 'pointsForLoss', l: 'Loss' }, { k: 'pointsForForfeit', l: 'Forfeit' }, { k: 'pointsForNoShow', l: 'No-Show' }].map(p => (
-                    <div key={p.k}><label className="block text-xs text-gray-500">{p.l}</label><input type="number" value={(scoring as any)[p.k]} onChange={e => setScoring({ ...scoring, [p.k]: parseInt(e.target.value) || 0 })} className="w-full bg-gray-900 text-white p-2 rounded border border-gray-600 text-center"/></div>
-                  ))}
+                <div className="mt-4 -mx-4 -mb-4">
+                  <StandingsPointsCard
+                    values={{
+                      win: scoring.pointsForWin,
+                      draw: scoring.pointsForDraw,
+                      loss: scoring.pointsForLoss,
+                      forfeit: scoring.pointsForForfeit,
+                      noShow: scoring.pointsForNoShow,
+                    }}
+                    onChange={(newValues: StandingsPointsConfig) => setScoring({
+                      ...scoring,
+                      pointsForWin: newValues.win,
+                      pointsForDraw: newValues.draw,
+                      pointsForLoss: newValues.loss,
+                      pointsForForfeit: newValues.forfeit,
+                      pointsForNoShow: newValues.noShow,
+                    })}
+                  />
                 </div>
               )}
             </div>
@@ -919,14 +1100,16 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               />
             </div>
 
-            {/* Match Deadline */}
-            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-2">⏰ Match Deadline</h3>
-              <div className="flex items-center gap-2">
-                <input type="number" value={scoreRep.matchDeadlineDays} onChange={e => setScoreRep({ ...scoreRep, matchDeadlineDays: parseInt(e.target.value) || 7 })} className="w-20 bg-gray-900 text-white p-2 rounded border border-gray-600 text-center" min={1} max={30}/>
-                <span className="text-gray-400">days to complete each round</span>
+            {/* Match Deadline - Not needed for Weekly Full RR (matches happen same night) */}
+            {!rr.weeklyFullRoundRobin && (
+              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                <h3 className="font-semibold text-white mb-2">⏰ Match Deadline</h3>
+                <div className="flex items-center gap-2">
+                  <input type="number" value={scoreRep.matchDeadlineDays} onChange={e => setScoreRep({ ...scoreRep, matchDeadlineDays: parseInt(e.target.value) || 7 })} className="w-20 bg-gray-900 text-white p-2 rounded border border-gray-600 text-center" min={1} max={30}/>
+                  <span className="text-gray-400">days to complete each round</span>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* ==================== DUPR INTEGRATION (NEW V05.36) ==================== */}
             <div className="bg-gradient-to-r from-purple-900/30 to-blue-900/30 p-4 rounded-lg border border-purple-600/50">
@@ -1070,10 +1253,14 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
             )}
 
             {basic.format === 'swiss' && (
-              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                <h3 className="font-semibold text-white mb-2">🎯 Swiss System</h3>
-                <div><label className="block text-xs text-gray-500">Number of Rounds</label><input type="number" value={swiss.rounds} onChange={e => setSwiss({ ...swiss, rounds: parseInt(e.target.value) || 4 })} className="w-24 bg-gray-900 text-white p-2 rounded border border-gray-600" min={2} max={10}/></div>
-              </div>
+              <RoundsSlider
+                value={swiss.rounds}
+                onChange={(v) => setSwiss({ ...swiss, rounds: v })}
+                min={2}
+                max={10}
+                label="Swiss Rounds"
+                hint="Number of rounds in the Swiss system tournament"
+              />
             )}
 
             {basic.format === 'box_league' && (
@@ -1092,11 +1279,18 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       // ==================== STEP 6: PAYMENT ====================
       case 6:
         return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white">Payment</h2>
-            
+          <div className="space-y-8">
+            {/* Section Header */}
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl">💳</span>
+                Payment
+              </h2>
+              <p className="text-gray-500 mt-2">Choose how players will pay to join your league</p>
+            </div>
+
             {/* Payment Mode Selection */}
-            <div className="space-y-3">
+            <div className="space-y-4">
               {/* Free League Option */}
               <label
                 className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
@@ -1181,14 +1375,20 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 {paymentMode === 'stripe' && (
                   <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
                     <label className="block text-xs text-gray-500 mb-1">Refund Policy</label>
-                    <div className="flex gap-2">
-                      {(['full', 'partial', 'none'] as const).map(p => (
-                        <label key={p} className={`flex-1 text-center py-2 rounded cursor-pointer border ${price.refundPolicy === p ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-900 border-gray-700 text-gray-400'}`}>
-                          <input type="radio" checked={price.refundPolicy === p} onChange={() => setPrice({ ...price, refundPolicy: p })} className="sr-only"/>
-                          {p === 'full' ? 'Full Refund' : p === 'partial' ? '50% Refund' : 'No Refunds'}
-                        </label>
-                      ))}
-                    </div>
+                    <select
+                      value={price.refundPolicy}
+                      onChange={(e) => setPrice({ ...price, refundPolicy: e.target.value as typeof price.refundPolicy })}
+                      className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"
+                    >
+                      <option value="full">100% refund before league starts</option>
+                      <option value="full_14days">100% refund up to 14 days before</option>
+                      <option value="full_7days">100% refund up to 7 days before</option>
+                      <option value="75_percent">75% refund before league starts</option>
+                      <option value="partial">50% refund before league starts</option>
+                      <option value="25_percent">25% refund before league starts</option>
+                      <option value="admin_fee_only">Full refund minus $5 admin fee</option>
+                      <option value="none">No refunds</option>
+                    </select>
                   </div>
                 )}
               </div>
@@ -1199,11 +1399,21 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       // ==================== STEP 7: REVIEW ====================
       case 7:
         return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-white">Review & Create</h2>
-            
-            <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-              <h3 className="font-semibold text-white mb-2">📋 Basic Info</h3>
+          <div className="space-y-8">
+            {/* Section Header */}
+            <div>
+              <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl bg-lime-500/20 text-lime-400 flex items-center justify-center text-xl">✓</span>
+                Review & Create
+              </h2>
+              <p className="text-gray-500 mt-2">Double-check your settings before creating the league</p>
+            </div>
+
+            {/* Summary Cards */}
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50">
+              <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                <span className="text-lime-400">📋</span> Basic Info
+              </h3>
               <div className="grid grid-cols-2 gap-1 text-sm">
                 <span className="text-gray-400">Name:</span><span className="text-white">{basic.name}</span>
                 <span className="text-gray-400">Type:</span><span className="text-white capitalize">{basic.type.replace('_', ' ')}</span>
@@ -1287,42 +1497,172 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   // ============================================
 
   return (
-    <div className="max-w-3xl mx-auto">
-      <div className="flex items-center gap-4 mb-6">
-        <button onClick={onBack} className="text-gray-400 hover:text-white">← Back</button>
-        <h1 className="text-2xl font-bold text-white">Create League</h1>
+    <div className="max-w-4xl mx-auto px-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="group flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
+          >
+            <span className="w-8 h-8 rounded-lg bg-gray-800/80 border border-gray-700/50 flex items-center justify-center group-hover:bg-gray-700/80 group-hover:border-gray-600 transition-all">
+              ←
+            </span>
+            <span className="hidden sm:inline text-sm">Back</span>
+          </button>
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Create League</h1>
+            <p className="text-gray-500 text-sm mt-0.5">Step {step} of 7 • {STEPS[step - 1].desc}</p>
+          </div>
+        </div>
       </div>
-      
-      {/* Step Indicator */}
-      <div className="flex items-center justify-center mb-6 overflow-x-auto">
-        {STEPS.map((t, i) => { 
-          const n = i + 1; const active = step === n; const done = step > n;
-          const skip = n === 4 && !isDoubles; 
-          return (
-            <React.Fragment key={n}>
-              <div className="flex flex-col items-center min-w-[40px]">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${skip ? 'bg-gray-700 text-gray-500' : active ? 'bg-blue-600 text-white' : done ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-400'}`}>{done ? '✓' : n}</div>
-                <span className={`text-xs mt-1 hidden md:block ${active ? 'text-blue-400' : 'text-gray-500'}`}>{t}</span>
-              </div>
-              {n < 7 && <div className={`w-4 md:w-6 h-0.5 ${step > n ? 'bg-green-600' : 'bg-gray-700'}`}/>}
-            </React.Fragment>
-          ); 
-        })}
+
+      {/* Step Indicator - Horizontal Progress */}
+      <div className="mb-8">
+        {/* Progress Bar Background */}
+        <div className="relative">
+          <div className="absolute top-5 left-0 right-0 h-1 bg-gray-800 rounded-full" />
+          <div
+            className="absolute top-5 left-0 h-1 bg-gradient-to-r from-lime-500 to-lime-400 rounded-full transition-all duration-500 ease-out"
+            style={{ width: `${((step - 1) / 6) * 100}%` }}
+          />
+
+          {/* Step Dots */}
+          <div className="relative flex justify-between">
+            {STEPS.map((s, i) => {
+              const n = i + 1;
+              const active = step === n;
+              const done = step > n;
+              const skip = n === 4 && !isDoubles;
+
+              return (
+                <div
+                  key={n}
+                  className={`flex flex-col items-center transition-all duration-300 ${skip ? 'opacity-40' : ''}`}
+                >
+                  {/* Step Circle */}
+                  <div
+                    className={`
+                      w-10 h-10 rounded-xl flex items-center justify-center text-lg
+                      transition-all duration-300 transform
+                      ${active
+                        ? 'bg-gradient-to-br from-lime-500 to-lime-600 text-gray-900 scale-110 shadow-lg shadow-lime-500/30 ring-4 ring-lime-500/20'
+                        : done
+                          ? 'bg-lime-600/20 text-lime-400 border-2 border-lime-500/50'
+                          : 'bg-gray-800 text-gray-500 border-2 border-gray-700'
+                      }
+                    `}
+                  >
+                    {done ? '✓' : s.icon}
+                  </div>
+
+                  {/* Step Label */}
+                  <span className={`
+                    text-xs font-medium mt-2 transition-colors hidden sm:block
+                    ${active ? 'text-lime-400' : done ? 'text-gray-400' : 'text-gray-600'}
+                  `}>
+                    {s.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
-      
-      {error && <div className="bg-red-900/20 border border-red-600 rounded-lg p-3 mb-4 text-red-400">{error}</div>}
-      
-      <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 mb-4">
-        {renderStepContent()}
+
+      {/* Error Message */}
+      {error && (
+        <div className="mb-6 p-4 rounded-xl bg-red-950/50 border border-red-500/30 flex items-start gap-3">
+          <span className="text-red-400 text-xl">⚠️</span>
+          <div>
+            <p className="text-red-400 font-medium">Please fix the following:</p>
+            <p className="text-red-300/80 text-sm mt-1">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content Card */}
+      <div className="relative">
+        {/* Glow Effect */}
+        <div className="absolute -inset-1 bg-gradient-to-r from-lime-500/10 via-transparent to-cyan-500/10 rounded-2xl blur-xl opacity-50" />
+
+        {/* Card */}
+        <div className="relative bg-gray-900/80 backdrop-blur-sm rounded-2xl border border-gray-700/50 overflow-hidden">
+          {/* Card Header Accent */}
+          <div className="h-1 bg-gradient-to-r from-lime-500 via-cyan-500 to-lime-500" />
+
+          {/* Content */}
+          <div className="p-6 sm:p-8">
+            {renderStepContent()}
+          </div>
+        </div>
       </div>
-      
-      <div className="flex justify-between">
-        <button onClick={() => setStep(Math.max(1, step - 1))} disabled={step === 1} className="px-6 py-2 text-gray-400 hover:text-white disabled:opacity-30">← Prev</button>
-        
+
+      {/* Navigation */}
+      <div className="flex items-center justify-between mt-8 pb-8">
+        <button
+          onClick={() => setStep(Math.max(1, step - 1))}
+          disabled={step === 1}
+          className={`
+            group flex items-center gap-2 px-5 py-3 rounded-xl font-medium
+            transition-all duration-200
+            ${step === 1
+              ? 'text-gray-600 cursor-not-allowed'
+              : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+            }
+          `}
+        >
+          <span className="group-hover:-translate-x-1 transition-transform">←</span>
+          Previous
+        </button>
+
         {step < 7 ? (
-          <button onClick={() => { const e = validate(step); if (e) setError(e); else { setError(null); setStep(step === 3 && !isDoubles ? 5 : step + 1); } }} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg font-semibold">Next →</button>
+          <button
+            onClick={() => {
+              const e = validate(step);
+              if (e) setError(e);
+              else {
+                setError(null);
+                setStep(step === 3 && !isDoubles ? 5 : step + 1);
+              }
+            }}
+            className="
+              group flex items-center gap-2 px-8 py-3 rounded-xl font-semibold
+              bg-gradient-to-r from-lime-500 to-lime-600
+              hover:from-lime-400 hover:to-lime-500
+              text-gray-900
+              shadow-lg shadow-lime-500/25 hover:shadow-lime-500/40
+              transition-all duration-200
+            "
+          >
+            Continue
+            <span className="group-hover:translate-x-1 transition-transform">→</span>
+          </button>
         ) : (
-          <button onClick={submit} disabled={loading} className="bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white px-8 py-2 rounded-lg font-semibold">{loading ? '⏳ Creating...' : '✓ Create League'}</button>
+          <button
+            onClick={submit}
+            disabled={loading}
+            className={`
+              group flex items-center gap-2 px-8 py-3 rounded-xl font-semibold
+              transition-all duration-200
+              ${loading
+                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white shadow-lg shadow-green-500/25 hover:shadow-green-500/40'
+              }
+            `}
+          >
+            {loading ? (
+              <>
+                <span className="animate-spin">⏳</span>
+                Creating...
+              </>
+            ) : (
+              <>
+                Create League
+                <span className="group-hover:scale-110 transition-transform">✓</span>
+              </>
+            )}
+          </button>
         )}
       </div>
     </div>

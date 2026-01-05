@@ -309,10 +309,16 @@ export const joinLeague = async (
 ): Promise<string> => {
   const memberRef = doc(collection(db, 'leagues', leagueId, 'members'));
   const now = Date.now();
-  
+
   // Get current member count for initial rank
   const league = await getLeague(leagueId);
-  const initialRank = (league?.memberCount || 0) + 1;
+  const currentCount = league?.memberCount || 0;
+  const initialRank = currentCount + 1;
+
+  // V07.15: Enforce max members limit
+  if (league?.maxMembers && currentCount >= league.maxMembers) {
+    throw new Error(`League is full (${league.maxMembers}/${league.maxMembers} players)`);
+  }
   
   const emptyStats: MemberStats = {
     played: 0,
