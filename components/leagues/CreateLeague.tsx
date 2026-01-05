@@ -348,7 +348,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     if (s === 2 && scheduleConfig.numberOfWeeks < 1) return 'Must be at least 1 week';
     if (s === 2 && venueEnabled && !venue.venueName.trim()) return 'Venue name required';
     if (s === 3 && hasDivs && divs.length === 0) return 'Add at least one division';
-    if (s === 6 && paymentMode !== 'free' && price.entryFee < 100) return 'Minimum $1.00';
+    if (s === 6 && paymentMode !== 'free' && price.entryFee < 500) return 'Minimum entry fee is $5';
     return null;
   };
 
@@ -1367,9 +1367,73 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
             {paymentMode !== 'free' && (
               <div className="space-y-4 mt-4">
                 <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div><label className="block text-xs text-gray-500 mb-1">Entry Fee *</label><input type="text" value={fmtCur(price.entryFee)} onChange={e => setPrice({ ...price, entryFee: parseCur(e.target.value) })} className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"/></div>
-                    <div><label className="block text-xs text-gray-500 mb-1">Fee Type</label><select value={price.entryFeeType} onChange={e => setPrice({ ...price, entryFeeType: e.target.value as 'per_player' | 'per_team' })} className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"><option value="per_player">Per Player</option><option value="per_team">Per Team</option></select></div>
+                  {/* Entry Fee Slider */}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm text-gray-400">Entry Fee</label>
+                      <span className="text-2xl font-bold text-lime-400">${Math.round(price.entryFee / 100)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="200"
+                      step="5"
+                      value={Math.round(price.entryFee / 100)}
+                      onChange={(e) => setPrice({ ...price, entryFee: parseInt(e.target.value) * 100 })}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-lime-500"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>$0</span>
+                      <span>$50</span>
+                      <span>$100</span>
+                      <span>$150</span>
+                      <span>$200</span>
+                    </div>
+                    {/* Quick presets */}
+                    <div className="flex gap-2 mt-3">
+                      {[10, 15, 20, 25, 30, 50].map((amt) => (
+                        <button
+                          key={amt}
+                          type="button"
+                          onClick={() => setPrice({ ...price, entryFee: amt * 100 })}
+                          className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                            Math.round(price.entryFee / 100) === amt
+                              ? 'bg-lime-500 text-gray-900'
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          ${amt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Fee Type */}
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">Fee Type</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPrice({ ...price, entryFeeType: 'per_player' })}
+                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          price.entryFeeType === 'per_player'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        Per Player
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPrice({ ...price, entryFeeType: 'per_team' })}
+                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          price.entryFeeType === 'per_team'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        Per Team
+                      </button>
+                    </div>
                   </div>
                 </div>
                 {paymentMode === 'stripe' && (
