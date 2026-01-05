@@ -35,9 +35,11 @@ const CALCULATION_VERSION = 'v07.14';
  */
 function validateMatch(match: LeagueMatch, memberIds: Set<string>): void {
   // 1. Completed match must have winner
-  if (match.status === 'completed' && !match.winnerMemberId) {
+  // V07.16: Check both winnerMemberId (LeagueMatch) and winnerId (Match/duprScoring)
+  const winnerId = match.winnerMemberId || (match as any).winnerId;
+  if (match.status === 'completed' && !winnerId) {
     throw new Error(
-      `INVALID DATA: Match ${match.id} is 'completed' but has no winnerMemberId. ` +
+      `INVALID DATA: Match ${match.id} is 'completed' but has no winner. ` +
       `Fix the match data before recalculating standings.`
     );
   }
@@ -164,7 +166,8 @@ function calculateStandings(
 
     completedMatches++;
 
-    const winnerId = match.winnerMemberId!;
+    // V07.16: Support both winnerMemberId (LeagueMatch) and winnerId (Match/duprScoring)
+    const winnerId = match.winnerMemberId || (match as any).winnerId;
     const loserId = winnerId === match.memberAId ? match.memberBId : match.memberAId;
 
     // Calculate points from scores
