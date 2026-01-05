@@ -477,6 +477,22 @@ service cloud.firestore {
         // Only league admin or app admin can write (auto-updated by app)
         allow write: if isLeagueAdmin(leagueId) || isAppAdmin();
       }
+      // V07.17: League Communications Queue
+      // Messages queue for SMS/Email notifications to league players
+      match /comms_queue/{messageId} {
+        // Only league organizer can read the queue
+        allow read: if isLeagueAdmin(leagueId);
+        // League organizer can create pending messages only
+        allow create: if isLeagueAdmin(leagueId) &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.leagueId == leagueId &&
+          request.resource.data.createdBy == request.auth.uid;
+        // Status updates only via Cloud Functions (no client updates)
+        allow update: if false;
+        // League organizer can delete pending messages only
+        allow delete: if isLeagueAdmin(leagueId) &&
+          resource.data.status == 'pending';
+      }
     }
 
     // Tournament Registrations - SECURED

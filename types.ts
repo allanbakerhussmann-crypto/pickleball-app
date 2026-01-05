@@ -3041,10 +3041,11 @@ export interface CommsQueueMessage {
   templateId?: string | null;    // Reference to template used
   templateData?: Record<string, string> | null; // Merge field values
 
-  // Scope
-  tournamentId: string;          // Parent tournament
+  // Scope - ONE of tournamentId or leagueId is required
+  tournamentId?: string;         // Parent tournament (for tournament comms)
+  leagueId?: string;             // Parent league (for league comms)
   divisionId?: string | null;    // Optional division filter
-  poolGroup?: string | null;     // Optional pool filter
+  poolGroup?: string | null;     // Optional pool filter (tournaments only)
   matchId?: string | null;       // Related match (for score reminders)
 
   // Timestamps

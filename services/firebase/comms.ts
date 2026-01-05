@@ -1,12 +1,13 @@
 /**
- * Tournament Communications Service
+ * Communications Service
  *
- * Firebase service for managing tournament communications:
- * - comms_templates: Reusable message templates
- * - comms_queue: Per-tournament message queue and history
+ * Firebase service for managing tournament and league communications:
+ * - comms_templates: Reusable message templates (shared)
+ * - tournaments/{id}/comms_queue: Per-tournament message queue
+ * - leagues/{id}/comms_queue: Per-league message queue
  *
  * FILE LOCATION: services/firebase/comms.ts
- * VERSION: 07.08
+ * VERSION: 07.17
  */
 
 import {
@@ -257,6 +258,121 @@ export const deleteQueuedMessage = async (
 };
 
 // ============================================
+// LEAGUE QUEUE CRUD
+// Collection: leagues/{leagueId}/comms_queue/{messageId}
+// ============================================
+
+/**
+ * Queue a new message for sending (league)
+ */
+export const queueLeagueMessage = async (
+  leagueId: string,
+  message: Omit<CommsQueueMessage, 'createdAt' | 'status' | 'sentAt' | 'failedAt' | 'error' | 'lockedAt' | 'lockedBy'>
+): Promise<string> => {
+  const queueRef = doc(collection(db, 'leagues', leagueId, 'comms_queue'));
+  const now = Date.now();
+
+  const queueMessage: CommsQueueMessage = {
+    ...message,
+    leagueId,
+    status: 'pending',
+    createdAt: now,
+    sentAt: null,
+    failedAt: null,
+    error: null,
+    lockedAt: null,
+    lockedBy: null,
+  };
+
+  await setDoc(queueRef, queueMessage);
+  return queueRef.id;
+};
+
+/**
+ * Get a queued message by ID (league)
+ */
+export const getQueuedLeagueMessage = async (
+  leagueId: string,
+  messageId: string
+): Promise<(CommsQueueMessage & { id: string }) | null> => {
+  const snap = await getDoc(doc(db, 'leagues', leagueId, 'comms_queue', messageId));
+  return snap.exists()
+    ? ({ id: snap.id, ...snap.data() } as CommsQueueMessage & { id: string })
+    : null;
+};
+
+/**
+ * Get all messages for a league (queue + history)
+ */
+export const getLeagueMessages = async (
+  leagueId: string,
+  options?: {
+    status?: CommsMessageStatus;
+    type?: CommsMessageType;
+    limitCount?: number;
+  }
+): Promise<(CommsQueueMessage & { id: string })[]> => {
+  let q = query(
+    collection(db, 'leagues', leagueId, 'comms_queue'),
+    orderBy('createdAt', 'desc')
+  );
+
+  if (options?.limitCount) {
+    q = query(q, limit(options.limitCount));
+  }
+
+  const snap = await getDocs(q);
+  let messages = snap.docs.map(
+    (d) => ({ id: d.id, ...d.data() } as CommsQueueMessage & { id: string })
+  );
+
+  // Client-side filtering (avoids composite index requirements)
+  if (options?.status) {
+    messages = messages.filter((m) => m.status === options.status);
+  }
+  if (options?.type) {
+    messages = messages.filter((m) => m.type === options.type);
+  }
+
+  return messages;
+};
+
+/**
+ * Subscribe to league messages (real-time)
+ */
+export const subscribeToLeagueMessages = (
+  leagueId: string,
+  callback: (messages: (CommsQueueMessage & { id: string })[]) => void
+): Unsubscribe => {
+  const q = query(
+    collection(db, 'leagues', leagueId, 'comms_queue'),
+    orderBy('createdAt', 'desc')
+  );
+
+  return onSnapshot(q, (snap) => {
+    const messages = snap.docs.map(
+      (d) => ({ id: d.id, ...d.data() } as CommsQueueMessage & { id: string })
+    );
+    callback(messages);
+  });
+};
+
+/**
+ * Delete a pending message from the league queue
+ * Only pending messages can be deleted by organizers
+ */
+export const deleteLeagueQueuedMessage = async (
+  leagueId: string,
+  messageId: string
+): Promise<void> => {
+  const message = await getQueuedLeagueMessage(leagueId, messageId);
+  if (message?.status !== 'pending') {
+    throw new Error('Only pending messages can be deleted');
+  }
+  await deleteDoc(doc(db, 'leagues', leagueId, 'comms_queue', messageId));
+};
+
+// ============================================
 // TEMPLATE RENDERING
 // ============================================
 
@@ -378,6 +494,93 @@ export const getMessageStats = async (
   byEmail: number;
 }> => {
   const messages = await getTournamentMessages(tournamentId);
+
+  return {
+    total: messages.length,
+    pending: messages.filter((m) => m.status === 'pending').length,
+    sent: messages.filter((m) => m.status === 'sent').length,
+    failed: messages.filter((m) => m.status === 'failed').length,
+    bySms: messages.filter((m) => m.type === 'sms').length,
+    byEmail: messages.filter((m) => m.type === 'email').length,
+  };
+};
+
+// ============================================
+// LEAGUE BULK OPERATIONS
+// ============================================
+
+/**
+ * Queue messages for multiple recipients (league)
+ * Returns array of created message IDs
+ */
+export const queueBulkLeagueMessages = async (
+  leagueId: string,
+  recipients: Array<{
+    recipientId: string;
+    recipientName: string;
+    recipientEmail: string | null;
+    recipientPhone: string | null;
+  }>,
+  messageConfig: {
+    type: CommsMessageType;
+    templateId?: string;
+    templateData?: Record<string, string>;
+    subject?: string;
+    body: string;
+    divisionId?: string;
+    matchId?: string;
+    createdBy: string;
+  }
+): Promise<string[]> => {
+  const messageIds: string[] = [];
+
+  for (const recipient of recipients) {
+    // Skip if recipient doesn't have required contact info
+    if (messageConfig.type === 'sms' && !recipient.recipientPhone) continue;
+    if (messageConfig.type === 'email' && !recipient.recipientEmail) continue;
+
+    const messageId = await queueLeagueMessage(leagueId, {
+      type: messageConfig.type,
+      recipientId: recipient.recipientId,
+      recipientName: recipient.recipientName,
+      recipientEmail: recipient.recipientEmail,
+      recipientPhone: recipient.recipientPhone,
+      body: messageConfig.body,
+      subject: messageConfig.subject,
+      templateId: messageConfig.templateId,
+      templateData: messageConfig.templateData,
+      leagueId,
+      divisionId: messageConfig.divisionId,
+      matchId: messageConfig.matchId,
+      createdBy: messageConfig.createdBy,
+      retried: false,
+      retryOf: null,
+    });
+
+    messageIds.push(messageId);
+  }
+
+  return messageIds;
+};
+
+// ============================================
+// LEAGUE STATISTICS
+// ============================================
+
+/**
+ * Get message statistics for a league
+ */
+export const getLeagueMessageStats = async (
+  leagueId: string
+): Promise<{
+  total: number;
+  pending: number;
+  sent: number;
+  failed: number;
+  bySms: number;
+  byEmail: number;
+}> => {
+  const messages = await getLeagueMessages(leagueId);
 
   return {
     total: messages.length,

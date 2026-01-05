@@ -106,9 +106,10 @@ export {
 } from './migrations/markOrganizersForAgreement';
 
 // ============================================
-// COMMS FUNCTIONS (V07.08) - Tournament Communications
+// COMMS FUNCTIONS (V07.17) - Tournament & League Communications
 // ============================================
 
 export {
   comms_processQueue,
+  comms_processLeagueQueue,
 } from './comms';

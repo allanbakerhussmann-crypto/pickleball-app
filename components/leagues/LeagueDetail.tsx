@@ -47,6 +47,7 @@ import type {
 } from '../../types';
 import type { BoxLeaguePlayer } from '../../types/boxLeague';
 import { LeagueStandings } from './LeagueStandings';
+import { LeagueCommsTab } from './LeagueCommsTab';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
 import { doc, updateDoc } from '@firebase/firestore';
@@ -62,7 +63,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'players' | 'schedule' | 'dupr' | 'info';
+type TabType = 'standings' | 'matches' | 'players' | 'schedule' | 'dupr' | 'info' | 'comms';
 
 // ============================================
 // COMPONENT
@@ -744,9 +745,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const isFull = effectiveMaxMembers ? (league.memberCount || 0) >= effectiveMaxMembers : false;
   const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active') && !isFull;
 
-  // Determine which tabs to show - Schedule, Players, and DUPR tabs only for organizers
+  // Determine which tabs to show - Schedule, Players, DUPR, and Comms tabs only for organizers
   const availableTabs: TabType[] = isOrganizer
-    ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info']
+    ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info', 'comms']
     : ['standings', 'matches', 'info'];
 
   return (
@@ -1142,6 +1143,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {tab === 'schedule' && '📅 '}
             {tab === 'dupr' && '📊 '}
             {tab === 'info' && 'ℹ️ '}
+            {tab === 'comms' && '📨 '}
             {tab === 'dupr' ? 'DUPR' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
@@ -1216,33 +1218,104 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </button>
             </div>
           )}
-
-          {/* Overall Standings View */}
-          {activeStandingsTab === 'overall' && (
-            <>
-              {overallStandings && (
-                <div className="text-xs text-gray-500 text-right">
-                  Last updated: {new Date(overallStandings.generatedAt).toLocaleString()} •
-                  {overallStandings.completedMatches} of {overallStandings.totalMatches} matches completed
-                </div>
-              )}
-              <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700 mb-2">
-                <p className="text-sm text-gray-400">
-                  📊 <span className="text-white font-medium">Season Standings</span> — Cumulative results from all weeks
-                </p>
-              </div>
-              <LeagueStandings
-                members={filteredMembers}
-                format={league.format}
-                leagueType={league.type}
-                currentUserId={currentUser?.uid}
-                myMembership={myMembership}
-                onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
-                challengeRange={league.settings?.challengeRules?.challengeRange || 3}
-                showPointsForAgainst={true}
-              />
-            </>
+          {/* V07.16: Show recalculate when standings have errors */}
+          {isOrganizer && overallStandings && overallStandings.errors && overallStandings.errors.length > 0 && standingsStatus !== 'stale' && (
+            <div className="bg-red-900/30 border border-red-600/50 p-3 rounded-lg flex items-center justify-between">
+              <span className="text-red-400 text-sm">
+                ⚠️ {overallStandings.errors.length} match errors found - recalculate to apply latest fixes
+              </span>
+              <button
+                onClick={handleRecalculateStandings}
+                disabled={isRecalculating}
+                className="bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+              >
+                {isRecalculating ? 'Recalculating...' : 'Recalculate'}
+              </button>
+            </div>
           )}
+
+          {/* Overall Standings View - Uses stored Firestore data */}
+          {activeStandingsTab === 'overall' && (() => {
+            // V07.16: Use stored overallStandings from Firestore (same pattern as weekly)
+            if (overallStandings && overallStandings.rows.length > 0) {
+              // Convert LeagueStandingsRow[] to LeagueMember[] for the component
+              const overallMembers: LeagueMember[] = overallStandings.rows.map(row => {
+                const originalMember = filteredMembers.find(m => m.id === row.memberId);
+                return {
+                  id: row.memberId,
+                  userId: originalMember?.userId || row.memberId,
+                  displayName: row.displayName,
+                  leagueId: leagueId,
+                  currentRank: row.rank,
+                  joinedAt: originalMember?.joinedAt || Date.now(),
+                  status: originalMember?.status || 'active',
+                  role: originalMember?.role || 'member',
+                  paymentStatus: originalMember?.paymentStatus || 'not_required',
+                  stats: {
+                    played: row.played,
+                    wins: row.wins,
+                    losses: row.losses,
+                    draws: 0,
+                    forfeits: 0,
+                    points: row.leaguePoints,
+                    gamesWon: row.gamesWon,
+                    gamesLost: row.gamesLost,
+                    pointsFor: row.pointsFor,
+                    pointsAgainst: row.pointsAgainst,
+                    currentStreak: 0,
+                    bestWinStreak: 0,
+                    recentForm: [],
+                  },
+                  duprId: originalMember?.duprId,
+                } as unknown as LeagueMember;
+              });
+
+              return (
+                <>
+                  <div className="bg-lime-900/30 rounded-lg p-3 border border-lime-600/50 mb-2">
+                    <p className="text-sm text-gray-300">
+                      🏆 <span className="text-white font-medium">Season Standings</span> —
+                      {overallStandings.completedMatches} of {overallStandings.totalMatches} matches completed
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Last calculated: {new Date(overallStandings.generatedAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <LeagueStandings
+                    members={overallMembers}
+                    format={league.format}
+                    leagueType={league.type}
+                    currentUserId={currentUser?.uid}
+                    myMembership={myMembership}
+                    onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
+                    challengeRange={league.settings?.challengeRules?.challengeRange || 3}
+                    showPointsForAgainst={true}
+                  />
+                </>
+              );
+            }
+
+            // Fallback: no standings yet, show empty state with original members
+            return (
+              <>
+                <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700 mb-2">
+                  <p className="text-sm text-gray-400">
+                    📊 <span className="text-white font-medium">Season Standings</span> — No matches completed yet
+                  </p>
+                </div>
+                <LeagueStandings
+                  members={filteredMembers}
+                  format={league.format}
+                  leagueType={league.type}
+                  currentUserId={currentUser?.uid}
+                  myMembership={myMembership}
+                  onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
+                  challengeRange={league.settings?.challengeRules?.challengeRange || 3}
+                  showPointsForAgainst={true}
+                />
+              </>
+            );
+          })()}
 
           {/* Weekly Standings View - Uses stored Firestore data */}
           {activeStandingsTab.startsWith('week-') && (() => {
@@ -1362,18 +1435,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               );
             })}
 
-            {/* Overall Tab - Season Leaderboard */}
-            <button
-              onClick={() => setActiveWeekTab('overall')}
-              className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                activeWeekTab === 'overall'
-                  ? 'bg-yellow-600 text-white'
-                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-            >
-              Overall
-            </button>
-
             {/* Finals Tab - Only show if there are finals matches */}
             {finalsMatches.length > 0 && (
               <button
@@ -1393,25 +1454,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           {filteredMatches.length === 0 ? (
             <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 text-center text-gray-400">
               No matches yet
-            </div>
-          ) : activeWeekTab === 'overall' ? (
-            /* Overall: Season Leaderboard */
-            <div>
-              <div className="bg-gray-800/50 rounded-lg p-3 mb-4 border border-gray-700">
-                <p className="text-sm text-gray-400">
-                  Season standings showing cumulative stats from all completed matches.
-                </p>
-              </div>
-              <LeagueStandings
-                members={filteredMembers}
-                format={league.format}
-                leagueType={league.type}
-                currentUserId={currentUser?.uid}
-                myMembership={myMembership}
-                onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
-                challengeRange={league.settings?.challengeRules?.challengeRange || 3}
-                showPointsForAgainst={true}
-              />
             </div>
           ) : activeWeekTab === 'finals' ? (
             /* Finals Matches */
@@ -1668,6 +1710,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             )}
           </div>
         </div>
+      )}
+
+      {/* COMMS TAB - V07.17: League Communications */}
+      {activeTab === 'comms' && isOrganizer && (
+        <LeagueCommsTab
+          league={league}
+          divisions={divisions}
+          members={members}
+          currentUserId={currentUser?.uid || ''}
+        />
       )}
 
 {/* ================================================
