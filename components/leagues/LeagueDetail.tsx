@@ -514,7 +514,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   };
 
-  const handleJoin = async () => {
+  // V07.15: skipDuprCheck param allows bypassing the acknowledgement check after user has confirmed
+  const handleJoin = async (skipDuprCheck: boolean = false) => {
     if (!currentUser || !userProfile) return;
 
     // V07.15: Refresh league data to get current member count
@@ -552,11 +553,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       mode: duprMode,
       isDuprLeague,
       duprAcknowledged,
+      skipDuprCheck,
       userDuprId: userProfile.duprId,
     });
 
     // Show acknowledgement modal for DUPR leagues (optional or required)
-    if (isDuprLeague && !duprAcknowledged) {
+    // Skip this check if we just came from the acknowledgement modal
+    if (isDuprLeague && !duprAcknowledged && !skipDuprCheck) {
       setDuprCheckboxChecked(false); // V07.15: Reset checkbox when modal opens
       setShowDuprAcknowledgement(true);
       return;
@@ -592,8 +595,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const handleDuprAcknowledge = () => {
     setDuprAcknowledged(true);
     setShowDuprAcknowledgement(false);
-    // Continue with join flow
-    handleJoin();
+    // Continue with join flow - pass true to skip the DUPR check we just completed
+    handleJoin(true);
   };
 
   // V07.15: Handle DUPR iframe login message for required leagues
