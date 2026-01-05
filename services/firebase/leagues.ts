@@ -25,6 +25,7 @@ import {
   deleteDoc,
   writeBatch,
   increment,
+  runTransaction,
 } from '@firebase/firestore';
 import { db } from './config';
 import type {
@@ -298,6 +299,7 @@ export const deleteLeagueDivision = async (
 
 /**
  * Join a league (creates a member record)
+ * V07.15: Uses transaction for atomic max members check
  */
 export const joinLeague = async (
   leagueId: string,
@@ -308,60 +310,67 @@ export const joinLeague = async (
   partnerDisplayName?: string | null
 ): Promise<string> => {
   const memberRef = doc(collection(db, 'leagues', leagueId, 'members'));
+  const leagueRef = doc(db, 'leagues', leagueId);
   const now = Date.now();
 
-  // Get current member count for initial rank
-  const league = await getLeague(leagueId);
-  const currentCount = league?.memberCount || 0;
-  const initialRank = currentCount + 1;
+  // Use transaction for atomic check-and-join
+  return await runTransaction(db, async (transaction) => {
+    // Read league data within transaction
+    const leagueSnap = await transaction.get(leagueRef);
+    if (!leagueSnap.exists()) {
+      throw new Error('League not found');
+    }
+    const league = leagueSnap.data() as League;
+    const currentCount = league.memberCount || 0;
+    const initialRank = currentCount + 1;
 
-  // V07.15: Enforce max members limit
-  if (league?.maxMembers && currentCount >= league.maxMembers) {
-    throw new Error(`League is full (${league.maxMembers}/${league.maxMembers} players)`);
-  }
-  
-  const emptyStats: MemberStats = {
-    played: 0,
-    wins: 0,
-    losses: 0,
-    draws: 0,
-    forfeits: 0,
-    points: 0,
-    gamesWon: 0,
-    gamesLost: 0,
-    pointsFor: 0,
-    pointsAgainst: 0,
-    currentStreak: 0,
-    bestWinStreak: 0,
-    recentForm: [],
-  };
-  
-  const newMember: LeagueMember = {
-    id: memberRef.id,
-    leagueId,
-    divisionId: divisionId || null,
-    userId,
-    displayName,
-    partnerUserId: partnerUserId || null,
-    partnerDisplayName: partnerDisplayName || null,
-    status: 'active',
-    role: 'member',
-    paymentStatus: 'not_required',
-    currentRank: initialRank,
-    stats: emptyStats,
-    joinedAt: now,
-    lastActiveAt: now,
-  };
-  
-  await setDoc(memberRef, newMember);
-  
-  // Increment league member count
-  await updateDoc(doc(db, 'leagues', leagueId), {
-    memberCount: increment(1),
-    updatedAt: now,
+    // V07.15: Enforce max members limit (atomic check)
+    if (league.maxMembers && currentCount >= league.maxMembers) {
+      throw new Error(`League is full (${currentCount}/${league.maxMembers} players)`);
+    }
+
+    const emptyStats: MemberStats = {
+      played: 0,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      forfeits: 0,
+      points: 0,
+      gamesWon: 0,
+      gamesLost: 0,
+      pointsFor: 0,
+      pointsAgainst: 0,
+      currentStreak: 0,
+      bestWinStreak: 0,
+      recentForm: [],
+    };
+
+    const newMember: LeagueMember = {
+      id: memberRef.id,
+      leagueId,
+      divisionId: divisionId || null,
+      userId,
+      displayName,
+      partnerUserId: partnerUserId || null,
+      partnerDisplayName: partnerDisplayName || null,
+      status: 'active',
+      role: 'member',
+      paymentStatus: 'not_required',
+      currentRank: initialRank,
+      stats: emptyStats,
+      joinedAt: now,
+      lastActiveAt: now,
+    };
+
+    // Write member and update count atomically
+    transaction.set(memberRef, newMember);
+    transaction.update(leagueRef, {
+      memberCount: increment(1),
+      updatedAt: now,
+    });
+
+    return memberRef.id;
   });
-  
-  return memberRef.id;
 };
 
 /**

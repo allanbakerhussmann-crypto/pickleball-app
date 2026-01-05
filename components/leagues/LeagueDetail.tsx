@@ -512,29 +512,45 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const handleJoin = async () => {
     if (!currentUser || !userProfile) return;
 
+    // V07.15: Refresh league data to get current member count
+    const freshLeague = await getLeague(leagueId);
+    if (!freshLeague) {
+      alert('League not found');
+      return;
+    }
+
     // V07.15: Check if league is full before attempting to join
-    if (league?.maxMembers && (league.memberCount || 0) >= league.maxMembers) {
-      alert(`League is full (${league.maxMembers}/${league.maxMembers} players)`);
+    if (freshLeague.maxMembers && (freshLeague.memberCount || 0) >= freshLeague.maxMembers) {
+      alert(`League is full (${freshLeague.memberCount}/${freshLeague.maxMembers} players)`);
+      return;
+    }
+
+    // V07.15: Check DUPR requirement BEFORE acknowledgement modal
+    const duprMode = freshLeague.settings?.duprSettings?.mode;
+    const isDuprLeague = duprMode === 'optional' || duprMode === 'required';
+
+    // If DUPR is REQUIRED, user must have a linked DUPR account
+    if (duprMode === 'required' && !userProfile.duprId) {
+      alert('This league requires a linked DUPR account. Please link your DUPR account in your profile settings before joining.');
       return;
     }
 
     // Debug: Log payment check
     console.log('Join clicked - Payment check:', {
-      pricingEnabled: league?.pricing?.enabled,
-      entryFee: league?.pricing?.entryFee,
-      organizerStripeAccountId: league?.organizerStripeAccountId,
+      pricingEnabled: freshLeague.pricing?.enabled,
+      entryFee: freshLeague.pricing?.entryFee,
+      organizerStripeAccountId: freshLeague.organizerStripeAccountId,
     });
 
-    // V07.12: Check if DUPR league requires acknowledgement
-    // Note: duprSettings is stored inside league.settings.duprSettings
-    const duprMode = league?.settings?.duprSettings?.mode;
-    const isDuprLeague = duprMode === 'optional' || duprMode === 'required';
     console.log('DUPR check:', {
-      duprSettings: league?.settings?.duprSettings,
+      duprSettings: freshLeague.settings?.duprSettings,
       mode: duprMode,
       isDuprLeague,
       duprAcknowledged,
+      userDuprId: userProfile.duprId,
     });
+
+    // Show acknowledgement modal for DUPR leagues (optional or required)
     if (isDuprLeague && !duprAcknowledged) {
       setDuprCheckboxChecked(false); // V07.15: Reset checkbox when modal opens
       setShowDuprAcknowledgement(true);
@@ -578,11 +594,34 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   // Handle free registration (after payment or for free leagues)
   const handleFreeJoin = async () => {
     if (!currentUser || !userProfile) return;
+
+    // V07.15: Final check before joining - get fresh data
+    const freshLeague = await getLeague(leagueId);
+    if (!freshLeague) {
+      alert('League not found');
+      return;
+    }
+
+    // Check max members one more time
+    if (freshLeague.maxMembers && (freshLeague.memberCount || 0) >= freshLeague.maxMembers) {
+      alert(`League is full (${freshLeague.memberCount}/${freshLeague.maxMembers} players)`);
+      setShowPaymentModal(false);
+      return;
+    }
+
+    // Check DUPR requirement
+    const duprMode = freshLeague.settings?.duprSettings?.mode;
+    if (duprMode === 'required' && !userProfile.duprId) {
+      alert('This league requires a linked DUPR account. Please link your DUPR account in your profile settings before joining.');
+      setShowPaymentModal(false);
+      return;
+    }
+
     setJoining(true);
     try {
       await joinLeague(
-        leagueId, 
-        currentUser.uid, 
+        leagueId,
+        currentUser.uid,
         userProfile.displayName || 'Player',
         selectedDivisionId
       );
