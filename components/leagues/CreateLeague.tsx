@@ -1437,23 +1437,68 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                   </div>
                 </div>
                 {paymentMode === 'stripe' && (
-                  <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                    <label className="block text-xs text-gray-500 mb-1">Refund Policy</label>
-                    <select
-                      value={price.refundPolicy}
-                      onChange={(e) => setPrice({ ...price, refundPolicy: e.target.value as typeof price.refundPolicy })}
-                      className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"
-                    >
-                      <option value="full">100% refund before league starts</option>
-                      <option value="full_14days">100% refund up to 14 days before</option>
-                      <option value="full_7days">100% refund up to 7 days before</option>
-                      <option value="75_percent">75% refund before league starts</option>
-                      <option value="partial">50% refund before league starts</option>
-                      <option value="25_percent">25% refund before league starts</option>
-                      <option value="admin_fee_only">Full refund minus $5 admin fee</option>
-                      <option value="none">No refunds</option>
-                    </select>
-                  </div>
+                  <>
+                    {/* Who pays fees */}
+                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                      <label className="block text-sm text-gray-400 mb-2">Who Pays Processing Fees?</label>
+                      <p className="text-xs text-gray-500 mb-3">
+                        Platform fee (1.5%) + Stripe fee (2.9% + 30¢) are charged on each payment
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setPrice({ ...price, feesPaidBy: 'organizer' })}
+                          className={`p-3 rounded-lg border-2 transition-all ${
+                            price.feesPaidBy === 'organizer'
+                              ? 'border-lime-500 bg-lime-500/10'
+                              : 'border-gray-600 hover:border-gray-500'
+                          }`}
+                        >
+                          <div className={`font-medium ${price.feesPaidBy === 'organizer' ? 'text-lime-400' : 'text-white'}`}>
+                            I'll absorb fees
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            Players pay ${Math.round(price.entryFee / 100)} exactly
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPrice({ ...price, feesPaidBy: 'player' })}
+                          className={`p-3 rounded-lg border-2 transition-all ${
+                            price.feesPaidBy === 'player'
+                              ? 'border-lime-500 bg-lime-500/10'
+                              : 'border-gray-600 hover:border-gray-500'
+                          }`}
+                        >
+                          <div className={`font-medium ${price.feesPaidBy === 'player' ? 'text-lime-400' : 'text-white'}`}>
+                            Player pays fees
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            ~${(Math.round(price.entryFee / 100) + Math.ceil(price.entryFee * 0.044 / 100) + 1).toFixed(0)} total
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Refund Policy */}
+                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                      <label className="block text-sm text-gray-400 mb-2">Refund Policy</label>
+                      <select
+                        value={price.refundPolicy}
+                        onChange={(e) => setPrice({ ...price, refundPolicy: e.target.value as typeof price.refundPolicy })}
+                        className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600"
+                      >
+                        <option value="full">100% refund before league starts</option>
+                        <option value="full_14days">100% refund up to 14 days before</option>
+                        <option value="full_7days">100% refund up to 7 days before</option>
+                        <option value="75_percent">75% refund before league starts</option>
+                        <option value="partial">50% refund before league starts</option>
+                        <option value="25_percent">25% refund before league starts</option>
+                        <option value="admin_fee_only">Full refund minus $5 admin fee</option>
+                        <option value="none">No refunds</option>
+                      </select>
+                    </div>
+                  </>
                 )}
               </div>
             )}
