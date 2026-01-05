@@ -80,10 +80,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [myMembership, setMyMembership] = useState<LeagueMember | null>(null);
   const [boxPlayers, setBoxPlayers] = useState<BoxLeaguePlayer[]>([]);
 
-  // V07.14: Standings snapshots
+  // V07.14: Standings snapshots from Firestore
   const [overallStandings, setOverallStandings] = useState<LeagueStandingsDoc | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [weekStandings, setWeekStandings] = useState<Map<number, LeagueStandingsDoc>>(new Map()); // Stored for future use
+  const [weekStandings, setWeekStandings] = useState<Map<number, LeagueStandingsDoc>>(new Map());
   const [standingsStatus, setStandingsStatus] = useState<'current' | 'stale' | 'missing'>('missing');
   const [isRecalculating, setIsRecalculating] = useState(false);
 
@@ -1245,74 +1244,89 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </>
           )}
 
-          {/* Weekly Standings View */}
+          {/* Weekly Standings View - Uses stored Firestore data */}
           {activeStandingsTab.startsWith('week-') && (() => {
             const weekNum = parseInt(activeStandingsTab.replace('week-', ''));
             const weekMatches = matchesByWeek[weekNum] || [];
-            const completedMatches = weekMatches.filter(m => m.status === 'completed');
+            const storedWeekStandings = weekStandings.get(weekNum);
 
-            // Calculate weekly stats for each member
-            const weeklyStats = new Map<string, { wins: number; losses: number; pointsFor: number; pointsAgainst: number }>();
+            // If we have stored standings from Firestore, use them
+            if (storedWeekStandings && storedWeekStandings.rows.length > 0) {
+              // Convert LeagueStandingsRow[] to LeagueMember[] for the component
+              const weeklyMembers: LeagueMember[] = storedWeekStandings.rows.map(row => {
+                // Find the original member to get additional data
+                const originalMember = filteredMembers.find(m => m.id === row.memberId);
+                return {
+                  id: row.memberId,
+                  userId: originalMember?.userId || row.memberId,
+                  displayName: row.displayName,
+                  leagueId: leagueId,
+                  currentRank: row.rank,
+                  joinedAt: originalMember?.joinedAt || Date.now(),
+                  status: originalMember?.status || 'active',
+                  role: originalMember?.role || 'member',
+                  paymentStatus: originalMember?.paymentStatus || 'not_required',
+                  stats: {
+                    played: row.played,
+                    wins: row.wins,
+                    losses: row.losses,
+                    draws: 0,
+                    forfeits: 0,
+                    points: row.leaguePoints,
+                    gamesWon: row.gamesWon,
+                    gamesLost: row.gamesLost,
+                    pointsFor: row.pointsFor,
+                    pointsAgainst: row.pointsAgainst,
+                    currentStreak: 0,
+                    bestWinStreak: 0,
+                    recentForm: [],
+                  },
+                  duprId: originalMember?.duprId,
+                } as unknown as LeagueMember;
+              });
 
-            completedMatches.forEach(match => {
-              const memberAId = match.memberAId;
-              const memberBId = match.memberBId;
+              return (
+                <>
+                  <div className="bg-blue-900/30 rounded-lg p-3 border border-blue-600/50 mb-2">
+                    <p className="text-sm text-gray-300">
+                      📅 <span className="text-white font-medium">Week {weekNum} Standings</span> —
+                      {storedWeekStandings.completedMatches} of {storedWeekStandings.totalMatches} matches completed
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Last calculated: {new Date(storedWeekStandings.generatedAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <LeagueStandings
+                    members={weeklyMembers}
+                    format={league.format}
+                    leagueType={league.type}
+                    currentUserId={currentUser?.uid}
+                    myMembership={myMembership}
+                    showPointsForAgainst={true}
+                  />
+                </>
+              );
+            }
 
-              if (!weeklyStats.has(memberAId)) weeklyStats.set(memberAId, { wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 });
-              if (!weeklyStats.has(memberBId)) weeklyStats.set(memberBId, { wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 });
-
-              const statsA = weeklyStats.get(memberAId)!;
-              const statsB = weeklyStats.get(memberBId)!;
-
-              // Calculate points from scores
-              const totalA = match.scores?.reduce((sum, g) => sum + (g.scoreA || 0), 0) || 0;
-              const totalB = match.scores?.reduce((sum, g) => sum + (g.scoreB || 0), 0) || 0;
-
-              statsA.pointsFor += totalA;
-              statsA.pointsAgainst += totalB;
-              statsB.pointsFor += totalB;
-              statsB.pointsAgainst += totalA;
-
-              if (match.winnerMemberId === memberAId) {
-                statsA.wins++;
-                statsB.losses++;
-              } else if (match.winnerMemberId === memberBId) {
-                statsB.wins++;
-                statsA.losses++;
-              }
-            });
-
-            // Create modified members with weekly stats for display
-            const weeklyMembers = filteredMembers.map(member => ({
-              ...member,
-              stats: {
-                ...member.stats,
-                played: (weeklyStats.get(member.id)?.wins || 0) + (weeklyStats.get(member.id)?.losses || 0),
-                wins: weeklyStats.get(member.id)?.wins || 0,
-                losses: weeklyStats.get(member.id)?.losses || 0,
-                points: (weeklyStats.get(member.id)?.wins || 0) * (league.settings?.pointsForWin || 3),
-                pointsFor: weeklyStats.get(member.id)?.pointsFor || 0,
-                pointsAgainst: weeklyStats.get(member.id)?.pointsAgainst || 0,
-              }
-            }));
-
+            // Fallback: No stored standings yet - show message
             return (
-              <>
-                <div className="bg-blue-900/30 rounded-lg p-3 border border-blue-600/50 mb-2">
-                  <p className="text-sm text-gray-300">
-                    📅 <span className="text-white font-medium">Week {weekNum} Standings</span> —
-                    {completedMatches.length} of {weekMatches.length} matches completed
-                  </p>
-                </div>
-                <LeagueStandings
-                  members={weeklyMembers}
-                  format={league.format}
-                  leagueType={league.type}
-                  currentUserId={currentUser?.uid}
-                  myMembership={myMembership}
-                  showPointsForAgainst={true}
-                />
-              </>
+              <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 text-center">
+                <p className="text-gray-400 mb-2">
+                  📅 Week {weekNum} standings not yet calculated
+                </p>
+                <p className="text-sm text-gray-500">
+                  {weekMatches.filter(m => m.status === 'completed').length} of {weekMatches.length} matches completed
+                </p>
+                {isOrganizer && (
+                  <button
+                    onClick={handleRecalculateStandings}
+                    disabled={isRecalculating}
+                    className="mt-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    {isRecalculating ? 'Calculating...' : 'Calculate Standings'}
+                  </button>
+                )}
+              </div>
             );
           })()}
         </div>
