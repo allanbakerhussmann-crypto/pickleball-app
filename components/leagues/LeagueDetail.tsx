@@ -83,7 +83,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   // V07.14: Standings snapshots
   const [overallStandings, setOverallStandings] = useState<LeagueStandingsDoc | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [_weekStandings, setWeekStandings] = useState<Map<number, LeagueStandingsDoc>>(new Map());
+  const [weekStandings, setWeekStandings] = useState<Map<number, LeagueStandingsDoc>>(new Map()); // Stored for future use
   const [standingsStatus, setStandingsStatus] = useState<'current' | 'stale' | 'missing'>('missing');
   const [isRecalculating, setIsRecalculating] = useState(false);
 
@@ -92,6 +92,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [activeTab, setActiveTab] = useState<TabType>('standings');
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [activeWeekTab, setActiveWeekTab] = useState<string>(''); // For matches sub-tabs
+  const [activeStandingsTab, setActiveStandingsTab] = useState<string>('overall'); // V07.16: For standings sub-tabs
   const [joining, setJoining] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -1150,6 +1151,43 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       {/* STANDINGS TAB */}
       {activeTab === 'standings' && league && (
         <div className="space-y-4">
+          {/* V07.16: Standings Sub-Tabs (Overall + Weekly) */}
+          <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-700">
+            {/* Overall Tab */}
+            <button
+              onClick={() => setActiveStandingsTab('overall')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                activeStandingsTab === 'overall'
+                  ? 'bg-lime-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              🏆 Overall
+            </button>
+            {/* Weekly Tabs */}
+            {weeks.map(week => {
+              const weekMatches = matchesByWeek[week] || [];
+              const completedCount = weekMatches.filter(m => m.status === 'completed').length;
+              const isActive = activeStandingsTab === `week-${week}`;
+              return (
+                <button
+                  key={week}
+                  onClick={() => setActiveStandingsTab(`week-${week}`)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                    isActive
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Week {week}
+                  {completedCount > 0 && (
+                    <span className="ml-1 text-xs opacity-70">({completedCount})</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
           {/* V07.14: Staleness indicator for organizers */}
           {isOrganizer && standingsStatus === 'stale' && (
             <div className="bg-yellow-900/30 border border-yellow-600/50 p-3 rounded-lg flex items-center justify-between">
@@ -1179,21 +1217,104 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </button>
             </div>
           )}
-          {overallStandings && (
-            <div className="text-xs text-gray-500 text-right">
-              Last updated: {new Date(overallStandings.generatedAt).toLocaleString()} •
-              {overallStandings.completedMatches} of {overallStandings.totalMatches} matches completed
-            </div>
+
+          {/* Overall Standings View */}
+          {activeStandingsTab === 'overall' && (
+            <>
+              {overallStandings && (
+                <div className="text-xs text-gray-500 text-right">
+                  Last updated: {new Date(overallStandings.generatedAt).toLocaleString()} •
+                  {overallStandings.completedMatches} of {overallStandings.totalMatches} matches completed
+                </div>
+              )}
+              <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700 mb-2">
+                <p className="text-sm text-gray-400">
+                  📊 <span className="text-white font-medium">Season Standings</span> — Cumulative results from all weeks
+                </p>
+              </div>
+              <LeagueStandings
+                members={filteredMembers}
+                format={league.format}
+                leagueType={league.type}
+                currentUserId={currentUser?.uid}
+                myMembership={myMembership}
+                onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
+                challengeRange={league.settings?.challengeRules?.challengeRange || 3}
+                showPointsForAgainst={true}
+              />
+            </>
           )}
-          <LeagueStandings
-            members={filteredMembers}
-            format={league.format}
-            leagueType={league.type}
-            currentUserId={currentUser?.uid}
-            myMembership={myMembership}
-            onChallenge={league.format === 'ladder' && myMembership ? handleChallenge : undefined}
-            challengeRange={league.settings?.challengeRules?.challengeRange || 3}
-          />
+
+          {/* Weekly Standings View */}
+          {activeStandingsTab.startsWith('week-') && (() => {
+            const weekNum = parseInt(activeStandingsTab.replace('week-', ''));
+            const weekMatches = matchesByWeek[weekNum] || [];
+            const completedMatches = weekMatches.filter(m => m.status === 'completed');
+
+            // Calculate weekly stats for each member
+            const weeklyStats = new Map<string, { wins: number; losses: number; pointsFor: number; pointsAgainst: number }>();
+
+            completedMatches.forEach(match => {
+              const memberAId = match.memberAId;
+              const memberBId = match.memberBId;
+
+              if (!weeklyStats.has(memberAId)) weeklyStats.set(memberAId, { wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 });
+              if (!weeklyStats.has(memberBId)) weeklyStats.set(memberBId, { wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 });
+
+              const statsA = weeklyStats.get(memberAId)!;
+              const statsB = weeklyStats.get(memberBId)!;
+
+              // Calculate points from scores
+              const totalA = match.scores?.reduce((sum, g) => sum + (g.scoreA || 0), 0) || 0;
+              const totalB = match.scores?.reduce((sum, g) => sum + (g.scoreB || 0), 0) || 0;
+
+              statsA.pointsFor += totalA;
+              statsA.pointsAgainst += totalB;
+              statsB.pointsFor += totalB;
+              statsB.pointsAgainst += totalA;
+
+              if (match.winnerMemberId === memberAId) {
+                statsA.wins++;
+                statsB.losses++;
+              } else if (match.winnerMemberId === memberBId) {
+                statsB.wins++;
+                statsA.losses++;
+              }
+            });
+
+            // Create modified members with weekly stats for display
+            const weeklyMembers = filteredMembers.map(member => ({
+              ...member,
+              stats: {
+                ...member.stats,
+                played: (weeklyStats.get(member.id)?.wins || 0) + (weeklyStats.get(member.id)?.losses || 0),
+                wins: weeklyStats.get(member.id)?.wins || 0,
+                losses: weeklyStats.get(member.id)?.losses || 0,
+                points: (weeklyStats.get(member.id)?.wins || 0) * (league.settings?.pointsForWin || 3),
+                pointsFor: weeklyStats.get(member.id)?.pointsFor || 0,
+                pointsAgainst: weeklyStats.get(member.id)?.pointsAgainst || 0,
+              }
+            }));
+
+            return (
+              <>
+                <div className="bg-blue-900/30 rounded-lg p-3 border border-blue-600/50 mb-2">
+                  <p className="text-sm text-gray-300">
+                    📅 <span className="text-white font-medium">Week {weekNum} Standings</span> —
+                    {completedMatches.length} of {weekMatches.length} matches completed
+                  </p>
+                </div>
+                <LeagueStandings
+                  members={weeklyMembers}
+                  format={league.format}
+                  leagueType={league.type}
+                  currentUserId={currentUser?.uid}
+                  myMembership={myMembership}
+                  showPointsForAgainst={true}
+                />
+              </>
+            );
+          })()}
         </div>
       )}
 
