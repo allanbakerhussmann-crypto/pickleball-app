@@ -250,13 +250,29 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       return;
     }
 
+    // V07.15: Check if matches already exist (prevent duplicate generation)
+    // For Swiss, allow generating new rounds. For other formats, warn if matches exist.
+    if (league.format !== 'swiss' && matchStats.total > 0) {
+      const confirmed = window.confirm(
+        `⚠️ ${matchStats.total} matches already exist!\n\n` +
+        `Generating again will create DUPLICATE matches.\n\n` +
+        `If you want to regenerate the schedule:\n` +
+        `1. Click "Clear" to delete existing scheduled matches first\n` +
+        `2. Then click "Generate Schedule"\n\n` +
+        `Do you want to continue anyway? (Not recommended)`
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
     setGenerating(true);
     setError(null);
     setResult(null);
 
     try {
       let genResult: GenerationResult;
-      
+
       if (league.format === 'swiss') {
         genResult = await generateSwissRound(
           league,
@@ -265,7 +281,7 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
           divisionMatches,
           selectedDivisionId
         );
-        
+
         if (genResult.success) {
           setSwissRound(swissRound + 1);
         }
@@ -276,10 +292,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       }
 
       setResult(genResult);
-      
+
       if (genResult.success) {
         onScheduleGenerated();
-        
+
         // Switch to courts tab if venue-based and auto-assign enabled
         if (hasVenue && venueSettings?.autoAssignCourts) {
           setTimeout(() => {
@@ -622,17 +638,28 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
             </div>
           )}
 
+          {/* V07.15: Warning when matches already exist */}
+          {matchStats.total > 0 && league.format !== 'swiss' && (
+            <div className="bg-yellow-900/20 border border-yellow-600 rounded-lg p-3 text-yellow-400 text-sm">
+              ⚠️ {matchStats.total} matches already generated. Use "Clear" first if you want to regenerate.
+            </div>
+          )}
+
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-3">
             <button
               onClick={handleGenerate}
               disabled={generating || divisionMembers.length < 2}
-              className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
+              className={`flex-1 py-3 ${
+                matchStats.total > 0 && league.format !== 'swiss'
+                  ? 'bg-gray-600 hover:bg-gray-500' // Dimmed when matches exist
+                  : 'bg-blue-600 hover:bg-blue-500'
+              } disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors`}
             >
-              {generating ? '⏳ Generating...' : league.format === 'swiss' ? `Generate Round ${swissRound}` : '🎲 Generate Schedule'}
+              {generating ? '⏳ Generating...' : league.format === 'swiss' ? `🎲 Generate Round ${swissRound}` : '🎲 Generate Schedule'}
             </button>
-            
-            {matchStats.scheduled > 0 && (
+
+            {matchStats.total > 0 && (
               <button
                 onClick={() => setShowConfirmClear(true)}
                 className="px-4 py-3 bg-red-600/20 border border-red-600 text-red-400 hover:bg-red-600/30 rounded-lg font-semibold transition-colors"
