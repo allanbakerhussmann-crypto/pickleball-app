@@ -348,7 +348,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     if (s === 2 && scheduleConfig.numberOfWeeks < 1) return 'Must be at least 1 week';
     if (s === 2 && venueEnabled && !venue.venueName.trim()) return 'Venue name required';
     if (s === 3 && hasDivs && divs.length === 0) return 'Add at least one division';
-    if (s === 6 && paymentMode !== 'free' && price.entryFee < 500) return 'Minimum entry fee is $5';
+    if (s === 6 && paymentMode !== 'free' && price.entryFee < 100) return 'Minimum entry fee is $1';
     return null;
   };
 
@@ -1367,31 +1367,23 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
             {paymentMode !== 'free' && (
               <div className="space-y-4 mt-4">
                 <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                  {/* Entry Fee Slider */}
+                  {/* Entry Fee Dropdown */}
                   <div className="mb-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm text-gray-400">Entry Fee</label>
-                      <span className="text-2xl font-bold text-lime-400">${Math.round(price.entryFee / 100)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="200"
-                      step="5"
+                    <label className="block text-sm text-gray-400 mb-2">Entry Fee</label>
+                    <select
                       value={Math.round(price.entryFee / 100)}
                       onChange={(e) => setPrice({ ...price, entryFee: parseInt(e.target.value) * 100 })}
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-lime-500"
-                    />
-                    <div className="flex justify-between text-xs text-gray-500 mt-1">
-                      <span>$0</span>
-                      <span>$50</span>
-                      <span>$100</span>
-                      <span>$150</span>
-                      <span>$200</span>
-                    </div>
+                      className="w-full bg-gray-900 text-white text-lg font-semibold p-3 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
+                    >
+                      {Array.from({ length: 201 }, (_, i) => i).map((amt) => (
+                        <option key={amt} value={amt}>
+                          ${amt}
+                        </option>
+                      ))}
+                    </select>
                     {/* Quick presets */}
-                    <div className="flex gap-2 mt-3">
-                      {[10, 15, 20, 25, 30, 50].map((amt) => (
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {[10, 15, 20, 25, 30, 40, 50, 75, 100].map((amt) => (
                         <button
                           key={amt}
                           type="button"
