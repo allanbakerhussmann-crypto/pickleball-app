@@ -250,20 +250,11 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       return;
     }
 
-    // V07.15: Check if matches already exist (prevent duplicate generation)
-    // For Swiss, allow generating new rounds. For other formats, warn if matches exist.
+    // V07.15: Block generation if matches already exist (prevent duplicates)
+    // For Swiss, allow generating new rounds. For other formats, BLOCK if matches exist.
     if (league.format !== 'swiss' && matchStats.total > 0) {
-      const confirmed = window.confirm(
-        `⚠️ ${matchStats.total} matches already exist!\n\n` +
-        `Generating again will create DUPLICATE matches.\n\n` +
-        `If you want to regenerate the schedule:\n` +
-        `1. Click "Clear" to delete existing scheduled matches first\n` +
-        `2. Then click "Generate Schedule"\n\n` +
-        `Do you want to continue anyway? (Not recommended)`
-      );
-      if (!confirmed) {
-        return;
-      }
+      setError(`Schedule already exists (${matchStats.total} matches). Use "Clear" to delete existing matches before regenerating.`);
+      return;
     }
 
     setGenerating(true);

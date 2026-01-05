@@ -48,6 +48,9 @@ import type {
 import type { BoxLeaguePlayer } from '../../types/boxLeague';
 import { LeagueStandings } from './LeagueStandings';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
+import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
+import { doc, updateDoc } from '@firebase/firestore';
+import { db } from '../../services/firebase';
 import { StandingsPointsCard, RoundsSlider, type StandingsPointsConfig } from '../shared/PointsSlider';
 
 // ============================================
@@ -99,6 +102,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [showDuprAcknowledgement, setShowDuprAcknowledgement] = useState(false); // V07.12
   const [duprAcknowledged, setDuprAcknowledged] = useState(false); // V07.12
   const [duprCheckboxChecked, setDuprCheckboxChecked] = useState(false); // V07.15: Local state for checkbox
+  const [showDuprRequiredModal, setShowDuprRequiredModal] = useState(false); // V07.15: DUPR linking modal
+  const [duprLinking, setDuprLinking] = useState(false); // V07.15: DUPR linking in progress
   const [editForm, setEditForm] = useState({
     // Basic Info
     name: '',
@@ -531,7 +536,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
     // If DUPR is REQUIRED, user must have a linked DUPR account
     if (duprMode === 'required' && !userProfile.duprId) {
-      alert('This league requires a linked DUPR account. Please link your DUPR account in your profile settings before joining.');
+      setShowDuprRequiredModal(true);
       return;
     }
 
@@ -591,6 +596,52 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     handleJoin();
   };
 
+  // V07.15: Handle DUPR iframe login message for required leagues
+  const handleDuprLinkMessage = async (event: MessageEvent) => {
+    const loginData = parseDuprLoginEvent(event);
+    if (!loginData || !currentUser?.uid) return;
+
+    console.log('DUPR login successful from league join:', loginData);
+    setDuprLinking(true);
+
+    try {
+      // Update user profile with DUPR data
+      const userRef = doc(db, 'users', currentUser.uid);
+      await updateDoc(userRef, {
+        duprId: loginData.duprId,
+        duprConnected: true,
+        duprConnectedAt: Date.now(),
+        duprDoublesRating: loginData.stats?.doublesRating || null,
+        duprSinglesRating: loginData.stats?.singlesRating || null,
+        duprAccessToken: loginData.userToken,
+        duprRefreshToken: loginData.refreshToken,
+        duprTokenUpdatedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      // Close modal and continue with join
+      setShowDuprRequiredModal(false);
+      setDuprLinking(false);
+
+      // Now that DUPR is linked, try to join again
+      setTimeout(() => {
+        handleJoin();
+      }, 500);
+    } catch (err: any) {
+      console.error('Failed to save DUPR data:', err);
+      alert('Failed to link DUPR account: ' + err.message);
+      setDuprLinking(false);
+    }
+  };
+
+  // Listen for DUPR iframe messages when modal is open
+  useEffect(() => {
+    if (showDuprRequiredModal) {
+      window.addEventListener('message', handleDuprLinkMessage);
+      return () => window.removeEventListener('message', handleDuprLinkMessage);
+    }
+  }, [showDuprRequiredModal, currentUser?.uid]);
+
   // Handle free registration (after payment or for free leagues)
   const handleFreeJoin = async () => {
     if (!currentUser || !userProfile) return;
@@ -612,8 +663,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     // Check DUPR requirement
     const duprMode = freshLeague.settings?.duprSettings?.mode;
     if (duprMode === 'required' && !userProfile.duprId) {
-      alert('This league requires a linked DUPR account. Please link your DUPR account in your profile settings before joining.');
       setShowPaymentModal(false);
+      setShowDuprRequiredModal(true);
       return;
     }
 
@@ -1513,6 +1564,87 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg transition-colors"
               >
                 Continue to Join
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* V07.15: DUPR Required Modal - Link DUPR account to join */}
+      {showDuprRequiredModal && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-800 w-full max-w-lg rounded-xl border border-gray-700 overflow-hidden">
+            {/* Header */}
+            <div className="bg-[#00B4D8]/20 px-6 py-4 border-b border-[#00B4D8]/30">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span className="text-2xl">📊</span> DUPR Account Required
+                </h2>
+                <button
+                  onClick={() => setShowDuprRequiredModal(false)}
+                  disabled={duprLinking}
+                  className="text-gray-400 hover:text-white disabled:opacity-50"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <div className="bg-[#00B4D8]/10 border border-[#00B4D8]/30 rounded-lg p-4 mb-4">
+                <p className="text-[#00B4D8] font-medium mb-2">
+                  This league requires a DUPR account
+                </p>
+                <p className="text-gray-400 text-sm">
+                  Link your DUPR account below to join this league. Your match results will be submitted to DUPR for official rating.
+                </p>
+              </div>
+
+              {/* Loading state when linking */}
+              {duprLinking ? (
+                <div className="text-center py-8">
+                  <div className="w-12 h-12 border-4 border-[#00B4D8] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                  <p className="text-white">Linking your DUPR account...</p>
+                </div>
+              ) : (
+                <>
+                  {/* DUPR Login iframe */}
+                  <div className="bg-white rounded-lg overflow-hidden mb-4">
+                    <iframe
+                      src={getDuprLoginIframeUrl()}
+                      title="Login with DUPR"
+                      className="w-full h-[400px] border-0"
+                      allow="clipboard-read; clipboard-write"
+                    />
+                  </div>
+
+                  {/* Register link */}
+                  <p className="text-xs text-gray-500 text-center">
+                    Don't have a DUPR account?{' '}
+                    <a
+                      href="https://mydupr.com/signup"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#00B4D8] hover:underline"
+                    >
+                      Create one for free at mydupr.com
+                    </a>
+                  </p>
+                </>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-gray-900 border-t border-gray-700">
+              <button
+                onClick={() => setShowDuprRequiredModal(false)}
+                disabled={duprLinking}
+                className="w-full py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
               </button>
             </div>
           </div>
