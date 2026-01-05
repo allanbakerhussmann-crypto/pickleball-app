@@ -526,8 +526,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
 
     // V07.15: Check if league is full before attempting to join
-    if (freshLeague.maxMembers && (freshLeague.memberCount || 0) >= freshLeague.maxMembers) {
-      alert(`League is full (${freshLeague.memberCount}/${freshLeague.maxMembers} players)`);
+    const maxMembers = freshLeague.maxMembers || freshLeague.settings?.maxMembers;
+    if (maxMembers && (freshLeague.memberCount || 0) >= maxMembers) {
+      alert(`League is full (${freshLeague.memberCount}/${maxMembers} players)`);
       return;
     }
 
@@ -657,8 +658,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
 
     // Check max members one more time
-    if (freshLeague.maxMembers && (freshLeague.memberCount || 0) >= freshLeague.maxMembers) {
-      alert(`League is full (${freshLeague.memberCount}/${freshLeague.maxMembers} players)`);
+    const maxMembers = freshLeague.maxMembers || freshLeague.settings?.maxMembers;
+    if (maxMembers && (freshLeague.memberCount || 0) >= maxMembers) {
+      alert(`League is full (${freshLeague.memberCount}/${maxMembers} players)`);
       setShowPaymentModal(false);
       return;
     }
@@ -737,7 +739,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
   const isDoublesOrMixed = league.type === 'doubles' || league.type === 'mixed_doubles';
   const isOrganizer = currentUser?.uid === league.createdByUserId;
-  const isFull = league.maxMembers ? (league.memberCount || 0) >= league.maxMembers : false;
+  // V07.15: Check both league.maxMembers and league.settings.maxMembers (stored in settings)
+  const effectiveMaxMembers = league.maxMembers || league.settings?.maxMembers;
+  const isFull = effectiveMaxMembers ? (league.memberCount || 0) >= effectiveMaxMembers : false;
   const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active') && !isFull;
 
   // Determine which tabs to show - Schedule, Players, and DUPR tabs only for organizers
@@ -971,7 +975,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               <span>•</span>
               <span>
                 {league.memberCount || members.length}
-                {league.maxMembers ? `/${league.maxMembers}` : ''} {isDoublesOrMixed ? 'teams' : 'players'}
+                {(league.maxMembers || league.settings?.maxMembers) ? `/${league.maxMembers || league.settings?.maxMembers}` : ''} {isDoublesOrMixed ? 'teams' : 'players'}
               </span>
             </div>
 
@@ -1012,13 +1016,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 </span>
               )}
               {/* Max Players indicator when close to full */}
-              {league.maxMembers && (league.memberCount || 0) >= league.maxMembers * 0.8 && (
+              {(league.maxMembers || league.settings?.maxMembers) && (league.memberCount || 0) >= (league.maxMembers || league.settings?.maxMembers || 0) * 0.8 && (
                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                  (league.memberCount || 0) >= league.maxMembers
+                  (league.memberCount || 0) >= (league.maxMembers || league.settings?.maxMembers || 0)
                     ? 'bg-red-600/20 text-red-400'
                     : 'bg-yellow-600/20 text-yellow-400'
                 }`}>
-                  {(league.memberCount || 0) >= league.maxMembers ? '⚠️ Full' : '⚡ Almost Full'}
+                  {(league.memberCount || 0) >= (league.maxMembers || league.settings?.maxMembers || 0) ? '⚠️ Full' : '⚡ Almost Full'}
                 </span>
               )}
             </div>
