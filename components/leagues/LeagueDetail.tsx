@@ -1015,19 +1015,33 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   {league.settings.minRating?.toFixed(1) || '0.0'} - {league.settings.maxRating?.toFixed(1) || '5.0'} Rating
                 </span>
               )}
-              {/* Max Players indicator when close to full */}
-              {(league.maxMembers || league.settings?.maxMembers) && (league.memberCount || 0) >= (league.maxMembers || league.settings?.maxMembers || 0) * 0.8 && (
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                  (league.memberCount || 0) >= (league.maxMembers || league.settings?.maxMembers || 0)
-                    ? 'bg-red-600/20 text-red-400'
-                    : 'bg-yellow-600/20 text-yellow-400'
-                }`}>
-                  {(league.memberCount || 0) >= (league.maxMembers || league.settings?.maxMembers || 0) ? '⚠️ Full' : '⚡ Almost Full'}
+              {/* Almost Full indicator (not full yet) */}
+              {effectiveMaxMembers && !isFull && (league.memberCount || 0) >= effectiveMaxMembers * 0.8 && (
+                <span className="bg-yellow-600/20 text-yellow-400 px-2 py-0.5 rounded text-xs font-medium">
+                  ⚡ Almost Full ({effectiveMaxMembers - (league.memberCount || 0)} spots left)
                 </span>
               )}
             </div>
           </div>
-          
+
+          {/* FULL LEAGUE NOTICE - Prominent display when league is at capacity */}
+          {isFull && (
+            <div className="bg-red-900/30 border border-red-600/50 rounded-lg p-4 text-center">
+              <div className="flex items-center justify-center gap-2 mb-1">
+                <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <span className="text-red-400 font-bold text-lg">League Full</span>
+              </div>
+              <p className="text-red-300/80 text-sm">
+                This league has reached its maximum capacity of {effectiveMaxMembers} {isDoublesOrMixed ? 'teams' : 'players'}.
+              </p>
+              <p className="text-gray-400 text-xs mt-1">
+                Registration is closed. Contact the organizer if you'd like to be added to a waitlist.
+              </p>
+            </div>
+          )}
+
           {/* Join/Leave - For non-organizers */}
           {currentUser && !isOrganizer && (
             myMembership ? (
