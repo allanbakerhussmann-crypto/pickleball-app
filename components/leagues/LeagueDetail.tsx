@@ -938,7 +938,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {/* Join as Organizer */}
             {!myMembership && (league.status === 'draft' || league.status === 'registration' || league.status === 'active') && (
               <button
-                onClick={handleJoin}
+                onClick={() => handleJoin()}
                 disabled={joining || isFull}
                 className="bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
               >
@@ -969,7 +969,58 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               <span className="bg-gray-700 px-2 py-0.5 rounded">{getTypeLabel(league.type)}</span>
               <span>{getFormatLabel(league.format)}</span>
               <span>•</span>
-              <span>{league.memberCount || members.length} {isDoublesOrMixed ? 'teams' : 'players'}</span>
+              <span>
+                {league.memberCount || members.length}
+                {league.maxMembers ? `/${league.maxMembers}` : ''} {isDoublesOrMixed ? 'teams' : 'players'}
+              </span>
+            </div>
+
+            {/* V07.15: Requirements badges */}
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              {/* DUPR Rating Range */}
+              {(league.settings?.duprSettings?.minDuprRating || league.settings?.duprSettings?.maxDuprRating) && (
+                <span className="bg-[#00B4D8]/20 text-[#00B4D8] px-2 py-0.5 rounded text-xs font-medium">
+                  DUPR {league.settings.duprSettings.minDuprRating?.toFixed(1) || '0.0'} - {league.settings.duprSettings.maxDuprRating?.toFixed(1) || '8.0'}
+                </span>
+              )}
+              {/* DUPR Required/Optional badge */}
+              {league.settings?.duprSettings?.mode === 'required' && (
+                <span className="bg-[#00B4D8]/20 text-[#00B4D8] px-2 py-0.5 rounded text-xs font-medium">
+                  DUPR Required
+                </span>
+              )}
+              {league.settings?.duprSettings?.mode === 'optional' && (
+                <span className="bg-[#00B4D8]/10 text-[#00B4D8]/80 px-2 py-0.5 rounded text-xs">
+                  DUPR Optional
+                </span>
+              )}
+              {/* Age Range */}
+              {(league.settings?.minAge || league.settings?.maxAge) && (
+                <span className="bg-purple-600/20 text-purple-400 px-2 py-0.5 rounded text-xs font-medium">
+                  {league.settings.minAge && league.settings.maxAge
+                    ? `Ages ${league.settings.minAge}-${league.settings.maxAge}`
+                    : league.settings.minAge
+                      ? `Ages ${league.settings.minAge}+`
+                      : `Ages ${league.settings.maxAge} & under`
+                  }
+                </span>
+              )}
+              {/* Rating Range (non-DUPR) */}
+              {(league.settings?.minRating || league.settings?.maxRating) && !league.settings?.duprSettings?.minDuprRating && !league.settings?.duprSettings?.maxDuprRating && (
+                <span className="bg-orange-600/20 text-orange-400 px-2 py-0.5 rounded text-xs font-medium">
+                  {league.settings.minRating?.toFixed(1) || '0.0'} - {league.settings.maxRating?.toFixed(1) || '5.0'} Rating
+                </span>
+              )}
+              {/* Max Players indicator when close to full */}
+              {league.maxMembers && (league.memberCount || 0) >= league.maxMembers * 0.8 && (
+                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                  (league.memberCount || 0) >= league.maxMembers
+                    ? 'bg-red-600/20 text-red-400'
+                    : 'bg-yellow-600/20 text-yellow-400'
+                }`}>
+                  {(league.memberCount || 0) >= league.maxMembers ? '⚠️ Full' : '⚡ Almost Full'}
+                </span>
+              )}
             </div>
           </div>
           
@@ -992,7 +1043,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </div>
             ) : canJoin && (
               <button
-                onClick={handleJoin}
+                onClick={() => handleJoin()}
                 disabled={joining}
                 className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
               >
