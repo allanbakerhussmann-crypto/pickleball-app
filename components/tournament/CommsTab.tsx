@@ -165,10 +165,14 @@ export const CommsTab: React.FC<CommsTabProps> = ({
   }), [messages]);
 
   // Get unique players from teams
+  // Teams store player IDs in team.players (not team.playerIds)
   const allPlayers = useMemo(() => {
     const playerIds = new Set<string>();
     teams.forEach(team => {
-      team.playerIds?.forEach(id => playerIds.add(id));
+      (team.players || []).forEach(p => {
+        const pid = typeof p === 'string' ? p : (p.odUserId || p.id || '');
+        if (pid) playerIds.add(pid);
+      });
     });
     return Array.from(playerIds)
       .map(id => playersCache[id])

@@ -500,8 +500,9 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated();
       // Only the registrant or tournament organizer can update/cancel
+      // Note: registrations use playerId field, not odUserId
       allow update, delete: if isAuthenticated() &&
-        (resource.data.odUserId == request.auth.uid ||
+        (resource.data.playerId == request.auth.uid ||
          isTournamentOrganizer(resource.data.tournamentId));
     }
 

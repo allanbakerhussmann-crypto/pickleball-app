@@ -39,7 +39,7 @@ type SelectionMode = 'group' | 'individual';
 // ============================================
 
 const getPlayerFromProfile = (profile: UserProfile): Recipient => ({
-  recipientId: profile.odUserId || profile.odAccountId || '',
+  recipientId: profile.id || profile.odUserId || profile.odAccountId || '',
   recipientName: profile.displayName || 'Unknown',
   recipientEmail: profile.email || null,
   recipientPhone: profile.phone || null,
@@ -129,9 +129,13 @@ const GroupSelector: React.FC<GroupSelectorProps> = ({
     }
 
     // Get unique player IDs
+    // Teams store player IDs in team.players (not team.playerIds)
     const playerIds = new Set<string>();
     filteredTeams.forEach(team => {
-      team.playerIds?.forEach(id => playerIds.add(id));
+      (team.players || []).forEach(p => {
+        const pid = typeof p === 'string' ? p : (p.odUserId || p.id || '');
+        if (pid) playerIds.add(pid);
+      });
     });
 
     // Map to recipients
@@ -143,7 +147,7 @@ const GroupSelector: React.FC<GroupSelectorProps> = ({
       seen.add(id);
 
       const profile = players.find(p =>
-        p.odUserId === id || p.odAccountId === id
+        p.id === id || p.odUserId === id || p.odAccountId === id
       );
 
       if (profile) {

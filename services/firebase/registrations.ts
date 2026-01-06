@@ -89,7 +89,7 @@ export const finalizeRegistration = async (
         [playerId, partnerInfo.partnerId],
         null,
         playerId,
-        { paymentStatus, paymentMethod: isFreeEvent ? undefined : paymentMethod }
+        { paymentStatus, paymentMethod: isFreeEvent ? null : paymentMethod }
       );
       if (!result.existed) teamsCreated++;
     } else {
@@ -99,7 +99,7 @@ export const finalizeRegistration = async (
         [playerId],
         null,
         playerId,
-        { status: 'pending_partner', paymentStatus, paymentMethod: isFreeEvent ? undefined : paymentMethod }
+        { status: 'pending_partner', paymentStatus, paymentMethod: isFreeEvent ? null : paymentMethod }
       );
       if (!result.existed) teamsCreated++;
     }

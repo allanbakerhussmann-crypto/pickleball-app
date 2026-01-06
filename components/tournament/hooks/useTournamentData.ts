@@ -97,7 +97,10 @@ export const useTournamentData = ({
   // ============================================
 
   useEffect(() => {
-    const allPlayerIds = Array.from(new Set(teams.flatMap(t => t.players || [])));
+    // Teams store player IDs in t.players as string array (not t.playerIds)
+    const allPlayerIds = Array.from(new Set(teams.flatMap(t =>
+      (t.players || []).map(p => typeof p === 'string' ? p : (p.odUserId || p.id || ''))
+    ).filter(Boolean)));
     const missing = allPlayerIds.filter(
       id => !playersCache[id] && !id.startsWith('invite_') && !id.startsWith('tbd')
     );
@@ -112,7 +115,10 @@ export const useTournamentData = ({
         if (cancelled) return;
         setPlayersCache(prev => {
           const next = { ...prev };
-          profiles.forEach(p => (next[p.id] = p));
+          profiles.forEach(p => {
+            const id = p.id || p.odUserId || p.odAccountId;
+            if (id) next[id] = p;
+          });
           return next;
         });
       } catch (err) {
@@ -184,8 +190,12 @@ export const useTournamentData = ({
     const team = teams.find(t => t.id === teamId);
     if (!team) return 'TBD';
     if (team.teamName) return team.teamName;
+    // Handle both string[] and object[] cases for team.players
     const names = (team.players || [])
-      .map(pid => playersCache[pid]?.displayName || 'Unknown')
+      .map(p => {
+        const pid = typeof p === 'string' ? p : (p.odUserId || p.id || '');
+        return playersCache[pid]?.displayName || 'Unknown';
+      })
       .join(' / ');
     return names || 'TBD';
   }, [teams, playersCache]);
@@ -193,8 +203,12 @@ export const useTournamentData = ({
   const getTeamPlayers = useCallback((teamId: string): UserProfile[] => {
     const team = teams.find(t => t.id === teamId);
     if (!team) return [];
+    // Handle both string[] and object[] cases for team.players
     return (team.players || [])
-      .map(pid => playersCache[pid])
+      .map(p => {
+        const pid = typeof p === 'string' ? p : (p.odUserId || p.id || '');
+        return playersCache[pid];
+      })
       .filter(Boolean) as UserProfile[];
   }, [teams, playersCache]);
 
