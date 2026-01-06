@@ -4,30 +4,61 @@
  * Processes messages in the comms_queue subcollection for both
  * tournaments and leagues.
  * Uses Firebase Functions v1 with Firestore triggers.
+ * SMS provider: SMSGlobal (better NZ coverage than Twilio)
  *
  * FILE LOCATION: functions/src/comms.ts
- * VERSION: 07.18
+ * VERSION: 07.19
  */
 
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import twilio from 'twilio';
+import * as crypto from 'crypto';
 
 // ============================================
-// TWILIO CONFIG (Functions v1)
+// SMSGLOBAL CONFIG (Functions v1)
 // ============================================
 
-const getTwilioConfig = () => {
+const getSMSGlobalConfig = () => {
   const config = functions.config();
-  if (!config.twilio?.sid || !config.twilio?.token || !config.twilio?.phone) {
-    throw new Error('Twilio credentials not configured. Run: firebase functions:config:set twilio.sid="..." twilio.token="..." twilio.phone="+1..."');
+  if (!config.smsglobal?.apikey || !config.smsglobal?.apisecret) {
+    throw new Error('SMSGlobal credentials not configured. Run: firebase functions:config:set smsglobal.apikey="..." smsglobal.apisecret="..."');
   }
   return {
-    sid: config.twilio.sid,
-    token: config.twilio.token,
-    phone: config.twilio.phone,
+    apiKey: config.smsglobal.apikey,
+    apiSecret: config.smsglobal.apisecret,
+    origin: config.smsglobal.origin || 'Pickleball',
   };
 };
+
+// ============================================
+// SMSGLOBAL MAC AUTHENTICATION
+// ============================================
+
+/**
+ * Generate MAC authentication header for SMSGlobal API
+ * Based on OAuth 2.0 MAC token spec
+ */
+function generateMACAuth(
+  apiKey: string,
+  apiSecret: string,
+  method: string,
+  path: string,
+  host: string,
+  port: string = '443'
+): string {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = crypto.randomBytes(16).toString('hex');
+
+  // MAC base string: timestamp\nnonce\nmethod\npath\nhost\nport\n\n
+  const baseString = `${timestamp}\n${nonce}\n${method}\n${path}\n${host}\n${port}\n\n`;
+
+  // HMAC-SHA256
+  const mac = crypto.createHmac('sha256', apiSecret)
+    .update(baseString)
+    .digest('base64');
+
+  return `MAC id="${apiKey}", ts="${timestamp}", nonce="${nonce}", mac="${mac}"`;
+}
 
 // ============================================
 // TYPES
@@ -64,33 +95,72 @@ interface CommsQueueMessage {
   retryOf?: string | null;
 }
 
+interface SMSConfig {
+  apiKey: string;
+  apiSecret: string;
+  origin: string;
+}
+
 // ============================================
-// HELPER: Send SMS via Twilio
+// HELPER: Send SMS via SMSGlobal
 // ============================================
 
-async function sendSMSViaTwilio(
+async function sendSMSViaSMSGlobal(
   to: string,
   body: string,
-  sid: string,
-  token: string,
-  fromPhone: string
-): Promise<{ success: boolean; twilioSid?: string; error?: string }> {
+  apiKey: string,
+  apiSecret: string,
+  origin: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
-    const client = twilio(sid, token);
+    const host = 'api.smsglobal.com';
+    const path = '/v2/sms';
 
-    console.log(`Sending SMS to ${to} from ${fromPhone}`);
+    const authHeader = generateMACAuth(apiKey, apiSecret, 'POST', path, host);
 
-    const result = await client.messages.create({
-      body,
-      to,
-      from: fromPhone,
+    console.log(`Sending SMS to ${to} via SMSGlobal (origin: ${origin})`);
+
+    const response = await fetch(`https://${host}${path}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        destination: to,
+        message: body,
+        origin: origin,
+      }),
     });
 
-    console.log(`SMS sent successfully. Twilio SID: ${result.sid}`);
-    return { success: true, twilioSid: result.sid };
+    if (response.status === 200 || response.status === 202) {
+      const data = await response.json() as { messages?: { id?: string }[] };
+      const messageId = data.messages?.[0]?.id;
+      console.log(`SMS sent via SMSGlobal. Message ID: ${messageId}`);
+      return { success: true, messageId };
+    }
+
+    // Handle errors
+    const errorText = await response.text();
+    console.error(`SMSGlobal error (${response.status}):`, errorText);
+
+    if (response.status === 401) {
+      return { success: false, error: 'SMSGlobal authentication failed - check API key/secret' };
+    }
+
+    if (response.status === 402) {
+      return { success: false, error: 'SMSGlobal account out of credits' };
+    }
+
+    if (response.status === 400) {
+      return { success: false, error: `Invalid request: ${errorText}` };
+    }
+
+    return { success: false, error: `SMSGlobal error: ${response.status} - ${errorText}` };
   } catch (error: any) {
-    console.error('Twilio error:', error.message);
-    return { success: false, error: error.message || 'Unknown Twilio error' };
+    console.error('SMSGlobal error:', error.message);
+    return { success: false, error: error.message || 'Unknown SMSGlobal error' };
   }
 }
 
@@ -123,9 +193,7 @@ async function processCommsMessage(
   messageId: string,
   entityType: 'tournament' | 'league',
   entityId: string,
-  twilioSidValue: string,
-  twilioTokenValue: string,
-  twilioPhone: string
+  smsConfig: SMSConfig
 ): Promise<void> {
   const message = snap.data() as CommsQueueMessage;
   const docRef = snap.ref;
@@ -191,7 +259,7 @@ async function processCommsMessage(
   // STEP 2: Send the message
   // ========================================
 
-  let result: { success: boolean; twilioSid?: string; error?: string };
+  let result: { success: boolean; messageId?: string; error?: string };
 
   if (message.type === 'sms') {
     // Validate phone number
@@ -202,13 +270,13 @@ async function processCommsMessage(
     } else if (!message.body || message.body.trim().length === 0) {
       result = { success: false, error: 'Message body is empty' };
     } else {
-      // Send SMS
-      result = await sendSMSViaTwilio(
+      // Send SMS via SMSGlobal
+      result = await sendSMSViaSMSGlobal(
         message.recipientPhone,
         message.body,
-        twilioSidValue,
-        twilioTokenValue,
-        twilioPhone
+        smsConfig.apiKey,
+        smsConfig.apiSecret,
+        smsConfig.origin
       );
     }
   } else if (message.type === 'email') {
@@ -295,15 +363,13 @@ async function processCommsMessage(
 export const comms_processQueue = functions.firestore
   .document('tournaments/{tournamentId}/comms_queue/{messageId}')
   .onCreate(async (snap, context) => {
-    const twilioConfig = getTwilioConfig();
+    const smsConfig = getSMSGlobalConfig();
     await processCommsMessage(
       snap,
       context.params.messageId,
       'tournament',
       context.params.tournamentId,
-      twilioConfig.sid,
-      twilioConfig.token,
-      twilioConfig.phone
+      smsConfig
     );
   });
 
@@ -317,14 +383,12 @@ export const comms_processQueue = functions.firestore
 export const comms_processLeagueQueue = functions.firestore
   .document('leagues/{leagueId}/comms_queue/{messageId}')
   .onCreate(async (snap, context) => {
-    const twilioConfig = getTwilioConfig();
+    const smsConfig = getSMSGlobalConfig();
     await processCommsMessage(
       snap,
       context.params.messageId,
       'league',
       context.params.leagueId,
-      twilioConfig.sid,
-      twilioConfig.token,
-      twilioConfig.phone
+      smsConfig
     );
   });

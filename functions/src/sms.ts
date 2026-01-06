@@ -1,24 +1,98 @@
 /**
- * SMS Cloud Function - Twilio Integration
+ * SMS Cloud Function - SMSGlobal Integration
  *
- * Sends SMS messages via Twilio when documents are created in the sms_messages collection.
+ * Sends SMS messages via SMSGlobal when documents are created in the sms_messages collection.
  *
  * FILE LOCATION: functions/src/sms.ts
- * VERSION: 06.17
+ * VERSION: 07.19
  */
 
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import twilio from 'twilio';
+import * as crypto from 'crypto';
 
-// Initialize Twilio client with config
-const getTwilioClient = () => {
+// ============================================
+// SMSGLOBAL CONFIG
+// ============================================
+
+const getSMSGlobalConfig = () => {
   const config = functions.config();
-  if (!config.twilio?.sid || !config.twilio?.token) {
-    throw new Error('Twilio credentials not configured. Run: firebase functions:config:set twilio.sid="..." twilio.token="..." twilio.phone="..."');
+  if (!config.smsglobal?.apikey || !config.smsglobal?.apisecret) {
+    throw new Error('SMSGlobal credentials not configured. Run: firebase functions:config:set smsglobal.apikey="..." smsglobal.apisecret="..."');
   }
-  return twilio(config.twilio.sid, config.twilio.token);
+  return {
+    apiKey: config.smsglobal.apikey,
+    apiSecret: config.smsglobal.apisecret,
+    origin: config.smsglobal.origin || 'Pickleball',
+  };
 };
+
+// ============================================
+// SMSGLOBAL MAC AUTHENTICATION
+// ============================================
+
+function generateMACAuth(
+  apiKey: string,
+  apiSecret: string,
+  method: string,
+  path: string,
+  host: string,
+  port: string = '443'
+): string {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = crypto.randomBytes(16).toString('hex');
+
+  const baseString = `${timestamp}\n${nonce}\n${method}\n${path}\n${host}\n${port}\n\n`;
+
+  const mac = crypto.createHmac('sha256', apiSecret)
+    .update(baseString)
+    .digest('base64');
+
+  return `MAC id="${apiKey}", ts="${timestamp}", nonce="${nonce}", mac="${mac}"`;
+}
+
+// ============================================
+// SMSGLOBAL SEND FUNCTION
+// ============================================
+
+async function sendViaSMSGlobal(
+  to: string,
+  body: string,
+  apiKey: string,
+  apiSecret: string,
+  origin: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  try {
+    const host = 'api.smsglobal.com';
+    const path = '/v2/sms';
+
+    const authHeader = generateMACAuth(apiKey, apiSecret, 'POST', path, host);
+
+    const response = await fetch(`https://${host}${path}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        destination: to,
+        message: body,
+        origin: origin,
+      }),
+    });
+
+    if (response.status === 200 || response.status === 202) {
+      const data = await response.json() as { messages?: { id?: string }[] };
+      return { success: true, messageId: data.messages?.[0]?.id };
+    }
+
+    const errorText = await response.text();
+    return { success: false, error: `SMSGlobal error: ${response.status} - ${errorText}` };
+  } catch (error: any) {
+    return { success: false, error: error.message || 'Unknown SMSGlobal error' };
+  }
+}
 
 // ============================================
 // SMS Message Types
@@ -29,7 +103,7 @@ interface SMSMessage {
   body: string;            // Message content
   createdAt: admin.firestore.Timestamp;
   status: 'pending' | 'sent' | 'failed';
-  twilioSid?: string;      // Twilio message SID after sending
+  messageId?: string;      // SMSGlobal message ID after sending
   sentAt?: admin.firestore.Timestamp;
   error?: string;          // Error message if failed
 
@@ -49,7 +123,7 @@ interface SMSMessage {
  *
  * When a document is created in sms_messages, this function:
  * 1. Reads the phone number and message body
- * 2. Sends the SMS via Twilio
+ * 2. Sends the SMS via SMSGlobal
  * 3. Updates the document with delivery status
  */
 export const sendSMS = functions.firestore
@@ -79,30 +153,38 @@ export const sendSMS = functions.firestore
     }
 
     try {
-      const twilioClient = getTwilioClient();
-      const config = functions.config();
+      const smsConfig = getSMSGlobalConfig();
 
-      console.log(`SMS ${messageId}: Sending to ${message.to}`);
+      console.log(`SMS ${messageId}: Sending to ${message.to} via SMSGlobal`);
 
-      const result = await twilioClient.messages.create({
-        body: message.body,
-        to: message.to,
-        from: config.twilio.phone,
-      });
+      const result = await sendViaSMSGlobal(
+        message.to,
+        message.body,
+        smsConfig.apiKey,
+        smsConfig.apiSecret,
+        smsConfig.origin
+      );
 
-      console.log(`SMS ${messageId}: Sent successfully. Twilio SID: ${result.sid}`);
+      if (result.success) {
+        console.log(`SMS ${messageId}: Sent successfully. SMSGlobal ID: ${result.messageId}`);
 
-      // Update document with success status
-      await snap.ref.update({
-        status: 'sent',
-        twilioSid: result.sid,
-        sentAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+        await snap.ref.update({
+          status: 'sent',
+          messageId: result.messageId,
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } else {
+        console.error(`SMS ${messageId}: Failed to send. Error:`, result.error);
+
+        await snap.ref.update({
+          status: 'failed',
+          error: result.error || 'Unknown error occurred',
+        });
+      }
 
     } catch (error: any) {
       console.error(`SMS ${messageId}: Failed to send. Error:`, error.message);
 
-      // Update document with failure status
       await snap.ref.update({
         status: 'failed',
         error: error.message || 'Unknown error occurred',
