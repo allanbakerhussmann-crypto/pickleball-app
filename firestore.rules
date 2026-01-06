@@ -663,6 +663,38 @@ service cloud.firestore {
     }
 
     // ============================================
+    // SMS CREDITS (V07.19)
+    // ============================================
+
+    // SMS Credits - Organizer SMS balance and usage tracking
+    match /sms_credits/{userId} {
+      // Users can read their own credits
+      allow read: if isOwner(userId);
+      // Only Cloud Functions can write credits (for security)
+      allow write: if false;
+
+      // Usage logs - read only for owner
+      match /usage/{usageId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      // Purchase history - read only for owner
+      match /purchases/{purchaseId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+    }
+
+    // SMS Bundles - Available bundles for purchase
+    match /sms_bundles/{bundleId} {
+      // Anyone authenticated can read active bundles
+      allow read: if isAuthenticated();
+      // Only app admins can manage bundles
+      allow write: if isAppAdmin();
+    }
+
+    // ============================================
     // DUPR SUBMISSION COLLECTIONS (V07.04)
     // ============================================
 

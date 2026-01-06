@@ -51,7 +51,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createUserConnectAccount = exports.stripe_createConnectAccount = void 0;
+exports.stripe_seedSMSBundles = exports.stripe_webhook = exports.stripe_purchaseSMSBundle = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createUserConnectAccount = exports.stripe_createConnectAccount = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const stripe_1 = __importDefault(require("stripe"));
@@ -63,6 +63,35 @@ if (!admin.apps.length) {
 const stripe = new stripe_1.default(((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.secret_key) || process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2024-11-20.acacia' });
 // Platform fee percentage (1.5%)
 const PLATFORM_FEE_PERCENT = 1.5;
+// Free starter SMS credits for new organizers
+const FREE_STARTER_SMS_CREDITS = 25;
+// Default SMS bundles for seeding
+const DEFAULT_SMS_BUNDLES = [
+    {
+        name: 'Starter Pack',
+        description: '50 SMS credits - great for small tournaments',
+        credits: 50,
+        priceNZD: 1000, // $10.00
+        isActive: true,
+        sortOrder: 1,
+    },
+    {
+        name: 'Pro Pack',
+        description: '200 SMS credits - best value for regular organizers',
+        credits: 200,
+        priceNZD: 3500, // $35.00
+        isActive: true,
+        sortOrder: 2,
+    },
+    {
+        name: 'Enterprise Pack',
+        description: '500 SMS credits - for high-volume events',
+        credits: 500,
+        priceNZD: 7500, // $75.00
+        isActive: true,
+        sortOrder: 3,
+    },
+];
 // ============================================
 // CREATE CONNECT ACCOUNT (FOR CLUBS)
 // ============================================
@@ -343,6 +372,68 @@ exports.stripe_createCheckoutSession = functions.https.onCall(async (data, conte
         throw new functions.https.HttpsError('internal', error.message || 'Failed to create checkout session');
     }
 });
+/**
+ * Create a Checkout Session for purchasing SMS credits bundle
+ * This uses the PLATFORM Stripe account (not Connect) since SMS credits
+ * are a platform service, not an organizer payment.
+ */
+exports.stripe_purchaseSMSBundle = functions.https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const { bundleId, successUrl, cancelUrl } = data;
+    if (!bundleId) {
+        throw new functions.https.HttpsError('invalid-argument', 'Bundle ID required');
+    }
+    const db = admin.firestore();
+    try {
+        // Get bundle details
+        const bundleDoc = await db.collection('sms_bundles').doc(bundleId).get();
+        if (!bundleDoc.exists) {
+            throw new functions.https.HttpsError('not-found', 'Bundle not found');
+        }
+        const bundle = Object.assign({ id: bundleDoc.id }, bundleDoc.data());
+        if (!bundle.isActive) {
+            throw new functions.https.HttpsError('failed-precondition', 'Bundle is not available');
+        }
+        // Create Checkout Session (no connected account - goes to platform)
+        const session = await stripe.checkout.sessions.create({
+            mode: 'payment',
+            customer_email: context.auth.token.email || undefined,
+            line_items: [
+                {
+                    price_data: {
+                        currency: 'nzd',
+                        product_data: {
+                            name: bundle.name,
+                            description: `${bundle.credits} SMS credits`,
+                        },
+                        unit_amount: bundle.priceNZD,
+                    },
+                    quantity: 1,
+                },
+            ],
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            metadata: {
+                type: 'sms_bundle',
+                bundleId: bundle.id,
+                bundleName: bundle.name,
+                credits: bundle.credits.toString(),
+                odUserId: context.auth.uid,
+            },
+        });
+        console.log(`Created SMS bundle checkout session ${session.id} for user ${context.auth.uid}`);
+        return {
+            sessionId: session.id,
+            url: session.url,
+        };
+    }
+    catch (error) {
+        console.error('Create SMS bundle checkout error:', error);
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to create checkout session');
+    }
+});
 // ============================================
 // STRIPE WEBHOOK HANDLER
 // Supports TWO webhook secrets (Account + Connect)
@@ -453,6 +544,9 @@ async function handleCheckoutComplete(session) {
                 break;
             case 'league':
                 await handleLeaguePayment(session, metadata);
+                break;
+            case 'sms_bundle':
+                await handleSMSBundlePayment(session, metadata);
                 break;
             default:
                 // Legacy: court booking without type
@@ -626,6 +720,75 @@ async function handleLeaguePayment(session, metadata) {
     // 3. Send confirmation email
 }
 // ============================================
+// SMS BUNDLE PAYMENT HANDLER
+// ============================================
+async function handleSMSBundlePayment(session, metadata) {
+    const bundleId = metadata.bundleId;
+    const bundleName = metadata.bundleName;
+    const credits = parseInt(metadata.credits, 10);
+    const odUserId = metadata.odUserId;
+    if (!bundleId || !odUserId || isNaN(credits)) {
+        console.error('Missing required metadata for SMS bundle payment:', {
+            bundleId,
+            odUserId,
+            credits,
+        });
+        return;
+    }
+    console.log(`Processing SMS bundle payment: bundle=${bundleName}, credits=${credits}, user=${odUserId}`);
+    const db = admin.firestore();
+    try {
+        const now = Date.now();
+        const creditsRef = db.collection('sms_credits').doc(odUserId);
+        // Use a transaction to safely update credits
+        await db.runTransaction(async (transaction) => {
+            const creditsDoc = await transaction.get(creditsRef);
+            if (!creditsDoc.exists) {
+                // Create new credits document with purchased credits + free starter
+                const newCredits = {
+                    odUserId,
+                    balance: credits + FREE_STARTER_SMS_CREDITS,
+                    totalPurchased: credits,
+                    totalUsed: 0,
+                    totalFreeCredits: FREE_STARTER_SMS_CREDITS,
+                    lastTopUpAt: now,
+                    createdAt: now,
+                    updatedAt: now,
+                };
+                transaction.set(creditsRef, newCredits);
+            }
+            else {
+                // Update existing credits
+                const existing = creditsDoc.data();
+                transaction.update(creditsRef, {
+                    balance: existing.balance + credits,
+                    totalPurchased: existing.totalPurchased + credits,
+                    lastTopUpAt: now,
+                    updatedAt: now,
+                });
+            }
+            // Log the purchase
+            const purchaseRef = db.collection('sms_credits').doc(odUserId).collection('purchases').doc();
+            transaction.set(purchaseRef, {
+                bundleId,
+                bundleName,
+                credits,
+                amountNZD: session.amount_total || 0,
+                stripeSessionId: session.id,
+                stripePaymentIntentId: session.payment_intent,
+                status: 'completed',
+                createdAt: now,
+                completedAt: now,
+            });
+        });
+        console.log(`✅ SMS bundle purchase successful: ${bundleName} (${credits} credits) for user ${odUserId}`);
+    }
+    catch (error) {
+        console.error('Error processing SMS bundle payment:', error);
+        throw error;
+    }
+}
+// ============================================
 // ACCOUNT UPDATED HANDLER (Connect Onboarding)
 // ============================================
 async function handleAccountUpdated(account) {
@@ -704,4 +867,65 @@ async function handleAccountUpdated(account) {
         console.error('Error handling account updated:', error);
     }
 }
+// ============================================
+// SEED SMS BUNDLES (One-time setup)
+// ============================================
+/**
+ * Seed the default SMS bundles to Firestore
+ * Call this once to populate the sms_bundles collection
+ */
+exports.stripe_seedSMSBundles = functions.https.onCall(async (_data, context) => {
+    var _a;
+    // Only app admins can seed bundles
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const db = admin.firestore();
+    // Check if user is app admin
+    const userDoc = await db.collection('users').doc(context.auth.uid).get();
+    if (!userDoc.exists || !((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.isAppAdmin)) {
+        throw new functions.https.HttpsError('permission-denied', 'Only app admins can seed bundles');
+    }
+    try {
+        const bundlesRef = db.collection('sms_bundles');
+        // Check if bundles already exist
+        const existingBundles = await bundlesRef.get();
+        if (!existingBundles.empty) {
+            return {
+                success: false,
+                message: `${existingBundles.size} bundles already exist. Delete them first to re-seed.`,
+                existing: existingBundles.docs.map(d => ({
+                    id: d.id,
+                    name: d.data().name,
+                    credits: d.data().credits,
+                })),
+            };
+        }
+        // Seed the default bundles
+        const now = Date.now();
+        const batch = db.batch();
+        const seededBundles = [];
+        for (const bundle of DEFAULT_SMS_BUNDLES) {
+            const docRef = bundlesRef.doc();
+            batch.set(docRef, Object.assign(Object.assign({}, bundle), { createdAt: now, updatedAt: now }));
+            seededBundles.push({
+                id: docRef.id,
+                name: bundle.name,
+                credits: bundle.credits,
+                priceNZD: bundle.priceNZD,
+            });
+        }
+        await batch.commit();
+        console.log(`✅ Seeded ${seededBundles.length} SMS bundles by user ${context.auth.uid}`);
+        return {
+            success: true,
+            message: `Successfully seeded ${seededBundles.length} SMS bundles`,
+            bundles: seededBundles,
+        };
+    }
+    catch (error) {
+        console.error('Error seeding SMS bundles:', error);
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to seed bundles');
+    }
+});
 //# sourceMappingURL=stripe.js.map

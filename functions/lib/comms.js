@@ -5,9 +5,16 @@
  * Processes messages in the comms_queue subcollection for both
  * tournaments and leagues.
  * Uses Firebase Functions v1 with Firestore triggers.
+ * SMS provider: SMSGlobal (better NZ coverage than Twilio)
+ *
+ * SMS CREDITS SYSTEM (V07.19):
+ * - Checks organizer's credit balance before sending SMS
+ * - Deducts 1 credit per successful SMS sent
+ * - Logs usage to sms_credits/{userId}/usage
+ * - Fails message with "Insufficient SMS credits" if no credits
  *
  * FILE LOCATION: functions/src/comms.ts
- * VERSION: 07.18
+ * VERSION: 07.19
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -42,47 +49,187 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.comms_processLeagueQueue = exports.comms_processQueue = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
-const twilio_1 = __importDefault(require("twilio"));
+const crypto = __importStar(require("crypto"));
 // ============================================
-// TWILIO CONFIG (Functions v1)
+// SMS CREDITS CONSTANTS
 // ============================================
-const getTwilioConfig = () => {
-    var _a, _b, _c;
+const FREE_STARTER_SMS_CREDITS = 25;
+// ============================================
+// SMSGLOBAL CONFIG (Functions v1)
+// ============================================
+const getSMSGlobalConfig = () => {
+    var _a, _b;
     const config = functions.config();
-    if (!((_a = config.twilio) === null || _a === void 0 ? void 0 : _a.sid) || !((_b = config.twilio) === null || _b === void 0 ? void 0 : _b.token) || !((_c = config.twilio) === null || _c === void 0 ? void 0 : _c.phone)) {
-        throw new Error('Twilio credentials not configured. Run: firebase functions:config:set twilio.sid="..." twilio.token="..." twilio.phone="+1..."');
+    if (!((_a = config.smsglobal) === null || _a === void 0 ? void 0 : _a.apikey) || !((_b = config.smsglobal) === null || _b === void 0 ? void 0 : _b.apisecret)) {
+        throw new Error('SMSGlobal credentials not configured. Run: firebase functions:config:set smsglobal.apikey="..." smsglobal.apisecret="..."');
     }
     return {
-        sid: config.twilio.sid,
-        token: config.twilio.token,
-        phone: config.twilio.phone,
+        apiKey: config.smsglobal.apikey,
+        apiSecret: config.smsglobal.apisecret,
+        origin: config.smsglobal.origin || 'Pickleball',
     };
 };
 // ============================================
-// HELPER: Send SMS via Twilio
+// SMSGLOBAL MAC AUTHENTICATION
 // ============================================
-async function sendSMSViaTwilio(to, body, sid, token, fromPhone) {
+/**
+ * Generate MAC authentication header for SMSGlobal API
+ * Based on OAuth 2.0 MAC token spec
+ */
+function generateMACAuth(apiKey, apiSecret, method, path, host, port = '443') {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    // MAC base string: timestamp\nnonce\nmethod\npath\nhost\nport\n\n
+    const baseString = `${timestamp}\n${nonce}\n${method}\n${path}\n${host}\n${port}\n\n`;
+    // HMAC-SHA256
+    const mac = crypto.createHmac('sha256', apiSecret)
+        .update(baseString)
+        .digest('base64');
+    return `MAC id="${apiKey}", ts="${timestamp}", nonce="${nonce}", mac="${mac}"`;
+}
+// ============================================
+// SMS CREDITS HELPERS
+// ============================================
+/**
+ * Get or create SMS credits for a user
+ */
+async function getOrCreateSMSCredits(db, userId) {
+    const creditsRef = db.collection('sms_credits').doc(userId);
+    const snap = await creditsRef.get();
+    if (snap.exists) {
+        return snap.data();
+    }
+    // Create new credits document with free starter credits
+    const now = Date.now();
+    const newCredits = {
+        odUserId: userId,
+        balance: FREE_STARTER_SMS_CREDITS,
+        totalPurchased: 0,
+        totalUsed: 0,
+        totalFreeCredits: FREE_STARTER_SMS_CREDITS,
+        createdAt: now,
+        updatedAt: now,
+    };
+    await creditsRef.set(newCredits);
+    console.log(`Created SMS credits for user ${userId} with ${FREE_STARTER_SMS_CREDITS} free credits`);
+    return newCredits;
+}
+/**
+ * Check if user has sufficient SMS credits
+ */
+async function hasSufficientCredits(db, userId, count = 1) {
+    const credits = await getOrCreateSMSCredits(db, userId);
+    return credits.balance >= count;
+}
+/**
+ * Deduct SMS credits and log usage (transactional)
+ * Only call this AFTER successful SMS send
+ */
+async function deductCreditsAndLogUsage(db, userId, count, metadata) {
+    const creditsRef = db.collection('sms_credits').doc(userId);
     try {
-        const client = (0, twilio_1.default)(sid, token);
-        console.log(`Sending SMS to ${to} from ${fromPhone}`);
-        const result = await client.messages.create({
-            body,
-            to,
-            from: fromPhone,
+        const result = await db.runTransaction(async (transaction) => {
+            const snap = await transaction.get(creditsRef);
+            if (!snap.exists) {
+                return { success: false, newBalance: 0, error: 'No credits document found' };
+            }
+            const credits = snap.data();
+            if (credits.balance < count) {
+                return {
+                    success: false,
+                    newBalance: credits.balance,
+                    error: `Insufficient credits: ${credits.balance} available, ${count} required`,
+                };
+            }
+            const newBalance = credits.balance - count;
+            const now = Date.now();
+            // Update credits
+            transaction.update(creditsRef, {
+                balance: newBalance,
+                totalUsed: credits.totalUsed + count,
+                lastUsedAt: now,
+                updatedAt: now,
+            });
+            // Log usage
+            const usageRef = db.collection('sms_credits').doc(userId).collection('usage').doc();
+            const usage = {
+                messageId: metadata.messageId,
+                tournamentId: metadata.tournamentId,
+                leagueId: metadata.leagueId,
+                recipientPhone: metadata.recipientPhone,
+                recipientName: metadata.recipientName,
+                status: 'sent',
+                creditsUsed: count,
+                createdAt: now,
+            };
+            transaction.set(usageRef, usage);
+            return { success: true, newBalance };
         });
-        console.log(`SMS sent successfully. Twilio SID: ${result.sid}`);
-        return { success: true, twilioSid: result.sid };
+        console.log(`Deducted ${count} SMS credit from user ${userId}. New balance: ${result.newBalance}`);
+        return result;
     }
     catch (error) {
-        console.error('Twilio error:', error.message);
-        return { success: false, error: error.message || 'Unknown Twilio error' };
+        console.error(`Error deducting credits for user ${userId}:`, error.message);
+        return { success: false, newBalance: 0, error: error.message };
+    }
+}
+// ============================================
+// HELPER: Send SMS via SMSGlobal
+// ============================================
+async function sendSMSViaSMSGlobal(to, body, apiKey, apiSecret, origin) {
+    var _a, _b;
+    try {
+        const host = 'api.smsglobal.com';
+        const path = '/v2/sms';
+        const authHeader = generateMACAuth(apiKey, apiSecret, 'POST', path, host);
+        console.log(`Sending SMS to ${to} via SMSGlobal (origin: ${origin})`);
+        // Send without origin - SMSGlobal will use default sender
+        // Alphanumeric sender IDs require registration in SMSGlobal dashboard
+        const requestBody = {
+            destination: to,
+            message: body,
+        };
+        // Only add origin if it's a valid phone number (registered sender IDs need dashboard setup)
+        if (origin.startsWith('+') && /^\+\d{10,15}$/.test(origin)) {
+            requestBody.origin = origin;
+        }
+        // Otherwise, SMSGlobal uses default sender from account settings
+        const response = await fetch(`https://${host}${path}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': authHeader,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+        });
+        if (response.status === 200 || response.status === 202) {
+            const data = await response.json();
+            const messageId = (_b = (_a = data.messages) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.id;
+            console.log(`SMS sent via SMSGlobal. Message ID: ${messageId}`);
+            return { success: true, messageId };
+        }
+        // Handle errors
+        const errorText = await response.text();
+        console.error(`SMSGlobal error (${response.status}):`, errorText);
+        if (response.status === 401) {
+            return { success: false, error: 'SMSGlobal authentication failed - check API key/secret' };
+        }
+        if (response.status === 402) {
+            return { success: false, error: 'SMSGlobal account out of credits' };
+        }
+        if (response.status === 400) {
+            return { success: false, error: `Invalid request: ${errorText}` };
+        }
+        return { success: false, error: `SMSGlobal error: ${response.status} - ${errorText}` };
+    }
+    catch (error) {
+        console.error('SMSGlobal error:', error.message);
+        return { success: false, error: error.message || 'Unknown SMSGlobal error' };
     }
 }
 // ============================================
@@ -101,12 +248,18 @@ async function sendEmail(_to, _subject, _body) {
 // ============================================
 /**
  * Process a comms queue message (shared logic for tournaments and leagues)
+ *
+ * For SMS messages:
+ * 1. Check if organizer (createdBy) has sufficient SMS credits
+ * 2. If no credits, fail the message with "Insufficient SMS credits"
+ * 3. If has credits, send SMS
+ * 4. On successful send, deduct 1 credit and log usage
  */
-async function processCommsMessage(snap, messageId, entityType, entityId, twilioSidValue, twilioTokenValue, twilioPhone) {
+async function processCommsMessage(snap, messageId, entityType, entityId, smsConfig) {
     const message = snap.data();
     const docRef = snap.ref;
     console.log(`Processing comms message ${messageId} for ${entityType} ${entityId}`);
-    console.log(`Type: ${message.type}, Recipient: ${message.recipientName}`);
+    console.log(`Type: ${message.type}, Recipient: ${message.recipientName}, CreatedBy: ${message.createdBy}`);
     // ========================================
     // STEP 1: Claim the document with a lock
     // ========================================
@@ -167,9 +320,37 @@ async function processCommsMessage(snap, messageId, entityType, entityId, twilio
         else if (!message.body || message.body.trim().length === 0) {
             result = { success: false, error: 'Message body is empty' };
         }
+        else if (!message.createdBy) {
+            result = { success: false, error: 'No createdBy user ID - cannot check SMS credits' };
+        }
         else {
-            // Send SMS
-            result = await sendSMSViaTwilio(message.recipientPhone, message.body, twilioSidValue, twilioTokenValue, twilioPhone);
+            // Check SMS credits BEFORE sending
+            const hasCredits = await hasSufficientCredits(db, message.createdBy, 1);
+            if (!hasCredits) {
+                console.log(`User ${message.createdBy} has insufficient SMS credits`);
+                result = {
+                    success: false,
+                    error: 'Insufficient SMS credits. Please purchase more credits to send SMS.',
+                };
+            }
+            else {
+                // Send SMS via SMSGlobal
+                result = await sendSMSViaSMSGlobal(message.recipientPhone, message.body, smsConfig.apiKey, smsConfig.apiSecret, smsConfig.origin);
+                // If SMS sent successfully, deduct credits and log usage
+                if (result.success) {
+                    const deductResult = await deductCreditsAndLogUsage(db, message.createdBy, 1, {
+                        messageId,
+                        tournamentId: entityType === 'tournament' ? entityId : undefined,
+                        leagueId: entityType === 'league' ? entityId : undefined,
+                        recipientPhone: message.recipientPhone,
+                        recipientName: message.recipientName,
+                    });
+                    if (!deductResult.success) {
+                        // Credit deduction failed but SMS was sent - log but don't fail the message
+                        console.error(`Warning: SMS sent but credit deduction failed: ${deductResult.error}`);
+                    }
+                }
+            }
         }
     }
     else if (message.type === 'email') {
@@ -239,8 +420,8 @@ async function processCommsMessage(snap, messageId, entityType, entityId, twilio
 exports.comms_processQueue = functions.firestore
     .document('tournaments/{tournamentId}/comms_queue/{messageId}')
     .onCreate(async (snap, context) => {
-    const twilioConfig = getTwilioConfig();
-    await processCommsMessage(snap, context.params.messageId, 'tournament', context.params.tournamentId, twilioConfig.sid, twilioConfig.token, twilioConfig.phone);
+    const smsConfig = getSMSGlobalConfig();
+    await processCommsMessage(snap, context.params.messageId, 'tournament', context.params.tournamentId, smsConfig);
 });
 // ============================================
 // LEAGUE TRIGGER: Process League Comms Queue
@@ -251,7 +432,7 @@ exports.comms_processQueue = functions.firestore
 exports.comms_processLeagueQueue = functions.firestore
     .document('leagues/{leagueId}/comms_queue/{messageId}')
     .onCreate(async (snap, context) => {
-    const twilioConfig = getTwilioConfig();
-    await processCommsMessage(snap, context.params.messageId, 'league', context.params.leagueId, twilioConfig.sid, twilioConfig.token, twilioConfig.phone);
+    const smsConfig = getSMSGlobalConfig();
+    await processCommsMessage(snap, context.params.messageId, 'league', context.params.leagueId, smsConfig);
 });
 //# sourceMappingURL=comms.js.map

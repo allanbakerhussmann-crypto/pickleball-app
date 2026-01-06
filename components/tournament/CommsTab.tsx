@@ -6,8 +6,10 @@
  * - Templates: Manage reusable message templates
  * - History: View sent/pending/failed messages
  *
+ * V07.19: Added SMS credits display and purchase flow
+ *
  * @file components/tournament/CommsTab.tsx
- * @version 07.08
+ * @version 07.19
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -16,6 +18,7 @@ import { subscribeToTournamentMessages } from '../../services/firebase/comms';
 import { CommsComposeSection } from './comms/CommsComposeSection';
 import { CommsHistorySection } from './comms/CommsHistorySection';
 import { CommsTemplateSection } from './comms/CommsTemplateSection';
+import { SMSCreditsCard, SMSBundleSelector } from '../sms';
 
 // ============================================
 // TYPES
@@ -142,6 +145,7 @@ export const CommsTab: React.FC<CommsTabProps> = ({
   const [activeSection, setActiveSection] = useState<CommsSection>('compose');
   const [messages, setMessages] = useState<(CommsQueueMessage & { id: string })[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showBundleSelector, setShowBundleSelector] = useState(false);
 
   // Subscribe to messages
   useEffect(() => {
@@ -181,16 +185,34 @@ export const CommsTab: React.FC<CommsTabProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lime-500/20 to-green-500/10 border border-lime-500/30 flex items-center justify-center">
-          <MessageIcon />
+      {/* Header with SMS Credits */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lime-500/20 to-green-500/10 border border-lime-500/30 flex items-center justify-center">
+            <MessageIcon />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-white">Communications</h2>
+            <p className="text-sm text-gray-400">Send SMS and email to tournament players</p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-xl font-bold text-white">Communications</h2>
-          <p className="text-sm text-gray-400">Send SMS and email to tournament players</p>
-        </div>
+
+        {/* SMS Credits Card (compact) */}
+        <SMSCreditsCard
+          userId={currentUserId}
+          onBuyMore={() => setShowBundleSelector(true)}
+          compact
+        />
       </div>
+
+      {/* SMS Bundle Selector Modal */}
+      {showBundleSelector && (
+        <SMSBundleSelector
+          userId={currentUserId}
+          onClose={() => setShowBundleSelector(false)}
+          onPurchaseComplete={() => setShowBundleSelector(false)}
+        />
+      )}
 
       {/* Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

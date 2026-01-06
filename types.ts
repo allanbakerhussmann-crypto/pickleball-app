@@ -3066,3 +3066,107 @@ export interface CommsQueueMessage {
   retryOf?: string | null;       // Original message ID if retried
 }
 
+// ============================================
+// SMS CREDITS SYSTEM (V07.19)
+// ============================================
+
+/**
+ * SMS credits balance for an organizer
+ * Collection: sms_credits/{odUserId}
+ */
+export interface SMSCredits {
+  odUserId: string;
+  balance: number;           // SMS credits remaining
+  totalPurchased: number;    // All-time purchased credits
+  totalUsed: number;         // All-time used credits
+  totalFreeCredits: number;  // Free credits given (e.g., sign-up bonus)
+  lastTopUpAt?: number;      // Timestamp of last purchase
+  lastUsedAt?: number;       // Timestamp of last SMS sent
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * SMS usage log entry
+ * Collection: sms_credits/{odUserId}/usage/{usageId}
+ */
+export interface SMSUsage {
+  id: string;
+  messageId: string;         // Reference to comms_queue message
+  tournamentId?: string;     // Tournament that triggered this SMS
+  leagueId?: string;         // League that triggered this SMS
+  recipientPhone: string;    // E.164 phone number
+  recipientName?: string;    // Recipient display name
+  status: 'sent' | 'failed'; // Delivery status
+  creditsUsed: number;       // Credits deducted (usually 1)
+  createdAt: number;
+}
+
+/**
+ * SMS bundle product for purchase
+ * Collection: sms_bundles/{bundleId}
+ */
+export interface SMSBundle {
+  id: string;
+  name: string;              // "Starter Pack", "Pro Pack", "Enterprise"
+  description?: string;      // Bundle description
+  credits: number;           // Number of SMS credits (50, 200, 500)
+  priceNZD: number;          // Price in cents (1000 = $10.00)
+  isActive: boolean;         // Whether bundle is available for purchase
+  sortOrder: number;         // Display order (lower = first)
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+/**
+ * SMS purchase transaction record
+ * Collection: sms_credits/{odUserId}/purchases/{purchaseId}
+ */
+export interface SMSPurchase {
+  id: string;
+  bundleId: string;
+  bundleName: string;
+  credits: number;
+  amountNZD: number;         // Amount paid in cents
+  stripeSessionId?: string;  // Stripe Checkout session ID
+  stripePaymentIntentId?: string;
+  status: 'pending' | 'completed' | 'failed' | 'refunded';
+  createdAt: number;
+  completedAt?: number;
+}
+
+/**
+ * Default SMS bundles (seeded to sms_bundles collection)
+ */
+export const DEFAULT_SMS_BUNDLES: Omit<SMSBundle, 'id'>[] = [
+  {
+    name: 'Starter Pack',
+    description: '50 SMS credits - great for small tournaments',
+    credits: 50,
+    priceNZD: 1000,  // $10.00
+    isActive: true,
+    sortOrder: 1,
+  },
+  {
+    name: 'Pro Pack',
+    description: '200 SMS credits - best value for regular organizers',
+    credits: 200,
+    priceNZD: 3500,  // $35.00
+    isActive: true,
+    sortOrder: 2,
+  },
+  {
+    name: 'Enterprise Pack',
+    description: '500 SMS credits - for high-volume events',
+    credits: 500,
+    priceNZD: 7500,  // $75.00
+    isActive: true,
+    sortOrder: 3,
+  },
+];
+
+/**
+ * Number of free SMS credits given to new organizers
+ */
+export const FREE_STARTER_SMS_CREDITS = 25;
+

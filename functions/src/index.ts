@@ -18,14 +18,18 @@ export {
   stripe_createConnectAccount,
   stripe_getConnectAccountStatus,
   stripe_createConnectLoginLink,
-  
+
   // User/Organizer Connect (NEW)
   stripe_createUserConnectAccount,
   stripe_createUserConnectLoginLink,
-  
+
   // Checkout & Webhook
   stripe_createCheckoutSession,
   stripe_webhook,
+
+  // SMS Bundles
+  stripe_purchaseSMSBundle,
+  stripe_seedSMSBundles,
 } from './stripe';
 
 // ============================================

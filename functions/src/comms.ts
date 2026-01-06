@@ -6,6 +6,12 @@
  * Uses Firebase Functions v1 with Firestore triggers.
  * SMS provider: SMSGlobal (better NZ coverage than Twilio)
  *
+ * SMS CREDITS SYSTEM (V07.19):
+ * - Checks organizer's credit balance before sending SMS
+ * - Deducts 1 credit per successful SMS sent
+ * - Logs usage to sms_credits/{userId}/usage
+ * - Fails message with "Insufficient SMS credits" if no credits
+ *
  * FILE LOCATION: functions/src/comms.ts
  * VERSION: 07.19
  */
@@ -13,6 +19,12 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
+
+// ============================================
+// SMS CREDITS CONSTANTS
+// ============================================
+
+const FREE_STARTER_SMS_CREDITS = 25;
 
 // ============================================
 // SMSGLOBAL CONFIG (Functions v1)
@@ -99,6 +111,149 @@ interface SMSConfig {
   apiKey: string;
   apiSecret: string;
   origin: string;
+}
+
+// SMS Credits interfaces (mirror of types.ts)
+interface SMSCredits {
+  odUserId: string;
+  balance: number;
+  totalPurchased: number;
+  totalUsed: number;
+  totalFreeCredits: number;
+  lastTopUpAt?: number;
+  lastUsedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface SMSUsage {
+  messageId: string;
+  tournamentId?: string;
+  leagueId?: string;
+  recipientPhone: string;
+  recipientName?: string;
+  status: 'sent' | 'failed';
+  creditsUsed: number;
+  createdAt: number;
+}
+
+// ============================================
+// SMS CREDITS HELPERS
+// ============================================
+
+/**
+ * Get or create SMS credits for a user
+ */
+async function getOrCreateSMSCredits(
+  db: admin.firestore.Firestore,
+  userId: string
+): Promise<SMSCredits> {
+  const creditsRef = db.collection('sms_credits').doc(userId);
+  const snap = await creditsRef.get();
+
+  if (snap.exists) {
+    return snap.data() as SMSCredits;
+  }
+
+  // Create new credits document with free starter credits
+  const now = Date.now();
+  const newCredits: SMSCredits = {
+    odUserId: userId,
+    balance: FREE_STARTER_SMS_CREDITS,
+    totalPurchased: 0,
+    totalUsed: 0,
+    totalFreeCredits: FREE_STARTER_SMS_CREDITS,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await creditsRef.set(newCredits);
+  console.log(`Created SMS credits for user ${userId} with ${FREE_STARTER_SMS_CREDITS} free credits`);
+  return newCredits;
+}
+
+/**
+ * Check if user has sufficient SMS credits
+ */
+async function hasSufficientCredits(
+  db: admin.firestore.Firestore,
+  userId: string,
+  count: number = 1
+): Promise<boolean> {
+  const credits = await getOrCreateSMSCredits(db, userId);
+  return credits.balance >= count;
+}
+
+/**
+ * Deduct SMS credits and log usage (transactional)
+ * Only call this AFTER successful SMS send
+ */
+async function deductCreditsAndLogUsage(
+  db: admin.firestore.Firestore,
+  userId: string,
+  count: number,
+  metadata: {
+    messageId: string;
+    tournamentId?: string;
+    leagueId?: string;
+    recipientPhone: string;
+    recipientName?: string;
+  }
+): Promise<{ success: boolean; newBalance: number; error?: string }> {
+  const creditsRef = db.collection('sms_credits').doc(userId);
+
+  try {
+    const result = await db.runTransaction(async (transaction) => {
+      const snap = await transaction.get(creditsRef);
+
+      if (!snap.exists) {
+        return { success: false, newBalance: 0, error: 'No credits document found' };
+      }
+
+      const credits = snap.data() as SMSCredits;
+
+      if (credits.balance < count) {
+        return {
+          success: false,
+          newBalance: credits.balance,
+          error: `Insufficient credits: ${credits.balance} available, ${count} required`,
+        };
+      }
+
+      const newBalance = credits.balance - count;
+      const now = Date.now();
+
+      // Update credits
+      transaction.update(creditsRef, {
+        balance: newBalance,
+        totalUsed: credits.totalUsed + count,
+        lastUsedAt: now,
+        updatedAt: now,
+      });
+
+      // Log usage
+      const usageRef = db.collection('sms_credits').doc(userId).collection('usage').doc();
+      const usage: SMSUsage = {
+        messageId: metadata.messageId,
+        tournamentId: metadata.tournamentId,
+        leagueId: metadata.leagueId,
+        recipientPhone: metadata.recipientPhone,
+        recipientName: metadata.recipientName,
+        status: 'sent',
+        creditsUsed: count,
+        createdAt: now,
+      };
+      transaction.set(usageRef, usage);
+
+      return { success: true, newBalance };
+    });
+
+    console.log(`Deducted ${count} SMS credit from user ${userId}. New balance: ${result.newBalance}`);
+    return result;
+  } catch (error: any) {
+    console.error(`Error deducting credits for user ${userId}:`, error.message);
+    return { success: false, newBalance: 0, error: error.message };
+  }
 }
 
 // ============================================
@@ -196,6 +351,12 @@ async function sendEmail(
 
 /**
  * Process a comms queue message (shared logic for tournaments and leagues)
+ *
+ * For SMS messages:
+ * 1. Check if organizer (createdBy) has sufficient SMS credits
+ * 2. If no credits, fail the message with "Insufficient SMS credits"
+ * 3. If has credits, send SMS
+ * 4. On successful send, deduct 1 credit and log usage
  */
 async function processCommsMessage(
   snap: admin.firestore.DocumentSnapshot,
@@ -208,7 +369,7 @@ async function processCommsMessage(
   const docRef = snap.ref;
 
   console.log(`Processing comms message ${messageId} for ${entityType} ${entityId}`);
-  console.log(`Type: ${message.type}, Recipient: ${message.recipientName}`);
+  console.log(`Type: ${message.type}, Recipient: ${message.recipientName}, CreatedBy: ${message.createdBy}`);
 
   // ========================================
   // STEP 1: Claim the document with a lock
@@ -278,15 +439,44 @@ async function processCommsMessage(
       result = { success: false, error: 'Invalid phone format. Must be E.164 (+XXXXXXXXXXX)' };
     } else if (!message.body || message.body.trim().length === 0) {
       result = { success: false, error: 'Message body is empty' };
+    } else if (!message.createdBy) {
+      result = { success: false, error: 'No createdBy user ID - cannot check SMS credits' };
     } else {
-      // Send SMS via SMSGlobal
-      result = await sendSMSViaSMSGlobal(
-        message.recipientPhone,
-        message.body,
-        smsConfig.apiKey,
-        smsConfig.apiSecret,
-        smsConfig.origin
-      );
+      // Check SMS credits BEFORE sending
+      const hasCredits = await hasSufficientCredits(db, message.createdBy, 1);
+
+      if (!hasCredits) {
+        console.log(`User ${message.createdBy} has insufficient SMS credits`);
+        result = {
+          success: false,
+          error: 'Insufficient SMS credits. Please purchase more credits to send SMS.',
+        };
+      } else {
+        // Send SMS via SMSGlobal
+        result = await sendSMSViaSMSGlobal(
+          message.recipientPhone,
+          message.body,
+          smsConfig.apiKey,
+          smsConfig.apiSecret,
+          smsConfig.origin
+        );
+
+        // If SMS sent successfully, deduct credits and log usage
+        if (result.success) {
+          const deductResult = await deductCreditsAndLogUsage(db, message.createdBy, 1, {
+            messageId,
+            tournamentId: entityType === 'tournament' ? entityId : undefined,
+            leagueId: entityType === 'league' ? entityId : undefined,
+            recipientPhone: message.recipientPhone,
+            recipientName: message.recipientName,
+          });
+
+          if (!deductResult.success) {
+            // Credit deduction failed but SMS was sent - log but don't fail the message
+            console.error(`Warning: SMS sent but credit deduction failed: ${deductResult.error}`);
+          }
+        }
+      }
     }
   } else if (message.type === 'email') {
     // Validate email

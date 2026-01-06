@@ -15,7 +15,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, getDocs } from '@firebase/firestore';
+import { getFunctions, httpsCallable } from '@firebase/functions';
 import { db } from '../services/firebase';
+import { testDuprConnection } from '../services/dupr';
 import type { UserProfile, Club } from '../types';
 
 // ============================================
@@ -78,6 +80,15 @@ const AdminDashboard: React.FC = () => {
   const [meetups, setMeetups] = useState<MeetupData[]>([]);
   
   const [searchTerm, setSearchTerm] = useState('');
+  const [duprTestResult, setDuprTestResult] = useState<{
+    testing: boolean;
+    result?: { success: boolean; error?: string; environment?: string };
+  } | null>(null);
+
+  const [smsBundleSeed, setSmsBundleSeed] = useState<{
+    seeding: boolean;
+    result?: { success: boolean; message?: string; error?: string };
+  } | null>(null);
 
   // ============================================
   // LOAD DATA
@@ -381,6 +392,47 @@ const AdminDashboard: React.FC = () => {
                 </div>
               </button>
               <button
+                onClick={async () => {
+                  setDuprTestResult({ testing: true });
+                  try {
+                    const result = await testDuprConnection();
+                    setDuprTestResult({ testing: false, result });
+                  } catch (err) {
+                    setDuprTestResult({
+                      testing: false,
+                      result: { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+                    });
+                  }
+                }}
+                className="w-full text-left px-4 py-3 bg-gray-900 hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-3"
+              >
+                <span className="text-2xl">🔗</span>
+                <div className="flex-1">
+                  <p className="text-white font-medium">Test DUPR Connection</p>
+                  <p className="text-gray-500 text-xs">
+                    {duprTestResult?.testing
+                      ? 'Testing...'
+                      : duprTestResult?.result
+                        ? duprTestResult.result.success
+                          ? `✓ Connected (${duprTestResult.result.environment})`
+                          : `✗ ${duprTestResult.result.error}`
+                        : 'Verify API credentials'
+                    }
+                  </p>
+                </div>
+                {duprTestResult?.testing && (
+                  <svg className="w-5 h-5 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                )}
+                {duprTestResult?.result && !duprTestResult.testing && (
+                  <span className={duprTestResult.result.success ? 'text-green-400' : 'text-red-400'}>
+                    {duprTestResult.result.success ? '✓' : '✗'}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => navigate('/admin/privacy-security')}
                 className="w-full text-left px-4 py-3 bg-gray-900 hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-3"
               >
@@ -389,6 +441,52 @@ const AdminDashboard: React.FC = () => {
                   <p className="text-white font-medium">Privacy & Security</p>
                   <p className="text-gray-500 text-xs">Breaches, requests, data retention</p>
                 </div>
+              </button>
+              <button
+                onClick={async () => {
+                  setSmsBundleSeed({ seeding: true });
+                  try {
+                    const functions = getFunctions();
+                    const seedBundles = httpsCallable<void, { success: boolean; message: string }>(
+                      functions,
+                      'stripe_seedSMSBundles'
+                    );
+                    const result = await seedBundles();
+                    setSmsBundleSeed({ seeding: false, result: { success: true, message: result.data.message } });
+                  } catch (err) {
+                    setSmsBundleSeed({
+                      seeding: false,
+                      result: { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+                    });
+                  }
+                }}
+                className="w-full text-left px-4 py-3 bg-gray-900 hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-3"
+              >
+                <span className="text-2xl">📦</span>
+                <div className="flex-1">
+                  <p className="text-white font-medium">Seed SMS Bundles</p>
+                  <p className="text-gray-500 text-xs">
+                    {smsBundleSeed?.seeding
+                      ? 'Seeding...'
+                      : smsBundleSeed?.result
+                        ? smsBundleSeed.result.success
+                          ? `✓ ${smsBundleSeed.result.message}`
+                          : `✗ ${smsBundleSeed.result.error}`
+                        : 'Populate sms_bundles collection'
+                    }
+                  </p>
+                </div>
+                {smsBundleSeed?.seeding && (
+                  <svg className="w-5 h-5 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                )}
+                {smsBundleSeed?.result && !smsBundleSeed.seeding && (
+                  <span className={smsBundleSeed.result.success ? 'text-green-400' : 'text-red-400'}>
+                    {smsBundleSeed.result.success ? '✓' : '✗'}
+                  </span>
+                )}
               </button>
             </div>
           </div>

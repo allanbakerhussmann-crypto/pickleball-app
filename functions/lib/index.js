@@ -38,7 +38,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.comms_processQueue = exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
+exports.comms_processLeagueQueue = exports.comms_processQueue = exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_seedSMSBundles = exports.stripe_purchaseSMSBundle = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -56,6 +56,9 @@ Object.defineProperty(exports, "stripe_createUserConnectLoginLink", { enumerable
 // Checkout & Webhook
 Object.defineProperty(exports, "stripe_createCheckoutSession", { enumerable: true, get: function () { return stripe_1.stripe_createCheckoutSession; } });
 Object.defineProperty(exports, "stripe_webhook", { enumerable: true, get: function () { return stripe_1.stripe_webhook; } });
+// SMS Bundles
+Object.defineProperty(exports, "stripe_purchaseSMSBundle", { enumerable: true, get: function () { return stripe_1.stripe_purchaseSMSBundle; } });
+Object.defineProperty(exports, "stripe_seedSMSBundles", { enumerable: true, get: function () { return stripe_1.stripe_seedSMSBundles; } });
 // ============================================
 // ADMIN FUNCTIONS
 // ============================================
@@ -111,8 +114,9 @@ var markOrganizersForAgreement_1 = require("./migrations/markOrganizersForAgreem
 Object.defineProperty(exports, "migrate_markOrganizersForAgreement", { enumerable: true, get: function () { return markOrganizersForAgreement_1.migrate_markOrganizersForAgreement; } });
 Object.defineProperty(exports, "migrate_getOrganizerAgreementStats", { enumerable: true, get: function () { return markOrganizersForAgreement_1.migrate_getOrganizerAgreementStats; } });
 // ============================================
-// COMMS FUNCTIONS (V07.08) - Tournament Communications
+// COMMS FUNCTIONS (V07.17) - Tournament & League Communications
 // ============================================
 var comms_1 = require("./comms");
 Object.defineProperty(exports, "comms_processQueue", { enumerable: true, get: function () { return comms_1.comms_processQueue; } });
+Object.defineProperty(exports, "comms_processLeagueQueue", { enumerable: true, get: function () { return comms_1.comms_processLeagueQueue; } });
 //# sourceMappingURL=index.js.map

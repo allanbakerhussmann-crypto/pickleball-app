@@ -142,6 +142,20 @@ export {
   getBracketSeeds,
 } from './bracketSeeds';
 
+// ============================================
+// V07.14 League Standings (Same pattern as poolResults)
+// ============================================
+export {
+  buildLeagueStandings,
+  buildWeekStandings,
+  getLeagueStandings,
+  getAllLeagueStandings,
+  isStandingsStale,
+  getStandingsStatus,
+  updateStandingsOnMatchComplete,
+  rebuildAllStandings,
+} from './leagueStandings';
+
 // Courts
 export {
   subscribeToCourts,
@@ -541,6 +555,41 @@ export {
   isPhoneVerified,
   canReceiveSMS,
 } from './phoneVerification';
+
+// ============================================
+// SMS CREDITS (NEW V07.19)
+// ============================================
+export {
+  // Credits CRUD
+  getOrCreateSMSCredits,
+  getSMSCredits,
+  getSMSBalance,
+  hasSufficientCredits,
+  subscribeToSMSCredits,
+  // Credit transactions
+  deductCredits,
+  addCredits,
+  // Usage history
+  logSMSUsage,
+  getSMSUsageHistory,
+  subscribeToSMSUsage,
+  // Purchase history
+  getSMSPurchaseHistory,
+  createPendingPurchase,
+  updatePurchaseStatus,
+  // SMS bundles
+  getSMSBundles,
+  getSMSBundle,
+  subscribeToSMSBundles,
+  saveSMSBundle,
+  deactivateSMSBundle,
+  // Helpers
+  formatPriceNZD,
+  getPricePerSMS,
+  formatPricePerSMS,
+  isCreditsLow,
+  getBalanceColorClass,
+} from './smsCredits';
 
 // ============================================
 // COMPETITION STUBS (Placeholder functions for CompetitionManager)
