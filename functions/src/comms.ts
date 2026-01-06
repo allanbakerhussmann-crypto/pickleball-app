@@ -120,21 +120,18 @@ async function sendSMSViaSMSGlobal(
 
     console.log(`Sending SMS to ${to} via SMSGlobal (origin: ${origin})`);
 
-    // Use sharedPool for NZ - alphanumeric sender IDs require pre-registration
-    // sharedPool uses SMSGlobal's dedicated number pool for the destination country
-    const requestBody: Record<string, string | boolean> = {
+    // Send without origin - SMSGlobal will use default sender
+    // Alphanumeric sender IDs require registration in SMSGlobal dashboard
+    const requestBody: Record<string, string> = {
       destination: to,
       message: body,
     };
 
-    // If origin looks like a phone number, use it; otherwise use shared pool
+    // Only add origin if it's a valid phone number (registered sender IDs need dashboard setup)
     if (origin.startsWith('+') && /^\+\d{10,15}$/.test(origin)) {
       requestBody.origin = origin;
-    } else {
-      // Use shared pool for alphanumeric sender IDs (requires registration)
-      // For now, use sharedPool which automatically selects a local number
-      requestBody.sharedPool = 'true';
     }
+    // Otherwise, SMSGlobal uses default sender from account settings
 
     const response = await fetch(`https://${host}${path}`, {
       method: 'POST',

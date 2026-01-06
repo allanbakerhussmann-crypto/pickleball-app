@@ -68,17 +68,15 @@ async function sendViaSMSGlobal(
 
     const authHeader = generateMACAuth(apiKey, apiSecret, 'POST', path, host);
 
-    // Use sharedPool for NZ - alphanumeric sender IDs require pre-registration
-    const requestBody: Record<string, string | boolean> = {
+    // Send without origin - SMSGlobal will use default sender
+    const requestBody: Record<string, string> = {
       destination: to,
       message: body,
     };
 
-    // If origin looks like a phone number, use it; otherwise use shared pool
+    // Only add origin if it's a valid phone number
     if (origin.startsWith('+') && /^\+\d{10,15}$/.test(origin)) {
       requestBody.origin = origin;
-    } else {
-      requestBody.sharedPool = 'true';
     }
 
     const response = await fetch(`https://${host}${path}`, {
