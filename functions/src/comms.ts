@@ -120,6 +120,22 @@ async function sendSMSViaSMSGlobal(
 
     console.log(`Sending SMS to ${to} via SMSGlobal (origin: ${origin})`);
 
+    // Use sharedPool for NZ - alphanumeric sender IDs require pre-registration
+    // sharedPool uses SMSGlobal's dedicated number pool for the destination country
+    const requestBody: Record<string, string | boolean> = {
+      destination: to,
+      message: body,
+    };
+
+    // If origin looks like a phone number, use it; otherwise use shared pool
+    if (origin.startsWith('+') && /^\+\d{10,15}$/.test(origin)) {
+      requestBody.origin = origin;
+    } else {
+      // Use shared pool for alphanumeric sender IDs (requires registration)
+      // For now, use sharedPool which automatically selects a local number
+      requestBody.sharedPool = 'true';
+    }
+
     const response = await fetch(`https://${host}${path}`, {
       method: 'POST',
       headers: {
@@ -127,11 +143,7 @@ async function sendSMSViaSMSGlobal(
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: JSON.stringify({
-        destination: to,
-        message: body,
-        origin: origin,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (response.status === 200 || response.status === 202) {

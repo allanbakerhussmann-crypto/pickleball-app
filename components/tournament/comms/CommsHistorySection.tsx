@@ -9,7 +9,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { CommsQueueMessage, CommsMessageStatus, CommsMessageType } from '../../../types';
-import { queueMessage } from '../../../services/firebase/comms';
+import { queueMessage, deleteQueuedMessage } from '../../../services/firebase/comms';
 
 // ============================================
 // TYPES
@@ -94,7 +94,9 @@ interface MessageRowProps {
   isExpanded: boolean;
   onToggle: () => void;
   onRetry: () => void;
+  onDelete: () => void;
   isRetrying: boolean;
+  isDeleting: boolean;
 }
 
 const MessageRow: React.FC<MessageRowProps> = ({
@@ -102,7 +104,9 @@ const MessageRow: React.FC<MessageRowProps> = ({
   isExpanded,
   onToggle,
   onRetry,
+  onDelete,
   isRetrying,
+  isDeleting,
 }) => {
   const formatTime = (timestamp: number | null | undefined) => {
     if (!timestamp) return '-';
@@ -227,34 +231,66 @@ const MessageRow: React.FC<MessageRowProps> = ({
             </div>
           )}
 
-          {/* Retry Button */}
-          {message.status === 'failed' && !message.retried && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onRetry();
-              }}
-              disabled={isRetrying}
-              className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg text-sm hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
-            >
-              {isRetrying ? (
-                <>
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Retrying...
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Retry
-                </>
-              )}
-            </button>
-          )}
+          {/* Action Buttons */}
+          <div className="flex items-center gap-2">
+            {/* Retry Button */}
+            {message.status === 'failed' && !message.retried && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetry();
+                }}
+                disabled={isRetrying}
+                className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500/20 text-yellow-400 rounded-lg text-sm hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
+              >
+                {isRetrying ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Retrying...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Retry
+                  </>
+                )}
+              </button>
+            )}
+
+            {/* Delete Button */}
+            {(message.status === 'pending' || message.status === 'failed') && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+                disabled={isDeleting}
+                className="flex items-center gap-2 px-3 py-1.5 bg-red-500/20 text-red-400 rounded-lg text-sm hover:bg-red-500/30 transition-colors disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Delete
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -274,6 +310,7 @@ export const CommsHistorySection: React.FC<CommsHistorySectionProps> = ({
   const [filterStatus, setFilterStatus] = useState<CommsMessageStatus | 'all'>('all');
   const [filterType, setFilterType] = useState<CommsMessageType | 'all'>('all');
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Filter messages
   const filteredMessages = useMemo(() => {
@@ -310,6 +347,19 @@ export const CommsHistorySection: React.FC<CommsHistorySectionProps> = ({
       console.error('Failed to retry message:', error);
     } finally {
       setRetryingId(null);
+    }
+  };
+
+  // Handle delete
+  const handleDelete = async (messageId: string) => {
+    if (!confirm('Delete this message?')) return;
+    setDeletingId(messageId);
+    try {
+      await deleteQueuedMessage(tournamentId, messageId);
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -394,7 +444,9 @@ export const CommsHistorySection: React.FC<CommsHistorySectionProps> = ({
               isExpanded={expandedId === message.id}
               onToggle={() => setExpandedId(expandedId === message.id ? null : message.id)}
               onRetry={() => handleRetry(message)}
+              onDelete={() => handleDelete(message.id)}
               isRetrying={retryingId === message.id}
+              isDeleting={deletingId === message.id}
             />
           ))}
         </div>
