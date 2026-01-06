@@ -24,6 +24,7 @@ import {
   subscribeToLeagueMessages,
   queueBulkLeagueMessages,
   queueLeagueMessage,
+  deleteLeagueQueuedMessage,
   getActiveTemplates,
   renderTemplate
 } from '../../services/firebase/comms';
@@ -49,6 +50,29 @@ interface Recipient {
   recipientEmail: string | null;
   recipientPhone: string | null;
 }
+
+// ============================================
+// HELPERS
+// ============================================
+
+/**
+ * Normalize phone numbers to E.164 format
+ * Handles legacy numbers stored without country code
+ */
+const normalizePhone = (phone: string | null | undefined): string | null => {
+  if (!phone) return null;
+  // Already in E.164 format
+  if (phone.startsWith('+')) return phone;
+  // NZ numbers starting with 02, 03, 04, 06, 07, 09
+  if (/^0[2-47-9]/.test(phone)) {
+    return '+64' + phone.slice(1); // Remove leading 0, add +64
+  }
+  // AU numbers starting with 04 (10 digits)
+  if (phone.startsWith('04') && phone.length === 10) {
+    return '+61' + phone.slice(1);
+  }
+  return phone;
+};
 
 // ============================================
 // ICONS
@@ -362,7 +386,7 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
       recipientId: p.odUserId || p.id || '',
       recipientName: p.displayName || 'Unknown',
       recipientEmail: p.email || null,
-      recipientPhone: p.phone || null,
+      recipientPhone: normalizePhone(p.phone),
     }));
   };
 
@@ -401,8 +425,8 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
 
       await queueBulkLeagueMessages(league.id, recipients, {
         type: messageType,
-        templateId: selectedTemplateId || undefined,
-        subject: messageType === 'email' ? subject : undefined,
+        templateId: selectedTemplateId || null,
+        subject: messageType === 'email' ? subject : null,
         body,
         createdBy: currentUserId,
       });
@@ -511,7 +535,7 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
                             recipientId: player.odUserId || player.id || '',
                             recipientName: player.displayName || 'Unknown',
                             recipientEmail: player.email || null,
-                            recipientPhone: player.phone || null,
+                            recipientPhone: normalizePhone(player.phone),
                           }]);
                         } else {
                           setSelectedRecipients(selectedRecipients.filter(r => r.recipientId !== (player.odUserId || player.id)));
@@ -649,6 +673,19 @@ const LeagueHistorySection: React.FC<LeagueHistorySectionProps> = ({
   const [typeFilter, setTypeFilter] = useState<'all' | 'sms' | 'email'>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const handleDelete = async (messageId: string) => {
+    if (!confirm('Delete this message?')) return;
+    setDeleting(messageId);
+    try {
+      await deleteLeagueQueuedMessage(leagueId, messageId);
+    } catch (error) {
+      console.error('Failed to delete message:', error);
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   const filteredMessages = useMemo(() => {
     let result = messages;
@@ -821,6 +858,31 @@ const LeagueHistorySection: React.FC<LeagueHistorySectionProps> = ({
                         )}
                       </button>
                     </>
+                  )}
+
+                  {(message.status === 'pending' || message.status === 'failed') && (
+                    <button
+                      onClick={() => handleDelete(message.id)}
+                      disabled={deleting === message.id}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors"
+                    >
+                      {deleting === message.id ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          Deleting...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                          Delete
+                        </>
+                      )}
+                    </button>
                   )}
                 </div>
               )}

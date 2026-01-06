@@ -358,9 +358,9 @@ service cloud.firestore {
           request.resource.data.tournamentId == tournamentId;
         // Status updates only via Cloud Functions (lockedAt, sentAt, failedAt, etc.)
         allow update: if false;
-        // Organizers can delete pending messages only
+        // Organizers can delete pending or failed messages
         allow delete: if isTournamentOrganizer(tournamentId) &&
-          resource.data.status == 'pending';
+          (resource.data.status == 'pending' || resource.data.status == 'failed');
       }
     }
 
@@ -489,9 +489,9 @@ service cloud.firestore {
           request.resource.data.createdBy == request.auth.uid;
         // Status updates only via Cloud Functions (no client updates)
         allow update: if false;
-        // League organizer can delete pending messages only
+        // League organizer can delete pending or failed messages
         allow delete: if isLeagueAdmin(leagueId) &&
-          resource.data.status == 'pending';
+          (resource.data.status == 'pending' || resource.data.status == 'failed');
       }
     }
 

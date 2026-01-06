@@ -155,8 +155,14 @@ export const queueMessage = async (
   const queueRef = doc(collection(db, 'tournaments', tournamentId, 'comms_queue'));
   const now = Date.now();
 
+  // Clean undefined values - Firestore doesn't allow undefined
+  const cleanedMessage: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(message)) {
+    cleanedMessage[key] = value === undefined ? null : value;
+  }
+
   const queueMessage: CommsQueueMessage = {
-    ...message,
+    ...cleanedMessage,
     tournamentId,
     status: 'pending',
     createdAt: now,
@@ -165,7 +171,7 @@ export const queueMessage = async (
     error: null,
     lockedAt: null,
     lockedBy: null,
-  };
+  } as CommsQueueMessage;
 
   await setDoc(queueRef, queueMessage);
   return queueRef.id;
@@ -243,16 +249,16 @@ export const subscribeToTournamentMessages = (
 };
 
 /**
- * Delete a pending message from the queue
- * Only pending messages can be deleted by organizers
+ * Delete a pending or failed message from the queue
+ * Sent messages cannot be deleted (for audit trail)
  */
 export const deleteQueuedMessage = async (
   tournamentId: string,
   messageId: string
 ): Promise<void> => {
   const message = await getQueuedMessage(tournamentId, messageId);
-  if (message?.status !== 'pending') {
-    throw new Error('Only pending messages can be deleted');
+  if (message?.status === 'sent') {
+    throw new Error('Sent messages cannot be deleted');
   }
   await deleteDoc(doc(db, 'tournaments', tournamentId, 'comms_queue', messageId));
 };
@@ -272,8 +278,14 @@ export const queueLeagueMessage = async (
   const queueRef = doc(collection(db, 'leagues', leagueId, 'comms_queue'));
   const now = Date.now();
 
+  // Clean undefined values - Firestore doesn't allow undefined
+  const cleanedMessage: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(message)) {
+    cleanedMessage[key] = value === undefined ? null : value;
+  }
+
   const queueMessage: CommsQueueMessage = {
-    ...message,
+    ...cleanedMessage,
     leagueId,
     status: 'pending',
     createdAt: now,
@@ -282,7 +294,7 @@ export const queueLeagueMessage = async (
     error: null,
     lockedAt: null,
     lockedBy: null,
-  };
+  } as CommsQueueMessage;
 
   await setDoc(queueRef, queueMessage);
   return queueRef.id;
@@ -358,16 +370,16 @@ export const subscribeToLeagueMessages = (
 };
 
 /**
- * Delete a pending message from the league queue
- * Only pending messages can be deleted by organizers
+ * Delete a pending or failed message from the league queue
+ * Sent messages cannot be deleted (for audit trail)
  */
 export const deleteLeagueQueuedMessage = async (
   leagueId: string,
   messageId: string
 ): Promise<void> => {
   const message = await getQueuedLeagueMessage(leagueId, messageId);
-  if (message?.status !== 'pending') {
-    throw new Error('Only pending messages can be deleted');
+  if (message?.status === 'sent') {
+    throw new Error('Sent messages cannot be deleted');
   }
   await deleteDoc(doc(db, 'leagues', leagueId, 'comms_queue', messageId));
 };
@@ -523,12 +535,12 @@ export const queueBulkLeagueMessages = async (
   }>,
   messageConfig: {
     type: CommsMessageType;
-    templateId?: string;
-    templateData?: Record<string, string>;
-    subject?: string;
+    templateId?: string | null;
+    templateData?: Record<string, string> | null;
+    subject?: string | null;
     body: string;
-    divisionId?: string;
-    matchId?: string;
+    divisionId?: string | null;
+    matchId?: string | null;
     createdBy: string;
   }
 ): Promise<string[]> => {

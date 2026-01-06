@@ -1,12 +1,13 @@
 "use strict";
 /**
- * Tournament Communications Cloud Function
+ * Communications Cloud Function
  *
- * Processes messages in the comms_queue subcollection.
- * Uses Firebase Functions v2 with Firestore triggers.
+ * Processes messages in the comms_queue subcollection for both
+ * tournaments and leagues.
+ * Uses Firebase Functions v1 with Firestore triggers.
  *
  * FILE LOCATION: functions/src/comms.ts
- * VERSION: 07.08
+ * VERSION: 07.18
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -45,23 +46,32 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.comms_processQueue = void 0;
-const firestore_1 = require("firebase-functions/v2/firestore");
-const params_1 = require("firebase-functions/params");
+exports.comms_processLeagueQueue = exports.comms_processQueue = void 0;
+const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const twilio_1 = __importDefault(require("twilio"));
 // ============================================
-// SECRETS (Functions v2)
+// TWILIO CONFIG (Functions v1)
 // ============================================
-const twilioSid = (0, params_1.defineSecret)('TWILIO_SID');
-const twilioToken = (0, params_1.defineSecret)('TWILIO_TOKEN');
-const twilioPhone = (0, params_1.defineSecret)('TWILIO_PHONE');
+const getTwilioConfig = () => {
+    var _a, _b, _c;
+    const config = functions.config();
+    if (!((_a = config.twilio) === null || _a === void 0 ? void 0 : _a.sid) || !((_b = config.twilio) === null || _b === void 0 ? void 0 : _b.token) || !((_c = config.twilio) === null || _c === void 0 ? void 0 : _c.phone)) {
+        throw new Error('Twilio credentials not configured. Run: firebase functions:config:set twilio.sid="..." twilio.token="..." twilio.phone="+1..."');
+    }
+    return {
+        sid: config.twilio.sid,
+        token: config.twilio.token,
+        phone: config.twilio.phone,
+    };
+};
 // ============================================
 // HELPER: Send SMS via Twilio
 // ============================================
 async function sendSMSViaTwilio(to, body, sid, token, fromPhone) {
     try {
         const client = (0, twilio_1.default)(sid, token);
+        console.log(`Sending SMS to ${to} from ${fromPhone}`);
         const result = await client.messages.create({
             body,
             to,
@@ -87,30 +97,15 @@ async function sendEmail(_to, _subject, _body) {
     };
 }
 // ============================================
-// MAIN TRIGGER: Process Comms Queue
+// SHARED PROCESSING LOGIC
 // ============================================
 /**
- * Firestore onCreate trigger for comms_queue messages.
- *
- * When a message is created:
- * 1. Claims the document with a lock (prevents duplicate processing)
- * 2. Sends SMS via Twilio or Email (stubbed)
- * 3. Updates status to 'sent' or 'failed'
+ * Process a comms queue message (shared logic for tournaments and leagues)
  */
-exports.comms_processQueue = (0, firestore_1.onDocumentCreated)({
-    document: 'tournaments/{tournamentId}/comms_queue/{messageId}',
-    secrets: [twilioSid, twilioToken, twilioPhone],
-}, async (event) => {
-    const snap = event.data;
-    if (!snap) {
-        console.error('No data in event');
-        return;
-    }
+async function processCommsMessage(snap, messageId, entityType, entityId, twilioSidValue, twilioTokenValue, twilioPhone) {
     const message = snap.data();
-    const messageId = event.params.messageId;
-    const tournamentId = event.params.tournamentId;
     const docRef = snap.ref;
-    console.log(`Processing comms message ${messageId} for tournament ${tournamentId}`);
+    console.log(`Processing comms message ${messageId} for ${entityType} ${entityId}`);
     console.log(`Type: ${message.type}, Recipient: ${message.recipientName}`);
     // ========================================
     // STEP 1: Claim the document with a lock
@@ -174,7 +169,7 @@ exports.comms_processQueue = (0, firestore_1.onDocumentCreated)({
         }
         else {
             // Send SMS
-            result = await sendSMSViaTwilio(message.recipientPhone, message.body, twilioSid.value(), twilioToken.value(), twilioPhone.value());
+            result = await sendSMSViaTwilio(message.recipientPhone, message.body, twilioSidValue, twilioTokenValue, twilioPhone);
         }
     }
     else if (message.type === 'email') {
@@ -221,8 +216,11 @@ exports.comms_processQueue = (0, firestore_1.onDocumentCreated)({
             // Optionally create a retry message if not already retried
             if (!message.retried) {
                 console.log(`Creating retry message for ${messageId}`);
-                const retryRef = db.collection('tournaments').doc(tournamentId)
-                    .collection('comms_queue').doc();
+                // Determine collection path based on entity type
+                const collectionPath = entityType === 'tournament'
+                    ? db.collection('tournaments').doc(entityId).collection('comms_queue')
+                    : db.collection('leagues').doc(entityId).collection('comms_queue');
+                const retryRef = collectionPath.doc();
                 await retryRef.set(Object.assign(Object.assign({}, message), { status: 'pending', createdAt: Date.now(), sentAt: null, failedAt: null, error: null, lockedAt: null, lockedBy: null, retried: true, retryOf: messageId }));
                 console.log(`Retry message created: ${retryRef.id}`);
             }
@@ -231,5 +229,29 @@ exports.comms_processQueue = (0, firestore_1.onDocumentCreated)({
     catch (error) {
         console.error(`Error updating message ${messageId} status:`, error.message);
     }
+}
+// ============================================
+// TOURNAMENT TRIGGER: Process Tournament Comms Queue
+// ============================================
+/**
+ * Firestore onCreate trigger for tournament comms_queue messages.
+ */
+exports.comms_processQueue = functions.firestore
+    .document('tournaments/{tournamentId}/comms_queue/{messageId}')
+    .onCreate(async (snap, context) => {
+    const twilioConfig = getTwilioConfig();
+    await processCommsMessage(snap, context.params.messageId, 'tournament', context.params.tournamentId, twilioConfig.sid, twilioConfig.token, twilioConfig.phone);
+});
+// ============================================
+// LEAGUE TRIGGER: Process League Comms Queue
+// ============================================
+/**
+ * Firestore onCreate trigger for league comms_queue messages.
+ */
+exports.comms_processLeagueQueue = functions.firestore
+    .document('leagues/{leagueId}/comms_queue/{messageId}')
+    .onCreate(async (snap, context) => {
+    const twilioConfig = getTwilioConfig();
+    await processCommsMessage(snap, context.params.messageId, 'league', context.params.leagueId, twilioConfig.sid, twilioConfig.token, twilioConfig.phone);
 });
 //# sourceMappingURL=comms.js.map

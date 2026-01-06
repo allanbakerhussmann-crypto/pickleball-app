@@ -3,24 +3,31 @@
  *
  * Processes messages in the comms_queue subcollection for both
  * tournaments and leagues.
- * Uses Firebase Functions v2 with Firestore triggers.
+ * Uses Firebase Functions v1 with Firestore triggers.
  *
  * FILE LOCATION: functions/src/comms.ts
- * VERSION: 07.17
+ * VERSION: 07.18
  */
 
-import { onDocumentCreated } from 'firebase-functions/v2/firestore';
-import { defineSecret } from 'firebase-functions/params';
+import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import twilio from 'twilio';
 
 // ============================================
-// SECRETS (Functions v2)
+// TWILIO CONFIG (Functions v1)
 // ============================================
 
-const twilioSid = defineSecret('TWILIO_SID');
-const twilioToken = defineSecret('TWILIO_TOKEN');
-const twilioPhone = defineSecret('TWILIO_PHONE');
+const getTwilioConfig = () => {
+  const config = functions.config();
+  if (!config.twilio?.sid || !config.twilio?.token || !config.twilio?.phone) {
+    throw new Error('Twilio credentials not configured. Run: firebase functions:config:set twilio.sid="..." twilio.token="..." twilio.phone="+1..."');
+  }
+  return {
+    sid: config.twilio.sid,
+    token: config.twilio.token,
+    phone: config.twilio.phone,
+  };
+};
 
 // ============================================
 // TYPES
@@ -71,6 +78,8 @@ async function sendSMSViaTwilio(
   try {
     const client = twilio(sid, token);
 
+    console.log(`Sending SMS to ${to} from ${fromPhone}`);
+
     const result = await client.messages.create({
       body,
       to,
@@ -116,7 +125,7 @@ async function processCommsMessage(
   entityId: string,
   twilioSidValue: string,
   twilioTokenValue: string,
-  twilioPhoneValue: string
+  twilioPhone: string
 ): Promise<void> {
   const message = snap.data() as CommsQueueMessage;
   const docRef = snap.ref;
@@ -199,7 +208,7 @@ async function processCommsMessage(
         message.body,
         twilioSidValue,
         twilioTokenValue,
-        twilioPhoneValue
+        twilioPhone
       );
     }
   } else if (message.type === 'email') {
@@ -283,29 +292,20 @@ async function processCommsMessage(
 /**
  * Firestore onCreate trigger for tournament comms_queue messages.
  */
-export const comms_processQueue = onDocumentCreated(
-  {
-    document: 'tournaments/{tournamentId}/comms_queue/{messageId}',
-    secrets: [twilioSid, twilioToken, twilioPhone],
-  },
-  async (event) => {
-    const snap = event.data;
-    if (!snap) {
-      console.error('No data in event');
-      return;
-    }
-
+export const comms_processQueue = functions.firestore
+  .document('tournaments/{tournamentId}/comms_queue/{messageId}')
+  .onCreate(async (snap, context) => {
+    const twilioConfig = getTwilioConfig();
     await processCommsMessage(
       snap,
-      event.params.messageId,
+      context.params.messageId,
       'tournament',
-      event.params.tournamentId,
-      twilioSid.value(),
-      twilioToken.value(),
-      twilioPhone.value()
+      context.params.tournamentId,
+      twilioConfig.sid,
+      twilioConfig.token,
+      twilioConfig.phone
     );
-  }
-);
+  });
 
 // ============================================
 // LEAGUE TRIGGER: Process League Comms Queue
@@ -314,26 +314,17 @@ export const comms_processQueue = onDocumentCreated(
 /**
  * Firestore onCreate trigger for league comms_queue messages.
  */
-export const comms_processLeagueQueue = onDocumentCreated(
-  {
-    document: 'leagues/{leagueId}/comms_queue/{messageId}',
-    secrets: [twilioSid, twilioToken, twilioPhone],
-  },
-  async (event) => {
-    const snap = event.data;
-    if (!snap) {
-      console.error('No data in event');
-      return;
-    }
-
+export const comms_processLeagueQueue = functions.firestore
+  .document('leagues/{leagueId}/comms_queue/{messageId}')
+  .onCreate(async (snap, context) => {
+    const twilioConfig = getTwilioConfig();
     await processCommsMessage(
       snap,
-      event.params.messageId,
+      context.params.messageId,
       'league',
-      event.params.leagueId,
-      twilioSid.value(),
-      twilioToken.value(),
-      twilioPhone.value()
+      context.params.leagueId,
+      twilioConfig.sid,
+      twilioConfig.token,
+      twilioConfig.phone
     );
-  }
-);
+  });
