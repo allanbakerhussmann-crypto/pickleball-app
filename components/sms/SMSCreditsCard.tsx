@@ -12,11 +12,10 @@
 
 import React, { useEffect, useState } from 'react';
 import type { SMSCredits } from '../../types';
+import { FREE_STARTER_SMS_CREDITS } from '../../types';
 import {
   subscribeToSMSCredits,
-  getOrCreateSMSCredits,
   getBalanceColorClass,
-  isCreditsLow,
 } from '../../services/firebase/smsCredits';
 
 interface SMSCreditsCardProps {
@@ -39,10 +38,9 @@ export const SMSCreditsCard: React.FC<SMSCreditsCardProps> = ({
       return;
     }
 
-    // Initialize credits if they don't exist
-    getOrCreateSMSCredits(userId).catch(console.error);
-
     // Subscribe to real-time updates
+    // Credits document is created by Cloud Functions on first SMS send or purchase
+    // If it doesn't exist yet, we show "free credits available" state
     const unsub = subscribeToSMSCredits(userId, (data) => {
       setCredits(data);
       setLoading(false);
@@ -59,9 +57,11 @@ export const SMSCreditsCard: React.FC<SMSCreditsCardProps> = ({
     );
   }
 
-  const balance = credits?.balance ?? 0;
+  // If credits document doesn't exist, user gets free starter credits on first use
+  const hasCreditsDoc = credits !== null;
+  const balance = credits?.balance ?? FREE_STARTER_SMS_CREDITS;
   const colorClass = getBalanceColorClass(balance);
-  const showWarning = credits && isCreditsLow(credits);
+  const showLowWarning = hasCreditsDoc && balance > 0 && balance <= 10;
 
   if (compact) {
     return (
@@ -71,7 +71,10 @@ export const SMSCreditsCard: React.FC<SMSCreditsCardProps> = ({
         </svg>
         <span className="text-sm text-gray-400">SMS:</span>
         <span className={`font-medium ${colorClass}`}>{balance}</span>
-        {showWarning && (
+        {!hasCreditsDoc && (
+          <span className="text-xs text-gray-500">(free)</span>
+        )}
+        {showLowWarning && (
           <span className="text-xs text-yellow-400">(Low)</span>
         )}
         {onBuyMore && (
@@ -111,7 +114,16 @@ export const SMSCreditsCard: React.FC<SMSCreditsCardProps> = ({
         )}
       </div>
 
-      {showWarning && (
+      {!hasCreditsDoc && (
+        <div className="mt-3 flex items-center gap-2 text-sm text-blue-400 bg-blue-900/20 rounded-lg px-3 py-2">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>{FREE_STARTER_SMS_CREDITS} free credits available on first use</span>
+        </div>
+      )}
+
+      {showLowWarning && (
         <div className="mt-3 flex items-center gap-2 text-sm text-yellow-400 bg-yellow-900/20 rounded-lg px-3 py-2">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -120,7 +132,7 @@ export const SMSCreditsCard: React.FC<SMSCreditsCardProps> = ({
         </div>
       )}
 
-      {balance === 0 && (
+      {hasCreditsDoc && balance === 0 && (
         <div className="mt-3 flex items-center gap-2 text-sm text-red-400 bg-red-900/20 rounded-lg px-3 py-2">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

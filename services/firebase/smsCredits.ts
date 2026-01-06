@@ -101,15 +101,24 @@ export const hasSufficientCredits = async (
 
 /**
  * Subscribe to SMS credits (real-time updates)
+ * Returns null if document doesn't exist (user gets free credits on first use)
  */
 export const subscribeToSMSCredits = (
   userId: string,
   callback: (credits: SMSCredits | null) => void
 ): Unsubscribe => {
   const creditsRef = doc(db, 'sms_credits', userId);
-  return onSnapshot(creditsRef, (snap) => {
-    callback(snap.exists() ? (snap.data() as SMSCredits) : null);
-  });
+  return onSnapshot(
+    creditsRef,
+    (snap) => {
+      callback(snap.exists() ? (snap.data() as SMSCredits) : null);
+    },
+    (error) => {
+      // Handle permission errors gracefully - user just doesn't have credits yet
+      console.warn('SMS credits subscription error (may be normal for new users):', error.message);
+      callback(null);
+    }
+  );
 };
 
 // ============================================
