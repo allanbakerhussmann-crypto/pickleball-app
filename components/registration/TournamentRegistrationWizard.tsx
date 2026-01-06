@@ -285,7 +285,7 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
             const payload = {
                 ...(regData as TournamentRegistration),
                 partnerDetails: isWaiverOnly ? (regData.partnerDetails || {}) : (partnerDetails || {}),
-                paymentMethod: isFreeEvent ? undefined : selectedPaymentMethod,
+                paymentMethod: isFreeEvent ? null : selectedPaymentMethod,
             };
             await finalizeRegistration(payload);
             setLoading(false);
