@@ -54,6 +54,7 @@ export {
 export {
   createUserProfile,
   getUserProfile,
+  updateUserProfile,
   updateUserProfileDoc,
   searchUsers,
   searchEligiblePartners,

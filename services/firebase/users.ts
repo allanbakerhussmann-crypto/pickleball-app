@@ -41,6 +41,9 @@ export const updateUserProfileDoc = async (userId: string, data: Partial<UserPro
   await updateDoc(doc(db, 'users', userId), { ...data, updatedAt: Date.now() });
 };
 
+// Alias for consistency
+export const updateUserProfile = updateUserProfileDoc;
+
 // ============================================
 // User Search
 // ============================================
