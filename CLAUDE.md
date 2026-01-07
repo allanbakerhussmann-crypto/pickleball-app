@@ -1,6 +1,6 @@
 # Pickleball Director
 
-> **Version**: 06.17
+> **Version**: 07.24
 > **Type**: Tournament, League & Club Management Platform
 > **Live URL**: https://pickleballdirector.co.nz
 > **Firebase URL**: https://pickleball-app-dev.web.app
@@ -699,77 +699,52 @@ Use Test Mode (`TestModePanel.tsx`) to:
 
 ---
 
-## DUPR Integration Status
+## DUPR Integration (V07.23)
 
 ### Overview
 
 DUPR (Dynamic Universal Pickleball Rating) integration enables automatic match submission for rating updates.
 
-**Documentation**: https://dupr.gitbook.io/dupr-raas
+**IMPORTANT FOR FUTURE CLAUDE SESSIONS**: This section documents the DUPR submission pattern that MUST be followed for ALL event types (tournaments, leagues, meetups). Read this entire section before implementing any DUPR-related features.
 
-### Current Status: AWAITING API CREDENTIALS
+### Official Documentation
 
-**Test Club ID**: `6915688914` (configured in UAT)
+| Resource | URL |
+|----------|-----|
+| RaaS API Docs | https://dupr.gitbook.io/dupr-raas |
+| Quick Start | https://dupr.gitbook.io/dupr-raas/quick-start-and-token-generation |
+| Swagger UAT | https://uat.mydupr.com/api/swagger-ui/index.html |
+| Swagger Prod | https://prod.mydupr.com/api/swagger-ui/index.html |
+| Developer FAQ | https://dupr.gitbook.io/dupr-raas/developer-faq |
 
-**Blocker**: Need valid `clientKey` and `clientSecret` from DUPR. Email sent to `tech@mydupr.com` (Haresh) requesting credentials.
+### API Environments
 
-### What's Implemented (Ready to Use)
+| Environment | Base URL | Login URL |
+|-------------|----------|-----------|
+| UAT | `https://uat.mydupr.com/api` | `https://uat.dupr.gg/login-external-app` |
+| Production | `https://prod.mydupr.com/api` | `https://dashboard.dupr.com/login-external-app` |
 
-| Feature | Status | File |
-|---------|--------|------|
-| SSO "Login with DUPR" | ✅ Working | `components/profile/DuprConnect.tsx` |
-| Profile linking/unlinking | ✅ Working | `components/profile/DuprConnect.tsx` |
-| Rating display | ✅ Working | Shows doubles/singles ratings with reliability % |
-| DUPR service with RaaS API | ✅ Ready | `services/dupr/index.ts` |
-| Match submission helper | ✅ Ready | `services/dupr/matchSubmission.ts` |
-| DuprSubmitButton component | ✅ Ready | `components/shared/DuprSubmitButton.tsx` |
-| Match DUPR status tracking | ✅ Ready | `services/firebase/matches.ts` |
-| League DUPR settings | ✅ Ready | `settings.duprSettings` on League |
+### API Endpoints (v1.0)
 
-### What's Blocked (Needs API Keys)
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/auth/v1.0/token` | Generate bearer token |
+| POST | `/match/v1.0/create` | Submit single match |
+| POST | `/match/v1.0/batch` | Bulk match submission |
+| POST | `/match/v1.0/update` | Update existing match |
+| DELETE | `/match/v1.0/delete` | Delete match |
+| GET | `/user/v1.0/{duprId}` | Get user by DUPR ID |
+| GET | `/user/v1.0/{duprId}/clubs` | Get user's club memberships |
+| POST | `/v1.0/webhook` | Register webhook |
 
-| Feature | Blocker |
-|---------|---------|
-| Match submission to DUPR | 403 Forbidden - invalid credentials |
-| Token generation | Needs valid clientKey:clientSecret |
-
-### API Configuration
-
-**File**: `services/dupr/index.ts`
-
-```typescript
-// Current placeholder credentials (NEED TO REPLACE)
-uat: {
-  baseUrl: 'https://uat.mydupr.com/api',
-  loginUrl: 'https://uat.dupr.gg/login-external-app',
-  clientId: '4970118010',
-  clientKey: 'REPLACE_WITH_REAL_KEY',    // From DUPR
-  clientSecret: 'REPLACE_WITH_REAL_SECRET', // From DUPR
-}
-```
-
-### Once Credentials Are Received
-
-1. Update `services/dupr/index.ts` with real `clientKey` and `clientSecret`
-2. Test token generation: Should get valid bearer token
-3. Test match submission: Complete a league match, click "Submit to DUPR"
-4. Verify in DUPR UAT dashboard that match appears
-
-### Authentication Flow (RaaS API)
+### Authentication Flow
 
 ```
 1. Base64 encode: clientKey:clientSecret
-2. POST to /token with x-authorization header
+2. POST to /auth/v1.0/token with x-authorization header
 3. Receive bearer token (valid 1 hour, cached 55 min)
-4. Use bearer token for /result/submit and other API calls
+4. Use bearer token for all subsequent API calls
 ```
-
-### Match Submission Requirements
-
-- Match must be `status: 'completed'`
-- At least one team must score 6+ points
-- All players must have DUPR IDs linked (via SSO login)
-- Players do NOT need to join the DUPR club - just have linked accounts
 
 ### Key Files
 
@@ -780,12 +755,626 @@ uat: {
 | `components/shared/DuprSubmitButton.tsx` | UI button for manual submission |
 | `components/profile/DuprConnect.tsx` | SSO login iframe component |
 
-### Future Enhancements (After API Working)
+---
+
+### UNIVERSAL DUPR SUBMISSION PATTERN
+
+**CRITICAL**: Follow this pattern for ALL event types (tournaments, leagues, meetups). This ensures consistent, error-free DUPR submissions.
+
+#### Step 1: Gather Required Data
+
+```typescript
+// 1. Match data (from any event type)
+const match = await getMatch(matchId); // Must have status: 'completed'
+
+// 2. Player profiles with DUPR IDs
+const players: SubmissionPlayers = {
+  userA: await getUserProfile(match.sideA.playerIds[0]),
+  userB: await getUserProfile(match.sideB.playerIds[0]),
+  partnerA: match.isDoubles ? await getUserProfile(match.sideA.playerIds[1]) : undefined,
+  partnerB: match.isDoubles ? await getUserProfile(match.sideB.playerIds[1]) : undefined,
+};
+
+// 3. Submission options
+const options: SubmissionOptions = {
+  eventType: 'tournament' | 'league' | 'meetup',
+  eventId: 'firestore-event-id',
+  matchId: match.id,
+  eventName: 'Wellington Open 2025',
+  location: 'Wellington, NZ',
+  clubId: undefined, // Optional DUPR club ID
+};
+```
+
+#### Step 2: Validate Eligibility
+
+```typescript
+import { isDuprEligible } from './services/dupr/matchSubmission';
+
+const eligibility = isDuprEligible(match, players);
+if (!eligibility.eligible) {
+  console.error('Not eligible:', eligibility.reason);
+  return;
+}
+```
+
+#### Step 3: Build Submission Payload
+
+```typescript
+import { buildDuprMatchSubmission } from './services/dupr/matchSubmission';
+
+const submission = buildDuprMatchSubmission(match, players, options);
+// Returns DuprMatchSubmission with:
+// - identifier: "tournament_abc123_match456" (unique per match)
+// - matchSource: "PARTNER" (or "CLUB" if clubId provided)
+// - matchType: "SINGLES" or "DOUBLES"
+// - team1/team2 with DUPR IDs
+// - games array with scores
+```
+
+#### Step 4: Submit to DUPR
+
+```typescript
+import { submitMatchToDupr } from './services/dupr';
+
+const result = await submitMatchToDupr('', submission);
+// Returns: { matchId, status, createdAt }
+```
+
+#### Step 5: Update Local Match
+
+```typescript
+await updateMatch(matchId, {
+  duprSubmitted: true,
+  duprMatchId: result.matchId,
+  duprSubmittedAt: Date.now(),
+});
+```
+
+---
+
+### Validation Rules (MUST CHECK)
+
+| Rule | Description |
+|------|-------------|
+| Match completed | `status === 'completed'` |
+| Has scores | `scores.length > 0` |
+| Minimum score | At least one team scored 6+ points |
+| No ties | Every game must have a winner (no tied games) |
+| All DUPR linked | All players must have `duprId` via SSO |
+| Not already submitted | `duprSubmitted !== true` |
+| Unique identifier | Use format: `{eventType}_{eventId}_{matchId}` |
+
+### Match Source Types
+
+| Type | When to Use | clubId Required? |
+|------|-------------|------------------|
+| `PARTNER` | Default for all submissions | No |
+| `CLUB` | When submitting on behalf of a DUPR club | Yes |
+
+### Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| 403 Forbidden | Invalid credentials | Check clientKey/clientSecret |
+| Duplicate match | Same identifier submitted twice | Use unique identifier per match |
+| Tied game | Game has equal scores | All games must have a winner |
+| Missing DUPR ID | Player not linked to DUPR | User must SSO login first |
+
+### Integration Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| SSO Login | ✅ Working | iframe-based OAuth |
+| Profile linking | ✅ Working | Via DuprConnect component |
+| Rating display | ✅ Working | Shows doubles/singles with reliability |
+| Token generation | ✅ Ready | Endpoint: `/auth/v1.0/token` |
+| Match submission | ✅ Ready | Endpoint: `/match/v1.0/create` |
+| Manual submit button | ✅ Ready | DuprSubmitButton component |
+
+### Configuration
+
+**File**: `services/dupr/index.ts`
+
+```typescript
+const DUPR_CONFIG = {
+  environment: 'uat', // Switch to 'production' after approval
+  testClubId: '6915688914',
+  uat: {
+    baseUrl: 'https://uat.mydupr.com/api',
+    loginUrl: 'https://uat.dupr.gg/login-external-app',
+    clientId: '4970118010',
+    clientKey: 'test-ck-...',     // From DUPR
+    clientSecret: 'test-cs-...',  // From DUPR
+  },
+  production: {
+    baseUrl: 'https://prod.mydupr.com/api',
+    loginUrl: 'https://dashboard.dupr.com/login-external-app',
+    clientId: '',     // Will be provided after UAT approval
+    clientKey: '',    // Will be provided after UAT approval
+    clientSecret: '', // Will be provided after UAT approval
+  },
+};
+```
+
+### Future Enhancements
 
 1. **Auto-submission**: Automatically submit on match completion (league setting)
-2. **Bulk submission**: Submit multiple matches at once
+2. **Bulk submission**: Submit multiple matches via `/match/v1.0/batch`
 3. **Rating sync**: Periodic refresh of player ratings from DUPR
-4. **Move credentials to .env**: `VITE_DUPR_CLIENT_KEY`, `VITE_DUPR_CLIENT_SECRET`
+4. **Webhook integration**: Subscribe to rating change notifications
+
+---
+
+## DUPR Submission Debugging & Lessons Learned (V07.24)
+
+**CRITICAL FOR FUTURE CLAUDE SESSIONS**: This section documents hard-won lessons from debugging 50+ failed DUPR submissions. READ THIS BEFORE modifying any DUPR submission code.
+
+### Architecture: Server-Side Only
+
+**NEVER call DUPR API from the browser.** All DUPR API calls MUST go through Cloud Functions:
+
+```
+Browser → httpsCallable('dupr_submitMatches') → Cloud Function → DUPR API
+```
+
+**Key Files:**
+| File | Purpose |
+|------|---------|
+| `functions/src/dupr.ts` | Cloud Functions for DUPR API calls (SERVER ONLY) |
+| `services/firebase/duprScoring.ts` | Client service that calls Cloud Functions |
+| `components/shared/DuprControlPanel.tsx` | UI for organizers to manage submissions |
+| `components/shared/DuprMatchTable.tsx` | Match list with status badges and actions |
+
+### Common Mistakes We Made (Don't Repeat These!)
+
+#### Mistake 1: Wrong Firebase Import Path
+```typescript
+// ❌ WRONG - causes "Rollup failed to resolve" build error
+import { httpsCallable } from 'firebase/functions';
+
+// ✅ CORRECT - use @firebase namespace
+import { httpsCallable } from '@firebase/functions';
+```
+
+#### Mistake 2: Mismatched Response Type Mapping
+The Cloud Function returns different field names than what client code expected:
+
+```typescript
+// Cloud Function returns:
+{
+  success: true,
+  eligibleCount: 5,    // Actually means: successful submissions
+  ineligibleCount: 2,  // Actually means: failed submissions
+  message: "..."
+}
+
+// ❌ WRONG - Old client code mapped incorrectly:
+return {
+  queuedCount: result.data.eligibleCount,  // Misleading name
+  failedCount: 0,  // ALWAYS 0 - hiding real failures!
+};
+
+// ✅ CORRECT - Proper mapping:
+return {
+  successCount: result.data.eligibleCount,
+  failedCount: result.data.ineligibleCount,
+  message: result.data.message,
+};
+```
+
+#### Mistake 3: Missing Cloud Function
+The `dupr_retryFailed` function was being called but didn't exist! Always verify:
+1. Function is defined in `functions/src/dupr.ts`
+2. Function is exported in `functions/src/index.ts`
+3. Functions are deployed: `firebase deploy --only functions`
+
+#### Mistake 4: "Already Exists" Not Handled as Success
+DUPR rejects duplicate submissions with "already exists in the database" error. This is actually success:
+
+```typescript
+// In submitMatchToDupr():
+if (errorMessage.includes('already exists') ||
+    errorMessage.includes('Object identifiers must be universally unique')) {
+  // Treat as success - match was submitted previously
+  return {
+    success: true,
+    duprMatchId: 'already-submitted',
+    warnings: ['Match was already in DUPR database'],
+  };
+}
+```
+
+#### Mistake 5: No Diagnostic Function
+When bulk submission fails, you can't tell WHY. We added `dupr_testSubmitOneMatch` for debugging:
+
+```typescript
+// Test a single match to see exact DUPR response
+const result = await httpsCallable(functions, 'dupr_testSubmitOneMatch')({
+  matchId: 'abc123',
+  eventType: 'league',
+  eventId: 'xyz789',
+});
+// Returns: { ok, stage, matchMetadata, payloadMetadata, duprResponse }
+```
+
+#### Mistake 6: Doubles Validation Based on DUPR ID Count (Not Player Count)
+
+**Original broken logic:**
+```typescript
+// ❌ WRONG - Determines doubles by how many DUPR IDs we found
+const isDoubles = match.gameSettings?.playType !== 'singles' && sideADuprIds.length > 1;
+
+// If 1 partner missing DUPR, isDoubles = false, submitted as SINGLES!
+```
+
+**Fixed logic:**
+```typescript
+// ✅ CORRECT - Determine doubles by PLAYER count BEFORE checking DUPR
+const isDoubles = sideAPlayerIds.length > 1 || sideBPlayerIds.length > 1 ||
+  (match.gameSettings?.playType && match.gameSettings.playType !== 'singles');
+
+// Then validate ALL players have DUPR IDs
+const expectedPerSide = isDoubles ? 2 : 1;
+if (sideADuprIds.length < expectedPerSide || sideBDuprIds.length < expectedPerSide) {
+  logger.warn(`Missing DUPR IDs for ${isDoubles ? 'doubles' : 'singles'}`, {
+    expected: expectedPerSide,
+    sideADuprCount: sideADuprIds.length,
+    sideBDuprCount: sideBDuprIds.length,
+  });
+  return null;  // BLOCK submission - don't submit wrong format
+}
+```
+
+**Rule:** For doubles, ALL 4 players must have DUPR IDs linked. For singles, both players must have DUPR IDs.
+
+### DUPR Payload Format (CRITICAL)
+
+The Cloud Function builds payloads in this exact format:
+
+```typescript
+{
+  identifier: `${eventType}_${eventId}_${matchId}`,  // DETERMINISTIC!
+  event: "Tournament Name",
+  format: "DOUBLES" | "SINGLES",
+  matchDate: "2025-01-07",  // Date only, no time
+  matchSource: "PARTNER",   // or "CLUB" if clubId provided
+  teamA: {
+    player1: "duprId123",   // String DUPR ID
+    player2: "duprId456",   // Optional for doubles
+    game1: 11,              // Score for game 1
+    game2: 9,               // Score for game 2
+    game3: 11,              // Optional
+  },
+  teamB: {
+    player1: "duprId789",
+    player2: "duprId012",
+    game1: 5,               // MUST have same games as teamA
+    game2: 11,
+    game3: 8,
+  },
+  // clubId: 12345,         // ONLY if matchSource === "CLUB"
+}
+```
+
+**HARD RULES:**
+1. `identifier` must be deterministic (same match = same identifier for retries)
+2. `teamA` and `teamB` MUST have the same game fields (game1, game2, etc.)
+3. No tied games allowed (scoreA !== scoreB for all games)
+4. If `matchSource === "PARTNER"`, do NOT include `clubId` (not even null)
+5. If `matchSource === "CLUB"`, `clubId` is required as a number
+
+### Debugging Checklist
+
+When DUPR submissions fail:
+
+1. **Check Cloud Function logs**: `firebase functions:log --only dupr_submitMatches`
+2. **Use test function**: Click "Test" button on a single match in DUPR panel
+3. **Verify credentials**: Ensure `firebase functions:config:get` shows `dupr.client_key` and `dupr.client_secret`
+4. **Check payload format**: Look for validation failures in logs
+5. **Check for duplicates**: "Already exists" means match was previously submitted
+
+### UI Feedback Best Practices
+
+Show users exactly what happened:
+
+```typescript
+// ❌ BAD - Misleading message
+showToast('success', `${result.queuedCount} matches queued`);
+
+// ✅ GOOD - Accurate counts
+if (result.successCount === 0 && result.failedCount === 0) {
+  showToast('success', 'No matches to submit - all already submitted');
+} else if (result.failedCount === 0) {
+  showToast('success', `Successfully submitted ${result.successCount} matches to DUPR`);
+} else if (result.successCount === 0) {
+  showToast('error', `Failed to submit ${result.failedCount} matches`);
+} else {
+  showToast('success', `Submitted ${result.successCount} matches (${result.failedCount} failed)`);
+}
+```
+
+### Safe Logging Rules
+
+**NEVER log credentials or player IDs in production:**
+
+```typescript
+// ❌ NEVER DO THIS
+logger.info('Credentials:', { clientKey, clientSecret });
+logger.info('Payload:', JSON.stringify(duprPayload));  // Contains DUPR IDs
+
+// ✅ SAFE - Log metadata only
+logger.info('[DUPR] Token request:', {
+  hasClientKey: !!clientKey,      // Boolean only
+  hasClientSecret: !!clientSecret,
+});
+logger.info('[DUPR] Payload metadata:', {
+  identifier: payload.identifier,
+  matchSource: payload.matchSource,
+  format: payload.format,
+  gameCount: 3,
+  hasClubId: false,
+});
+```
+
+---
+
+## DUPR Compliance Rules (V07.23)
+
+**CRITICAL FOR FUTURE CLAUDE SESSIONS**: This section defines the compliance rules that MUST be followed when implementing any scoring, match finalization, or DUPR submission features. Review this section before modifying any related components.
+
+### 1. Core Compliance Principles
+
+Pickleball Director meets DUPR partner requirements by enforcing:
+- **Exclusive use of DUPR for ratings** (no alternative rating systems)
+- **Organiser-only official score reporting** (no self-reporting)
+- **Structured competition contexts** (leagues/tournaments/sessions)
+- **Auditability and integrity controls** across the entire score lifecycle
+
+### 2. Roles and Permissions
+
+#### Players MAY:
+- View matches and results
+- Propose a score after a match (non-binding)
+- Acknowledge ("sign") an opponent's proposed score (non-binding)
+- Dispute a proposed score
+
+#### Players MAY NOT:
+- Finalise an official result
+- Mark matches as DUPR submitted
+- Trigger DUPR submissions
+- Edit results after organiser finalisation
+
+#### Organisers MAY:
+- Create and manage events (tournaments/leagues)
+- Review proposed scores and disputes
+- Finalise official results
+- Mark matches as DUPR-eligible (where applicable)
+- Submit matches to DUPR (single or bulk)
+- Correct official results (with audit trail)
+
+#### Enforcement Layers:
+1. **UI gating** - buttons/actions hidden based on role
+2. **Service-layer checks** - validation in Firebase services
+3. **Firestore security rules** - hard enforcement at database level
+
+### 3. Anti Self-Reporting (REQUIRED)
+
+Pickleball Director enforces a strict non-self-reporting model:
+
+| Rule | Implementation |
+|------|----------------|
+| Player scores are proposals only | `scoreState: 'proposed'` |
+| Only organisers finalise | `finalisedByUserId` must be organiser |
+| Only official results to DUPR | Check `officialResult` exists before submission |
+
+**Key Rule**: A match is NOT considered complete for standings/brackets or DUPR until `officialResult` exists.
+
+### 4. Score Lifecycle States
+
+```
+none → proposed → signed → official → submittedToDupr
+                ↘ disputed ↗
+```
+
+| State | Description | Who Can Transition |
+|-------|-------------|-------------------|
+| `none` | No score activity | - |
+| `proposed` | Player submitted a score proposal | Player |
+| `signed` | Opponent acknowledged proposal | Opponent |
+| `disputed` | Opponent disputed proposal | Opponent |
+| `official` | Organiser finalised official result | Organiser only |
+| `submittedToDupr` | Accepted by DUPR | System (after organiser triggers) |
+
+**Only `official` results affect standings and bracket progression.**
+**Only `official` results can be submitted to DUPR.**
+
+### 5. Team Integrity (teamSnapshot)
+
+To prevent score manipulation, store a `teamSnapshot` for each match:
+
+```typescript
+interface TeamSnapshot {
+  sideA: {
+    id: string;
+    playerIds: string[];
+    name: string;
+  };
+  sideB: {
+    id: string;
+    playerIds: string[];
+    name: string;
+  };
+  capturedAt: number;
+}
+```
+
+**Enforcement Rules:**
+- Only an opposing player can acknowledge ("sign") a proposal
+- A player or teammate cannot confirm their own score
+- Firestore rules validate signer/proposer sides using the snapshot
+
+### 6. Standings and Brackets Use Official Results Only
+
+All competition logic MUST use organiser-finalised results only:
+- Pool standings
+- Round-robin standings
+- Bracket advancement
+- Medal calculations
+
+**Matches without `officialResult` are ignored for these calculations.**
+
+### 7. DUPR Eligibility Requirements
+
+A match is eligible for DUPR submission only if ALL requirements are met:
+
+| Requirement | Check |
+|-------------|-------|
+| Organiser finalised | `officialResult` exists |
+| DUPR eligible flag | `duprEligible === true` (if event mode is Optional) |
+| Match complete | `status === 'completed'` |
+| Score locked | `scoreLocked === true` |
+| No unresolved dispute | Dispute resolved by organiser finalisation |
+| Players linked to DUPR | All participants have `duprId` (for DUPR Required events) |
+| Minimum score | At least one team scored 6+ points |
+| No tied games | Every game has a winner |
+
+### 8. Submission Rules (Organiser-Only, Server-Side)
+
+| Rule | Implementation |
+|------|----------------|
+| Organiser-triggered only | Check user role before allowing submission |
+| Uses `officialResult` only | Never submit proposals |
+| Server-side execution | Cloud Functions only, not client-side |
+| Client cannot call DUPR API | Block direct API calls from client |
+| Client cannot set submitted | Firestore rules block `dupr.submitted = true` from client |
+
+### 9. Bulk Submission and Partial Failure
+
+Batch submissions support partial success:
+
+```typescript
+interface BatchSubmissionResult {
+  batchId: string;
+  totalMatches: number;
+  successCount: number;
+  failCount: number;
+  results: Array<{
+    matchId: string;
+    success: boolean;
+    duprMatchId?: string;
+    error?: string;
+  }>;
+}
+```
+
+**Handling:**
+- Successful matches marked `dupr.submitted = true`
+- Failed matches store `dupr.submissionError`
+- Retry requeues only failed matches
+
+### 10. No Automatic Submission Without Organiser Control
+
+| Allowed | Not Allowed |
+|---------|-------------|
+| Auto-queue eligible matches for organiser review | Auto-submit without organiser action |
+| Reminders/escalation timers to prompt organisers | Bypass organiser verification |
+| Batch submission UI for organisers | Silent background submission |
+
+### 11. Audit Trail Requirements
+
+Every key action MUST be recorded:
+
+| Action | Fields to Record |
+|--------|-----------------|
+| Score proposal | `proposedBy`, `proposedAt`, `proposedScores` |
+| Acknowledgement | `signedBy`, `signedAt` |
+| Dispute | `disputedBy`, `disputedAt`, `disputeReason` |
+| Official finalisation | `finalisedByUserId`, `finalisedAt` |
+| DUPR submission | `submittedByUserId`, `submittedAt`, `duprMatchId` or `submissionError` |
+| Score correction | `correctedBy`, `correctedAt`, `correctionReason`, `previousResult` |
+
+### 12. Player Disclosure (DUPR-Enabled Events)
+
+For DUPR-enabled events, players must be informed:
+- Results may be submitted to DUPR and affect ratings
+- Only organisers finalise and submit results
+- Players may propose/acknowledge/dispute, but cannot finalise
+- Participation implies consent to share match results with DUPR
+
+### Key Data Structures
+
+#### Match with DUPR Compliance Fields
+
+```typescript
+interface Match {
+  id: string;
+  status: 'scheduled' | 'in_progress' | 'completed';
+
+  // Score lifecycle
+  scoreState: 'none' | 'proposed' | 'signed' | 'disputed' | 'official' | 'submittedToDupr';
+  scoreLocked: boolean;
+
+  // Player proposals (non-binding)
+  proposedResult?: {
+    scores: GameScore[];
+    proposedBy: string;
+    proposedAt: number;
+    signedBy?: string;
+    signedAt?: number;
+    disputedBy?: string;
+    disputedAt?: number;
+    disputeReason?: string;
+  };
+
+  // Official result (organiser-finalised)
+  officialResult?: {
+    scores: GameScore[];
+    winnerId: string;
+    finalisedByUserId: string;
+    finalisedAt: number;
+    correctionHistory?: Array<{
+      previousScores: GameScore[];
+      correctedBy: string;
+      correctedAt: number;
+      reason: string;
+    }>;
+  };
+
+  // Team snapshot for integrity
+  teamSnapshot?: TeamSnapshot;
+
+  // DUPR tracking
+  dupr?: {
+    eligible: boolean;
+    submitted: boolean;
+    submissionId?: string;
+    submittedAt?: number;
+    submittedByUserId?: string;
+    submissionError?: string;
+    batchId?: string;
+  };
+}
+```
+
+### Compliance Checklist for New Features
+
+When implementing scoring or DUPR-related features, verify:
+
+- [ ] Player-entered scores are treated as proposals only
+- [ ] Only organisers can finalise official results
+- [ ] Only official results update standings/brackets
+- [ ] Only official results can be submitted to DUPR
+- [ ] DUPR submission is server-side only
+- [ ] All actions are audited with userId and timestamp
+- [ ] teamSnapshot is used to validate acknowledgements
+- [ ] Disputes are handled before finalisation
+- [ ] Bulk submission handles partial failures
+- [ ] UI hides actions user cannot perform
+
+### Summary Statement
+
+> Pickleball Director integrates with DUPR using an organiser-verified reporting model. Players may propose and acknowledge scores, but results are never official until a verified organiser finalises them. Only organiser-finalised official results are used for standings/brackets and are eligible for DUPR submission. All submissions are server-side and auditable, with strict role-based access control, anti-self-reporting safeguards (teamSnapshot), dispute handling, and batch submission support.
 
 ---
 

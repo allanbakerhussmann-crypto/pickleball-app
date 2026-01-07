@@ -1,20 +1,22 @@
 /**
  * LeagueRegistrationWizard Component
- * 
+ *
  * Simple registration wizard for leagues.
  * For singles: direct join
  * For doubles: partner selection with invite/open modes
- * 
+ *
  * FILE LOCATION: components/leagues/LeagueRegistrationWizard.tsx
- * VERSION: V05.17
+ * VERSION: V07.24
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   joinLeague,
   searchUsers,
+  updateUserProfile,
 } from '../../services/firebase';
+import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
 import type { League, UserProfile } from '../../types';
 
 // ============================================
@@ -33,6 +35,7 @@ interface PartnerSelection {
   mode: PartnerMode;
   partnerUserId?: string;
   partnerName?: string;
+  partnerHasDupr?: boolean; // V07.24: Track if partner has DUPR linked
 }
 
 // ============================================
@@ -45,20 +48,84 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   onComplete,
 }) => {
   const { currentUser, userProfile } = useAuth();
-  
+
   // Step management
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Partner selection (for doubles)
   const [partnerSelection, setPartnerSelection] = useState<PartnerSelection>({ mode: 'invite' });
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
+  // DUPR Required modal state (V07.24)
+  const [showDuprRequiredModal, setShowDuprRequiredModal] = useState(false);
+  const [duprLinking, setDuprLinking] = useState(false);
+  const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(userProfile);
+  const [duprLinkingFor, setDuprLinkingFor] = useState<'self' | 'partner'>('self');
+
   // Determine league characteristics
   const isDoubles = league.type === 'doubles';
+
+  // Check if DUPR is required and user doesn't have it linked
+  const isDuprRequired = league.duprSettings?.mode === 'required';
+  const userHasDupr = !!(currentUserProfile?.duprId);
+  const needsDuprLink = isDuprRequired && !userHasDupr;
+
+  // V07.24: Show DUPR required modal if user doesn't have DUPR linked
+  useEffect(() => {
+    if (needsDuprLink) {
+      setDuprLinkingFor('self');
+      setShowDuprRequiredModal(true);
+    }
+  }, [needsDuprLink]);
+
+  // V07.24: Listen for DUPR login messages
+  useEffect(() => {
+    if (!showDuprRequiredModal) return;
+
+    const handleDuprMessage = async (event: MessageEvent) => {
+      const loginData = parseDuprLoginEvent(event);
+      if (!loginData || !currentUser?.uid) return;
+
+      console.log('DUPR login successful from league registration:', loginData);
+      setDuprLinking(true);
+
+      try {
+        // Update user profile with DUPR data
+        await updateUserProfile(currentUser.uid, {
+          duprId: loginData.duprId,
+          duprDisplayName: loginData.displayName,
+          duprSinglesRating: loginData.singles,
+          duprDoublesRating: loginData.doubles,
+          duprSinglesReliability: loginData.singlesReliability,
+          duprDoublesReliability: loginData.doublesReliability,
+          duprLinkedAt: Date.now(),
+        });
+
+        // Update local state
+        setCurrentUserProfile(prev => prev ? ({
+          ...prev,
+          duprId: loginData.duprId,
+          duprDisplayName: loginData.displayName,
+          duprSinglesRating: loginData.singles,
+          duprDoublesRating: loginData.doubles,
+        }) : null);
+
+        // Close modal after successful link
+        setShowDuprRequiredModal(false);
+      } catch (error) {
+        console.error('Failed to link DUPR account:', error);
+      } finally {
+        setDuprLinking(false);
+      }
+    };
+
+    window.addEventListener('message', handleDuprMessage);
+    return () => window.removeEventListener('message', handleDuprMessage);
+  }, [showDuprRequiredModal, currentUser?.uid]);
   const totalSteps = isDoubles ? 2 : 1;
 
   // ============================================
@@ -87,13 +154,23 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   };
 
   const handleSelectPartner = (user: UserProfile) => {
+    const partnerHasDupr = !!user.duprId;
+
+    // V07.24: Block selection if DUPR required but partner doesn't have it
+    if (isDuprRequired && !partnerHasDupr) {
+      setError(`${user.displayName || 'This player'} has not linked their DUPR account. All players must have DUPR linked to join this league.`);
+      return;
+    }
+
     setPartnerSelection({
       mode: 'invite',
       partnerUserId: user.id,
       partnerName: user.displayName || user.email || 'Partner',
+      partnerHasDupr,
     });
     setSearchTerm('');
     setSearchResults([]);
+    setError(null);
   };
 
   const handleClearPartner = () => {
@@ -247,16 +324,44 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
               
               {searchResults.length > 0 && (
                 <div className="max-h-48 overflow-y-auto border border-gray-700 rounded-lg bg-gray-900">
-                  {searchResults.map(user => (
-                    <div
-                      key={user.id}
-                      onClick={() => handleSelectPartner(user)}
-                      className="p-3 hover:bg-gray-800 cursor-pointer border-b border-gray-700 last:border-b-0"
-                    >
-                      <div className="font-semibold text-white">{user.displayName}</div>
-                      <div className="text-xs text-gray-400">{user.email}</div>
-                    </div>
-                  ))}
+                  {searchResults.map(user => {
+                    const hasDupr = !!user.duprId;
+                    const isBlocked = isDuprRequired && !hasDupr;
+
+                    return (
+                      <div
+                        key={user.id}
+                        onClick={() => !isBlocked && handleSelectPartner(user)}
+                        className={`p-3 border-b border-gray-700 last:border-b-0 ${
+                          isBlocked
+                            ? 'opacity-50 cursor-not-allowed bg-gray-800'
+                            : 'hover:bg-gray-800 cursor-pointer'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-semibold text-white">{user.displayName}</div>
+                            <div className="text-xs text-gray-400">{user.email}</div>
+                          </div>
+                          {/* V07.24: Show DUPR status when league requires it */}
+                          {isDuprRequired && (
+                            <div className={`text-xs px-2 py-1 rounded ${
+                              hasDupr
+                                ? 'bg-lime-900/30 text-lime-400 border border-lime-700'
+                                : 'bg-red-900/30 text-red-400 border border-red-700'
+                            }`}>
+                              {hasDupr ? '✓ DUPR' : '✗ No DUPR'}
+                            </div>
+                          )}
+                        </div>
+                        {isBlocked && (
+                          <div className="text-xs text-red-400 mt-1">
+                            Must link DUPR account to join this league
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
               
@@ -337,6 +442,52 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
 
   return (
     <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
+      {/* V07.24: DUPR Required Modal */}
+      {showDuprRequiredModal && (
+        <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-[70] rounded-lg p-4 backdrop-blur-sm">
+          <div className="bg-gray-800 p-6 rounded-lg border border-lime-500/50 shadow-2xl max-w-md w-full text-center">
+            <div className="w-16 h-16 mx-auto mb-4 bg-lime-500/20 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-lime-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">DUPR Account Required</h3>
+            <p className="text-gray-300 mb-4 text-sm">
+              {duprLinkingFor === 'self'
+                ? 'This league requires a linked DUPR account for match result submissions. Please link your DUPR account to continue with registration.'
+                : 'Your partner must also have a linked DUPR account to join this league.'}
+            </p>
+
+            {duprLinking ? (
+              <div className="py-8">
+                <div className="animate-spin w-8 h-8 border-2 border-lime-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                <p className="text-gray-400 text-sm">Linking your DUPR account...</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-gray-900 rounded-lg p-2 border border-gray-700">
+                  <iframe
+                    src={getDuprLoginIframeUrl()}
+                    className="w-full h-[400px] rounded"
+                    title="Link DUPR Account"
+                  />
+                </div>
+                <p className="text-xs text-gray-500">
+                  Sign in with your DUPR credentials above to link your account.
+                </p>
+              </div>
+            )}
+
+            <button
+              onClick={onClose}
+              className="mt-4 px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium transition-colors"
+            >
+              Cancel Registration
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-gray-800 w-full max-w-lg rounded-xl border border-gray-700 overflow-hidden">
         {/* Header */}
         <div className="bg-gray-900 px-6 py-4 border-b border-gray-700">

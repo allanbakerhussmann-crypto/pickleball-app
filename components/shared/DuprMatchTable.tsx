@@ -19,6 +19,7 @@ interface DuprMatchTableProps {
   onFinalise: (match: Match) => void;
   onSubmit: (match: Match) => void;
   onToggleEligibility: (match: Match, eligible: boolean) => void;
+  onTest?: (match: Match) => void;
   isLoading?: boolean;
 }
 
@@ -59,12 +60,14 @@ function MatchRow({
   onFinalise,
   onSubmit,
   onToggleEligibility,
+  onTest,
 }: {
   row: DuprMatchRowData;
   onReview: (match: Match) => void;
   onFinalise: (match: Match) => void;
   onSubmit: (match: Match) => void;
   onToggleEligibility: (match: Match, eligible: boolean) => void;
+  onTest?: (match: Match) => void;
 }) {
   const { match, category, canReview, canFinalise, canSubmit, canToggleEligibility } = row;
 
@@ -188,6 +191,15 @@ function MatchRow({
               Submit
             </button>
           )}
+          {onTest && (
+            <button
+              onClick={() => onTest(match)}
+              className="px-2 py-1 text-xs font-medium text-gray-400 hover:text-gray-300 hover:bg-gray-500/10 rounded transition-colors"
+              title={`Test match ID: ${match.id}`}
+            >
+              Test
+            </button>
+          )}
         </div>
       </td>
     </tr>
@@ -202,6 +214,7 @@ export function DuprMatchTable({
   onFinalise,
   onSubmit,
   onToggleEligibility,
+  onTest,
   isLoading,
 }: DuprMatchTableProps) {
   return (
@@ -266,6 +279,7 @@ export function DuprMatchTable({
                   onFinalise={onFinalise}
                   onSubmit={onSubmit}
                   onToggleEligibility={onToggleEligibility}
+                  onTest={onTest}
                 />
               ))
             )}

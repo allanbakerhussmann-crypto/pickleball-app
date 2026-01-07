@@ -20,6 +20,38 @@ import type {
 import { getScoreStateLabel } from '../../utils/matchHelpers';
 
 // ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Check if a match has valid participants (not TBD or empty)
+ * Matches with "TBD" or missing player names should not be DUPR eligible
+ */
+export function hasValidParticipants(match: Match): boolean {
+  // Get participant names from various formats
+  const leagueMatch = match as any;
+
+  const sideAName = match.sideA?.name || leagueMatch.memberAName || leagueMatch.userAName || '';
+  const sideBName = match.sideB?.name || leagueMatch.memberBName || leagueMatch.userBName || '';
+
+  // Check if either side is TBD or empty
+  const invalidNames = ['tbd', 'tba', 'bye', ''];
+  const sideALower = sideAName.toLowerCase().trim();
+  const sideBLower = sideBName.toLowerCase().trim();
+
+  if (invalidNames.includes(sideALower) || invalidNames.includes(sideBLower)) {
+    return false;
+  }
+
+  // Check for "TBD" anywhere in the name (e.g., "TBD vs TBD")
+  if (sideALower.includes('tbd') || sideBLower.includes('tbd')) {
+    return false;
+  }
+
+  return true;
+}
+
+// ============================================
 // MATCH CATEGORIZATION
 // ============================================
 
@@ -39,6 +71,11 @@ export function categorizeMatch(match: Match): DuprMatchCategory {
 
   // Check if needs correction (submitted but officialResult changed)
   if (match.dupr?.needsCorrection) {
+    return 'blocked';
+  }
+
+  // Check for TBD/placeholder matches - these should be blocked
+  if (!hasValidParticipants(match)) {
     return 'blocked';
   }
 
@@ -135,6 +172,7 @@ export function getDuprPanelStats(matches: Match[]): DuprPanelStats {
  * Check if a match can be submitted to DUPR
  *
  * Requirements:
+ * - Has valid participants (not TBD/BYE)
  * - Has officialResult
  * - status === 'completed'
  * - scoreState === 'official'
@@ -144,6 +182,11 @@ export function getDuprPanelStats(matches: Match[]): DuprPanelStats {
  * - dupr.needsCorrection !== true
  */
 export function canSubmitToDupr(match: Match): DuprEligibilityResult {
+  // Must have valid participants (not TBD)
+  if (!hasValidParticipants(match)) {
+    return { eligible: false, reason: 'Match has TBD or missing participants' };
+  }
+
   // Must have official result
   if (!match.officialResult) {
     return { eligible: false, reason: 'No official result' };
@@ -235,6 +278,11 @@ export function getEligibilityToggleState(match: Match): EligibilityToggleState 
  * Get block reason for a match
  */
 export function getBlockReason(match: Match): string | null {
+  // Check for TBD/placeholder participants first
+  if (!hasValidParticipants(match)) {
+    return 'Match has TBD or missing participants';
+  }
+
   if (match.dupr?.needsCorrection) {
     return 'Official result changed after DUPR submission';
   }

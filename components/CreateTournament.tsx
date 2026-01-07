@@ -153,7 +153,12 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     createdByUserId: userId,
     organizerId: userId,
     organizerName: userProfile?.displayName || '',
-    clubId: '' // Required
+    clubId: '', // Required
+    // DUPR settings (V07.24)
+    duprSettings: {
+      mode: 'none',
+      autoSubmit: false,
+    },
   });
 
   // Planner settings (if using planner flow)
@@ -1044,6 +1049,63 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                             </p>
                         </div>
                       )}
+                  </div>
+
+                  {/* DUPR Settings (V07.24) */}
+                  <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-[#00B4D8] text-lg">📊</span>
+                        <h4 className="text-sm font-medium text-gray-300">DUPR Integration</h4>
+                      </div>
+
+                      <div className="space-y-3">
+                        {/* DUPR Mode Selection */}
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'none', autoSubmit: false }})}
+                            className={`p-3 rounded-lg border text-center transition-all ${
+                              formData.duprSettings?.mode === 'none'
+                                ? 'bg-gray-600 border-gray-500 text-white'
+                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
+                            }`}
+                          >
+                            <div className="text-lg mb-1">🎾</div>
+                            <div className="text-xs font-medium">No DUPR</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'optional', autoSubmit: true }})}
+                            className={`p-3 rounded-lg border text-center transition-all ${
+                              formData.duprSettings?.mode === 'optional'
+                                ? 'bg-[#00B4D8]/20 border-[#00B4D8] text-[#00B4D8]'
+                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
+                            }`}
+                          >
+                            <div className="text-lg mb-1">📊</div>
+                            <div className="text-xs font-medium">DUPR Optional</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'required', autoSubmit: true }})}
+                            className={`p-3 rounded-lg border text-center transition-all ${
+                              formData.duprSettings?.mode === 'required'
+                                ? 'bg-green-500/20 border-green-500 text-green-400'
+                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
+                            }`}
+                          >
+                            <div className="text-lg mb-1">✅</div>
+                            <div className="text-xs font-medium">DUPR Required</div>
+                          </button>
+                        </div>
+
+                        {/* Description based on mode */}
+                        <p className="text-xs text-gray-500">
+                          {formData.duprSettings?.mode === 'none' && 'Casual tournament - no DUPR accounts needed.'}
+                          {formData.duprSettings?.mode === 'optional' && 'Players can link DUPR. Matches submitted for linked players.'}
+                          {formData.duprSettings?.mode === 'required' && 'All players must link DUPR to register. All matches submitted to DUPR.'}
+                        </p>
+                      </div>
                   </div>
 
                   {/* Draft Mode Notice */}

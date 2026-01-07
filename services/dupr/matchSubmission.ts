@@ -2,13 +2,38 @@
  * DUPR Match Submission Helper
  *
  * Converts app match data to DUPR's expected format for submission.
+ * Works for ALL event types: tournaments, leagues, and meetups.
  *
  * FILE LOCATION: services/dupr/matchSubmission.ts
- * VERSION: V06.15
+ * VERSION: V07.23
+ *
+ * DUPR SUBMISSION PATTERN (for future reference):
+ * ================================================
+ * 1. Get match data with scores from any event type
+ * 2. Gather all player profiles with DUPR IDs (via SSO login)
+ * 3. Call isDuprEligible() to validate
+ * 4. Call buildDuprMatchSubmission() to convert to DUPR format
+ * 5. Call submitMatchToDupr() to send to DUPR API
+ * 6. Update local match with duprSubmitted=true and duprMatchId
+ *
+ * REQUIRED FIELDS FOR DUPR:
+ * - identifier: Unique ID (use format: {eventType}_{eventId}_{matchId})
+ * - matchSource: 'PARTNER' (we are a partner integration)
+ * - matchType: 'SINGLES' or 'DOUBLES'
+ * - matchDate: ISO date string
+ * - team1/team2: Player DUPR IDs
+ * - games: Array of { team1Score, team2Score }
+ *
+ * VALIDATION RULES:
+ * - At least one team must score 6+ points
+ * - No tied games (every game must have a winner)
+ * - All players must have DUPR IDs linked via SSO
+ * - Match must be completed
+ * - Match must not already be submitted
  */
 
 import type { LeagueMatch, GameScore, UserProfile } from '../../types';
-import type { DuprMatchSubmission } from './index';
+import type { DuprMatchSubmission, DuprMatchSource } from './index';
 import { submitMatchToDupr } from './index';
 
 // ============================================
@@ -29,9 +54,27 @@ export interface SubmissionPlayers {
 }
 
 export interface SubmissionOptions {
+  /** Event type: tournament, league, or meetup */
+  eventType: 'tournament' | 'league' | 'meetup';
+  /** Event ID from Firestore */
+  eventId: string;
+  /** Match ID from Firestore - used to build unique identifier */
+  matchId: string;
+  /** Event name to display in DUPR */
   eventName?: string;
+  /** DUPR Club ID if submitting as a club (optional) */
   clubId?: string;
+  /** Location/venue name */
   location?: string;
+}
+
+/**
+ * Generate unique identifier for DUPR match submission
+ * Format: {eventType}_{eventId}_{matchId}
+ * This prevents duplicate submissions
+ */
+export function generateDuprIdentifier(options: SubmissionOptions): string {
+  return `${options.eventType}_${options.eventId}_${options.matchId}`;
 }
 
 // ============================================
@@ -40,6 +83,13 @@ export interface SubmissionOptions {
 
 /**
  * Check if a match is eligible for DUPR submission
+ *
+ * Validates all DUPR requirements:
+ * - Match completed with scores
+ * - At least one team scored 6+ points
+ * - No tied games
+ * - All players have DUPR IDs
+ * - Not already submitted
  */
 export function isDuprEligible(
   match: LeagueMatch,
@@ -61,6 +111,14 @@ export function isDuprEligible(
   );
   if (!hasMinScore) {
     return { eligible: false, reason: 'At least one team must score 6 or more points' };
+  }
+
+  // Check no tied games (DUPR requirement - every game must have a winner)
+  const hasTiedGame = match.scores.some(
+    s => (s.scoreA ?? 0) === (s.scoreB ?? 0)
+  );
+  if (hasTiedGame) {
+    return { eligible: false, reason: 'All games must have a winner (no ties allowed)' };
   }
 
   // Check player A has DUPR ID
@@ -102,6 +160,12 @@ export function isDuprEligible(
 
 /**
  * Build DUPR match submission payload from our match format
+ *
+ * This function converts our internal match format to DUPR's expected format.
+ * Works for tournaments, leagues, and meetups.
+ *
+ * IMPORTANT: The identifier field is REQUIRED and must be unique per match.
+ * We use format: {eventType}_{eventId}_{matchId}
  */
 export function buildDuprMatchSubmission(
   match: LeagueMatch,
@@ -145,7 +209,17 @@ export function buildDuprMatchSubmission(
     team2.player2 = { duprId: players.partnerB.duprId };
   }
 
+  // Generate unique identifier for this match
+  const identifier = generateDuprIdentifier(options);
+
+  // Determine match source:
+  // - CLUB: If we have a DUPR club ID configured
+  // - PARTNER: We are a partner integration (default)
+  const matchSource: DuprMatchSource = options.clubId ? 'CLUB' : 'PARTNER';
+
   return {
+    identifier,
+    matchSource,
     matchType: isDoubles ? 'DOUBLES' : 'SINGLES',
     matchDate,
     eventName: options.eventName,
@@ -207,6 +281,7 @@ export async function submitLeagueMatchToDupr(
 // ============================================
 
 export default {
+  generateDuprIdentifier,
   isDuprEligible,
   buildDuprMatchSubmission,
   submitLeagueMatchToDupr,

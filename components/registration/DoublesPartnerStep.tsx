@@ -26,6 +26,7 @@ interface DoublesPartnerStepProps {
       | ((prev: TournamentRegistration['partnerDetails']) => TournamentRegistration['partnerDetails'])
   ) => void;
   existingTeams: Record<string, Team>;
+  onPartnerDuprError?: (error: string) => void; // V07.24: Callback for DUPR errors
 }
 
 interface OpenTeamWithOwner {
@@ -94,8 +95,11 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
   userProfile,
   partnerDetails,
   setPartnerDetails,
-  existingTeams
+  existingTeams,
+  onPartnerDuprError,
 }) => {
+  // V07.24: Check if DUPR is required
+  const isDuprRequired = tournament.duprSettings?.mode === 'required';
   const [openTeamsByDivision, setOpenTeamsByDivision] = useState<Record<string, OpenTeamWithOwner[]>>({});
   const [searchResults, setSearchResults] = useState<Record<string, UserProfile[]>>({});
   const [searchTerm, setSearchTerm] = useState<Record<string, string>>({});
@@ -215,6 +219,15 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
   };
 
   const handleSelectInvitePartner = (divId: string, user: UserProfile) => {
+    // V07.24: Block selection if DUPR required but partner doesn't have it
+    const partnerHasDupr = !!user.duprId;
+    if (isDuprRequired && !partnerHasDupr) {
+      onPartnerDuprError?.(
+        `${user.displayName || 'This player'} has not linked their DUPR account. All players must have DUPR linked for this tournament.`
+      );
+      return;
+    }
+
     setPartnerDetails(prev => {
       const next = { ...(prev || {}) };
       next[divId] = {
@@ -236,7 +249,16 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
     });
   };
 
-  const handleSelectOpenTeam = (divId: string, team: Team) => {
+  const handleSelectOpenTeam = (divId: string, team: Team, owner: UserProfile | null) => {
+    // V07.24: Block joining if DUPR required but team owner doesn't have it
+    const ownerHasDupr = !!(owner?.duprId);
+    if (isDuprRequired && !ownerHasDupr) {
+      onPartnerDuprError?.(
+        `${owner?.displayName || 'The team owner'} has not linked their DUPR account. All players must have DUPR linked for this tournament.`
+      );
+      return;
+    }
+
     setPartnerDetails(prev => {
       const next = { ...(prev || {}) };
       next[divId] = {
@@ -315,11 +337,35 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                       <div className="max-h-44 overflow-auto border border-gray-700 rounded bg-gray-900 p-2">
                         {(searchResults[div.id] || []).map(u => {
                           const unavailableReason = unavailableUsers.get(u.id);
-                          const disabled = !!unavailableReason;
+                          const hasDupr = !!u.duprId;
+                          const duprBlocked = isDuprRequired && !hasDupr;
+                          const disabled = !!unavailableReason || duprBlocked;
                           return (
-                            <div key={u.id} className={`p-2 ${disabled ? 'opacity-50' : 'cursor-pointer hover:bg-gray-800'}`} onClick={() => !disabled && handleSelectInvitePartner(div.id, u)}>
-                              <div className="font-semibold text-white">{u.displayName || u.email}</div>
-                              <div className="text-xs text-gray-400">{u.email} {disabled && <span className="text-red-400">· {unavailableReason}</span>}</div>
+                            <div
+                              key={u.id}
+                              className={`p-2 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-800'}`}
+                              onClick={() => !disabled && handleSelectInvitePartner(div.id, u)}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="font-semibold text-white">{u.displayName || u.email}</div>
+                                  <div className="text-xs text-gray-400">
+                                    {u.email}
+                                    {unavailableReason && <span className="text-red-400"> · {unavailableReason}</span>}
+                                    {duprBlocked && !unavailableReason && <span className="text-red-400"> · No DUPR linked</span>}
+                                  </div>
+                                </div>
+                                {/* V07.24: Show DUPR status when tournament requires it */}
+                                {isDuprRequired && (
+                                  <div className={`text-xs px-2 py-1 rounded flex-shrink-0 ${
+                                    hasDupr
+                                      ? 'bg-lime-900/30 text-lime-400 border border-lime-700'
+                                      : 'bg-red-900/30 text-red-400 border border-red-700'
+                                  }`}>
+                                    {hasDupr ? '✓ DUPR' : '✗ No DUPR'}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -350,12 +396,43 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
               {mode === 'join_open' && (
                 <div className="space-y-2">
                   <p className="text-xs text-gray-400">Available open teams:</p>
-                  {openTeams.length === 0 ? <div className="text-gray-500">No open teams</div> : openTeams.map(ot => (
-                    <div key={ot.team.id} className="p-2 border border-gray-700 rounded cursor-pointer" onClick={() => handleSelectOpenTeam(div.id, ot.team)}>
-                      <div className="font-semibold text-white">{ot.owner.displayName || ot.owner.email}</div>
-                      <div className="text-xs text-gray-400">{ot.team.teamName}</div>
-                    </div>
-                  ))}
+                  {openTeams.length === 0 ? (
+                    <div className="text-gray-500">No open teams</div>
+                  ) : (
+                    openTeams.map(ot => {
+                      const ownerHasDupr = !!(ot.owner?.duprId);
+                      const duprBlocked = isDuprRequired && !ownerHasDupr;
+                      return (
+                        <div
+                          key={ot.team.id}
+                          className={`p-2 border border-gray-700 rounded ${
+                            duprBlocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-800'
+                          }`}
+                          onClick={() => !duprBlocked && handleSelectOpenTeam(div.id, ot.team, ot.owner)}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-semibold text-white">{ot.owner?.displayName || ot.owner?.email || 'Unknown'}</div>
+                              <div className="text-xs text-gray-400">
+                                {ot.team.teamName}
+                                {duprBlocked && <span className="text-red-400"> · No DUPR linked</span>}
+                              </div>
+                            </div>
+                            {/* V07.24: Show DUPR status when tournament requires it */}
+                            {isDuprRequired && (
+                              <div className={`text-xs px-2 py-1 rounded flex-shrink-0 ${
+                                ownerHasDupr
+                                  ? 'bg-lime-900/30 text-lime-400 border border-lime-700'
+                                  : 'bg-red-900/30 text-red-400 border border-red-700'
+                              }`}>
+                                {ownerHasDupr ? '✓ DUPR' : '✗ No DUPR'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               )}
             </div>

@@ -1,42 +1,107 @@
 /**
- * DuprSubmitButton Component
+ * DuprSubmitButton Component V07.04
  *
- * A reusable button component for submitting completed matches to DUPR.
- * Shows different states: eligible, loading, submitted, error.
+ * DUPR-Compliant submission button that calls Cloud Function for server-side submission.
+ * No client-side DUPR API calls - all submission is handled by dupr_submitMatches Cloud Function.
+ *
+ * V07.04 Changes:
+ * - Removed direct DUPR API calls
+ * - Uses dupr_submitMatches Cloud Function for server-side submission
+ * - Checks eligibility: match must have officialResult and scoreState: 'official'
+ * - Batch submission with tracking via dupr_submission_batches collection
  *
  * FILE LOCATION: components/shared/DuprSubmitButton.tsx
- * VERSION: V06.15
+ * VERSION: V07.04
  */
 
 import React, { useState, useEffect } from 'react';
+import { httpsCallable } from '@firebase/functions';
 import { useAuth } from '../../contexts/AuthContext';
-import { getUserProfile } from '../../services/firebase';
-import { updateLeagueMatchDuprStatus } from '../../services/firebase/matches';
-import {
-  isDuprEligible,
-  submitLeagueMatchToDupr,
-  type SubmissionPlayers,
-  type SubmissionOptions,
-} from '../../services/dupr/matchSubmission';
-import type { LeagueMatch } from '../../types';
+import { functions } from '../../services/firebase/config';
+import type { LeagueMatch, Match } from '../../types';
 
 // ============================================
 // TYPES
 // ============================================
 
 interface DuprSubmitButtonProps {
-  match: LeagueMatch;
-  leagueId?: string;  // For updating match status in Firestore
-  eventName?: string;
-  clubId?: string;
-  location?: string;
-  onSubmitted?: (duprMatchId: string) => void;
+  /** Match to submit - supports both LeagueMatch and universal Match */
+  match: LeagueMatch | Match;
+  /** Event type for batch submission */
+  eventType: 'tournament' | 'league';
+  /** Event ID (tournamentId or leagueId) */
+  eventId: string;
+  /** Callback when submission is queued */
+  onQueued?: (batchId: string) => void;
+  /** Callback on error */
   onError?: (error: string) => void;
+  /** Additional CSS classes */
   className?: string;
+  /** Compact display mode */
   compact?: boolean;
 }
 
-type SubmitState = 'idle' | 'checking' | 'loading' | 'submitted' | 'error' | 'not_eligible';
+type SubmitState = 'idle' | 'checking' | 'loading' | 'queued' | 'submitted' | 'error' | 'not_eligible';
+
+interface SubmitMatchesResponse {
+  success: boolean;
+  batchId?: string;
+  message: string;
+  eligibleCount?: number;
+  ineligibleCount?: number;
+}
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Check if match is eligible for DUPR submission
+ * Match must have officialResult and scoreState: 'official'
+ */
+function checkEligibility(match: LeagueMatch | Match): { eligible: boolean; reason?: string } {
+  // Already submitted
+  if ((match as any).dupr?.submitted || (match as LeagueMatch).duprSubmitted) {
+    return { eligible: false, reason: 'Already submitted to DUPR' };
+  }
+
+  // Check for officialResult (V07.04 requirement)
+  const hasOfficialResult = !!(match as any).officialResult;
+
+  // Check scoreState
+  const scoreState = (match as any).scoreState;
+  const isOfficial = scoreState === 'official' || scoreState === 'submittedToDupr';
+
+  // Check match status
+  const isCompleted = match.status === 'completed';
+
+  // V07.04: Require officialResult and scoreState for new matches
+  if (hasOfficialResult && isOfficial) {
+    return { eligible: true };
+  }
+
+  // Legacy check for older matches
+  if (isCompleted && !hasOfficialResult) {
+    // Legacy match without officialResult - may have been completed before V07.04
+    const hasScores = (match as LeagueMatch).scores?.length > 0;
+    const hasWinner = !!(match as any).winnerId ||
+      !!(match as any).memberAWins || !!(match as any).memberBWins;
+
+    if (hasScores && hasWinner) {
+      return { eligible: true };
+    }
+  }
+
+  // Not eligible
+  if (!isCompleted) {
+    return { eligible: false, reason: 'Match not completed' };
+  }
+  if (!hasOfficialResult && !isOfficial) {
+    return { eligible: false, reason: 'Awaiting organiser finalization' };
+  }
+
+  return { eligible: false, reason: 'Missing required data' };
+}
 
 // ============================================
 // COMPONENT
@@ -44,11 +109,9 @@ type SubmitState = 'idle' | 'checking' | 'loading' | 'submitted' | 'error' | 'no
 
 export const DuprSubmitButton: React.FC<DuprSubmitButtonProps> = ({
   match,
-  leagueId,
-  eventName,
-  clubId,
-  location,
-  onSubmitted,
+  eventType,
+  eventId,
+  onQueued,
   onError,
   className = '',
   compact = false,
@@ -56,174 +119,102 @@ export const DuprSubmitButton: React.FC<DuprSubmitButtonProps> = ({
   const { userProfile } = useAuth();
   const [state, setState] = useState<SubmitState>('checking');
   const [error, setError] = useState<string | null>(null);
-  const [players, setPlayers] = useState<SubmissionPlayers | null>(null);
+  const [, setBatchId] = useState<string | null>(null);
 
-  // Check if match is already submitted
+  // Check eligibility on mount and when match changes
   useEffect(() => {
-    if (match.duprSubmitted) {
+    // Check if already submitted
+    if ((match as any).dupr?.submitted || (match as LeagueMatch).duprSubmitted) {
       setState('submitted');
       return;
     }
 
-    // Load player profiles to check eligibility
-    const loadPlayers = async () => {
-      setState('checking');
-      try {
-        // Get player IDs from match
-        const userAId = match.userAId;
-        const userBId = match.userBId;
-        const partnerAId = match.partnerAId;
-        const partnerBId = match.partnerBId;
-
-        console.log('[DuprSubmitButton] Checking eligibility for match:', {
-          matchId: match.id,
-          userAId,
-          userBId,
-          memberAName: match.memberAName,
-          memberBName: match.memberBName,
-        });
-
-        if (!userAId || !userBId) {
-          setError('Match is missing player IDs');
-          setState('not_eligible');
-          return;
-        }
-
-        // Fetch player profiles
-        let userA, userB, partnerA, partnerB;
-        try {
-          [userA, userB, partnerA, partnerB] = await Promise.all([
-            getUserProfile(userAId),
-            getUserProfile(userBId),
-            partnerAId ? getUserProfile(partnerAId) : Promise.resolve(null),
-            partnerBId ? getUserProfile(partnerBId) : Promise.resolve(null),
-          ]);
-        } catch (fetchErr) {
-          console.error('[DuprSubmitButton] Error fetching profiles:', fetchErr);
-          setError('Could not load player profiles');
-          setState('not_eligible');
-          return;
-        }
-
-        if (!userA || !userB) {
-          console.log('[DuprSubmitButton] Missing user profiles:', { userA: !!userA, userB: !!userB });
-          setError('Could not load player profiles');
-          setState('not_eligible');
-          return;
-        }
-
-        console.log('[DuprSubmitButton] Loaded profiles:', {
-          userA: { id: userA.id, name: userA.displayName, duprId: userA.duprId },
-          userB: { id: userB.id, name: userB.displayName, duprId: userB.duprId },
-        });
-
-        const loadedPlayers: SubmissionPlayers = {
-          userA,
-          userB,
-          partnerA: partnerA || undefined,
-          partnerB: partnerB || undefined,
-        };
-
-        setPlayers(loadedPlayers);
-
-        // Check eligibility
-        const eligibility = isDuprEligible(match, loadedPlayers);
-        console.log('[DuprSubmitButton] Eligibility check:', eligibility);
-
-        if (!eligibility.eligible) {
-          setError(eligibility.reason || 'Not eligible for DUPR submission');
-          setState('not_eligible');
-        } else {
-          setState('idle');
-        }
-      } catch (err) {
-        console.error('[DuprSubmitButton] Error loading players:', err);
-        setError('Error checking eligibility');
-        setState('not_eligible');
-      }
-    };
-
-    loadPlayers();
-  }, [match]);
-
-  // Handle submit
-  const handleSubmit = async () => {
-    if (!players) {
-      setError('Player data not loaded');
-      setState('error');
+    // Check if pending submission
+    if ((match as any).dupr?.pendingSubmission) {
+      setState('queued');
+      setBatchId((match as any).dupr?.batchId || null);
       return;
     }
 
-    // Note: With the new RaaS API, we use client credentials, not user's access token
-    // The userProfile?.duprAccessToken check is no longer strictly required
-    console.log('[DuprSubmitButton] Submitting match to DUPR...');
+    // Check eligibility
+    const eligibility = checkEligibility(match);
+    if (!eligibility.eligible) {
+      setError(eligibility.reason || 'Not eligible');
+      setState('not_eligible');
+    } else {
+      setState('idle');
+    }
+  }, [match]);
+
+  // Handle submit - calls Cloud Function
+  const handleSubmit = async () => {
+    if (!userProfile) {
+      setError('You must be logged in');
+      setState('error');
+      return;
+    }
 
     setState('loading');
     setError(null);
 
-    const options: SubmissionOptions = {
-      eventName,
-      clubId,
-      location,
-    };
+    try {
+      const submitMatches = httpsCallable<
+        { eventType: string; eventId: string; matchIds: string[] },
+        SubmitMatchesResponse
+      >(functions, 'dupr_submitMatches');
 
-    const result = await submitLeagueMatchToDupr(
-      userProfile.duprAccessToken,
-      match,
-      players,
-      options
-    );
+      const result = await submitMatches({
+        eventType,
+        eventId,
+        matchIds: [match.id],
+      });
 
-    if (result.success && result.duprMatchId) {
-      // Update match status in Firestore if leagueId is provided
-      if (leagueId && match.id) {
-        try {
-          await updateLeagueMatchDuprStatus(leagueId, match.id, {
-            duprSubmitted: true,
-            duprMatchId: result.duprMatchId,
-            duprSubmittedAt: Date.now(),
-            duprSubmittedBy: userProfile.id,
-          });
-        } catch (err) {
-          console.warn('[DuprSubmitButton] Failed to update match status:', err);
-          // Don't fail the whole operation, the submission was successful
-        }
+      if (result.data.success && result.data.batchId) {
+        setState('queued');
+        setBatchId(result.data.batchId);
+        onQueued?.(result.data.batchId);
+      } else {
+        setError(result.data.message || 'Submission failed');
+        setState('error');
+        onError?.(result.data.message || 'Submission failed');
       }
-
-      setState('submitted');
-      onSubmitted?.(result.duprMatchId);
-    } else {
-      // Update match with error if leagueId is provided
-      if (leagueId && match.id) {
-        try {
-          await updateLeagueMatchDuprStatus(leagueId, match.id, {
-            duprSubmitted: false,
-            duprError: result.error || 'Submission failed',
-          });
-        } catch (err) {
-          console.warn('[DuprSubmitButton] Failed to update match error status:', err);
-        }
-      }
-
-      setError(result.error || 'Submission failed');
+    } catch (err: any) {
+      console.error('[DuprSubmitButton] Error:', err);
+      const errorMessage = err.message || 'Failed to queue submission';
+      setError(errorMessage);
       setState('error');
-      onError?.(result.error || 'Submission failed');
+      onError?.(errorMessage);
     }
   };
 
   // Already submitted state
-  if (state === 'submitted' || match.duprSubmitted) {
+  if (state === 'submitted' || (match as any).dupr?.submitted || (match as LeagueMatch).duprSubmitted) {
+    const duprMatchId = (match as any).dupr?.submissionId || (match as LeagueMatch).duprMatchId;
     return (
       <div className={`flex items-center gap-1 text-green-400 ${className}`}>
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
         </svg>
         <span className={compact ? 'text-xs' : 'text-sm'}>
-          {compact ? 'DUPR' : 'Submitted to DUPR'}
+          {compact ? 'DUPR ✓' : 'Submitted to DUPR'}
         </span>
-        {match.duprMatchId && !compact && (
-          <span className="text-xs text-gray-500 ml-1">#{match.duprMatchId}</span>
+        {duprMatchId && !compact && (
+          <span className="text-xs text-gray-500 ml-1">#{duprMatchId}</span>
         )}
+      </div>
+    );
+  }
+
+  // Queued/Pending state
+  if (state === 'queued' || (match as any).dupr?.pendingSubmission) {
+    return (
+      <div className={`flex items-center gap-1 text-amber-400 ${className}`}>
+        <svg className="animate-pulse w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span className={compact ? 'text-xs' : 'text-sm'}>
+          {compact ? 'Queued' : 'Queued for DUPR'}
+        </span>
       </div>
     );
   }
@@ -258,7 +249,6 @@ export const DuprSubmitButton: React.FC<DuprSubmitButtonProps> = ({
   }
 
   // Check if user can submit
-  // With RaaS API, we use client credentials, so any authenticated user can submit
   const canSubmit = !!userProfile;
 
   // Loading/checking state
@@ -272,7 +262,7 @@ export const DuprSubmitButton: React.FC<DuprSubmitButtonProps> = ({
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
         </svg>
-        {state === 'loading' ? 'Submitting...' : 'Checking...'}
+        {state === 'loading' ? 'Queuing...' : 'Checking...'}
       </button>
     );
   }
@@ -287,7 +277,7 @@ export const DuprSubmitButton: React.FC<DuprSubmitButtonProps> = ({
           ? 'bg-blue-600 hover:bg-blue-500 text-white'
           : 'bg-gray-700 text-gray-400 cursor-not-allowed'
       } ${className}`}
-      title={canSubmit ? 'Submit this match to DUPR' : 'Sign in to submit matches to DUPR'}
+      title={canSubmit ? 'Queue for DUPR submission' : 'Sign in to submit to DUPR'}
     >
       {/* DUPR Icon */}
       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">

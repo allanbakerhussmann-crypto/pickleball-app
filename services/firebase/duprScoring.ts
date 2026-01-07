@@ -375,8 +375,15 @@ export async function finaliseResult(
       );
     }
 
+    // Support both tournament format (sideA.id/sideB.id) and league format (memberAId/memberBId)
+    const leagueMatch = match as any;
+    const sideAId = match.sideA?.id || leagueMatch.memberAId;
+    const sideBId = match.sideB?.id || leagueMatch.memberBId;
+    const sideAName = match.sideA?.name || leagueMatch.memberAName || leagueMatch.userAName;
+    const sideBName = match.sideB?.name || leagueMatch.memberBName || leagueMatch.userBName;
+
     // Validate winnerId
-    if (winnerId !== match.sideA?.id && winnerId !== match.sideB?.id) {
+    if (winnerId !== sideAId && winnerId !== sideBId) {
       throw new DuprScoringError(
         'Winner must be sideA or sideB',
         'VALIDATION_FAILED'
@@ -389,8 +396,7 @@ export async function finaliseResult(
     }
 
     // Get winner name
-    const winnerName =
-      winnerId === match.sideA?.id ? match.sideA?.name : match.sideB?.name;
+    const winnerName = winnerId === sideAId ? sideAName : sideBName;
 
     // Create official result
     const officialResult: OfficialResult = {
@@ -405,7 +411,7 @@ export async function finaliseResult(
     const now = Date.now();
 
     // Build update object
-    const updates: Partial<Match> & { updatedAt: number } = {
+    const updates: Partial<Match> & { updatedAt: number; winnerMemberId?: string } = {
       officialResult,
       scoreState: 'official' as ScoreState,
       status: 'completed',
@@ -424,6 +430,12 @@ export async function finaliseResult(
         submitted: false,
       },
     };
+
+    // V07.16: For league matches, also write winnerMemberId for compatibility
+    // with standings calculation and legacy code
+    if (eventType === 'league') {
+      updates.winnerMemberId = winnerId;
+    }
 
     transaction.update(matchRef, updates);
   });
@@ -464,8 +476,15 @@ export async function correctResult(
       );
     }
 
+    // Support both tournament format (sideA.id/sideB.id) and league format (memberAId/memberBId)
+    const leagueMatch = match as any;
+    const sideAId = match.sideA?.id || leagueMatch.memberAId;
+    const sideBId = match.sideB?.id || leagueMatch.memberBId;
+    const sideAName = match.sideA?.name || leagueMatch.memberAName || leagueMatch.userAName;
+    const sideBName = match.sideB?.name || leagueMatch.memberBName || leagueMatch.userBName;
+
     // Validate winnerId
-    if (winnerId !== match.sideA?.id && winnerId !== match.sideB?.id) {
+    if (winnerId !== sideAId && winnerId !== sideBId) {
       throw new DuprScoringError(
         'Winner must be sideA or sideB',
         'VALIDATION_FAILED'
@@ -473,8 +492,7 @@ export async function correctResult(
     }
 
     // Get winner name
-    const winnerName =
-      winnerId === match.sideA?.id ? match.sideA?.name : match.sideB?.name;
+    const winnerName = winnerId === sideAId ? sideAName : sideBName;
 
     // Archive current officialResult
     const currentResult = match.officialResult!;
@@ -510,7 +528,7 @@ export async function correctResult(
     const wasSubmittedToDupr = match.dupr?.submitted === true;
 
     // Build update object
-    const updates: Partial<Match> & { updatedAt: number } = {
+    const updates: Partial<Match> & { updatedAt: number; winnerMemberId?: string } = {
       officialResult: newOfficialResult,
       // Update canonical fields
       winnerId,
@@ -518,6 +536,11 @@ export async function correctResult(
       scores,
       updatedAt: Date.now(),
     };
+
+    // V07.16: For league matches, also write winnerMemberId for compatibility
+    if (eventType === 'league') {
+      updates.winnerMemberId = winnerId;
+    }
 
     // If already submitted to DUPR, flag for correction
     if (wasSubmittedToDupr && match.dupr) {
@@ -585,7 +608,7 @@ export async function setDuprEligibility(
 /**
  * Request DUPR submission for a match (organizer action)
  *
- * This sets a flag that a Cloud Function will pick up.
+ * Calls the Cloud Function to immediately submit to DUPR.
  * The actual API call happens server-side only.
  */
 export async function requestDuprSubmission(
@@ -593,74 +616,68 @@ export async function requestDuprSubmission(
   eventId: string,
   matchId: string,
   _organizerUserId: string
-): Promise<void> {
-  const matchPath = getMatchDocPath(eventType, eventId, matchId);
-  const matchRef = doc(db, matchPath);
+): Promise<{ success: boolean; message: string }> {
+  const submitMatches = httpsCallable<
+    { eventType: string; eventId: string; matchIds: string[] },
+    { success: boolean; batchId?: string; message: string; eligibleCount?: number; ineligibleCount?: number }
+  >(functions, 'dupr_submitMatches');
 
-  const matchSnap = await getDoc(matchRef);
-  if (!matchSnap.exists()) {
-    throw new DuprScoringError('Match not found', 'NOT_FOUND');
-  }
+  try {
+    const result = await submitMatches({
+      eventType,
+      eventId,
+      matchIds: [matchId],
+    });
 
-  const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
+    if (!result.data.success) {
+      throw new DuprScoringError(
+        result.data.message || 'Failed to submit match to DUPR',
+        'VALIDATION_FAILED'
+      );
+    }
 
-  // Validate eligibility
-  if (!match.officialResult) {
+    return {
+      success: true,
+      message: result.data.message || 'Match submitted to DUPR',
+    };
+  } catch (error: any) {
+    // If it's already a DuprScoringError, rethrow
+    if (error instanceof DuprScoringError) {
+      throw error;
+    }
     throw new DuprScoringError(
-      'Match must have an official result',
-      'INVALID_STATE'
+      error.message || 'Failed to submit match to DUPR',
+      'VALIDATION_FAILED'
     );
   }
+}
 
-  if (match.status !== 'completed') {
-    throw new DuprScoringError('Match must be completed', 'INVALID_STATE');
-  }
-
-  if (match.scoreState !== 'official') {
-    throw new DuprScoringError(
-      'Score must be officially finalized',
-      'INVALID_STATE'
-    );
-  }
-
-  if (match.dupr?.submitted && !match.dupr?.needsCorrection) {
-    throw new DuprScoringError(
-      'Match has already been submitted to DUPR',
-      'INVALID_STATE'
-    );
-  }
-
-  if (match.dupr?.eligible === false) {
-    throw new DuprScoringError(
-      'Match is not eligible for DUPR submission',
-      'INVALID_STATE'
-    );
-  }
-
-  // Set pending submission flag (Cloud Function will process)
-  await updateDoc(matchRef, {
-    'dupr.pendingSubmission': true,
-    'dupr.pendingSubmissionAt': Date.now(),
-    updatedAt: Date.now(),
-  });
+/**
+ * Bulk submission result - matches Cloud Function response
+ */
+export interface BulkSubmissionResult {
+  batchId: string;
+  successCount: number;
+  failedCount: number;
+  message: string;
 }
 
 /**
  * Request bulk DUPR submission for all eligible matches (organizer action)
  *
- * This calls the Cloud Function to queue all eligible matches for submission.
+ * This calls the Cloud Function to submit all eligible matches immediately.
  * The actual API calls happen server-side only.
  *
- * @returns Object with batchId and counts
+ * @returns Object with batchId and submission counts
  */
 export async function requestBulkDuprSubmission(
   eventType: EventType,
   eventId: string,
   _organizerUserId: string
-): Promise<{ batchId: string; queuedCount: number; skippedCount: number; failedCount: number }> {
+): Promise<BulkSubmissionResult> {
   const submitMatches = httpsCallable<
     { eventType: string; eventId: string; matchIds?: string[] },
-    { success: boolean; batchId?: string; eligibleCount?: number; ineligibleCount?: number; error?: string }
+    { success: boolean; batchId?: string; eligibleCount?: number; ineligibleCount?: number; message?: string; error?: string }
   >(functions, 'dupr_submitMatches');
 
   try {
@@ -670,18 +687,14 @@ export async function requestBulkDuprSubmission(
       eventId,
     });
 
-    if (!result.data.success) {
-      throw new DuprScoringError(
-        result.data.error || 'Failed to queue matches for DUPR submission',
-        'VALIDATION_FAILED'
-      );
-    }
-
+    // Cloud Function returns success=true if at least one match succeeded
+    // eligibleCount = successful submissions
+    // ineligibleCount = failed submissions
     return {
       batchId: result.data.batchId || '',
-      queuedCount: result.data.eligibleCount || 0,
-      skippedCount: result.data.ineligibleCount || 0,
-      failedCount: 0,
+      successCount: result.data.eligibleCount || 0,
+      failedCount: result.data.ineligibleCount || 0,
+      message: result.data.message || (result.data.success ? 'Submission complete' : 'Submission failed'),
     };
   } catch (error: any) {
     throw new DuprScoringError(
@@ -692,19 +705,28 @@ export async function requestBulkDuprSubmission(
 }
 
 /**
+ * Retry result - matches Cloud Function response
+ */
+export interface RetrySubmissionResult {
+  retriedCount: number;
+  successCount: number;
+  failedCount: number;
+}
+
+/**
  * Retry failed DUPR submissions (organizer action)
  *
  * This calls the Cloud Function to retry all failed submissions.
- * Increments attemptCount and creates a new batch.
+ * Returns detailed counts of retry results.
  */
 export async function retryFailedDuprSubmissions(
   eventType: EventType,
   eventId: string,
   _organizerUserId: string
-): Promise<{ batchId: string; retriedCount: number }> {
+): Promise<RetrySubmissionResult> {
   const retryFailed = httpsCallable<
     { eventType: string; eventId: string },
-    { success: boolean; batchId?: string; retriedCount?: number; error?: string }
+    { success: boolean; retriedCount?: number; successCount?: number; failureCount?: number; error?: string }
   >(functions, 'dupr_retryFailed');
 
   try {
@@ -721,8 +743,9 @@ export async function retryFailedDuprSubmissions(
     }
 
     return {
-      batchId: result.data.batchId || '',
       retriedCount: result.data.retriedCount || 0,
+      successCount: result.data.successCount || 0,
+      failedCount: result.data.failureCount || 0,
     };
   } catch (error: any) {
     throw new DuprScoringError(

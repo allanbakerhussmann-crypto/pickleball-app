@@ -1,22 +1,30 @@
 /**
- * LeagueScoreEntryModal Component V05.44
+ * LeagueScoreEntryModal Component V07.04
  *
  * Modal for entering league match scores with game-by-game entry.
  * Supports best of 1, 3, or 5 games with validation.
- * Includes score verification (confirm/dispute) workflow.
+ *
+ * V07.04: DUPR-Compliant Scoring
+ * - Players "Propose Score" → opponents "Sign to Acknowledge" → organizers finalize
+ * - Uses proposeScore, signScore from duprScoring service
+ * - Updated UI labels per DUPR compliance requirements
  *
  * FILE LOCATION: components/leagues/LeagueScoreEntryModal.tsx
- * VERSION: V05.44
+ * VERSION: V07.04
  */
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
-  submitLeagueMatchResult,
-  confirmMatchScore,
   notifyScoreConfirmation,
   DEFAULT_VERIFICATION_SETTINGS,
 } from '../../services/firebase';
+// V07.04: DUPR-Compliant Scoring
+import {
+  proposeScore,
+  signScore,
+  finaliseResult,
+} from '../../services/firebase/duprScoring';
 import type { LeagueMatch, GameScore, ScoreVerificationSettings } from '../../types';
 import {
   ScoreVerificationBadge,
@@ -79,21 +87,34 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   if (match.partnerAId) matchPlayerIds.push(match.partnerAId);
   if (match.partnerBId) matchPlayerIds.push(match.partnerBId);
 
-  // Check verification status (use new verification system or fall back to legacy)
+  // V07.04: Check verification status using scoreState (DUPR-compliant) with legacy fallback
   const verification = match.verification;
-  const hasScore = match.status === 'completed' || match.status === 'pending_confirmation' || match.scores?.length > 0;
-  const verificationStatus = verification?.verificationStatus ||
+  const hasScore = match.status === 'completed' || match.status === 'pending_confirmation' ||
+    match.scores?.length > 0 || match.scoreProposal?.scores?.length > 0;
+
+  // V07.04: Map scoreState to verification status for UI
+  const verificationStatus = match.scoreState === 'proposed' ? 'pending' :
+    match.scoreState === 'signed' ? 'confirmed' :
+    match.scoreState === 'disputed' ? 'disputed' :
+    match.scoreState === 'official' || match.scoreState === 'submittedToDupr' ? 'final' :
+    // Legacy fallback
+    verification?.verificationStatus ||
     (match.status === 'pending_confirmation' ? 'pending' :
      match.status === 'completed' ? 'final' : undefined);
-  const isPending = verificationStatus === 'pending' || verificationStatus === 'confirmed';
-  const isFinal = verificationStatus === 'final';
-  const isDisputed = verificationStatus === 'disputed';
 
-  // Check if user can confirm
+  const isPending = verificationStatus === 'pending' || verificationStatus === 'confirmed';
+  const isSigned = match.scoreState === 'signed'; // V07.04: Awaiting organiser
+  const isFinal = verificationStatus === 'final';
+  const isDisputed = verificationStatus === 'disputed' || match.scoreState === 'disputed';
+
+  // V07.04: Check if user can sign to acknowledge
+  // User must be opponent of the proposer (not the one who proposed)
+  const proposerId = match.scoreProposal?.enteredByUserId || match.submittedByUserId;
   const userCanConfirm = isParticipant &&
     hasScore &&
-    isPending &&
-    match.submittedByUserId !== currentUser?.uid &&
+    (match.scoreState === 'proposed' || isPending) && // V07.04: Check scoreState
+    !isSigned && // Already signed
+    proposerId !== currentUser?.uid && // Not the proposer
     !(verification?.confirmations || []).includes(currentUser?.uid || '');
 
   // Check if user can dispute
@@ -297,6 +318,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     }
   };
 
+  // V07.04: DUPR-Compliant submit handler
   const handleSubmit = async () => {
     if (!currentUser) return;
 
@@ -321,18 +343,30 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
 
       const { winnerId, gamesA, gamesB } = calculateWinner();
 
-      // Submit match result - if organizer, auto-finalize
-      await submitLeagueMatchResult(
-        leagueId,
-        match.id,
-        scores,
-        winnerId!,
-        currentUser.uid,
-        isOrganizer  // Auto-finalize if organizer submits
-      );
+      // V07.04: Use DUPR-compliant scoring
+      if (isOrganizer) {
+        // Organizer directly finalizes the result
+        await finaliseResult(
+          'league',
+          leagueId,
+          match.id,
+          scores,
+          winnerId!,
+          currentUser.uid,
+          true  // duprEligible
+        );
+      } else {
+        // Player proposes score, awaiting opponent acknowledgement
+        await proposeScore(
+          'league',
+          leagueId,
+          match.id,
+          scores,
+          winnerId!,
+          currentUser.uid
+        );
 
-      // Send notification to opponent to confirm the score (skip if organizer auto-finalized)
-      if (!isOrganizer) {
+        // Send notification to opponent to confirm the score
         const submitterName = isPlayerA ? match.memberAName : match.memberBName;
         const opponentUserId = isPlayerA ? match.userBId : match.userAId;
         const scoreDisplay = `${gamesA}-${gamesB}`;
@@ -367,7 +401,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     }
   };
 
-  // Handle confirm using new verification service
+  // V07.04: Handle sign to acknowledge using DUPR-compliant scoring
   const handleConfirm = async () => {
     if (!currentUser) return;
 
@@ -375,25 +409,21 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     setError(null);
 
     try {
-      const result = await confirmMatchScore(
+      // V07.04: Use signScore - sets scoreProposal.status to 'signed'
+      // and marks the proposal as locked (awaiting organiser finalization)
+      await signScore(
         'league',
         leagueId,
         match.id,
-        currentUser.uid,
-        verificationSettings
+        currentUser.uid
       );
 
-      if (result.success) {
-        onSuccess();
-        if (result.newStatus === 'final') {
-          onClose();
-        }
-      } else {
-        setError(result.error || result.message || 'Failed to confirm');
-      }
+      onSuccess();
+      // After signing, show "Awaiting organiser approval" state
+      // Don't close - user may want to see the updated status
     } catch (e: any) {
-      console.error('Failed to confirm score:', e);
-      setError(e.message || 'Failed to confirm score');
+      console.error('Failed to sign score:', e);
+      setError(e.message || 'Failed to sign score');
     } finally {
       setConfirming(false);
     }
@@ -414,7 +444,12 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold text-white">
-                {hasScore && !isFinal ? 'Confirm Score' : hasScore ? 'Match Score' : 'Enter Match Score'}
+                {/* V07.04: DUPR-compliant header titles */}
+                {isSigned ? 'Awaiting Organiser' :
+                  hasScore && userCanConfirm ? 'Sign to Acknowledge' :
+                  hasScore && !isFinal ? 'Score Proposed' :
+                  hasScore ? 'Match Score' :
+                  isOrganizer ? 'Finalise Score' : 'Propose Score'}
               </h2>
               {/* Verification Badge */}
               {verificationStatus && (
@@ -569,10 +604,17 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
 
         {/* Footer */}
         <div className="bg-gray-900 px-6 py-4 border-t border-gray-700">
-          {/* Waiting for confirmation message */}
-          {hasScore && isPending && !userCanConfirm && match.submittedByUserId === currentUser?.uid && (
+          {/* V07.04: Waiting for opponent to sign */}
+          {hasScore && match.scoreState === 'proposed' && !userCanConfirm && proposerId === currentUser?.uid && (
             <div className="text-sm text-yellow-400 text-center mb-3">
-              ⏳ Waiting for opponent to confirm this score...
+              ⏳ Waiting for opponent to sign and acknowledge...
+            </div>
+          )}
+
+          {/* V07.04: Score signed - awaiting organiser approval */}
+          {isSigned && (
+            <div className="text-sm text-purple-400 text-center mb-3">
+              ✓ Score acknowledged. Awaiting organiser approval.
             </div>
           )}
 
@@ -583,10 +625,10 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             </div>
           )}
 
-          {/* Confirm prompt */}
+          {/* V07.04: Sign prompt - DUPR-compliant wording */}
           {userCanConfirm && (
             <div className="text-sm text-yellow-400 text-center mb-3">
-              ⚠️ Your opponent submitted this score. Please confirm or dispute.
+              ⚠️ Your opponent proposed this score. Please sign to acknowledge or dispute.
             </div>
           )}
 
@@ -610,25 +652,26 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
               </button>
             )}
 
-            {/* Confirm button - only show when user can confirm */}
+            {/* V07.04: Sign to Acknowledge button - DUPR-compliant wording */}
             {userCanConfirm && (
               <button
                 onClick={handleConfirm}
                 disabled={confirming}
                 className="flex-1 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
               >
-                {confirming ? 'Confirming...' : 'Confirm Score'}
+                {confirming ? 'Signing...' : 'Sign to Acknowledge'}
               </button>
             )}
 
-            {/* Submit button - only show when entering new score */}
+            {/* V07.04: Propose/Finalise button - DUPR-compliant wording */}
             {!hasScore && (
               <button
                 onClick={handleSubmit}
                 disabled={loading || !canSubmitScore}
                 className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
               >
-                {loading ? 'Submitting...' : 'Submit Score'}
+                {loading ? (isOrganizer ? 'Finalising...' : 'Proposing...') :
+                  isOrganizer ? 'Finalise Official Score' : 'Propose Score'}
               </button>
             )}
           </div>

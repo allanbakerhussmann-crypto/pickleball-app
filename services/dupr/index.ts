@@ -1,18 +1,24 @@
 /**
  * DUPR Integration Service
- * 
+ *
  * Handles all DUPR API interactions:
  * - SSO Login via iframe (Login with DUPR)
  * - Match submission
  * - Player lookup
  * - Club verification
  * - Premium/Verified entitlement checks
- * 
+ *
  * FILE LOCATION: services/dupr/index.ts
- * VERSION: V05.17.1 - Fixed to use iframe-based OAuth per DUPR docs
- * 
+ * VERSION: V07.23 - Updated to use correct RaaS API endpoints per docs
+ *
+ * API DOCUMENTATION: https://dupr.gitbook.io/dupr-raas
+ * SWAGGER UAT: https://uat.mydupr.com/api/swagger-ui/index.html
+ * SWAGGER PROD: https://prod.mydupr.com/api/swagger-ui/index.html
+ *
  * IMPORTANT: Users MUST use SSO to link DUPR accounts.
  * Manual DUPR ID entry is NOT allowed per DUPR requirements.
+ *
+ * API VERSION: v1.0 (used in all endpoint paths)
  */
 
 // ============================================
@@ -48,6 +54,9 @@ const DUPR_CONFIG = {
   },
 };
 
+// API version used in endpoint paths
+const API_VERSION = 'v1.0';
+
 // Cache for API token (valid for 1 hour)
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
@@ -56,13 +65,21 @@ export const getConfig = () => {
   return DUPR_CONFIG[DUPR_CONFIG.environment];
 };
 
+// Get versioned endpoint path
+export const getEndpoint = (path: string) => {
+  const config = getConfig();
+  // Replace {version} placeholder with actual version
+  const versionedPath = path.replace('{version}', API_VERSION);
+  return `${config.baseUrl}${versionedPath}`;
+};
+
 /**
  * Get API token for DUPR RaaS API calls
  *
- * Per DUPR documentation:
+ * Per DUPR documentation (https://dupr.gitbook.io/dupr-raas/quick-start-and-token-generation):
  * 1. Base64 encode clientKey:clientSecret
- * 2. POST to /token with x-authorization header
- * 3. Token is valid for 1 hour
+ * 2. POST to /auth/{version}/token with x-authorization header
+ * 3. Token is valid for 1 hour, stateless, can be cached/shared
  */
 export async function getApiToken(): Promise<string> {
   // Return cached token if still valid (with 5 min buffer)
@@ -75,7 +92,12 @@ export async function getApiToken(): Promise<string> {
   // Base64 encode clientKey:clientSecret
   const credentials = btoa(`${config.clientKey}:${config.clientSecret}`);
 
-  const response = await fetch(`${config.baseUrl}/token`, {
+  // Use versioned endpoint: /auth/v1.0/token
+  const tokenUrl = getEndpoint('/auth/{version}/token');
+
+  console.log('[DUPR] Requesting token from:', tokenUrl);
+
+  const response = await fetch(tokenUrl, {
     method: 'POST',
     headers: {
       'x-authorization': credentials,
@@ -87,6 +109,7 @@ export async function getApiToken(): Promise<string> {
     const errorText = await response.text().catch(() => '');
     console.error('[DUPR] Token generation failed:', {
       status: response.status,
+      url: tokenUrl,
       error: errorText,
     });
     throw new Error(`Failed to get DUPR API token: ${response.status}`);
@@ -107,7 +130,78 @@ export async function getApiToken(): Promise<string> {
 
   console.log('[DUPR] API token generated successfully');
   return token;
-};
+}
+
+/**
+ * Test DUPR API connection by attempting token generation
+ * Returns diagnostic info for troubleshooting
+ */
+export async function testDuprConnection(): Promise<{
+  success: boolean;
+  environment: 'uat' | 'production';
+  baseUrl: string;
+  tokenUrl: string;
+  tokenReceived: boolean;
+  error?: string;
+  responseStatus?: number;
+}> {
+  const config = getConfig();
+  const tokenUrl = getEndpoint('/auth/{version}/token');
+
+  try {
+    // Clear cached token to force fresh request
+    cachedToken = null;
+
+    const credentials = btoa(`${config.clientKey}:${config.clientSecret}`);
+
+    console.log('[DUPR] Testing connection to:', tokenUrl);
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'x-authorization': credentials,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error('[DUPR] Connection test failed:', response.status, response.statusText);
+      return {
+        success: false,
+        environment: DUPR_CONFIG.environment,
+        baseUrl: config.baseUrl,
+        tokenUrl,
+        tokenReceived: false,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+        responseStatus: response.status,
+      };
+    }
+
+    const data = await response.json();
+    const token = data.token || data.accessToken || data.result?.token;
+
+    console.log('[DUPR] Connection test result:', token ? 'SUCCESS' : 'NO TOKEN');
+
+    return {
+      success: !!token,
+      environment: DUPR_CONFIG.environment,
+      baseUrl: config.baseUrl,
+      tokenUrl,
+      tokenReceived: !!token,
+      error: token ? undefined : 'No token in response',
+    };
+  } catch (error) {
+    console.error('[DUPR] Connection test error:', error);
+    return {
+      success: false,
+      environment: DUPR_CONFIG.environment,
+      baseUrl: config.baseUrl,
+      tokenUrl,
+      tokenReceived: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
 
 // ============================================
 // TYPES
@@ -152,12 +246,23 @@ export interface DuprMatchTeam {
   score: number[]; // Array of scores per game
 }
 
+/**
+ * Match source type for DUPR submission
+ * - CLUB: Match is from a DUPR-registered club (requires clubId)
+ * - PARTNER: Match is from a partner integration (no clubId needed)
+ */
+export type DuprMatchSource = 'CLUB' | 'PARTNER';
+
 export interface DuprMatchSubmission {
+  /** Unique identifier for this match - prevents duplicate submissions */
+  identifier: string;
+  /** Source type: CLUB (with clubId) or PARTNER (without) */
+  matchSource: DuprMatchSource;
   matchType: DuprMatchType;
   matchDate: string; // ISO date string
   eventName?: string;
   location?: string;
-  clubId?: string; // DUPR Club ID if club match
+  clubId?: string; // DUPR Club ID - required if matchSource is CLUB
   team1: DuprMatchTeam;
   team2: DuprMatchTeam;
   games: Array<{
@@ -463,10 +568,15 @@ export async function verifyClubPermission(
 /**
  * Submit a match to DUPR using RaaS API
  *
- * Per DUPR documentation:
- * - Uses token-based authentication (get token first, then use Bearer token)
+ * Per DUPR documentation (https://dupr.gitbook.io/dupr-raas):
+ * - Endpoint: POST /match/{version}/create
+ * - Uses token-based authentication (Bearer token from /auth/{version}/token)
  * - All players must have DUPR IDs
  * - At least one team must score 6+ points
+ * - No duplicate players in a single submission
+ * - No tied games (must have a winner)
+ * - Unique identifier per match (prevents duplicates)
+ * - matchSource: CLUB (with clubId) or PARTNER (without)
  *
  * @param _accessToken - User's DUPR access token (from SSO login) - kept for backwards compatibility
  * @param match - Match data to submit
@@ -475,8 +585,6 @@ export async function submitMatchToDupr(
   _accessToken: string,
   match: DuprMatchSubmission
 ): Promise<DuprMatchResult> {
-  const config = getConfig();
-
   // Validate minimum score requirement
   const hasMinimumScore = match.games.some(
     game => game.team1Score >= 6 || game.team2Score >= 6
@@ -486,16 +594,35 @@ export async function submitMatchToDupr(
     throw new Error('At least one team must score 6 or more points');
   }
 
+  // Validate no tied games
+  const hasTiedGame = match.games.some(
+    game => game.team1Score === game.team2Score
+  );
+
+  if (hasTiedGame) {
+    throw new Error('All games must have a winner (no ties allowed)');
+  }
+
+  // Validate unique identifier
+  if (!match.identifier) {
+    throw new Error('Match identifier is required for DUPR submission');
+  }
+
   // Get API token using client credentials
   const apiToken = await getApiToken();
 
+  // Use versioned endpoint: /match/v1.0/create
+  const submitUrl = getEndpoint('/match/{version}/create');
+
   // Build request body per DUPR RaaS API spec
-  const body = {
+  // See: https://uat.mydupr.com/api/swagger-ui/index.html
+  const body: Record<string, unknown> = {
+    identifier: match.identifier,
+    matchSource: match.matchSource,
     matchType: match.matchType,
     matchDate: match.matchDate,
     eventName: match.eventName,
     location: match.location,
-    clubId: match.clubId,
     team1: {
       player1Id: match.team1.player1.duprId,
       player2Id: match.team1.player2?.duprId,
@@ -507,16 +634,23 @@ export async function submitMatchToDupr(
     games: match.games,
   };
 
+  // Only include clubId if matchSource is CLUB
+  if (match.matchSource === 'CLUB' && match.clubId) {
+    body.clubId = match.clubId;
+  }
+
   console.log('[DUPR] Submitting match:', {
-    url: `${config.baseUrl}/result/submit`,
+    url: submitUrl,
+    identifier: match.identifier,
+    matchSource: match.matchSource,
     matchType: match.matchType,
     team1Player1: match.team1.player1.duprId,
     team2Player1: match.team2.player1.duprId,
     gamesCount: match.games.length,
   });
 
-  // DUPR RaaS API endpoint for match submission
-  const response = await fetch(`${config.baseUrl}/result/submit`, {
+  // DUPR RaaS API endpoint for match creation
+  const response = await fetch(submitUrl, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiToken}`,
@@ -541,7 +675,7 @@ export async function submitMatchToDupr(
     console.error('[DUPR] Submit failed:', {
       status: response.status,
       statusText: response.statusText,
-      url: response.url,
+      url: submitUrl,
       error: errorText.substring(0, 500),
     });
     throw new Error(errorMessage);
@@ -561,22 +695,30 @@ export async function submitMatchToDupr(
 
 /**
  * Delete a match from DUPR using RaaS API
+ *
+ * Endpoint: DELETE /match/{version}/delete
  */
 export async function deleteMatchFromDupr(
   _accessToken: string,
   duprMatchId: string
 ): Promise<void> {
-  const config = getConfig();
-
   // Get API token using client credentials
   const apiToken = await getApiToken();
 
-  // DUPR RaaS API endpoint for match deletion
-  const response = await fetch(`${config.baseUrl}/result/${duprMatchId}`, {
+  // Use versioned endpoint: /match/v1.0/delete
+  // Note: The delete endpoint may require the match ID in the body or as query param
+  // Check Swagger docs for exact format
+  const deleteUrl = getEndpoint('/match/{version}/delete');
+
+  console.log('[DUPR] Deleting match:', { url: deleteUrl, matchId: duprMatchId });
+
+  const response = await fetch(deleteUrl, {
     method: 'DELETE',
     headers: {
       'Authorization': `Bearer ${apiToken}`,
+      'Content-Type': 'application/json',
     },
+    body: JSON.stringify({ matchId: duprMatchId }),
   });
 
   if (!response.ok) {
@@ -619,6 +761,7 @@ export const duprService = {
   // Config
   getConfig,
   getApiToken,
+  testDuprConnection,
 
   // SSO (iframe method)
   getDuprLoginIframeUrl,

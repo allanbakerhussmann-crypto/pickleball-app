@@ -592,6 +592,8 @@ export interface Tournament {
   staffIds?: string[];
   /** Premier court settings for finals scheduling (V07.02) */
   courtSettings?: TournamentCourtSettings;
+  /** DUPR integration settings (V07.24) */
+  duprSettings?: TournamentDuprSettings;
 }
 
 /**
@@ -1275,13 +1277,21 @@ export type PointsSystemPreset = 'win_only' | 'enhanced' | 'participation' | 'cu
 /**
  * DUPR integration mode for leagues
  */
-export type LeagueDuprMode = 'none' | 'optional' | 'required';
+/**
+ * DUPR integration mode (shared by leagues and tournaments)
+ */
+export type DuprMode = 'none' | 'optional' | 'required';
+
+/**
+ * @deprecated Use DuprMode instead
+ */
+export type LeagueDuprMode = DuprMode;
 
 /**
  * DUPR integration settings for leagues
  */
 export interface LeagueDuprSettings {
-  mode: LeagueDuprMode;
+  mode: DuprMode;
   autoSubmit: boolean;
   submitTrigger: 'on_confirmation' | 'on_completion' | 'manual';
   duprClubId?: string | null;
@@ -1289,6 +1299,18 @@ export interface LeagueDuprSettings {
   minDuprRating?: number | null;
   maxDuprRating?: number | null;
   ratingType: 'singles' | 'doubles' | 'both';
+}
+
+/**
+ * DUPR integration settings for tournaments (V07.24)
+ */
+export interface TournamentDuprSettings {
+  /** DUPR mode: none (no DUPR), optional (encouraged), required (must link to register) */
+  mode: DuprMode;
+  /** Auto-submit matches to DUPR when finalized */
+  autoSubmit: boolean;
+  /** DUPR Club ID for CLUB submissions (optional) */
+  duprClubId?: string | null;
 }
 
 // ============================================

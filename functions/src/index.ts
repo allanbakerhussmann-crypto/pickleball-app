@@ -81,7 +81,7 @@ export {
 } from './phoneVerification';
 
 // ============================================
-// DUPR SUBMISSION FUNCTIONS (V07.04)
+// DUPR FUNCTIONS (V07.24)
 // ============================================
 
 export {
@@ -89,6 +89,10 @@ export {
   dupr_processQueue,
   dupr_processCorrections,
   dupr_getBatchStatus,
+  dupr_syncRatings,       // Daily rating sync
+  dupr_refreshMyRating,   // Manual rating refresh
+  dupr_testSubmitOneMatch, // Debug single match submission
+  dupr_retryFailed,       // Retry failed submissions
 } from './dupr';
 
 // ============================================
