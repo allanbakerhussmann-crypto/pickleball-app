@@ -8,6 +8,10 @@
     ],
     "rewrites": [
       {
+        "source": "/api/dupr/webhook",
+        "function": "duprWebhook"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

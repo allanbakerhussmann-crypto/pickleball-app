@@ -15,6 +15,7 @@
 
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
+import * as crypto from 'crypto';
 
 const logger = functions.logger;
 const db = admin.firestore();
@@ -29,19 +30,18 @@ const CONFIG = {
   // Switch to production URLs after DUPR approval
   ENVIRONMENT: 'uat' as 'uat' | 'production',
 
-  // UAT URLs and credentials (testing)
+  // UAT URLs (testing)
   UAT_BASE_URL: 'https://uat.mydupr.com/api',
   UAT_TOKEN_URL: 'https://uat.mydupr.com/api/auth/v1.0/token',
   UAT_MATCH_URL: 'https://uat.mydupr.com/api/match/v1.0/create',
-  UAT_CLIENT_ID: '4970118010',
-  UAT_CLIENT_KEY: 'test-ck-6181132e-cedf-45a6-fcb0-f88dda516175',
 
-  // Production URLs and credentials (after approval)
+  // Production URLs (after approval)
   PROD_BASE_URL: 'https://prod.mydupr.com/api',
   PROD_TOKEN_URL: 'https://prod.mydupr.com/api/auth/v1.0/token',
   PROD_MATCH_URL: 'https://prod.mydupr.com/api/match/v1.0/create',
-  PROD_CLIENT_ID: '', // Will be provided after UAT approval
-  PROD_CLIENT_KEY: '', // Will be provided after UAT approval
+
+  // NOTE: Credentials (client_key, client_secret) come from functions.config().dupr
+  // Never store secrets in source code
 
   // Retry configuration
   MAX_RETRIES: 3,
@@ -1668,3 +1668,578 @@ export const dupr_retryFailed = functions
     };
   }
 );
+
+// ============================================
+// HTTP Function: DUPR Webhook Handler
+// ============================================
+
+/**
+ * Generate deterministic dedupe key for webhook event
+ * Uses SHA-256 hash of normalized payload fields
+ */
+function generateWebhookDedupeKey(payload: Record<string, unknown>, rawBody?: string): string {
+  // Extract stable fields for hashing
+  const eventType = (payload?.event ?? payload?.topic ?? 'UNKNOWN') as string;
+  const clientId = (payload?.clientId ?? '') as string;
+  const message = payload?.message as Record<string, unknown> | undefined;
+  const duprId = (message?.duprId ?? '') as string;
+  const rating = message?.rating as Record<string, unknown> | undefined;
+  const matchId = (rating?.matchId ?? '') as string;
+  const singles = (rating?.singles ?? '') as string;
+  const doubles = (rating?.doubles ?? '') as string;
+
+  // Build normalized string for hashing
+  let hashInput = `${eventType}|${clientId}|${duprId}|${matchId}|${singles}|${doubles}`;
+
+  // Fallback: if no meaningful fields, hash the entire raw body
+  if (!duprId && !matchId && rawBody) {
+    hashInput = rawBody;
+  }
+
+  return crypto.createHash('sha256').update(hashInput).digest('hex').substring(0, 32);
+}
+
+/**
+ * Process DUPR rating change event
+ * Updates both duprPlayers/{duprId} snapshot and users/{uid} profile
+ */
+async function processWebhookRatingChange(payload: Record<string, unknown>): Promise<void> {
+  const message = payload?.message as Record<string, unknown> | undefined;
+  if (!message?.duprId) {
+    logger.info('[DUPR Webhook] No duprId in rating change event');
+    return;
+  }
+
+  const duprId = message.duprId as string;
+  const name = message.name as string | undefined;
+  const rating = message.rating as Record<string, unknown> | undefined;
+
+  // Parse ratings - handle "NR" (Not Rated) as null
+  const doublesRating = rating?.doubles && rating.doubles !== 'NR'
+    ? parseFloat(rating.doubles as string)
+    : null;
+  const singlesRating = rating?.singles && rating.singles !== 'NR'
+    ? parseFloat(rating.singles as string)
+    : null;
+  const doublesReliability = rating?.doublesReliability
+    ? parseFloat(rating.doublesReliability as string)
+    : null;
+  const singlesReliability = rating?.singlesReliability
+    ? parseFloat(rating.singlesReliability as string)
+    : null;
+  const matchId = rating?.matchId as number | undefined;
+
+  // 1. Upsert duprPlayers/{duprId} snapshot collection
+  const playerSnapshot: Record<string, unknown> = {
+    duprId,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    source: 'webhook',
+  };
+  if (name) playerSnapshot.name = name;
+  if (doublesRating !== null) playerSnapshot.doublesRating = doublesRating;
+  if (singlesRating !== null) playerSnapshot.singlesRating = singlesRating;
+  if (doublesReliability !== null) playerSnapshot.doublesReliability = doublesReliability;
+  if (singlesReliability !== null) playerSnapshot.singlesReliability = singlesReliability;
+  if (matchId !== undefined) playerSnapshot.lastMatchId = matchId;
+
+  await db.collection('duprPlayers').doc(duprId).set(playerSnapshot, { merge: true });
+  logger.info('[DUPR Webhook] Updated duprPlayers snapshot', { duprId });
+
+  // 2. Find and update user with this DUPR ID
+  const usersSnapshot = await db.collection('users')
+    .where('duprId', '==', duprId)
+    .limit(1)
+    .get();
+
+  if (usersSnapshot.empty) {
+    logger.info('[DUPR Webhook] No user found with duprId:', duprId);
+    return;
+  }
+
+  const userDoc = usersSnapshot.docs[0];
+
+  // IMPORTANT: duprLastSyncAt must be a number (milliseconds) for compatibility
+  // with rate limiting in dupr_refreshMyRating which does Date.now() - lastSync
+  const nowMs = Date.now();
+  const userUpdates: Record<string, unknown> = {
+    duprLastSyncAt: nowMs,
+    duprLastSyncSource: 'webhook',
+    updatedAt: nowMs,
+  };
+
+  if (doublesRating !== null) userUpdates.duprDoublesRating = doublesRating;
+  if (singlesRating !== null) userUpdates.duprSinglesRating = singlesRating;
+  if (doublesReliability !== null) userUpdates.duprDoublesReliability = doublesReliability;
+  if (singlesReliability !== null) userUpdates.duprSinglesReliability = singlesReliability;
+
+  await userDoc.ref.update(userUpdates);
+  logger.info('[DUPR Webhook] Updated user ratings', {
+    userId: userDoc.id,
+    duprId,
+    doublesRating,
+    singlesRating,
+  });
+}
+
+/**
+ * DUPR Webhook Handler
+ *
+ * Receives webhook events from DUPR for rating changes.
+ * - GET: DUPR validation ping (returns 200)
+ * - POST: Webhook event (stores + processes, always returns 200)
+ *
+ * Key behaviors:
+ * - Deterministic dedupe via SHA-256 hash of payload
+ * - Always returns 200 quickly (never blocks on processing)
+ * - Stores raw events for auditing in duprWebhookEvents
+ * - Updates duprPlayers/{duprId} snapshot + users/{uid} profile
+ */
+export const duprWebhook = functions.https.onRequest(async (req, res) => {
+  // Handle OPTIONS (harmless, not needed for server-to-server)
+  if (req.method === 'OPTIONS') {
+    res.status(200).send('');
+    return;
+  }
+
+  // GET = DUPR validation ping (happens when registering webhook)
+  if (req.method === 'GET') {
+    logger.info('[DUPR Webhook] Validation ping received');
+    res.status(200).send('ok');
+    return;
+  }
+
+  // POST = webhook event
+  if (req.method === 'POST') {
+    // Get raw body for stable hashing (req.rawBody is the actual bytes received)
+    // Do NOT use JSON.stringify(payload) as fallback - key order is not stable
+    const rawBody = req.rawBody
+      ? req.rawBody.toString('utf8')
+      : undefined;
+
+    // Parse payload (may be already parsed or raw string)
+    let payload: Record<string, unknown>;
+
+    try {
+      if (typeof req.body === 'string') {
+        payload = JSON.parse(req.body);
+      } else {
+        payload = req.body || {};
+      }
+    } catch {
+      logger.error('[DUPR Webhook] Failed to parse request body');
+      res.status(200).send('ok'); // Still return 200 to prevent retries
+      return;
+    }
+
+    // Generate deterministic dedupe key using raw body for stable hashing
+    const dedupeKey = generateWebhookDedupeKey(payload, rawBody);
+
+    // Extract event type (DUPR uses 'event' field, but support 'topic' as fallback)
+    const request = payload?.request as Record<string, unknown> | undefined;
+    const eventType = (payload?.event ?? payload?.topic ?? request?.event ?? 'UNKNOWN') as string;
+
+    logger.info('[DUPR Webhook] Event received', {
+      dedupeKey,
+      eventType,
+      clientId: payload?.clientId,
+    });
+
+    // Best-effort: Store raw event for auditing + dedupe
+    try {
+      const eventRef = db.collection('duprWebhookEvents').doc(dedupeKey);
+      const existingEvent = await eventRef.get();
+
+      if (existingEvent.exists) {
+        logger.info('[DUPR Webhook] Duplicate event, skipping processing', { dedupeKey });
+        res.status(200).send('ok');
+        return;
+      }
+
+      // Store the event
+      await eventRef.set({
+        ...payload,
+        dedupeKey,
+        eventType,
+        receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+        processed: false,
+      });
+    } catch (storeError) {
+      logger.error('[DUPR Webhook] Failed to store event (continuing anyway)', {
+        error: storeError instanceof Error ? storeError.message : 'Unknown',
+      });
+      // Continue processing even if storage fails
+    }
+
+    // Best-effort: Process based on event type
+    try {
+      if (eventType === 'RATING') {
+        await processWebhookRatingChange(payload);
+
+        // Mark as processed
+        try {
+          await db.collection('duprWebhookEvents').doc(dedupeKey).update({
+            processed: true,
+            processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch {
+          // Ignore update failure
+        }
+      } else if (eventType === 'REGISTRATION') {
+        // Validation event from DUPR when webhook is first registered
+        logger.info('[DUPR Webhook] Registration validation received');
+        try {
+          await db.collection('duprWebhookEvents').doc(dedupeKey).update({
+            processed: true,
+            processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch {
+          // Ignore update failure
+        }
+      } else {
+        logger.info('[DUPR Webhook] Unknown event type, stored for review', { eventType });
+      }
+    } catch (processError) {
+      logger.error('[DUPR Webhook] Error processing event (still returning 200)', {
+        error: processError instanceof Error ? processError.message : 'Unknown',
+        dedupeKey,
+        eventType,
+      });
+      // Continue to return 200 - never let processing errors cause retries
+    }
+
+    res.status(200).send('ok');
+    return;
+  }
+
+  // Unknown method - still return 200 to be safe
+  res.status(200).send('ok');
+});
+
+// ============================================
+// Callable Function: Subscribe to DUPR Rating Changes
+// ============================================
+
+/**
+ * Subscribe user(s) to DUPR rating change notifications
+ *
+ * After registering the webhook with DUPR, call this to subscribe
+ * specific users (by DUPR ID) to receive rating notifications.
+ *
+ * Endpoint: POST /v1.0/subscribe/rating-changes
+ */
+export const dupr_subscribeToRatings = functions.https.onCall(
+  async (data: { duprIds: string[] }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const { duprIds } = data;
+    if (!duprIds || !Array.isArray(duprIds) || duprIds.length === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'duprIds array required');
+    }
+
+    const token = await getDuprToken();
+    if (!token) {
+      throw new functions.https.HttpsError('unavailable', 'Failed to get DUPR token');
+    }
+
+    const baseUrl = CONFIG.ENVIRONMENT === 'production'
+      ? CONFIG.PROD_BASE_URL
+      : CONFIG.UAT_BASE_URL;
+
+    try {
+      const response = await fetch(`${baseUrl}/v1.0/subscribe/rating-changes`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ duprIds }),
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok) {
+        logger.error('[DUPR Subscribe] Failed', {
+          status: response.status,
+          response: responseData,
+        });
+        throw new functions.https.HttpsError(
+          'internal',
+          responseData.message || 'Subscription failed'
+        );
+      }
+
+      logger.info('[DUPR Subscribe] Success', {
+        duprIds,
+        response: responseData,
+      });
+
+      return {
+        success: true,
+        subscribedCount: duprIds.length,
+        response: responseData,
+      };
+    } catch (error) {
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      logger.error('[DUPR Subscribe] Exception', {
+        error: error instanceof Error ? error.message : 'Unknown',
+      });
+      throw new functions.https.HttpsError('internal', 'Subscription request failed');
+    }
+  }
+);
+
+// ============================================
+// Callable Function: Get DUPR Subscriptions
+// ============================================
+
+/**
+ * Helper function to subscribe a single DUPR ID to rating notifications
+ * DUPR API expects body to be an array of DUPR IDs: ["GGEGNM"]
+ */
+async function subscribeSingleDuprId(
+  duprId: string,
+  token: string,
+  baseUrl: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${baseUrl}/v1.0/subscribe/rating-changes`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      // Body is just the array: ["GGEGNM"]
+      body: JSON.stringify([duprId]),
+    });
+
+    const responseData = await response.json();
+
+    if (response.ok && responseData?.status !== 'FAILURE') {
+      return { success: true };
+    } else {
+      const errorMsg = responseData?.message || responseData?.error || JSON.stringify(responseData);
+      return { success: false, error: errorMsg };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+/**
+ * Subscribe ALL users with linked DUPR accounts to rating notifications
+ *
+ * This batch function:
+ * 1. Queries all users with a duprId
+ * 2. Subscribes them ONE BY ONE (DUPR doesn't support batch)
+ * 3. Returns count of subscribed users
+ *
+ * Run this once after registering your webhook, then new users
+ * will be auto-subscribed when they link their DUPR account.
+ */
+export const dupr_subscribeAllUsers = functions
+  .runWith({ timeoutSeconds: 540 }) // 9 min timeout for one-at-a-time calls
+  .https.onCall(async (_data: unknown, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    // Check if user is admin (supports multiple field patterns)
+    const userDoc = await db.collection('users').doc(context.auth.uid).get();
+    const userData = userDoc.data();
+    const isAdmin = userData?.role === 'app_admin' ||
+                    userData?.roles?.includes('app_admin') ||
+                    userData?.isAppAdmin === true ||
+                    userData?.isRootAdmin === true;
+    if (!isAdmin) {
+      throw new functions.https.HttpsError('permission-denied', 'Only admins can bulk subscribe');
+    }
+
+    logger.info('[DUPR] Starting bulk subscription of all users with DUPR IDs');
+
+    // Get all users with DUPR IDs
+    const usersWithDupr = await db.collection('users')
+      .where('duprId', '!=', null)
+      .get();
+
+    if (usersWithDupr.empty) {
+      return { success: true, message: 'No users with DUPR IDs found', subscribedCount: 0 };
+    }
+
+    // Collect all DUPR IDs
+    const duprIds: string[] = [];
+    for (const doc of usersWithDupr.docs) {
+      const duprId = doc.data().duprId;
+      if (duprId && typeof duprId === 'string') {
+        duprIds.push(duprId);
+      }
+    }
+
+    logger.info(`[DUPR] Found ${duprIds.length} users with DUPR IDs`, { duprIds });
+
+    if (duprIds.length === 0) {
+      return { success: true, message: 'No valid DUPR IDs found', subscribedCount: 0 };
+    }
+
+    // Get DUPR token
+    const token = await getDuprToken();
+    if (!token) {
+      throw new functions.https.HttpsError('unavailable', 'Failed to get DUPR token');
+    }
+
+    const baseUrl = CONFIG.ENVIRONMENT === 'production'
+      ? CONFIG.PROD_BASE_URL
+      : CONFIG.UAT_BASE_URL;
+
+    // Subscribe ONE BY ONE (DUPR API doesn't accept arrays)
+    let subscribedCount = 0;
+    const errors: string[] = [];
+
+    for (let i = 0; i < duprIds.length; i++) {
+      const duprId = duprIds[i];
+
+      const result = await subscribeSingleDuprId(duprId, token, baseUrl);
+
+      if (result.success) {
+        subscribedCount++;
+        logger.info(`[DUPR] Subscribed ${i + 1}/${duprIds.length}: ${duprId}`);
+      } else {
+        logger.error(`[DUPR] Failed to subscribe ${duprId}:`, { error: result.error });
+        errors.push(`${duprId}: ${result.error}`);
+      }
+
+      // Small delay between requests to avoid rate limiting
+      if (i < duprIds.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    logger.info(`[DUPR] Bulk subscription complete: ${subscribedCount}/${duprIds.length} subscribed`);
+
+    return {
+      success: errors.length === 0,
+      message: `Subscribed ${subscribedCount} of ${duprIds.length} users`,
+      subscribedCount,
+      totalUsers: duprIds.length,
+      errors: errors.length > 0 ? errors : undefined,
+    };
+  });
+
+/**
+ * Get current DUPR rating subscriptions
+ *
+ * Returns list of users currently subscribed to rating notifications.
+ * Endpoint: GET /v1.0/subscribe/rating-changes
+ */
+export const dupr_getSubscriptions = functions.https.onCall(
+  async (_data: unknown, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const token = await getDuprToken();
+    if (!token) {
+      throw new functions.https.HttpsError('unavailable', 'Failed to get DUPR token');
+    }
+
+    const baseUrl = CONFIG.ENVIRONMENT === 'production'
+      ? CONFIG.PROD_BASE_URL
+      : CONFIG.UAT_BASE_URL;
+
+    try {
+      const response = await fetch(`${baseUrl}/v1.0/subscribe/rating-changes`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new functions.https.HttpsError('internal', 'Failed to fetch subscriptions');
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      logger.error('[DUPR Subscriptions] Exception', {
+        error: error instanceof Error ? error.message : 'Unknown',
+      });
+      throw new functions.https.HttpsError('internal', 'Failed to fetch subscriptions');
+    }
+  }
+);
+
+// ============================================
+// Firestore Trigger: Auto-Subscribe on DUPR Link
+// ============================================
+
+/**
+ * Auto-subscribe user to DUPR rating notifications when they link their account
+ *
+ * Triggers when a user document is updated and:
+ * - duprId is added (didn't exist before, exists now)
+ * - duprId is changed (different value)
+ *
+ * This ensures new users get webhook notifications automatically.
+ */
+export const dupr_onUserDuprLinked = functions.firestore
+  .document('users/{userId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+
+    const oldDuprId = before?.duprId;
+    const newDuprId = after?.duprId;
+
+    // Only trigger if duprId was added or changed
+    if (!newDuprId || newDuprId === oldDuprId) {
+      return;
+    }
+
+    logger.info('[DUPR] User linked DUPR account, auto-subscribing', {
+      userId: context.params.userId,
+      duprId: newDuprId,
+    });
+
+    // Get DUPR token
+    const token = await getDuprToken();
+    if (!token) {
+      logger.error('[DUPR] Auto-subscribe failed: could not get token');
+      return;
+    }
+
+    const baseUrl = CONFIG.ENVIRONMENT === 'production'
+      ? CONFIG.PROD_BASE_URL
+      : CONFIG.UAT_BASE_URL;
+
+    // Subscribe this user to rating notifications
+    const result = await subscribeSingleDuprId(newDuprId, token, baseUrl);
+
+    if (result.success) {
+      logger.info('[DUPR] Auto-subscribed user to rating notifications', {
+        userId: context.params.userId,
+        duprId: newDuprId,
+      });
+
+      // Mark user as subscribed
+      await change.after.ref.update({
+        duprSubscribed: true,
+        duprSubscribedAt: Date.now(),
+      });
+    } else {
+      logger.error('[DUPR] Auto-subscribe failed', {
+        userId: context.params.userId,
+        duprId: newDuprId,
+        error: result.error,
+      });
+    }
+  });

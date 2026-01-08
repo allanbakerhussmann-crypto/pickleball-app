@@ -38,7 +38,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.comms_processLeagueQueue = exports.comms_processQueue = exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_seedSMSBundles = exports.stripe_purchaseSMSBundle = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
+exports.comms_processLeagueQueue = exports.comms_processQueue = exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_seedSMSBundles = exports.stripe_purchaseSMSBundle = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -105,6 +105,12 @@ Object.defineProperty(exports, "dupr_syncRatings", { enumerable: true, get: func
 Object.defineProperty(exports, "dupr_refreshMyRating", { enumerable: true, get: function () { return dupr_1.dupr_refreshMyRating; } });
 Object.defineProperty(exports, "dupr_testSubmitOneMatch", { enumerable: true, get: function () { return dupr_1.dupr_testSubmitOneMatch; } });
 Object.defineProperty(exports, "dupr_retryFailed", { enumerable: true, get: function () { return dupr_1.dupr_retryFailed; } });
+// Webhook & subscriptions (V07.25)
+Object.defineProperty(exports, "duprWebhook", { enumerable: true, get: function () { return dupr_1.duprWebhook; } });
+Object.defineProperty(exports, "dupr_subscribeToRatings", { enumerable: true, get: function () { return dupr_1.dupr_subscribeToRatings; } });
+Object.defineProperty(exports, "dupr_subscribeAllUsers", { enumerable: true, get: function () { return dupr_1.dupr_subscribeAllUsers; } });
+Object.defineProperty(exports, "dupr_getSubscriptions", { enumerable: true, get: function () { return dupr_1.dupr_getSubscriptions; } });
+Object.defineProperty(exports, "dupr_onUserDuprLinked", { enumerable: true, get: function () { return dupr_1.dupr_onUserDuprLinked; } });
 // ============================================
 // MIGRATION FUNCTIONS (V07.04)
 // ============================================

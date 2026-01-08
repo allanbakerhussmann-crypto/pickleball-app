@@ -90,6 +90,11 @@ const AdminDashboard: React.FC = () => {
     result?: { success: boolean; message?: string; error?: string };
   } | null>(null);
 
+  const [duprSubscribeAll, setDuprSubscribeAll] = useState<{
+    subscribing: boolean;
+    result?: { success: boolean; message?: string; subscribedCount?: number; totalUsers?: number; error?: string; errors?: string[] };
+  } | null>(null);
+
   // ============================================
   // LOAD DATA
   // ============================================
@@ -429,6 +434,64 @@ const AdminDashboard: React.FC = () => {
                 {duprTestResult?.result && !duprTestResult.testing && (
                   <span className={duprTestResult.result.success ? 'text-green-400' : 'text-red-400'}>
                     {duprTestResult.result.success ? '✓' : '✗'}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={async () => {
+                  setDuprSubscribeAll({ subscribing: true });
+                  try {
+                    const functions = getFunctions();
+                    const subscribeAll = httpsCallable<void, {
+                      success: boolean;
+                      message: string;
+                      subscribedCount: number;
+                      totalUsers: number;
+                      errors?: string[];
+                    }>(functions, 'dupr_subscribeAllUsers');
+                    const result = await subscribeAll();
+                    setDuprSubscribeAll({
+                      subscribing: false,
+                      result: {
+                        success: result.data.success,
+                        message: result.data.message,
+                        subscribedCount: result.data.subscribedCount,
+                        totalUsers: result.data.totalUsers,
+                        errors: result.data.errors,
+                      }
+                    });
+                  } catch (err) {
+                    setDuprSubscribeAll({
+                      subscribing: false,
+                      result: { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+                    });
+                  }
+                }}
+                className="w-full text-left px-4 py-3 bg-gray-900 hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-3"
+              >
+                <span className="text-2xl">📡</span>
+                <div className="flex-1">
+                  <p className="text-white font-medium">Subscribe All DUPR Users</p>
+                  <p className="text-gray-500 text-xs">
+                    {duprSubscribeAll?.subscribing
+                      ? 'Subscribing...'
+                      : duprSubscribeAll?.result
+                        ? duprSubscribeAll.result.success
+                          ? `✓ ${duprSubscribeAll.result.message}`
+                          : `✗ ${duprSubscribeAll.result.message || duprSubscribeAll.result.errors?.[0] || duprSubscribeAll.result.error || 'Failed'}`
+                        : 'Subscribe all users to DUPR rating webhooks'
+                    }
+                  </p>
+                </div>
+                {duprSubscribeAll?.subscribing && (
+                  <svg className="w-5 h-5 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                )}
+                {duprSubscribeAll?.result && !duprSubscribeAll.subscribing && (
+                  <span className={duprSubscribeAll.result.success ? 'text-green-400' : 'text-red-400'}>
+                    {duprSubscribeAll.result.success ? '✓' : '✗'}
                   </span>
                 )}
               </button>

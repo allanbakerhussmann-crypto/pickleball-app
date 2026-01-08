@@ -821,6 +821,93 @@ none → proposed → signed → official → submittedToDupr
 3. **Verify credentials**: `firebase functions:config:get` shows `dupr.client_key` and `dupr.client_secret`
 4. **Check for duplicates**: "Already exists" means match was previously submitted
 
+### Webhook Integration (V07.25)
+
+Real-time rating updates via DUPR webhooks. Complements the daily `dupr_syncRatings` cron job.
+
+#### Architecture
+
+```
+DUPR Server → POST /api/dupr/webhook → Firebase Hosting → duprWebhook Cloud Function
+                                                              ↓
+                                                     duprWebhookEvents/{id}
+                                                              ↓
+                                                     users/{uid} profile update
+```
+
+#### Webhook Functions
+
+| Function | Type | Purpose |
+|----------|------|---------|
+| `duprWebhook` | HTTP (`onRequest`) | Receives webhook events from DUPR |
+| `dupr_subscribeToRatings` | Callable | Subscribe specific users to notifications |
+| `dupr_subscribeAllUsers` | Callable | Bulk subscribe all users with DUPR IDs (admin) |
+| `dupr_getSubscriptions` | Callable | List current subscriptions |
+| `dupr_onUserDuprLinked` | Firestore trigger | Auto-subscribe when user links DUPR |
+
+#### Subscription API Format
+
+**CRITICAL**: The DUPR subscribe API expects the body as a raw array, NOT wrapped in an object:
+
+```typescript
+// CORRECT - just the array
+body: JSON.stringify(["GGEGNM"])
+
+// WRONG - don't wrap in object
+body: JSON.stringify({ duprIds: ["GGEGNM"] })
+```
+
+Subscribe one user at a time (no batch support).
+
+#### Webhook Event Format
+
+```typescript
+{
+  "clientId": "1111",
+  "event": "RATING",
+  "message": {
+    "duprId": "ABC123",
+    "name": "Player Name",
+    "rating": {
+      "singles": "4.0",
+      "doubles": "4.5",
+      "singlesReliability": "4.0",
+      "doublesReliability": "4.0",
+      "matchId": 12345
+    }
+  }
+}
+```
+
+#### Key Implementation Details
+
+1. **Dedupe**: SHA-256 hash of payload fields prevents duplicate processing
+2. **Always return 200**: Never let processing errors cause DUPR retries
+3. **duprLastSyncAt must be number**: Use `Date.now()` not Firestore Timestamp (for rate limiting compatibility)
+4. **Auto-subscribe**: `dupr_onUserDuprLinked` trigger subscribes users when they link DUPR account
+5. **Webhook URL**: `/api/dupr/webhook` (Firebase Hosting rewrite BEFORE catch-all)
+
+#### Firestore Collections
+
+- `duprWebhookEvents/{dedupeKey}` - Raw events for auditing
+- `duprPlayers/{duprId}` - Rating snapshots by DUPR ID
+- `users/{uid}` - Updated with `duprLastSyncSource: 'webhook'`
+
+#### User Fields Updated by Webhook
+
+```typescript
+{
+  duprDoublesRating: number;
+  duprSinglesRating: number;
+  duprDoublesReliability: number;
+  duprSinglesReliability: number;
+  duprLastSyncAt: number;        // Must be milliseconds, not Timestamp
+  duprLastSyncSource: 'webhook'; // Track update source
+  duprSubscribed: boolean;       // Set by auto-subscribe trigger
+  duprSubscribedAt: number;
+}
+```
+
 ---
 
 ## Phone Verification System

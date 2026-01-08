@@ -93,6 +93,12 @@ export {
   dupr_refreshMyRating,   // Manual rating refresh
   dupr_testSubmitOneMatch, // Debug single match submission
   dupr_retryFailed,       // Retry failed submissions
+  // Webhook & subscriptions (V07.25)
+  duprWebhook,            // HTTP webhook handler for DUPR rating events
+  dupr_subscribeToRatings, // Subscribe users to rating notifications
+  dupr_subscribeAllUsers,  // Bulk subscribe ALL users with DUPR IDs (admin only)
+  dupr_getSubscriptions,   // List current subscriptions
+  dupr_onUserDuprLinked,   // Auto-subscribe when user links DUPR account
 } from './dupr';
 
 // ============================================
