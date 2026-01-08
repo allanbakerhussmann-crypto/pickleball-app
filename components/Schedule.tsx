@@ -21,6 +21,8 @@ interface QueueMatchModel {
 
 interface ScheduleProps {
   matches: MatchDisplay[];
+  /** V07.07: All matches across all divisions (for Live Courts display) */
+  allMatches?: MatchDisplay[];
   courts?: Court[];
   queue?: MatchDisplay[];
   queueMatchModels?: QueueMatchModel[];  // Queue with rest time info
@@ -33,17 +35,23 @@ interface ScheduleProps {
     reason?: string
   ) => void;
   isVerified: boolean;
+  /** V07.07: Hide match list (useful when matches are shown in other tabs like Pool Stage) */
+  hideMatchList?: boolean;
 }
 
 export const Schedule: React.FC<ScheduleProps> = ({
   matches,
+  allMatches,
   courts = [],
   queue = [],
   queueMatchModels = [],
   waitTimes = {},
   onUpdateScore,
   isVerified,
+  hideMatchList = false,
 }) => {
+  // V07.07: Use allMatches for court display (shows all divisions), fallback to matches
+  const matchesForCourts = allMatches || matches;
   const { currentUser } = useAuth();
 
   // For updating rest countdown every second
@@ -54,14 +62,15 @@ export const Schedule: React.FC<ScheduleProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Active Matches on Courts
+  // Active Matches on Courts - V07.07: Use matchesForCourts (all divisions) to show who's on each court
   const matchesOnCourt = useMemo(() => {
     const active: Array<{ court: Court; match: MatchDisplay | null }> = [];
     (courts || [])
       .filter(c => c.active)
       .forEach(c => {
         // Any non-completed match assigned to this court (waiting or playing)
-        const matchOnCourt = (matches || []).find(
+        // V07.07: Uses all matches across divisions so players see who's actually on each court
+        const matchOnCourt = (matchesForCourts || []).find(
           m =>
             m.status !== 'completed' &&
             (m as any).court === c.name
@@ -75,7 +84,7 @@ export const Schedule: React.FC<ScheduleProps> = ({
         }
       });
     return active;
-  }, [courts, matches]);
+  }, [courts, matchesForCourts]);
 
   // Court statistics for wait time estimation
   const courtStats = useMemo(() => {
@@ -500,41 +509,42 @@ export const Schedule: React.FC<ScheduleProps> = ({
         </div>
       )}
 
-      {/* Match List */}
-      <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
-        <h2 className="text-2xl font-bold mb-4 text-green-400">Match List</h2>
-        {(matches || []).length === 0 ? (
-          <div className="text-center text-gray-400 italic py-10">
-            <p>Generate a schedule after adding teams.</p>
-          </div>
-        ) : (
-                    <div className="space-y-3">
-            {(matches || []).map((match, index) => {
-              // Is the logged-in user a player in this match?
-              const isPlayerInThisMatch =
-                !!currentUser &&
-                (
-                  (match.team1?.players || []).some(p => p.name === currentUser.displayName) ||
-                  (match.team2?.players || []).some(p => p.name === currentUser.displayName)
+      {/* Match List - V07.07: Conditionally hidden for pool_play_medals (shown in Pool Stage tab) */}
+      {!hideMatchList && (
+        <div className="bg-gray-800 rounded-lg p-6 shadow-lg">
+          <h2 className="text-2xl font-bold mb-4 text-green-400">Match List</h2>
+          {(matches || []).length === 0 ? (
+            <div className="text-center text-gray-400 italic py-10">
+              <p>Generate a schedule after adding teams.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {(matches || []).map((match, index) => {
+                // Is the logged-in user a player in this match?
+                const isPlayerInThisMatch =
+                  !!currentUser &&
+                  (
+                    (match.team1?.players || []).some(p => p.name === currentUser.displayName) ||
+                    (match.team2?.players || []).some(p => p.name === currentUser.displayName)
+                  );
+
+                return (
+                  <MatchCard
+                    key={match.id}
+                    match={match}
+                    matchNumber={index + 1}
+                    onUpdateScore={onUpdateScore}
+                    isVerified={isVerified}
+                    isWaitingOnYou={(match as any).isWaitingOnYou}
+                    canCurrentUserConfirm={(match as any).canCurrentUserConfirm}
+                    canCurrentUserEdit={isPlayerInThisMatch}
+                  />
                 );
-
-              return (
-                <MatchCard
-                  key={match.id}
-                  match={match}
-                  matchNumber={index + 1}
-                  onUpdateScore={onUpdateScore}
-                  isVerified={isVerified}
-                  isWaitingOnYou={(match as any).isWaitingOnYou}
-                  canCurrentUserConfirm={(match as any).canCurrentUserConfirm}
-                  canCurrentUserEdit={isPlayerInThisMatch}
-                />
-              );
-            })}
-          </div>
-
-        )}
-      </div>
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

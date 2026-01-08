@@ -82,6 +82,22 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showPhoneVerification, setShowPhoneVerification] = useState(false);
 
+    // Auto-correct legacy phone numbers without country code
+    const normalizePhone = (phone: string | undefined): string => {
+        if (!phone) return '';
+        // Already in E.164 format
+        if (phone.startsWith('+')) return phone;
+        // NZ mobile numbers starting with 02, landlines 03, 04, 06, 07, 09
+        if (/^0[2-47-9]/.test(phone)) {
+            return '+64' + phone.slice(1); // Remove leading 0, add +64
+        }
+        // AU numbers starting with 04
+        if (phone.startsWith('04') && phone.length === 10) {
+            return '+61' + phone.slice(1);
+        }
+        return phone; // Return as-is if can't determine format
+    };
+
     useEffect(() => {
         if (userProfile) {
             // Prefer loaded profile data
@@ -93,7 +109,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             setGender((userProfile.gender as UserGender) || '');
             setCountry(extendedProfile?.country || 'NZL');
             setRegion(userProfile.region || '');
-            setPhone(userProfile.phone || '');
+            setPhone(normalizePhone(userProfile.phone));
             setPlaysHand(extendedProfile?.playsHand || '');
             setHeight(extendedProfile?.height || '');
             

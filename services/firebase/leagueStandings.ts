@@ -23,7 +23,7 @@ import type { LeagueMatch, LeagueMember, LeagueStandingsDoc, LeagueStandingsRow,
 // CONSTANTS
 // ============================================
 
-const CALCULATION_VERSION = 'v07.14';
+const CALCULATION_VERSION = 'v07.16';
 
 // ============================================
 // VALIDATION (FAIL LOUDLY)
@@ -32,14 +32,18 @@ const CALCULATION_VERSION = 'v07.14';
 /**
  * Validate match data before calculation
  * @throws Error with descriptive message if validation fails
+ *
+ * V07.16: DUPR scoring uses `winnerId` (Match type), league matches use `winnerMemberId`.
+ * This function checks both fields for compatibility with both scoring flows.
  */
 function validateMatch(match: LeagueMatch, memberIds: Set<string>): void {
-  // 1. Completed match must have winner
-  // V07.16: Check both winnerMemberId (LeagueMatch) and winnerId (Match/duprScoring)
+  // V07.16: Support both winnerMemberId (LeagueMatch) and winnerId (Match/duprScoring)
   const winnerId = match.winnerMemberId || (match as any).winnerId;
+
+  // 1. Completed match must have winner
   if (match.status === 'completed' && !winnerId) {
     throw new Error(
-      `INVALID DATA: Match ${match.id} is 'completed' but has no winner. ` +
+      `INVALID DATA: Match ${match.id} is 'completed' but has no winner (checked both winnerMemberId and winnerId). ` +
       `Fix the match data before recalculating standings.`
     );
   }
@@ -58,13 +62,13 @@ function validateMatch(match: LeagueMatch, memberIds: Set<string>): void {
     );
   }
 
-  // 3. Winner must be a participant
-  if (match.winnerMemberId &&
-      match.winnerMemberId !== match.memberAId &&
-      match.winnerMemberId !== match.memberBId) {
+  // 3. Winner must be a participant (check using the combined winnerId)
+  if (winnerId &&
+      winnerId !== match.memberAId &&
+      winnerId !== match.memberBId) {
     throw new Error(
-      `INVALID DATA: Match ${match.id} has winnerMemberId '${match.winnerMemberId}' ` +
-      `which is neither memberA nor memberB.`
+      `INVALID DATA: Match ${match.id} has winner '${winnerId}' ` +
+      `which is neither memberA (${match.memberAId}) nor memberB (${match.memberBId}).`
     );
   }
 

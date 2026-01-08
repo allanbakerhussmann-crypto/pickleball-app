@@ -1,0 +1,1310 @@
+"use strict";
+/**
+ * DUPR Submission Cloud Functions
+ *
+ * Server-side DUPR API integration for match result submission.
+ * Implements batch submission with retry logic.
+ *
+ * Functions:
+ * - dupr_submitMatches: Callable function for organizers to request submission
+ * - dupr_processQueue: Scheduled function to process pending submissions
+ * - dupr_submitCorrections: Process matches needing correction
+ *
+ * FILE LOCATION: functions/src/dupr.ts
+ * VERSION: V07.04
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = void 0;
+const functions = __importStar(require("firebase-functions"));
+const admin = __importStar(require("firebase-admin"));
+const logger = functions.logger;
+const db = admin.firestore();
+// ============================================
+// Configuration
+// ============================================
+const CONFIG = {
+    // DUPR API configuration
+    // Using UAT environment for testing
+    // Switch to production URLs after DUPR approval
+    ENVIRONMENT: 'uat',
+    // UAT URLs and credentials (testing)
+    UAT_BASE_URL: 'https://uat.mydupr.com/api',
+    UAT_TOKEN_URL: 'https://uat.mydupr.com/api/auth/v1.0/token',
+    UAT_MATCH_URL: 'https://uat.mydupr.com/api/match/v1.0/create',
+    UAT_CLIENT_ID: '4970118010',
+    UAT_CLIENT_KEY: 'test-ck-6181132e-cedf-45a6-fcb0-f88dda516175',
+    // Production URLs and credentials (after approval)
+    PROD_BASE_URL: 'https://prod.mydupr.com/api',
+    PROD_TOKEN_URL: 'https://prod.mydupr.com/api/auth/v1.0/token',
+    PROD_MATCH_URL: 'https://prod.mydupr.com/api/match/v1.0/create',
+    PROD_CLIENT_ID: '', // Will be provided after UAT approval
+    PROD_CLIENT_KEY: '', // Will be provided after UAT approval
+    // Retry configuration
+    MAX_RETRIES: 3,
+    RETRY_DELAYS: [60000, 120000, 180000], // 1min, 2min, 3min
+    // Batch configuration
+    BATCH_SIZE: 50,
+    PROCESS_INTERVAL_MINUTES: 5,
+};
+// Get URL based on environment
+const getTokenUrl = () => CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_TOKEN_URL : CONFIG.PROD_TOKEN_URL;
+const getMatchUrl = () => CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_MATCH_URL : CONFIG.PROD_MATCH_URL;
+// ============================================
+// Helper Functions
+// ============================================
+/**
+ * Get DUPR API token using client credentials
+ * Per DUPR RaaS docs: https://dupr.gitbook.io/dupr-raas/quick-start-and-token-generation
+ */
+async function getDuprToken() {
+    var _a, _b, _c;
+    // Get credentials from Firebase config
+    const config = functions.config();
+    const clientKey = (_a = config.dupr) === null || _a === void 0 ? void 0 : _a.client_key;
+    const clientSecret = (_b = config.dupr) === null || _b === void 0 ? void 0 : _b.client_secret;
+    if (!clientKey || !clientSecret) {
+        logger.error('[DUPR] Missing API credentials in config', {
+            hasClientKey: !!clientKey,
+            hasClientSecret: !!clientSecret,
+        });
+        return null;
+    }
+    try {
+        // Base64 encode clientKey:clientSecret as per DUPR docs
+        const credentials = Buffer.from(`${clientKey}:${clientSecret}`).toString('base64');
+        const tokenUrl = getTokenUrl();
+        logger.info('[DUPR] Requesting token from:', tokenUrl);
+        // Request token from DUPR API
+        const response = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: {
+                'x-authorization': credentials,
+                'Content-Type': 'application/json',
+            },
+        });
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            logger.error('[DUPR] Token request failed:', {
+                status: response.status,
+                statusText: response.statusText,
+                error: errorText.substring(0, 500),
+            });
+            return null;
+        }
+        const data = await response.json();
+        const token = data.token || data.accessToken || ((_c = data.result) === null || _c === void 0 ? void 0 : _c.token);
+        if (!token) {
+            logger.error('[DUPR] No token in response:', data);
+            return null;
+        }
+        logger.info('[DUPR] Token obtained successfully');
+        return token;
+    }
+    catch (error) {
+        logger.error('[DUPR] Token request error:', error);
+        return null;
+    }
+}
+/**
+ * Fetch DUPR IDs for player IDs from user profiles
+ */
+async function fetchDuprIdsForPlayers(playerIds) {
+    const duprIds = [];
+    for (const playerId of playerIds) {
+        if (!playerId)
+            continue;
+        try {
+            const userDoc = await db.collection('users').doc(playerId).get();
+            if (userDoc.exists) {
+                const userData = userDoc.data();
+                if (userData === null || userData === void 0 ? void 0 : userData.duprId) {
+                    duprIds.push(userData.duprId);
+                }
+            }
+        }
+        catch (error) {
+            logger.warn(`[DUPR] Failed to fetch user ${playerId}:`, error);
+        }
+    }
+    return duprIds;
+}
+/**
+ * Convert match to DUPR submission format
+ *
+ * Per DUPR RaaS API documentation:
+ * - identifier: unique match ID (required) - deterministic: ${eventType}_${eventId}_${matchId}
+ * - matchSource: CLUB or PARTNER (required)
+ * - teamA/teamB: { player1, player2?, game1, game2, ... } format
+ * - Game counts MUST match between teamA and teamB
+ *
+ * VALIDATION RULES:
+ * - No tied games (HARD BLOCK)
+ * - Game count 1-5 (HARD BLOCK)
+ * - Min 6+ score (WARNING only, unless DUPR rejects)
+ * - PARTNER: strip clubId entirely
+ * - CLUB: require clubId as number
+ */
+async function convertMatchToDuprFormat(match, eventName, eventType, eventId) {
+    var _a, _b;
+    const warnings = [];
+    if (!match.officialResult || !match.sideA || !match.sideB) {
+        logger.warn(`[DUPR] Match ${match.id} missing officialResult or sides`);
+        return { payload: null, warnings: [], error: 'Missing official result or team data' };
+    }
+    const scores = match.officialResult.scores;
+    // VALIDATION 1: Check game count (1-5 games allowed)
+    if (!scores || scores.length < 1 || scores.length > 5) {
+        logger.error(`[DUPR] Match ${match.id} invalid game count: ${(scores === null || scores === void 0 ? void 0 : scores.length) || 0}`);
+        return { payload: null, warnings: [], error: `Invalid game count: ${(scores === null || scores === void 0 ? void 0 : scores.length) || 0} (must be 1-5)` };
+    }
+    // VALIDATION 2: Check for tied games (HARD BLOCK)
+    for (const score of scores) {
+        if (score.scoreA === score.scoreB) {
+            logger.error(`[DUPR] Match ${match.id} has tied game: ${score.scoreA}-${score.scoreB}`);
+            return { payload: null, warnings: [], error: `Tied game not allowed: ${score.scoreA}-${score.scoreB}` };
+        }
+    }
+    // VALIDATION 3: Check minimum score (WARNING only)
+    const hasMinScore = scores.some(s => s.scoreA >= 6 || s.scoreB >= 6);
+    if (!hasMinScore) {
+        warnings.push('No game with minimum 6 points - DUPR may reject');
+        logger.warn(`[DUPR] Match ${match.id} warning: no game with 6+ points`);
+    }
+    // Get player IDs from match
+    const sideAPlayerIds = match.sideA.playerIds || [];
+    const sideBPlayerIds = match.sideB.playerIds || [];
+    // Determine if this is a doubles match BEFORE checking DUPR IDs
+    // Doubles = more than 1 player per side, or playType is not 'singles'
+    const isDoubles = sideAPlayerIds.length > 1 || sideBPlayerIds.length > 1 ||
+        (((_a = match.gameSettings) === null || _a === void 0 ? void 0 : _a.playType) && match.gameSettings.playType !== 'singles');
+    // First check if DUPR IDs are already on the match
+    let sideADuprIds = match.sideA.duprIds || [];
+    let sideBDuprIds = match.sideB.duprIds || [];
+    // If not on match, fetch from user profiles
+    // Wrap in try/catch to return error instead of throwing
+    try {
+        if (sideADuprIds.length === 0 && sideAPlayerIds.length > 0) {
+            sideADuprIds = await fetchDuprIdsForPlayers(sideAPlayerIds);
+        }
+        if (sideBDuprIds.length === 0 && sideBPlayerIds.length > 0) {
+            sideBDuprIds = await fetchDuprIdsForPlayers(sideBPlayerIds);
+        }
+    }
+    catch (fetchError) {
+        logger.error(`[DUPR] Failed to fetch DUPR IDs for match ${match.id}:`, {
+            error: fetchError instanceof Error ? fetchError.message : 'Unknown',
+        });
+        return {
+            payload: null,
+            warnings: [],
+            error: 'Failed to fetch player DUPR IDs: ' + (fetchError instanceof Error ? fetchError.message : 'Unknown'),
+        };
+    }
+    // VALIDATION: For doubles, ALL players must have DUPR IDs
+    // For singles, both players must have DUPR IDs
+    const expectedPerSide = isDoubles ? 2 : 1;
+    if (sideADuprIds.length < expectedPerSide || sideBDuprIds.length < expectedPerSide) {
+        const missingCount = (expectedPerSide - sideADuprIds.length) + (expectedPerSide - sideBDuprIds.length);
+        const matchType = isDoubles ? 'doubles' : 'singles';
+        logger.warn(`[DUPR] Match ${match.id} missing DUPR IDs for ${matchType}`, {
+            expected: expectedPerSide,
+            sideAPlayerCount: sideAPlayerIds.length,
+            sideBPlayerCount: sideBPlayerIds.length,
+            sideADuprCount: sideADuprIds.length,
+            sideBDuprCount: sideBDuprIds.length,
+        });
+        // Return specific error message for UI display
+        return {
+            payload: null,
+            warnings: [],
+            error: `${missingCount} player(s) missing DUPR link - all ${isDoubles ? '4' : '2'} players must link DUPR accounts`,
+        };
+    }
+    // Build teamA object - MUST have same game fields as teamB
+    const teamA = {
+        player1: sideADuprIds[0],
+    };
+    if (isDoubles && sideADuprIds[1]) {
+        teamA.player2 = sideADuprIds[1];
+    }
+    // Build teamB object
+    const teamB = {
+        player1: sideBDuprIds[0],
+    };
+    if (isDoubles && sideBDuprIds[1]) {
+        teamB.player2 = sideBDuprIds[1];
+    }
+    // Add SAME game fields to BOTH teams (critical: must match)
+    scores.forEach((score, index) => {
+        const gameNum = `game${index + 1}`;
+        teamA[gameNum] = score.scoreA;
+        teamB[gameNum] = score.scoreB;
+    });
+    // Deterministic identifier for stable retries
+    const identifier = `${eventType}_${eventId}_${match.id}`;
+    // Get club ID from config
+    const config = functions.config();
+    const clubId = (_b = config.dupr) === null || _b === void 0 ? void 0 : _b.club_id;
+    // HARD RULE: matchSource determines clubId handling
+    const matchSource = clubId ? 'CLUB' : 'PARTNER';
+    // Build submission payload
+    const submission = {
+        identifier,
+        event: eventName,
+        format: isDoubles ? 'DOUBLES' : 'SINGLES',
+        matchDate: new Date(match.officialResult.finalisedAt).toISOString().split('T')[0],
+        matchSource,
+        teamA,
+        teamB,
+    };
+    // HARD RULE: Only add clubId if CLUB source, strip entirely if PARTNER
+    if (matchSource === 'CLUB') {
+        const parsedClubId = parseInt(clubId, 10);
+        if (isNaN(parsedClubId)) {
+            logger.error(`[DUPR] Invalid clubId: ${clubId}`);
+            return { payload: null, warnings, error: 'Invalid club ID configuration' };
+        }
+        submission.clubId = parsedClubId;
+    }
+    // If PARTNER, clubId is NOT added (not even null)
+    // Safe logging - no player IDs, no credentials
+    logger.info(`[DUPR] Formatted match ${match.id}:`, {
+        identifier,
+        matchSource,
+        format: submission.format,
+        gameCount: scores.length,
+        hasClubId: !!submission.clubId,
+        warnings: warnings.length > 0 ? warnings : undefined,
+    });
+    return { payload: submission, warnings };
+}
+/**
+ * Submit a single match to DUPR API
+ */
+async function submitMatchToDupr(match, eventName, eventType, eventId, token) {
+    var _a, _b;
+    const result = await convertMatchToDuprFormat(match, eventName, eventType, eventId);
+    if (!result || !result.payload) {
+        // Use specific error from validation if available, otherwise generic
+        const errorMsg = (result === null || result === void 0 ? void 0 : result.error) || 'Invalid match data - missing scores or validation failed';
+        return { success: false, error: errorMsg, warnings: result === null || result === void 0 ? void 0 : result.warnings };
+    }
+    const { payload: duprMatch, warnings } = result;
+    try {
+        const matchUrl = getMatchUrl();
+        // Safe logging - no full payload with player IDs
+        logger.info('[DUPR] Submitting match:', {
+            url: matchUrl,
+            identifier: duprMatch.identifier,
+            matchSource: duprMatch.matchSource,
+            format: duprMatch.format,
+            gameCount: Object.keys(duprMatch.teamA || {}).filter(k => k.startsWith('game')).length,
+            hasClubId: !!duprMatch.clubId,
+        });
+        const response = await fetch(matchUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(duprMatch),
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            // Parse error for better message
+            let errorMessage = `API error: ${response.status}`;
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorMessage = errorJson.message || errorJson.error || ((_b = (_a = errorJson.errors) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.message) || errorText;
+            }
+            catch (_c) {
+                errorMessage = errorText || `API error: ${response.status}`;
+            }
+            // SPECIAL CASE: If DUPR says "already exists", treat as success
+            // This happens when match was submitted before but local DB wasn't updated
+            if (errorMessage.includes('already exists') || errorMessage.includes('Object identifiers must be universally unique')) {
+                logger.info(`[DUPR] Match already exists in DUPR, marking as submitted:`, {
+                    identifier: duprMatch.identifier,
+                });
+                return {
+                    success: true,
+                    duprMatchId: 'already-submitted',
+                    warnings: [...(warnings || []), 'Match was already in DUPR database'],
+                };
+            }
+            logger.error(`[DUPR] Submit failed:`, {
+                status: response.status,
+                error: errorMessage,
+            });
+            return { success: false, error: errorMessage, warnings };
+        }
+        const data = await response.json();
+        logger.info(`[DUPR] Submit success:`, { duprMatchId: data.matchId || data.id });
+        return {
+            success: true,
+            duprMatchId: data.matchId || data.id,
+            warnings,
+        };
+    }
+    catch (error) {
+        logger.error(`[DUPR] Submit exception:`, { error: error instanceof Error ? error.message : 'Unknown' });
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error', warnings };
+    }
+}
+/**
+ * Get match document path based on event type
+ */
+function getMatchPath(eventType, eventId, matchId) {
+    switch (eventType) {
+        case 'tournament':
+            return `tournaments/${eventId}/matches/${matchId}`;
+        case 'league':
+            return `leagues/${eventId}/matches/${matchId}`;
+        case 'meetup':
+            return `meetups/${eventId}/matches/${matchId}`;
+        default:
+            throw new Error(`Unknown event type: ${eventType}`);
+    }
+}
+/**
+ * Get event name for DUPR submission
+ */
+async function getEventName(eventType, eventId) {
+    try {
+        const collection = eventType === 'tournament' ? 'tournaments' :
+            eventType === 'league' ? 'leagues' : 'meetups';
+        const doc = await db.collection(collection).doc(eventId).get();
+        const data = doc.data();
+        return (data === null || data === void 0 ? void 0 : data.name) || (data === null || data === void 0 ? void 0 : data.title) || `${eventType}-${eventId}`;
+    }
+    catch (_a) {
+        return `${eventType}-${eventId}`;
+    }
+}
+/**
+ * Submit matches to DUPR immediately
+ *
+ * Called by organizers to submit matches to DUPR.
+ * Submits immediately and returns results.
+ */
+exports.dupr_submitMatches = functions
+    .runWith({ timeoutSeconds: 300 }) // 5 minute timeout for bulk submissions
+    .https.onCall(async (data, context) => {
+    var _a, _b, _c, _d, _e, _f;
+    // Verify authentication
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const { eventType, eventId, matchIds: providedMatchIds } = data;
+    const userId = context.auth.uid;
+    logger.info('[DUPR] dupr_submitMatches called', { eventType, eventId, matchIdsCount: (providedMatchIds === null || providedMatchIds === void 0 ? void 0 : providedMatchIds.length) || 0, userId });
+    // Validate input
+    if (!eventType || !eventId) {
+        logger.error('[DUPR] Missing required fields', { eventType, eventId });
+        throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
+    }
+    // If matchIds not provided, we'll query all eligible matches below
+    let matchIds = providedMatchIds || [];
+    // Verify user is organizer for this event
+    const eventCollection = eventType === 'tournament' ? 'tournaments' : 'leagues';
+    const eventDoc = await db.collection(eventCollection).doc(eventId).get();
+    if (!eventDoc.exists) {
+        logger.error('[DUPR] Event not found', { eventType, eventId });
+        throw new functions.https.HttpsError('not-found', 'Event not found');
+    }
+    const eventData = eventDoc.data();
+    logger.info('[DUPR] Event data', {
+        organizerId: eventData === null || eventData === void 0 ? void 0 : eventData.organizerId,
+        organizerIds: eventData === null || eventData === void 0 ? void 0 : eventData.organizerIds,
+        createdBy: eventData === null || eventData === void 0 ? void 0 : eventData.createdBy,
+        createdByUserId: eventData === null || eventData === void 0 ? void 0 : eventData.createdByUserId,
+        userId
+    });
+    // Check various organizer field names (tournaments use organizerId, leagues use createdByUserId)
+    const isOrganizer = (eventData === null || eventData === void 0 ? void 0 : eventData.organizerId) === userId ||
+        ((_a = eventData === null || eventData === void 0 ? void 0 : eventData.organizerIds) === null || _a === void 0 ? void 0 : _a.includes(userId)) ||
+        (eventData === null || eventData === void 0 ? void 0 : eventData.createdBy) === userId ||
+        (eventData === null || eventData === void 0 ? void 0 : eventData.createdByUserId) === userId;
+    if (!isOrganizer) {
+        logger.error('[DUPR] User is not organizer', { userId, eventData });
+        throw new functions.https.HttpsError('permission-denied', 'Only organizers can submit to DUPR');
+    }
+    logger.info('[DUPR] User verified as organizer');
+    // Get DUPR API token
+    const token = await getDuprToken();
+    if (!token) {
+        logger.error('[DUPR] Failed to get API token');
+        throw new functions.https.HttpsError('unavailable', 'DUPR API unavailable - missing credentials');
+    }
+    // Get event name for DUPR submission
+    const eventName = (eventData === null || eventData === void 0 ? void 0 : eventData.name) || (eventData === null || eventData === void 0 ? void 0 : eventData.title) || `${eventType}-${eventId}`;
+    // If no matchIds provided, query all eligible matches
+    if (matchIds.length === 0) {
+        logger.info('[DUPR] No matchIds provided, querying all eligible matches...');
+        const matchesCollection = db.collection(eventType === 'tournament' ? 'tournaments' : 'leagues')
+            .doc(eventId)
+            .collection('matches');
+        // Query all completed matches first (simpler query, no composite index needed)
+        // Then filter in memory for scoreState and eligibility
+        try {
+            const allMatches = await matchesCollection
+                .where('status', '==', 'completed')
+                .get();
+            logger.info('[DUPR] Query returned completed matches', { count: allMatches.docs.length });
+            for (const doc of allMatches.docs) {
+                const match = doc.data();
+                // Filter for official scores and eligibility in memory
+                if (match.scoreState === 'official' &&
+                    match.officialResult &&
+                    ((_b = match.dupr) === null || _b === void 0 ? void 0 : _b.eligible) !== false &&
+                    !((_c = match.dupr) === null || _c === void 0 ? void 0 : _c.submitted)) {
+                    matchIds.push(doc.id);
+                }
+            }
+            logger.info(`[DUPR] Found ${matchIds.length} eligible matches after filtering`);
+        }
+        catch (queryError) {
+            logger.error('[DUPR] Query failed:', { error: queryError instanceof Error ? queryError.message : 'Unknown' });
+            throw new functions.https.HttpsError('internal', 'Failed to query matches: ' + (queryError instanceof Error ? queryError.message : 'Unknown error'));
+        }
+    }
+    // Collect eligible matches and submit immediately
+    const results = [];
+    let successCount = 0;
+    let failureCount = 0;
+    let skippedCount = 0;
+    for (const matchId of matchIds) {
+        // CRITICAL: Wrap entire per-match processing in try/catch
+        // so one match failure doesn't abort the entire batch
+        try {
+            const matchPath = getMatchPath(eventType, eventId, matchId);
+            const matchDoc = await db.doc(matchPath).get();
+            if (!matchDoc.exists) {
+                results.push({ matchId, success: false, error: 'Match not found' });
+                failureCount++;
+                continue;
+            }
+            const match = Object.assign({ id: matchDoc.id }, matchDoc.data());
+            // Check if already submitted (skip gracefully)
+            if ((_d = match.dupr) === null || _d === void 0 ? void 0 : _d.submitted) {
+                skippedCount++;
+                continue;
+            }
+            // Check other eligibility
+            if (!match.officialResult ||
+                match.status !== 'completed' ||
+                match.scoreState !== 'official' ||
+                ((_e = match.dupr) === null || _e === void 0 ? void 0 : _e.eligible) === false) {
+                // Skip ineligible matches silently
+                continue;
+            }
+            // Submit to DUPR immediately
+            logger.info(`[DUPR] Submitting match ${matchId} to DUPR...`);
+            const result = await submitMatchToDupr(match, eventName, eventType, eventId, token);
+            // Only include defined values to avoid Firestore undefined error
+            const resultEntry = {
+                matchId,
+                success: result.success,
+            };
+            if (result.duprMatchId)
+                resultEntry.duprMatchId = result.duprMatchId;
+            if (result.error)
+                resultEntry.error = result.error;
+            results.push(resultEntry);
+            if (result.success) {
+                successCount++;
+                // Update match with successful submission
+                // Build update object with only defined values (Firestore doesn't allow undefined)
+                try {
+                    const updateData = {
+                        'dupr.submitted': true,
+                        'dupr.submittedAt': Date.now(),
+                        'dupr.pendingSubmission': false,
+                        scoreState: 'submittedToDupr',
+                        updatedAt: Date.now(),
+                    };
+                    // Only include submissionId if it's defined
+                    if (result.duprMatchId) {
+                        updateData['dupr.submissionId'] = result.duprMatchId;
+                    }
+                    // Use FieldValue.delete() to remove error field instead of null
+                    updateData['dupr.submissionError'] = admin.firestore.FieldValue.delete();
+                    await db.doc(matchPath).update(updateData);
+                }
+                catch (updateError) {
+                    logger.error(`[DUPR] Failed to update success state for ${matchId}:`, {
+                        error: updateError instanceof Error ? updateError.message : 'Unknown',
+                    });
+                    // Don't fail the submission just because DB update failed
+                }
+                logger.info(`[DUPR] Match ${matchId} submitted successfully: ${result.duprMatchId || 'no-id-returned'}`);
+            }
+            else {
+                failureCount++;
+                // Update match with error (ensure error message is never undefined)
+                const errorMessage = result.error || 'Unknown submission error';
+                try {
+                    await db.doc(matchPath).update({
+                        'dupr.submissionError': errorMessage,
+                        'dupr.lastAttemptAt': Date.now(),
+                        'dupr.attemptCount': admin.firestore.FieldValue.increment(1),
+                        updatedAt: Date.now(),
+                    });
+                }
+                catch (updateError) {
+                    logger.error(`[DUPR] Failed to update error state for ${matchId}:`, {
+                        error: updateError instanceof Error ? updateError.message : 'Unknown',
+                    });
+                }
+                logger.error(`[DUPR] Match ${matchId} submission failed: ${errorMessage}`);
+            }
+        }
+        catch (matchError) {
+            // Capture error and CONTINUE to next match - never abort batch
+            logger.error(`[DUPR] Match ${matchId} threw exception:`, {
+                error: matchError instanceof Error ? matchError.message : 'Unknown',
+                stack: matchError instanceof Error ? (_f = matchError.stack) === null || _f === void 0 ? void 0 : _f.substring(0, 500) : undefined,
+            });
+            results.push({
+                matchId,
+                success: false,
+                error: matchError instanceof Error ? matchError.message : 'Unknown error',
+            });
+            failureCount++;
+            // Try to update match with error state (nested try/catch so this doesn't throw either)
+            try {
+                await db.doc(getMatchPath(eventType, eventId, matchId)).update({
+                    'dupr.submissionError': matchError instanceof Error ? matchError.message : 'Unknown error',
+                    'dupr.lastAttemptAt': Date.now(),
+                    'dupr.attemptCount': admin.firestore.FieldValue.increment(1),
+                    updatedAt: Date.now(),
+                });
+            }
+            catch (updateError) {
+                logger.error(`[DUPR] Failed to update error state for ${matchId} after exception`);
+            }
+            // Continue to next match - DO NOT throw
+            continue;
+        }
+        // Small delay between submissions to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    // Create batch record for history tracking
+    const batchId = db.collection('dupr_submission_batches').doc().id;
+    const batch = {
+        id: batchId,
+        eventId,
+        eventType,
+        matchIds: results.map(r => r.matchId),
+        status: failureCount === 0 ? 'completed' : successCount === 0 ? 'partial_failure' : 'partial_failure',
+        createdAt: Date.now(),
+        createdByUserId: userId,
+        results,
+        retryCount: 0,
+        processedAt: Date.now(),
+    };
+    await db.collection('dupr_submission_batches').doc(batchId).set(batch);
+    logger.info(`[DUPR] Batch ${batchId} complete: ${successCount} success, ${failureCount} failed, ${skippedCount} skipped`);
+    return {
+        success: successCount > 0 || skippedCount > 0,
+        batchId,
+        message: failureCount === 0
+            ? `Successfully submitted ${successCount} matches to DUPR${skippedCount > 0 ? `, ${skippedCount} already submitted` : ''}`
+            : successCount > 0
+                ? `Submitted ${successCount}, failed ${failureCount}${skippedCount > 0 ? `, skipped ${skippedCount}` : ''}`
+                : `Failed to submit ${failureCount} matches to DUPR`,
+        eligibleCount: successCount,
+        ineligibleCount: failureCount,
+        skippedCount,
+    };
+});
+// ============================================
+// Scheduled Function: Process Submission Queue
+// ============================================
+/**
+ * Process pending DUPR submissions
+ *
+ * Runs every 5 minutes to process queued batches.
+ * Implements retry logic with exponential backoff.
+ */
+exports.dupr_processQueue = functions.pubsub
+    .schedule(`every ${CONFIG.PROCESS_INTERVAL_MINUTES} minutes`)
+    .onRun(async () => {
+    console.log('[DUPR] Processing submission queue...');
+    // Get DUPR token
+    const token = await getDuprToken();
+    if (!token) {
+        console.error('[DUPR] Failed to get API token, skipping processing');
+        return;
+    }
+    // Find pending batches
+    const pendingBatches = await db.collection('dupr_submission_batches')
+        .where('status', '==', 'pending')
+        .limit(10)
+        .get();
+    // Also find batches ready for retry
+    const retryBatches = await db.collection('dupr_submission_batches')
+        .where('status', '==', 'partial_failure')
+        .where('nextRetryAt', '<=', Date.now())
+        .where('retryCount', '<', CONFIG.MAX_RETRIES)
+        .limit(5)
+        .get();
+    const allBatches = [...pendingBatches.docs, ...retryBatches.docs];
+    if (allBatches.length === 0) {
+        console.log('[DUPR] No pending batches to process');
+        return;
+    }
+    console.log(`[DUPR] Processing ${allBatches.length} batches`);
+    for (const batchDoc of allBatches) {
+        const batch = batchDoc.data();
+        // Mark as processing
+        await batchDoc.ref.update({ status: 'processing' });
+        try {
+            // Get event name
+            const eventName = await getEventName(batch.eventType, batch.eventId);
+            // Process each match
+            const results = [];
+            let successCount = 0;
+            let failureCount = 0;
+            for (const matchId of batch.matchIds) {
+                // Skip if already successfully submitted in previous attempt
+                const previousResult = batch.results.find(r => r.matchId === matchId);
+                if (previousResult === null || previousResult === void 0 ? void 0 : previousResult.success) {
+                    results.push(previousResult);
+                    successCount++;
+                    continue;
+                }
+                // Get match
+                const matchPath = getMatchPath(batch.eventType, batch.eventId, matchId);
+                const matchDoc = await db.doc(matchPath).get();
+                if (!matchDoc.exists) {
+                    results.push({ matchId, success: false, error: 'Match not found' });
+                    failureCount++;
+                    continue;
+                }
+                const match = Object.assign({ id: matchDoc.id }, matchDoc.data());
+                // Submit to DUPR
+                const result = await submitMatchToDupr(match, eventName, batch.eventType, batch.eventId, token);
+                results.push({
+                    matchId,
+                    success: result.success,
+                    duprMatchId: result.duprMatchId,
+                    error: result.error,
+                });
+                if (result.success) {
+                    successCount++;
+                    // Update match with submission result
+                    await db.doc(matchPath).update({
+                        'dupr.submitted': true,
+                        'dupr.submittedAt': Date.now(),
+                        'dupr.submissionId': result.duprMatchId,
+                        'dupr.pendingSubmission': false,
+                        'dupr.submissionError': null,
+                        scoreState: 'submittedToDupr',
+                        updatedAt: Date.now(),
+                    });
+                }
+                else {
+                    failureCount++;
+                    // Update match with error
+                    await db.doc(matchPath).update({
+                        'dupr.submissionError': result.error,
+                        'dupr.lastRetryAt': Date.now(),
+                        'dupr.retryCount': admin.firestore.FieldValue.increment(1),
+                        updatedAt: Date.now(),
+                    });
+                }
+                // Small delay between submissions to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            // Update batch status
+            const allSuccess = failureCount === 0;
+            const allFailed = successCount === 0;
+            const updateData = {
+                results,
+                processedAt: Date.now(),
+                status: allSuccess ? 'completed' : allFailed ? 'partial_failure' : 'partial_failure',
+            };
+            if (!allSuccess && batch.retryCount < CONFIG.MAX_RETRIES) {
+                updateData.retryCount = batch.retryCount + 1;
+                updateData.nextRetryAt = Date.now() + CONFIG.RETRY_DELAYS[batch.retryCount];
+            }
+            await batchDoc.ref.update(updateData);
+            console.log(`[DUPR] Batch ${batch.id}: ${successCount} success, ${failureCount} failed`);
+        }
+        catch (error) {
+            console.error(`[DUPR] Batch ${batch.id} processing error:`, error);
+            await batchDoc.ref.update({
+                status: 'partial_failure',
+                retryCount: batch.retryCount + 1,
+                nextRetryAt: Date.now() + CONFIG.RETRY_DELAYS[Math.min(batch.retryCount, 2)],
+            });
+        }
+    }
+    console.log('[DUPR] Queue processing complete');
+});
+// ============================================
+// Scheduled Function: Process Corrections
+// ============================================
+/**
+ * Process matches needing DUPR correction
+ *
+ * Runs hourly to handle matches where officialResult was changed
+ * after initial DUPR submission.
+ */
+exports.dupr_processCorrections = functions.pubsub
+    .schedule('every 1 hours')
+    .onRun(async () => {
+    console.log('[DUPR] Processing corrections...');
+    // Get DUPR token
+    const token = await getDuprToken();
+    if (!token) {
+        console.error('[DUPR] Failed to get API token, skipping corrections');
+        return;
+    }
+    // Find matches needing correction across all event types
+    const collections = ['tournaments', 'leagues'];
+    for (const collection of collections) {
+        // Get all events
+        const events = await db.collection(collection).get();
+        for (const eventDoc of events.docs) {
+            // Find matches needing correction
+            const matchesNeedingCorrection = await db
+                .collection(collection)
+                .doc(eventDoc.id)
+                .collection('matches')
+                .where('dupr.needsCorrection', '==', true)
+                .where('dupr.correctionSubmitted', '==', false)
+                .limit(20)
+                .get();
+            if (matchesNeedingCorrection.empty)
+                continue;
+            const eventName = await getEventName(collection === 'tournaments' ? 'tournament' : 'league', eventDoc.id);
+            for (const matchDoc of matchesNeedingCorrection.docs) {
+                const match = Object.assign({ id: matchDoc.id }, matchDoc.data());
+                const correctionEventType = collection === 'tournaments' ? 'tournament' : 'league';
+                // Submit correction (same as regular submission but with correction flag)
+                const result = await submitMatchToDupr(match, eventName, correctionEventType, eventDoc.id, token);
+                if (result.success) {
+                    await matchDoc.ref.update({
+                        'dupr.correctionSubmitted': true,
+                        'dupr.correctionSubmittedAt': Date.now(),
+                        'dupr.needsCorrection': false,
+                        updatedAt: Date.now(),
+                    });
+                    console.log(`[DUPR] Correction submitted for ${match.id}`);
+                }
+                else {
+                    console.error(`[DUPR] Correction failed for ${match.id}:`, result.error);
+                }
+                // Small delay between submissions
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+    }
+    console.log('[DUPR] Correction processing complete');
+});
+/**
+ * Get status of a DUPR submission batch
+ */
+exports.dupr_getBatchStatus = functions.https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const { batchId } = data;
+    if (!batchId) {
+        throw new functions.https.HttpsError('invalid-argument', 'Missing batchId');
+    }
+    const batchDoc = await db.collection('dupr_submission_batches').doc(batchId).get();
+    if (!batchDoc.exists) {
+        return { success: false, message: 'Batch not found' };
+    }
+    return {
+        success: true,
+        batch: batchDoc.data(),
+    };
+});
+// ============================================
+// Scheduled Function: Daily DUPR Rating Sync
+// ============================================
+/**
+ * Sync DUPR ratings for all linked users
+ *
+ * Runs daily at 3 AM NZ time (14:00 UTC previous day / 15:00 UTC during DST)
+ * Fetches latest ratings from DUPR and updates user profiles
+ */
+exports.dupr_syncRatings = functions.pubsub
+    .schedule('0 3 * * *') // 3 AM daily
+    .timeZone('Pacific/Auckland')
+    .onRun(async () => {
+    var _a, _b, _c;
+    logger.info('[DUPR] Starting daily rating sync...');
+    // Get DUPR API token
+    const token = await getDuprToken();
+    if (!token) {
+        logger.error('[DUPR] Failed to get API token, skipping rating sync');
+        return;
+    }
+    // Find all users with linked DUPR accounts
+    const usersWithDupr = await db.collection('users')
+        .where('duprId', '!=', null)
+        .get();
+    if (usersWithDupr.empty) {
+        logger.info('[DUPR] No users with linked DUPR accounts');
+        return;
+    }
+    logger.info(`[DUPR] Found ${usersWithDupr.docs.length} users with linked DUPR accounts`);
+    let successCount = 0;
+    let failureCount = 0;
+    const baseUrl = CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_BASE_URL : CONFIG.PROD_BASE_URL;
+    for (const userDoc of usersWithDupr.docs) {
+        const userData = userDoc.data();
+        const duprId = userData.duprId;
+        if (!duprId)
+            continue;
+        try {
+            // Fetch player data from DUPR via POST /v1.0/player (verified via Swagger)
+            const response = await fetch(`${baseUrl}/v1.0/player`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    duprIds: [duprId],
+                    sortBy: '',
+                }),
+            });
+            if (!response.ok) {
+                logger.warn(`[DUPR] Failed to fetch ratings for user ${userDoc.id} (DUPR: ${duprId}): ${response.status}`);
+                failureCount++;
+                continue;
+            }
+            const data = await response.json();
+            // Response structure: { status: "SUCCESS", results: [{ ratings: { singles, doubles } }] }
+            if (data.status !== 'SUCCESS' || !((_a = data.results) === null || _a === void 0 ? void 0 : _a.length)) {
+                logger.warn(`[DUPR] No results for user ${userDoc.id} (DUPR: ${duprId})`);
+                failureCount++;
+                continue;
+            }
+            const player = data.results[0];
+            const singlesStr = (_b = player.ratings) === null || _b === void 0 ? void 0 : _b.singles;
+            const doublesStr = (_c = player.ratings) === null || _c === void 0 ? void 0 : _c.doubles;
+            // Convert string ratings to numbers (handle "NR" as null)
+            const singlesRating = singlesStr && singlesStr !== 'NR' ? parseFloat(singlesStr) : null;
+            const doublesRating = doublesStr && doublesStr !== 'NR' ? parseFloat(doublesStr) : null;
+            // Only update if we got valid data
+            if (doublesRating !== null || singlesRating !== null) {
+                const updateData = {
+                    duprLastSyncAt: Date.now(),
+                };
+                if (doublesRating !== null) {
+                    updateData.duprDoublesRating = doublesRating;
+                }
+                if (singlesRating !== null) {
+                    updateData.duprSinglesRating = singlesRating;
+                }
+                await userDoc.ref.update(updateData);
+                successCount++;
+                logger.info(`[DUPR] Updated ratings for user ${userDoc.id}: doubles=${doublesRating}, singles=${singlesRating}`);
+            }
+            // Rate limiting - small delay between requests
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        catch (error) {
+            logger.error(`[DUPR] Error syncing ratings for user ${userDoc.id}:`, error);
+            failureCount++;
+        }
+    }
+    logger.info(`[DUPR] Daily rating sync complete: ${successCount} updated, ${failureCount} failed`);
+});
+// ============================================
+// Callable Function: Manual Rating Refresh (v2 - client credentials)
+// ============================================
+/**
+ * Manually refresh DUPR rating for current user
+ * V2: Uses server-side client credentials (identical to dupr_syncRatings)
+ * NO SSO tokens, NO session refresh - pure client-credential flow
+ */
+exports.dupr_refreshMyRating = functions.https.onCall(async (_data, context) => {
+    var _a, _b, _c;
+    // Auth check
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const uid = context.auth.uid;
+    // Signature log to prove v2 is executing
+    logger.info('[DUPR] refreshMyRating v2 (client-credentials) starting', { uid });
+    // Load user document and read duprId
+    const userDoc = await db.collection('users').doc(uid).get();
+    if (!userDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'User not found');
+    }
+    const userData = userDoc.data();
+    const duprId = userData === null || userData === void 0 ? void 0 : userData.duprId;
+    if (!duprId) {
+        throw new functions.https.HttpsError('failed-precondition', 'No DUPR account linked');
+    }
+    // Rate limit: 60 seconds between refreshes
+    const lastSync = userData === null || userData === void 0 ? void 0 : userData.duprLastSyncAt;
+    if (lastSync && Date.now() - lastSync < 60000) {
+        const secondsRemaining = Math.ceil((60000 - (Date.now() - lastSync)) / 1000);
+        return {
+            success: false,
+            rateLimited: true,
+            message: `Please wait ${secondsRemaining} seconds before refreshing again`,
+        };
+    }
+    // Get bearer token via client credentials (same as dupr_syncRatings)
+    const token = await getDuprToken();
+    if (!token) {
+        logger.error('[DUPR] refreshMyRating v2: failed to get API token');
+        throw new functions.https.HttpsError('unavailable', 'DUPR API unavailable');
+    }
+    const baseUrl = CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_BASE_URL : CONFIG.PROD_BASE_URL;
+    // Fetch player ratings via POST /v1.0/player (verified via Swagger)
+    const response = await fetch(`${baseUrl}/v1.0/player`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            duprIds: [duprId],
+            sortBy: '',
+        }),
+    });
+    if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.error('[DUPR] refreshMyRating v2: player lookup failed', {
+            duprId,
+            status: response.status,
+            errorText,
+        });
+        throw new functions.https.HttpsError('unavailable', 'Unable to fetch DUPR rating. Please try again later.');
+    }
+    // Parse response - structure: { status: "SUCCESS", results: [{ ratings: { singles, doubles } }] }
+    const data = await response.json();
+    if (data.status !== 'SUCCESS' || !((_a = data.results) === null || _a === void 0 ? void 0 : _a.length)) {
+        logger.error('[DUPR] refreshMyRating v2: unexpected response', { data });
+        throw new functions.https.HttpsError('unavailable', 'No player data returned from DUPR');
+    }
+    const player = data.results[0];
+    const singlesStr = (_b = player.ratings) === null || _b === void 0 ? void 0 : _b.singles;
+    const doublesStr = (_c = player.ratings) === null || _c === void 0 ? void 0 : _c.doubles;
+    // Convert string ratings to numbers (handle "NR" as null)
+    const singlesRating = singlesStr && singlesStr !== 'NR' ? parseFloat(singlesStr) : null;
+    const doublesRating = doublesStr && doublesStr !== 'NR' ? parseFloat(doublesStr) : null;
+    // Note: reliability fields not in this endpoint response
+    const singlesReliability = null;
+    const doublesReliability = null;
+    logger.info('[DUPR] refreshMyRating v2: ratings fetched', {
+        duprId,
+        doublesRating,
+        singlesRating,
+    });
+    // Update user doc (same field names as UI expects)
+    const updateData = {
+        duprLastSyncAt: Date.now(),
+        updatedAt: Date.now(),
+    };
+    if (doublesRating !== undefined && doublesRating !== null) {
+        updateData.duprDoublesRating = doublesRating;
+    }
+    if (doublesReliability !== undefined && doublesReliability !== null) {
+        updateData.duprDoublesReliability = doublesReliability;
+    }
+    if (singlesRating !== undefined && singlesRating !== null) {
+        updateData.duprSinglesRating = singlesRating;
+    }
+    if (singlesReliability !== undefined && singlesReliability !== null) {
+        updateData.duprSinglesReliability = singlesReliability;
+    }
+    await userDoc.ref.update(updateData);
+    logger.info('[DUPR] refreshMyRating v2: complete', { uid, duprId });
+    return {
+        success: true,
+        doublesRating: doublesRating !== null && doublesRating !== void 0 ? doublesRating : null,
+        singlesRating: singlesRating !== null && singlesRating !== void 0 ? singlesRating : null,
+        doublesReliability: doublesReliability !== null && doublesReliability !== void 0 ? doublesReliability : null,
+        singlesReliability: singlesReliability !== null && singlesReliability !== void 0 ? singlesReliability : null,
+        syncedAt: Date.now(),
+    };
+});
+/**
+ * Test submitting a single match to DUPR
+ *
+ * This diagnostic function:
+ * - Requires admin or organizer permission
+ * - Loads ONE match from Firestore
+ * - Builds payload with full validation
+ * - Submits to DUPR
+ * - Returns DUPR response (no player IDs exposed to client)
+ *
+ * Use this to debug submission issues before bulk operations.
+ */
+exports.dupr_testSubmitOneMatch = functions.https.onCall(async (data, context) => {
+    var _a, _b, _c, _d, _e;
+    // STEP 1: Verify authentication
+    if (!context.auth) {
+        return { ok: false, stage: 'auth', error: 'Must be logged in' };
+    }
+    const { matchId, eventType, eventId } = data;
+    const userId = context.auth.uid;
+    if (!matchId || !eventType || !eventId) {
+        return { ok: false, stage: 'auth', error: 'Missing required fields: matchId, eventType, eventId' };
+    }
+    // STEP 2: Verify admin or organizer permission
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const isAppAdmin = (userData === null || userData === void 0 ? void 0 : userData.role) === 'app_admin';
+    if (!isAppAdmin) {
+        // Check if user is organizer for this event
+        const eventCollection = eventType === 'tournament' ? 'tournaments' :
+            eventType === 'league' ? 'leagues' : 'meetups';
+        const eventDoc = await db.collection(eventCollection).doc(eventId).get();
+        if (!eventDoc.exists) {
+            return { ok: false, stage: 'permission', error: 'Event not found' };
+        }
+        const eventData = eventDoc.data();
+        const isOrganizer = (eventData === null || eventData === void 0 ? void 0 : eventData.organizerId) === userId ||
+            ((_a = eventData === null || eventData === void 0 ? void 0 : eventData.organizerIds) === null || _a === void 0 ? void 0 : _a.includes(userId)) ||
+            (eventData === null || eventData === void 0 ? void 0 : eventData.createdBy) === userId ||
+            (eventData === null || eventData === void 0 ? void 0 : eventData.createdByUserId) === userId;
+        if (!isOrganizer) {
+            return { ok: false, stage: 'permission', error: 'Must be admin or event organizer' };
+        }
+    }
+    logger.info('[DUPR TEST] Starting single match test:', { matchId, eventType, eventId, userId });
+    // STEP 3: Get DUPR token
+    const token = await getDuprToken();
+    if (!token) {
+        return { ok: false, stage: 'token', error: 'Failed to get DUPR API token - check credentials config' };
+    }
+    // STEP 4: Load match from Firestore
+    const matchPath = getMatchPath(eventType, eventId, matchId);
+    const matchDoc = await db.doc(matchPath).get();
+    if (!matchDoc.exists) {
+        return { ok: false, stage: 'load', error: `Match not found at path: ${matchPath}` };
+    }
+    const match = Object.assign({ id: matchDoc.id }, matchDoc.data());
+    // Return match metadata (safe, no player IDs)
+    const matchMetadata = {
+        hasOfficialResult: !!match.officialResult,
+        scoreCount: ((_c = (_b = match.officialResult) === null || _b === void 0 ? void 0 : _b.scores) === null || _c === void 0 ? void 0 : _c.length) || 0,
+        hasSideA: !!match.sideA,
+        hasSideB: !!match.sideB,
+        gameCount: ((_e = (_d = match.officialResult) === null || _d === void 0 ? void 0 : _d.scores) === null || _e === void 0 ? void 0 : _e.length) || 0,
+    };
+    // STEP 5: Get event name and convert to DUPR format
+    const eventName = await getEventName(eventType, eventId);
+    const conversionResult = await convertMatchToDuprFormat(match, eventName, eventType, eventId);
+    if (!conversionResult) {
+        return {
+            ok: false,
+            stage: 'convert',
+            error: 'Failed to build DUPR payload - check match data',
+            matchMetadata,
+        };
+    }
+    const { payload: duprPayload, warnings } = conversionResult;
+    // Payload metadata (safe, no player IDs)
+    const payloadMetadata = {
+        identifier: duprPayload.identifier,
+        matchSource: duprPayload.matchSource,
+        format: duprPayload.format,
+        gameCount: Object.keys(duprPayload.teamA || {}).filter(k => k.startsWith('game')).length,
+        hasClubId: !!duprPayload.clubId,
+    };
+    // Log payload to Cloud Functions logs (for debugging, not exposed to client)
+    logger.info('[DUPR TEST] Payload to submit:', JSON.stringify(duprPayload, null, 2));
+    // STEP 6: Submit to DUPR
+    const matchUrl = getMatchUrl();
+    try {
+        const response = await fetch(matchUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(duprPayload),
+        });
+        const responseText = await response.text();
+        logger.info('[DUPR TEST] Response:', {
+            status: response.status,
+            ok: response.ok,
+            body: responseText.substring(0, 1000),
+        });
+        return {
+            ok: response.ok,
+            stage: 'submit',
+            matchMetadata,
+            payloadMetadata,
+            warnings: warnings.length > 0 ? warnings : undefined,
+            duprResponse: {
+                status: response.status,
+                statusText: response.statusText,
+                body: responseText,
+            },
+        };
+    }
+    catch (error) {
+        logger.error('[DUPR TEST] Exception:', error);
+        return {
+            ok: false,
+            stage: 'submit',
+            error: error instanceof Error ? error.message : 'Network error',
+            matchMetadata,
+            payloadMetadata,
+            warnings: warnings.length > 0 ? warnings : undefined,
+        };
+    }
+});
+/**
+ * dupr_retryFailed
+ *
+ * Retries all failed DUPR submissions for an event.
+ * Called by organizers to retry matches that previously failed.
+ */
+exports.dupr_retryFailed = functions
+    .runWith({ timeoutSeconds: 300 })
+    .https.onCall(async (data, context) => {
+    var _a, _b, _c, _d, _e;
+    // Verify authentication
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const { eventType, eventId } = data;
+    const userId = context.auth.uid;
+    logger.info('[DUPR] dupr_retryFailed called', { eventType, eventId, userId });
+    // Validate input
+    if (!eventType || !eventId) {
+        throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
+    }
+    // Verify user is organizer for this event
+    const eventCollection = eventType === 'tournament' ? 'tournaments' : 'leagues';
+    const eventDoc = await db.collection(eventCollection).doc(eventId).get();
+    if (!eventDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Event not found');
+    }
+    const eventData = eventDoc.data();
+    const isOrganizer = (eventData === null || eventData === void 0 ? void 0 : eventData.organizerId) === userId ||
+        ((_a = eventData === null || eventData === void 0 ? void 0 : eventData.organizerIds) === null || _a === void 0 ? void 0 : _a.includes(userId)) ||
+        (eventData === null || eventData === void 0 ? void 0 : eventData.createdBy) === userId ||
+        (eventData === null || eventData === void 0 ? void 0 : eventData.createdByUserId) === userId;
+    // Also check for app admin
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    const isAppAdmin = (userData === null || userData === void 0 ? void 0 : userData.role) === 'app_admin' || (userData === null || userData === void 0 ? void 0 : userData.isAppAdmin) === true;
+    if (!isOrganizer && !isAppAdmin) {
+        throw new functions.https.HttpsError('permission-denied', 'Only organizers can retry DUPR submissions');
+    }
+    // Get DUPR API token
+    const token = await getDuprToken();
+    if (!token) {
+        throw new functions.https.HttpsError('unavailable', 'DUPR API unavailable');
+    }
+    const eventName = (eventData === null || eventData === void 0 ? void 0 : eventData.name) || (eventData === null || eventData === void 0 ? void 0 : eventData.title) || `${eventType}-${eventId}`;
+    // Query failed matches (have submissionError or dupr.submitted is false with previous attempt)
+    const matchesCollection = db.collection(eventCollection).doc(eventId).collection('matches');
+    const failedMatches = await matchesCollection
+        .where('status', '==', 'completed')
+        .where('scoreState', '==', 'official')
+        .get();
+    const matchIds = [];
+    for (const doc of failedMatches.docs) {
+        const match = doc.data();
+        // Include matches that have a submission error OR were queued but not submitted
+        if (match.officialResult &&
+            ((_b = match.dupr) === null || _b === void 0 ? void 0 : _b.eligible) !== false &&
+            !((_c = match.dupr) === null || _c === void 0 ? void 0 : _c.submitted) &&
+            (((_d = match.dupr) === null || _d === void 0 ? void 0 : _d.submissionError) || ((_e = match.dupr) === null || _e === void 0 ? void 0 : _e.pendingSubmission))) {
+            matchIds.push(doc.id);
+        }
+    }
+    logger.info(`[DUPR] Found ${matchIds.length} failed matches to retry`);
+    // Retry each failed match
+    const results = [];
+    let successCount = 0;
+    let failureCount = 0;
+    for (const matchId of matchIds) {
+        const matchPath = getMatchPath(eventType, eventId, matchId);
+        const matchDoc = await db.doc(matchPath).get();
+        if (!matchDoc.exists) {
+            results.push({ matchId, success: false, error: 'Match not found' });
+            failureCount++;
+            continue;
+        }
+        const match = Object.assign({ id: matchDoc.id }, matchDoc.data());
+        // Clear previous error and retry
+        logger.info(`[DUPR] Retrying match ${matchId}...`);
+        const result = await submitMatchToDupr(match, eventName, eventType, eventId, token);
+        results.push({
+            matchId,
+            success: result.success,
+            error: result.error,
+        });
+        if (result.success) {
+            successCount++;
+            await db.doc(matchPath).update({
+                'dupr.submitted': true,
+                'dupr.submittedAt': Date.now(),
+                'dupr.submissionId': result.duprMatchId,
+                'dupr.pendingSubmission': false,
+                'dupr.submissionError': null,
+                scoreState: 'submittedToDupr',
+                updatedAt: Date.now(),
+            });
+        }
+        else {
+            failureCount++;
+            await db.doc(matchPath).update({
+                'dupr.submissionError': result.error,
+                'dupr.lastRetryAt': Date.now(),
+                updatedAt: Date.now(),
+            });
+        }
+    }
+    logger.info(`[DUPR] Retry complete: ${successCount} success, ${failureCount} failed`);
+    return {
+        success: true,
+        retriedCount: matchIds.length,
+        successCount,
+        failureCount,
+        results,
+    };
+});
+//# sourceMappingURL=dupr.js.map

@@ -1,11 +1,11 @@
 "use strict";
 /**
- * SMS Cloud Function - Twilio Integration
+ * SMS Cloud Function - SMSGlobal Integration
  *
- * Sends SMS messages via Twilio when documents are created in the sms_messages collection.
+ * Sends SMS messages via SMSGlobal when documents are created in the sms_messages collection.
  *
  * FILE LOCATION: functions/src/sms.ts
- * VERSION: 06.17
+ * VERSION: 07.19
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -40,23 +40,76 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendBulkSMS = exports.sendSMS = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
-const twilio_1 = __importDefault(require("twilio"));
-// Initialize Twilio client with config
-const getTwilioClient = () => {
+const crypto = __importStar(require("crypto"));
+// ============================================
+// SMSGLOBAL CONFIG
+// ============================================
+const getSMSGlobalConfig = () => {
     var _a, _b;
     const config = functions.config();
-    if (!((_a = config.twilio) === null || _a === void 0 ? void 0 : _a.sid) || !((_b = config.twilio) === null || _b === void 0 ? void 0 : _b.token)) {
-        throw new Error('Twilio credentials not configured. Run: firebase functions:config:set twilio.sid="..." twilio.token="..." twilio.phone="..."');
+    if (!((_a = config.smsglobal) === null || _a === void 0 ? void 0 : _a.apikey) || !((_b = config.smsglobal) === null || _b === void 0 ? void 0 : _b.apisecret)) {
+        throw new Error('SMSGlobal credentials not configured. Run: firebase functions:config:set smsglobal.apikey="..." smsglobal.apisecret="..."');
     }
-    return (0, twilio_1.default)(config.twilio.sid, config.twilio.token);
+    return {
+        apiKey: config.smsglobal.apikey,
+        apiSecret: config.smsglobal.apisecret,
+        origin: config.smsglobal.origin || 'Pickleball',
+    };
 };
+// ============================================
+// SMSGLOBAL MAC AUTHENTICATION
+// ============================================
+function generateMACAuth(apiKey, apiSecret, method, path, host, port = '443') {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const baseString = `${timestamp}\n${nonce}\n${method}\n${path}\n${host}\n${port}\n\n`;
+    const mac = crypto.createHmac('sha256', apiSecret)
+        .update(baseString)
+        .digest('base64');
+    return `MAC id="${apiKey}", ts="${timestamp}", nonce="${nonce}", mac="${mac}"`;
+}
+// ============================================
+// SMSGLOBAL SEND FUNCTION
+// ============================================
+async function sendViaSMSGlobal(to, body, apiKey, apiSecret, origin) {
+    var _a, _b;
+    try {
+        const host = 'api.smsglobal.com';
+        const path = '/v2/sms';
+        const authHeader = generateMACAuth(apiKey, apiSecret, 'POST', path, host);
+        // Send without origin - SMSGlobal will use default sender
+        const requestBody = {
+            destination: to,
+            message: body,
+        };
+        // Only add origin if it's a valid phone number
+        if (origin.startsWith('+') && /^\+\d{10,15}$/.test(origin)) {
+            requestBody.origin = origin;
+        }
+        const response = await fetch(`https://${host}${path}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': authHeader,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+        });
+        if (response.status === 200 || response.status === 202) {
+            const data = await response.json();
+            return { success: true, messageId: (_b = (_a = data.messages) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.id };
+        }
+        const errorText = await response.text();
+        return { success: false, error: `SMSGlobal error: ${response.status} - ${errorText}` };
+    }
+    catch (error) {
+        return { success: false, error: error.message || 'Unknown SMSGlobal error' };
+    }
+}
 // ============================================
 // Send SMS Function
 // ============================================
@@ -65,7 +118,7 @@ const getTwilioClient = () => {
  *
  * When a document is created in sms_messages, this function:
  * 1. Reads the phone number and message body
- * 2. Sends the SMS via Twilio
+ * 2. Sends the SMS via SMSGlobal
  * 3. Updates the document with delivery status
  */
 exports.sendSMS = functions.firestore
@@ -92,25 +145,27 @@ exports.sendSMS = functions.firestore
         return;
     }
     try {
-        const twilioClient = getTwilioClient();
-        const config = functions.config();
-        console.log(`SMS ${messageId}: Sending to ${message.to}`);
-        const result = await twilioClient.messages.create({
-            body: message.body,
-            to: message.to,
-            from: config.twilio.phone,
-        });
-        console.log(`SMS ${messageId}: Sent successfully. Twilio SID: ${result.sid}`);
-        // Update document with success status
-        await snap.ref.update({
-            status: 'sent',
-            twilioSid: result.sid,
-            sentAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        const smsConfig = getSMSGlobalConfig();
+        console.log(`SMS ${messageId}: Sending to ${message.to} via SMSGlobal`);
+        const result = await sendViaSMSGlobal(message.to, message.body, smsConfig.apiKey, smsConfig.apiSecret, smsConfig.origin);
+        if (result.success) {
+            console.log(`SMS ${messageId}: Sent successfully. SMSGlobal ID: ${result.messageId}`);
+            await snap.ref.update({
+                status: 'sent',
+                messageId: result.messageId,
+                sentAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+        }
+        else {
+            console.error(`SMS ${messageId}: Failed to send. Error:`, result.error);
+            await snap.ref.update({
+                status: 'failed',
+                error: result.error || 'Unknown error occurred',
+            });
+        }
     }
     catch (error) {
         console.error(`SMS ${messageId}: Failed to send. Error:`, error.message);
-        // Update document with failure status
         await snap.ref.update({
             status: 'failed',
             error: error.message || 'Unknown error occurred',

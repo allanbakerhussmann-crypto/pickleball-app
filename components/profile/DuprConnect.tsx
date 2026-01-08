@@ -18,11 +18,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { doc, updateDoc, onSnapshot } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
-import { 
+import {
   getDuprLoginIframeUrl,
   parseDuprLoginEvent,
   getDuprUserProfile,
   formatDuprRating,
+  refreshMyDuprRating,
 } from '../../services/dupr';
 
 // ============================================
@@ -57,9 +58,10 @@ export const DuprConnect: React.FC = () => {
   const [duprData, setDuprData] = useState<DuprProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
-  
+
   // Login modal state
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -200,6 +202,24 @@ export const DuprConnect: React.FC = () => {
       setError(err.message || 'Failed to disconnect DUPR');
     } finally {
       setDisconnecting(false);
+    }
+  };
+
+  const handleRefreshRating = async () => {
+    if (!currentUser?.uid) return;
+
+    setIsRefreshing(true);
+    setError(null);
+
+    try {
+      const result = await refreshMyDuprRating();
+      console.log('[DUPR] Rating refreshed:', result);
+      // The profile will update automatically via the onSnapshot listener
+    } catch (err: any) {
+      console.error('[DUPR] Failed to refresh rating:', err);
+      setError(err.message || 'Failed to refresh DUPR rating');
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -366,8 +386,7 @@ export const DuprConnect: React.FC = () => {
         {/* Info about ratings */}
         <div className="mb-4 p-3 bg-gray-900 rounded-lg">
           <p className="text-xs text-gray-400">
-            💡 Your ratings will update automatically when you play DUPR matches. 
-            To see updated ratings, disconnect and reconnect your account.
+            💡 Ratings sync daily at 3 AM NZ time. Click "Refresh" for an instant update.
           </p>
         </div>
 
@@ -384,15 +403,41 @@ export const DuprConnect: React.FC = () => {
             </svg>
             View on DUPR
           </a>
-          
+
+          <button
+            onClick={handleRefreshRating}
+            disabled={isRefreshing}
+            className="px-4 py-2 bg-lime-600 hover:bg-lime-700 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium flex items-center gap-1"
+          >
+            {isRefreshing ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Refreshing...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+              </>
+            )}
+          </button>
+
           <button
             onClick={() => {
               setShowDisconnectConfirm(true);
               setError(null);
             }}
             className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-medium"
+            title="Disconnect DUPR account"
           >
-            🔄 Update
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
           </button>
         </div>
 

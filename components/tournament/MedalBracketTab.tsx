@@ -239,9 +239,6 @@ const BracketMatchCard: React.FC<BracketMatchCardProps> = ({
     plate: 'text-gray-400',
   };
 
-  // Check if multi-game for modal
-  const isMultiGame = (match as any)?.gameSettings?.bestOf > 1;
-
   // Size-based dimensions
   const sizeStyles = {
     default: 'min-w-[220px] p-3',
@@ -304,15 +301,15 @@ const BracketMatchCard: React.FC<BracketMatchCardProps> = ({
         </span>
       </div>
 
-      {/* Score Entry */}
+      {/* Score Entry - Always use global scorecard modal when available */}
       {canEdit && match && !isTBD && !isCompleted && (
         <div className="mt-2 pt-2 border-t border-gray-600/30">
-          {isMultiGame && onOpenScoreModal ? (
+          {onOpenScoreModal ? (
             <button
               onClick={() => onOpenScoreModal(match)}
               className="w-full py-1.5 text-xs bg-lime-600/20 hover:bg-lime-600/30 text-lime-400 rounded transition-colors"
             >
-              Enter Scores
+              Enter Score
             </button>
           ) : isEditing ? (
             <div className="flex items-center gap-2">
@@ -364,7 +361,7 @@ const BracketMatchCard: React.FC<BracketMatchCardProps> = ({
 // ============================================
 // ILLUSTRATIVE BRACKET COMPONENT
 // ============================================
-interface IllustrativeBracketProps {
+export interface IllustrativeBracketProps {
   matches: MatchDisplay[];
   bronzeMatches: MatchDisplay[];
   onUpdateScore: (matchId: string, score1: number, score2: number, action: 'submit' | 'confirm' | 'dispute') => void;
@@ -375,7 +372,7 @@ interface IllustrativeBracketProps {
   bracketType?: 'main' | 'plate';
 }
 
-const IllustrativeBracket: React.FC<IllustrativeBracketProps> = ({
+export const IllustrativeBracket: React.FC<IllustrativeBracketProps> = ({
   matches,
   bronzeMatches,
   onUpdateScore,
@@ -407,15 +404,16 @@ const IllustrativeBracket: React.FC<IllustrativeBracketProps> = ({
 
   const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
 
-  // Get round name
+  // Get round name with plate prefix if needed
   const getRoundName = (roundNum: number): string => {
     const fromFinal = maxRound - roundNum;
+    const prefix = bracketType === 'plate' ? 'Plate ' : '';
     switch (fromFinal) {
       case 0: return finalsLabel;
-      case 1: return 'Semi-Finals';
-      case 2: return 'Quarter-Finals';
-      case 3: return 'Round of 16';
-      default: return `Round ${roundNum}`;
+      case 1: return `${prefix}Semi-Finals`;
+      case 2: return `${prefix}Quarter-Finals`;
+      case 3: return `${prefix}Round of 16`;
+      default: return `${prefix}Round ${roundNum}`;
     }
   };
 
@@ -461,13 +459,17 @@ const IllustrativeBracket: React.FC<IllustrativeBracketProps> = ({
           <div className="flex mb-4" style={{ gap: `${roundGap}px` }}>
             {roundKeys.map(roundNum => {
               const isChampionship = roundNum === maxRound;
+              // Finals header: gold for main bracket, silver for plate bracket
+              const finalsHeaderStyle = bracketType === 'main'
+                ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                : 'bg-gray-600/30 text-gray-300 border border-gray-500/30';
               return (
                 <div
                   key={`header-${roundNum}`}
                   className={`
                     text-center font-bold uppercase text-xs tracking-wider px-4 py-2 rounded-lg
                     ${isChampionship
-                      ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                      ? finalsHeaderStyle
                       : 'bg-gray-800/50 text-gray-400 border border-gray-700/30'}
                   `}
                   style={{ width: `${isChampionship ? finalsCardWidth : cardWidth}px` }}
@@ -489,136 +491,197 @@ const IllustrativeBracket: React.FC<IllustrativeBracketProps> = ({
 
           {/* Bracket Matches with Connectors */}
           <div className="relative flex items-start" style={{ gap: `${roundGap}px` }}>
-            {roundKeys.map((roundNum) => {
+            {roundKeys.map((roundNum, roundIndex) => {
               const matchesInRound = rounds[roundNum] || [];
-              const spacingMultiplier = Math.pow(2, roundNum - 1);
               const isChampionship = roundNum === maxRound;
               const currentCardHeight = isChampionship ? finalsCardHeight : cardHeight;
               const currentCardWidth = isChampionship ? finalsCardWidth : cardWidth;
 
-              // Calculate vertical gap and offset based on standard card height
-              const verticalGap = cardHeight * (spacingMultiplier - 1) + (spacingMultiplier - 1) * 16;
-              const topOffset = (cardHeight + 16) * (spacingMultiplier - 1) / 2;
+              // FLEXIBLE positioning formula that works for any bracket size
+              // Cards are ~140px tall (with Enter Score button), so need more spacing
+              const baseGap = 50; // Gap between match boxes
+              const actualCardHeight = 140; // Actual rendered card height including button
+              const baseSpacing = actualCardHeight + baseGap;
+
+              // Each round's spacing doubles: Round 1 = 116, Round 2 = 232, Round 3 = 464, etc.
+              const roundMultiplier = Math.pow(2, roundNum - 1);
+              const matchSpacing = baseSpacing * roundMultiplier;
+
+              // Top offset: positions first match so its center aligns with meeting point of previous round's pair
+              // Formula: (baseSpacing / 2) * (2^(roundNum-1) - 1)
+              const topOffset = (baseSpacing / 2) * (roundMultiplier - 1);
+
+              // For championship round, adjust for taller card
+              const adjustedTopOffset = isChampionship
+                ? topOffset - (finalsCardHeight - cardHeight) / 2
+                : topOffset;
+
+              const getMatchTopPosition = (matchIndex: number): number => {
+                return adjustedTopOffset + matchIndex * matchSpacing;
+              };
+
+              // Calculate total height needed
+              const lastMatchTop = getMatchTopPosition(matchesInRound.length - 1);
+              const containerHeight = lastMatchTop + currentCardHeight + 20;
 
               return (
-                <div key={`round-${roundNum}`} className="relative" style={{ width: `${currentCardWidth}px` }}>
-                  <div
-                    className="flex flex-col"
-                    style={{
-                      gap: `${verticalGap + 16}px`,
-                      paddingTop: `${topOffset}px`
-                    }}
-                  >
-                    {matchesInRound.map((match, matchIndex) => {
-                      const matchLabel = isChampionship ? finalsLabel : `Match ${(match as any).bracketPosition || matchIndex + 1}`;
+                <div
+                  key={`round-${roundNum}`}
+                  className="relative"
+                  style={{
+                    width: `${currentCardWidth}px`,
+                    height: `${containerHeight}px`
+                  }}
+                >
+                  {/* Match Cards - Absolute Positioning */}
+                  {matchesInRound.map((match, matchIndex) => {
+                    const matchNum = (match as any).bracketPosition || matchIndex + 1;
+                    const matchType = (match as any).matchType;
 
-                      return (
-                        <div key={match.id} className="relative">
-                          <BracketMatchCard
-                            match={match}
-                            label={matchLabel}
-                            onUpdateScore={onUpdateScore}
-                            onOpenScoreModal={onOpenScoreModal}
-                            canEdit={canEditMatch(match)}
-                            variant={isChampionship && bracketType === 'main' ? 'gold' : 'default'}
-                            size={isChampionship ? 'large' : 'default'}
+                    // Only show finals label for actual finals match (matchType === 'final')
+                    // AND only if it's in the championship round with just 1 match
+                    const isActualFinals = isChampionship &&
+                      (matchType === 'final' || matchType === 'gold_medal' || matchesInRound.length === 1);
+
+                    const matchLabel = isActualFinals
+                      ? finalsLabel
+                      : bracketType === 'plate'
+                        ? `Plate Match ${matchNum}`
+                        : `Match ${matchNum}`;
+                    const topPosition = getMatchTopPosition(matchIndex);
+
+                    return (
+                      <div
+                        key={match.id}
+                        className="absolute"
+                        style={{
+                          top: `${topPosition}px`,
+                          left: 0,
+                          width: '100%'
+                        }}
+                      >
+                        <BracketMatchCard
+                          match={match}
+                          label={matchLabel}
+                          onUpdateScore={onUpdateScore}
+                          onOpenScoreModal={onOpenScoreModal}
+                          canEdit={canEditMatch(match)}
+                          variant={isActualFinals ? (bracketType === 'main' ? 'gold' : 'plate') : 'default'}
+                          size={isActualFinals ? 'large' : 'default'}
+                        />
+                        {/* Line from finals to champion trophy */}
+                        {isActualFinals && bracketType === 'main' && (
+                          <div
+                            className="absolute bg-yellow-500"
+                            style={{
+                              top: `${actualCardHeight / 2}px`,
+                              left: `${currentCardWidth}px`,
+                              width: '40px',
+                              height: '3px',
+                            }}
                           />
+                        )}
+                      </div>
+                    );
+                  })}
 
-                          {/* SOLID Connector Lines */}
-                          {roundNum < maxRound && (
-                            <svg
-                              className="absolute pointer-events-none"
-                              style={{
-                                top: 0,
-                                left: `${currentCardWidth}px`,
-                                width: `${roundGap}px`,
-                                height: `${cardHeight * spacingMultiplier + 16 * (spacingMultiplier - 1) + cardHeight}px`,
-                                overflow: 'visible'
-                              }}
-                            >
-                              {/* Horizontal line from this match to midpoint */}
-                              <line
-                                x1="0"
-                                y1={currentCardHeight / 2}
-                                x2={roundGap / 2}
-                                y2={currentCardHeight / 2}
+                  {/* Bracket Connector Lines */}
+                  {roundNum < maxRound && (
+                    <svg
+                      className="absolute pointer-events-none"
+                      style={{
+                        top: 0,
+                        left: `${currentCardWidth}px`,
+                      }}
+                      width={roundGap}
+                      height={containerHeight}
+                    >
+                      {matchesInRound.map((_, matchIndex) => {
+                        // Get Y position for this match center
+                        const matchTop = getMatchTopPosition(matchIndex);
+                        const matchCenterY = matchTop + actualCardHeight / 2;
+                        const midX = roundGap / 2;
+
+                        const isFirstOfPair = matchIndex % 2 === 0;
+                        const hasPair = matchIndex + 1 < matchesInRound.length;
+
+                        if (isFirstOfPair && hasPair) {
+                          // Get next match in pair
+                          const pairMatchTop = getMatchTopPosition(matchIndex + 1);
+                          const pairMatchCenterY = pairMatchTop + actualCardHeight / 2;
+
+                          // Meeting point is midway between the two
+                          const meetingY = (matchCenterY + pairMatchCenterY) / 2;
+
+                          return (
+                            <g key={matchIndex}>
+                              {/* Top match: horizontal → down → horizontal */}
+                              <path
+                                d={`M 0 ${matchCenterY} L ${midX} ${matchCenterY} L ${midX} ${meetingY} L ${roundGap} ${meetingY}`}
+                                fill="none"
                                 stroke="#84cc16"
                                 strokeWidth="2"
                               />
-
-                              {/* Vertical connector and horizontal to next round for pairs */}
-                              {matchIndex % 2 === 0 && matchIndex + 1 < matchesInRound.length && (
-                                <>
-                                  {/* Vertical line connecting this match to the one below */}
-                                  <line
-                                    x1={roundGap / 2}
-                                    y1={currentCardHeight / 2}
-                                    x2={roundGap / 2}
-                                    y2={currentCardHeight / 2 + verticalGap + currentCardHeight + 16}
-                                    stroke="#84cc16"
-                                    strokeWidth="2"
-                                  />
-                                  {/* Horizontal line from midpoint to next round */}
-                                  <line
-                                    x1={roundGap / 2}
-                                    y1={currentCardHeight / 2 + (verticalGap + currentCardHeight + 16) / 2}
-                                    x2={roundGap}
-                                    y2={currentCardHeight / 2 + (verticalGap + currentCardHeight + 16) / 2}
-                                    stroke="#84cc16"
-                                    strokeWidth="2"
-                                  />
-                                </>
-                              )}
-                            </svg>
-                          )}
-
-                          {/* Line from finals to champion trophy */}
-                          {isChampionship && bracketType === 'main' && (
-                            <svg
-                              className="absolute pointer-events-none"
-                              style={{
-                                top: 0,
-                                left: `${finalsCardWidth}px`,
-                                width: '60px',
-                                height: `${finalsCardHeight}px`,
-                                overflow: 'visible'
-                              }}
-                            >
-                              <line
-                                x1="0"
-                                y1={finalsCardHeight / 2}
-                                x2="40"
-                                y2={finalsCardHeight / 2}
-                                stroke="#eab308"
-                                strokeWidth="3"
+                              {/* Bottom match: horizontal → up to meeting point */}
+                              <path
+                                d={`M 0 ${pairMatchCenterY} L ${midX} ${pairMatchCenterY} L ${midX} ${meetingY}`}
+                                fill="none"
+                                stroke="#84cc16"
+                                strokeWidth="2"
                               />
-                            </svg>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                            </g>
+                          );
+                        } else if (isFirstOfPair && !hasPair) {
+                          // Single match - straight line
+                          return (
+                            <path
+                              key={matchIndex}
+                              d={`M 0 ${matchCenterY} L ${roundGap} ${matchCenterY}`}
+                              fill="none"
+                              stroke="#84cc16"
+                              strokeWidth="2"
+                            />
+                          );
+                        }
+                        return null;
+                      })}
+                    </svg>
+                  )}
                 </div>
               );
             })}
 
             {/* Finals Row: Bronze Match + Champion Trophy - aligned with finals */}
             {(() => {
-              // Calculate offset based on first round match count (more reliable than maxRound)
-              const firstRoundMatches = rounds[roundKeys[0]]?.length || 1;
-              // For 4 QF matches, finals offset should center it between the 2 SF matches
-              // spacingMultiplier = firstRoundMatches (4 for standard 8-team bracket)
-              const finalsVerticalOffset = (cardHeight + 16) * (firstRoundMatches - 1) / 2;
+              // Use same calculation as main rounds for consistency
+              const baseGap = 16;
+              const baseSpacing = cardHeight + baseGap;
+
+              // Finals positioning using the correct formula
+              const finalsTopOffset = (baseSpacing / 2) * (Math.pow(2, maxRound - 1) - 1);
+              const finalsAdjustedOffset = finalsTopOffset - (finalsCardHeight - cardHeight) / 2;
+
+              // Semi-finals positioning (for bronze connector lines)
+              const sfRoundNum = maxRound - 1;
+              const sfRoundSpacing = baseSpacing * Math.pow(2, sfRoundNum - 1);
+              const sfTopOffset = (baseSpacing / 2) * (Math.pow(2, sfRoundNum - 1) - 1);
+
+              // SF match centers (where bronze connectors start from)
+              const sfMatch0CenterY = sfTopOffset + cardHeight / 2;
+              const sfMatch1CenterY = sfTopOffset + sfRoundSpacing + cardHeight / 2;
+
+              // Bronze match center (same as finals center for visual alignment)
+              const bronzeCenterY = finalsAdjustedOffset + finalsCardHeight / 2;
 
               return (
                 <>
-                  {/* Bronze Match - same vertical position as finals */}
+                  {/* Bronze Match */}
                   {bronzeMatches.length > 0 && (
                     <div
                       className="relative"
                       style={{
                         width: `${cardWidth}px`,
-                        paddingTop: `${finalsVerticalOffset}px`
+                        paddingTop: `${finalsAdjustedOffset + (finalsCardHeight - cardHeight) / 2}px`
                       }}
                     >
                       <BracketMatchCard
@@ -632,11 +695,14 @@ const IllustrativeBracket: React.FC<IllustrativeBracketProps> = ({
                     </div>
                   )}
 
-                  {/* Champion Trophy (for main bracket) - same vertical position */}
+                  {/* Champion Trophy (for main bracket) - positioned to connect with finals line */}
                   {bracketType === 'main' && maxRound > 0 && (
                     <div
                       className="flex items-start"
-                      style={{ paddingTop: `${finalsVerticalOffset + (finalsCardHeight - 96) / 2}px` }}
+                      style={{
+                        paddingTop: `${finalsAdjustedOffset + (finalsCardHeight - 96) / 2}px`,
+                        marginLeft: `-${roundGap - 40}px` // Move closer to finals (40px line width)
+                      }}
                     >
                       <div className="flex flex-col items-center gap-2">
                         <div className="w-24 h-24 rounded-full bg-gradient-to-br from-yellow-400 to-yellow-600 flex items-center justify-center shadow-xl shadow-yellow-500/40 border-4 border-yellow-300/30">

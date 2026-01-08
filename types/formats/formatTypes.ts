@@ -91,7 +91,6 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '🔄',
-    comingSoon: true,
   },
   {
     value: 'rotating_doubles_box',
@@ -100,7 +99,6 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '📦',
-    comingSoon: true,
   },
   {
     value: 'fixed_doubles_box',

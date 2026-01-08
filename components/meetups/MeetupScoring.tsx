@@ -621,25 +621,28 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
       const accessToken = (userProfile as any).duprAccessToken;
       
       // Build DUPR match submission
+      // See CLAUDE.md "UNIVERSAL DUPR SUBMISSION PATTERN" for documentation
       const duprMatch: DuprMatchSubmission = {
+        identifier: `meetup_${meetupId}_${match.id}`, // Unique per match
+        matchSource: duprClubId ? 'CLUB' : 'PARTNER',
         matchType: match.matchType,
-        matchDate: meetupDate 
-          ? new Date(meetupDate).toISOString() 
+        matchDate: meetupDate
+          ? new Date(meetupDate).toISOString()
           : new Date().toISOString(),
         eventName: meetupTitle || 'Pickleball Meetup',
         location: meetupLocation,
         clubId: duprClubId,
         team1: {
           player1: { duprId: match.player1DuprId! },
-          player2: match.matchType === 'DOUBLES' && match.player1PartnerDuprId 
-            ? { duprId: match.player1PartnerDuprId } 
+          player2: match.matchType === 'DOUBLES' && match.player1PartnerDuprId
+            ? { duprId: match.player1PartnerDuprId }
             : undefined,
           score: match.games.map(g => g.player1),
         },
         team2: {
           player1: { duprId: match.player2DuprId! },
-          player2: match.matchType === 'DOUBLES' && match.player2PartnerDuprId 
-            ? { duprId: match.player2PartnerDuprId } 
+          player2: match.matchType === 'DOUBLES' && match.player2PartnerDuprId
+            ? { duprId: match.player2PartnerDuprId }
             : undefined,
           score: match.games.map(g => g.player2),
         },
@@ -693,25 +696,28 @@ export const MeetupScoring: React.FC<MeetupScoringProps> = ({
 
       for (const match of eligibleMatches) {
         try {
+          // See CLAUDE.md "UNIVERSAL DUPR SUBMISSION PATTERN" for documentation
           const duprMatch: DuprMatchSubmission = {
+            identifier: `meetup_${meetupId}_${match.id}`, // Unique per match
+            matchSource: duprClubId ? 'CLUB' : 'PARTNER',
             matchType: match.matchType,
-            matchDate: meetupDate 
-              ? new Date(meetupDate).toISOString() 
+            matchDate: meetupDate
+              ? new Date(meetupDate).toISOString()
               : new Date().toISOString(),
             eventName: meetupTitle || 'Pickleball Meetup',
             location: meetupLocation,
             clubId: duprClubId,
             team1: {
               player1: { duprId: match.player1DuprId! },
-              player2: match.matchType === 'DOUBLES' && match.player1PartnerDuprId 
-                ? { duprId: match.player1PartnerDuprId } 
+              player2: match.matchType === 'DOUBLES' && match.player1PartnerDuprId
+                ? { duprId: match.player1PartnerDuprId }
                 : undefined,
               score: match.games.map(g => g.player1),
             },
             team2: {
               player1: { duprId: match.player2DuprId! },
-              player2: match.matchType === 'DOUBLES' && match.player2PartnerDuprId 
-                ? { duprId: match.player2PartnerDuprId } 
+              player2: match.matchType === 'DOUBLES' && match.player2PartnerDuprId
+                ? { duprId: match.player2PartnerDuprId }
                 : undefined,
               score: match.games.map(g => g.player2),
             },

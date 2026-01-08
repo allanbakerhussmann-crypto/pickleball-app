@@ -730,6 +730,46 @@ export async function deleteMatchFromDupr(
 }
 
 // ============================================
+// RATING REFRESH (Cloud Function)
+// ============================================
+
+/**
+ * Refresh current user's DUPR rating from the DUPR API
+ *
+ * This calls the `dupr_refreshMyRating` Cloud Function which:
+ * 1. Fetches the latest rating from DUPR API
+ * 2. Updates the user's profile in Firestore
+ * 3. Returns the new rating values
+ *
+ * Note: The daily auto-sync runs at 3 AM NZ time for all users.
+ * This function allows users to manually refresh their rating on-demand.
+ */
+export const refreshMyDuprRating = async (): Promise<{
+  doublesRating?: number;
+  singlesRating?: number;
+  doublesReliability?: number;
+  singlesReliability?: number;
+  syncedAt: number;
+}> => {
+  const { httpsCallable } = await import('@firebase/functions');
+  const { functions } = await import('../firebase/config');
+
+  const callable = httpsCallable<
+    Record<string, never>,
+    {
+      doublesRating?: number;
+      singlesRating?: number;
+      doublesReliability?: number;
+      singlesReliability?: number;
+      syncedAt: number;
+    }
+  >(functions, 'dupr_refreshMyRating');
+
+  const result = await callable({});
+  return result.data;
+};
+
+// ============================================
 // HELPERS
 // ============================================
 
@@ -783,6 +823,9 @@ export const duprService = {
   // Matches
   submitMatchToDupr,
   deleteMatchFromDupr,
+
+  // Rating Refresh
+  refreshMyDuprRating,
 
   // Helpers
   formatDuprRating,

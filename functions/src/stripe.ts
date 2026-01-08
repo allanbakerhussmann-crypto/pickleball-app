@@ -807,22 +807,114 @@ async function handleCourtBookingPayment(
 }
 
 // ============================================
-// TOURNAMENT PAYMENT HANDLER (Placeholder)
+// TOURNAMENT PAYMENT HANDLER
 // ============================================
 
 async function handleTournamentPayment(
   session: Stripe.Checkout.Session,
   metadata: Record<string, string>
 ) {
+  const db = admin.firestore();
   const tournamentId = metadata.tournamentId;
   const odUserId = metadata.odUserId;
+  const registrationId = metadata.registrationId;
+  const divisionIds = metadata.divisionIds ? JSON.parse(metadata.divisionIds) : [];
+  const partnerDetails = metadata.partnerDetails ? JSON.parse(metadata.partnerDetails) : {};
 
-  console.log(`Tournament payment: tournament=${tournamentId}, user=${odUserId}`);
+  if (!tournamentId || !odUserId) {
+    console.error('Missing tournamentId or odUserId for tournament payment');
+    return;
+  }
 
-  // TODO: Implement tournament registration payment handling
-  // 1. Update registration status to 'paid'
-  // 2. Add user to tournament participants
-  // 3. Send confirmation email
+  console.log(`Processing tournament payment: tournament=${tournamentId}, user=${odUserId}, reg=${registrationId}`);
+
+  const now = Date.now();
+
+  try {
+    // 1. Update registration status to 'completed' and 'paid'
+    if (registrationId) {
+      const regRef = db.collection('tournament_registrations').doc(registrationId);
+      await regRef.update({
+        status: 'completed',
+        paymentStatus: 'paid',
+        paymentMethod: 'stripe',
+        stripeSessionId: session.id,
+        stripePaymentIntentId: session.payment_intent as string,
+        paidAt: now,
+        paidAmount: session.amount_total || 0,
+        completedAt: now,
+        updatedAt: now,
+      });
+      console.log(`✅ Registration ${registrationId} updated to paid`);
+    }
+
+    // 2. Get user profile for team creation
+    const userSnap = await db.collection('users').doc(odUserId).get();
+    const userProfile = userSnap.exists ? userSnap.data() : null;
+    const userName = userProfile?.displayName || userProfile?.firstName || 'Unknown';
+
+    // 3. Create/update teams for each division
+    for (const divisionId of divisionIds) {
+      const teamsRef = db.collection('tournaments').doc(tournamentId).collection('teams');
+
+      // Check if team already exists for this user in this division
+      const existingTeamSnap = await teamsRef
+        .where('divisionId', '==', divisionId)
+        .where('players', 'array-contains', odUserId)
+        .get();
+
+      if (!existingTeamSnap.empty) {
+        // Update existing team to paid
+        const batch = db.batch();
+        existingTeamSnap.docs.forEach((doc: admin.firestore.QueryDocumentSnapshot) => {
+          batch.update(doc.ref, {
+            paymentStatus: 'paid',
+            paymentMethod: 'stripe',
+            stripeSessionId: session.id,
+            paidAt: now,
+            paidAmount: session.amount_total || 0,
+            updatedAt: now,
+          });
+        });
+        await batch.commit();
+        console.log(`✅ Updated ${existingTeamSnap.size} existing team(s) in division ${divisionId}`);
+      } else {
+        // Create new team
+        const partnerInfo = partnerDetails[divisionId];
+        const players = [odUserId];
+
+        // Add partner if specified
+        if (partnerInfo?.partnerId) {
+          players.push(partnerInfo.partnerId);
+        }
+
+        const teamRef = teamsRef.doc();
+        await teamRef.set({
+          id: teamRef.id,
+          tournamentId,
+          divisionId,
+          players,
+          name: userName,
+          status: partnerInfo?.partnerId ? 'active' : 'pending_partner',
+          paymentStatus: 'paid',
+          paymentMethod: 'stripe',
+          stripeSessionId: session.id,
+          paidAt: now,
+          paidAmount: session.amount_total || 0,
+          createdByUserId: odUserId,
+          createdAt: now,
+          updatedAt: now,
+        });
+        console.log(`✅ Created new team ${teamRef.id} in division ${divisionId}`);
+      }
+    }
+
+    console.log(`✅ Tournament registration complete: ${divisionIds.length} division(s) processed`);
+
+  } catch (error) {
+    console.error('Error processing tournament payment:', error);
+    throw error;
+  }
 }
 
 // ============================================
@@ -1083,3 +1175,4 @@ export const stripe_seedSMSBundles = functions.https.onCall(async (_data, contex
     throw new functions.https.HttpsError('internal', error.message || 'Failed to seed bundles');
   }
 });
+

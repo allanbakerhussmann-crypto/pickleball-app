@@ -695,6 +695,25 @@ service cloud.firestore {
     }
 
     // ============================================
+    // ORGANIZER REQUESTS (V07.23)
+    // ============================================
+
+    // Organizer access requests - users apply, admins approve/deny
+    match /organizer_requests/{requestId} {
+      // Users can read their own request, admins can read all
+      allow read: if isAuthenticated() && (
+        requestId == request.auth.uid ||
+        isAppAdmin()
+      );
+      // Users can create a request for themselves
+      allow create: if isAuthenticated() &&
+        requestId == request.auth.uid &&
+        request.resource.data.odUserId == request.auth.uid;
+      // Only admins can update (approve/deny) or delete
+      allow update, delete: if isAppAdmin();
+    }
+
+    // ============================================
     // DUPR SUBMISSION COLLECTIONS (V07.04)
     // ============================================
 

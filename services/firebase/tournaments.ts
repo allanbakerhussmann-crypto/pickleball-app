@@ -18,7 +18,7 @@ import {
 } from '@firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from '@firebase/storage';
 import { db, storage } from './config';
-import type { Tournament, Division, TournamentSponsor } from '../../types';
+import type { Tournament, Division, TournamentSponsor, TournamentDay } from '../../types';
 
 // ============================================
 // Tournament CRUD
@@ -119,11 +119,13 @@ export const updateDivision = async (
   // Filter out undefined values - Firestore rejects them
   // This prevents crashes when form fields are empty (e.g., skillMin: undefined)
   // V06.36 FIX: Always ensure tournamentId is set correctly (was sometimes empty string)
+  // Note: null values ARE allowed (used to clear fields like tournamentDayId)
   const filteredUpdates: { [key: string]: any } = {
     updatedAt: Date.now(),
     tournamentId,
   };
   for (const [key, value] of Object.entries(updates)) {
+    // Allow null (to clear fields) but filter out undefined
     if (value !== undefined) {
       filteredUpdates[key] = value;
     }
@@ -364,4 +366,99 @@ export const getTournamentStaffDetails = async (
   );
 
   return staffDetails.filter((s): s is NonNullable<typeof s> => s !== null) as TournamentStaffMember[];
+};
+
+// ============================================
+// Tournament Day Management
+// ============================================
+
+/**
+ * Add a new day to a tournament
+ */
+export const addTournamentDay = async (
+  tournamentId: string,
+  day: Omit<TournamentDay, 'id'>
+): Promise<string> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  const dayId = `day-${Date.now()}`;
+  const newDay: TournamentDay = {
+    ...day,
+    id: dayId,
+  };
+
+  const existingDays = tournament.days || [];
+  existingDays.push(newDay);
+
+  // Sort by date
+  existingDays.sort((a, b) => a.date.localeCompare(b.date));
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    days: existingDays,
+    updatedAt: Date.now(),
+  });
+
+  return dayId;
+};
+
+/**
+ * Update an existing tournament day
+ */
+export const updateTournamentDay = async (
+  tournamentId: string,
+  dayId: string,
+  updates: Partial<TournamentDay>
+): Promise<void> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  const existingDays = tournament.days || [];
+  const dayIndex = existingDays.findIndex(d => d.id === dayId);
+
+  if (dayIndex === -1) throw new Error('Day not found');
+
+  existingDays[dayIndex] = {
+    ...existingDays[dayIndex],
+    ...updates,
+  };
+
+  // Re-sort by date in case date was changed
+  existingDays.sort((a, b) => a.date.localeCompare(b.date));
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    days: existingDays,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Remove a tournament day
+ */
+export const removeTournamentDay = async (
+  tournamentId: string,
+  dayId: string
+): Promise<void> => {
+  const tournament = await getTournament(tournamentId);
+  if (!tournament) throw new Error('Tournament not found');
+
+  const filteredDays = (tournament.days || []).filter(d => d.id !== dayId);
+
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    days: filteredDays,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Start a tournament day (mark it as the active day)
+ */
+export const startTournamentDay = async (
+  tournamentId: string,
+  dayId: string
+): Promise<void> => {
+  await updateDoc(doc(db, 'tournaments', tournamentId), {
+    activeDayId: dayId,
+    updatedAt: Date.now(),
+  });
 };

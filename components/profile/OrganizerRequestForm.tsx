@@ -72,8 +72,14 @@ export const OrganizerRequestForm: React.FC<OrganizerRequestFormProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-      <div className="bg-gray-900 rounded-xl max-w-lg w-full border border-gray-700 overflow-hidden">
+    <div
+      className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div
+        className="bg-gray-900 rounded-xl max-w-lg w-full border border-gray-700 overflow-hidden pointer-events-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-700">
           <div className="flex items-center justify-between">

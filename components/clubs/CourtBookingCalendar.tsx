@@ -493,9 +493,9 @@ export const CourtBookingCalendar: React.FC<CourtBookingCalendarProps> = ({
         </div>
       )}
 
-      {/* Cart Summary Bar */}
+      {/* Cart Summary Bar - positioned above BottomNav on mobile */}
       {selectedSlots.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 p-3 sm:p-4 z-40">
+        <div className="fixed bottom-16 md:bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 p-3 sm:p-4 z-40">
           <div className="max-w-6xl mx-auto">
             {/* Mobile Layout */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

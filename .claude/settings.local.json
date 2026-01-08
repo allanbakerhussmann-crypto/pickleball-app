@@ -18,7 +18,11 @@
       "Bash(git -C \"c:\\\\Users\\\\allan\\\\OneDrive\\\\Documents\\\\GitHub\\\\pickleball-app\" log --oneline -1 --format=\"%B\")",
       "Bash(npm run typecheck:*)",
       "Bash(npx firebase deploy --only hosting)",
-      "Skill(frontend-design)"
+      "Skill(frontend-design)",
+      "Bash(git commit:*)",
+      "Bash(npx firebase deploy:*)",
+      "WebFetch(domain:dupr.gitbook.io)",
+      "WebFetch(domain:uat.mydupr.com)"
     ]
   }
 }

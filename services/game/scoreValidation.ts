@@ -84,7 +84,10 @@ export function validateGameScore(
   if (winBy === 2) {
     // Standard case: winner reaches target with required margin
     if (maxScore === pointsPerGame && margin < 2) {
-      return { valid: false, error: 'Must win by 2 points' };
+      return {
+        valid: false,
+        error: `Score ${maxScore}-${minScore} invalid. At ${pointsPerGame} points, must win by 2 (e.g., ${pointsPerGame}-${pointsPerGame - 2})`
+      };
     }
 
     // Deuce scenario: if over target, margin must be exactly 2
@@ -92,7 +95,13 @@ export function validateGameScore(
     if (maxScore > pointsPerGame) {
       const isAtCap = capAt && maxScore === capAt;
       if (!isAtCap && margin !== 2) {
-        return { valid: false, error: 'Must win by 2 points' };
+        // Provide helpful examples based on the loser's score
+        const validWinnerScore = minScore + 2;
+        const validLoserScore = maxScore - 2;
+        return {
+          valid: false,
+          error: `Score ${maxScore}-${minScore} invalid. In deuce (past ${pointsPerGame}), must win by exactly 2. Valid: ${validWinnerScore}-${minScore} or ${maxScore}-${validLoserScore}`
+        };
       }
     }
   }
@@ -265,15 +274,27 @@ export function matchNeedsMoreGames(
 
 /**
  * Check if a match is complete
+ * Requires all game scores to be valid AND someone has won enough games
  *
  * @param scores - Current game scores
  * @param settings - Game settings
- * @returns True if match is complete
+ * @returns True if match is complete with valid scores
  */
 export function isMatchComplete(
   scores: GameScore[],
   settings: GameSettings
 ): boolean {
+  if (!scores || scores.length === 0) return false;
+
+  // First, validate all game scores
+  for (const game of scores) {
+    const validation = validateGameScore(game.scoreA, game.scoreB, settings);
+    if (!validation.valid) {
+      return false; // Can't be complete if any game score is invalid
+    }
+  }
+
+  // Then check if someone has won enough games
   const { winnerId } = calculateMatchWinner(scores, settings);
   return winnerId !== null;
 }

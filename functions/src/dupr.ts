@@ -29,15 +29,19 @@ const CONFIG = {
   // Switch to production URLs after DUPR approval
   ENVIRONMENT: 'uat' as 'uat' | 'production',
 
-  // UAT URLs (testing)
+  // UAT URLs and credentials (testing)
   UAT_BASE_URL: 'https://uat.mydupr.com/api',
   UAT_TOKEN_URL: 'https://uat.mydupr.com/api/auth/v1.0/token',
   UAT_MATCH_URL: 'https://uat.mydupr.com/api/match/v1.0/create',
+  UAT_CLIENT_ID: '4970118010',
+  UAT_CLIENT_KEY: 'test-ck-6181132e-cedf-45a6-fcb0-f88dda516175',
 
-  // Production URLs (after approval)
+  // Production URLs and credentials (after approval)
   PROD_BASE_URL: 'https://prod.mydupr.com/api',
   PROD_TOKEN_URL: 'https://prod.mydupr.com/api/auth/v1.0/token',
   PROD_MATCH_URL: 'https://prod.mydupr.com/api/match/v1.0/create',
+  PROD_CLIENT_ID: '', // Will be provided after UAT approval
+  PROD_CLIENT_KEY: '', // Will be provided after UAT approval
 
   // Retry configuration
   MAX_RETRIES: 3,
@@ -274,11 +278,23 @@ async function convertMatchToDuprFormat(
   let sideBDuprIds = match.sideB.duprIds || [];
 
   // If not on match, fetch from user profiles
-  if (sideADuprIds.length === 0 && sideAPlayerIds.length > 0) {
-    sideADuprIds = await fetchDuprIdsForPlayers(sideAPlayerIds);
-  }
-  if (sideBDuprIds.length === 0 && sideBPlayerIds.length > 0) {
-    sideBDuprIds = await fetchDuprIdsForPlayers(sideBPlayerIds);
+  // Wrap in try/catch to return error instead of throwing
+  try {
+    if (sideADuprIds.length === 0 && sideAPlayerIds.length > 0) {
+      sideADuprIds = await fetchDuprIdsForPlayers(sideAPlayerIds);
+    }
+    if (sideBDuprIds.length === 0 && sideBPlayerIds.length > 0) {
+      sideBDuprIds = await fetchDuprIdsForPlayers(sideBPlayerIds);
+    }
+  } catch (fetchError) {
+    logger.error(`[DUPR] Failed to fetch DUPR IDs for match ${match.id}:`, {
+      error: fetchError instanceof Error ? fetchError.message : 'Unknown',
+    });
+    return {
+      payload: null,
+      warnings: [],
+      error: 'Failed to fetch player DUPR IDs: ' + (fetchError instanceof Error ? fetchError.message : 'Unknown'),
+    };
   }
 
   // VALIDATION: For doubles, ALL players must have DUPR IDs
@@ -508,6 +524,7 @@ interface SubmitMatchesResponse {
   message: string;
   eligibleCount?: number;
   ineligibleCount?: number;
+  skippedCount?: number;
 }
 
 /**
@@ -587,96 +604,164 @@ export const dupr_submitMatches = functions
         .doc(eventId)
         .collection('matches');
 
-      const allMatches = await matchesCollection
-        .where('status', '==', 'completed')
-        .where('scoreState', '==', 'official')
-        .get();
+      // Query all completed matches first (simpler query, no composite index needed)
+      // Then filter in memory for scoreState and eligibility
+      try {
+        const allMatches = await matchesCollection
+          .where('status', '==', 'completed')
+          .get();
 
-      logger.info('[DUPR] Query returned matches', { count: allMatches.docs.length });
+        logger.info('[DUPR] Query returned completed matches', { count: allMatches.docs.length });
 
-      for (const doc of allMatches.docs) {
-        const match = doc.data();
-        // Additional eligibility checks
-        if (
-          match.officialResult &&
-          match.dupr?.eligible !== false &&
-          !match.dupr?.submitted
-        ) {
-          matchIds.push(doc.id);
+        for (const doc of allMatches.docs) {
+          const match = doc.data();
+          // Filter for official scores and eligibility in memory
+          if (
+            match.scoreState === 'official' &&
+            match.officialResult &&
+            match.dupr?.eligible !== false &&
+            !match.dupr?.submitted
+          ) {
+            matchIds.push(doc.id);
+          }
         }
-      }
 
-      logger.info(`[DUPR] Found ${matchIds.length} eligible matches after filtering`);
+        logger.info(`[DUPR] Found ${matchIds.length} eligible matches after filtering`);
+      } catch (queryError) {
+        logger.error('[DUPR] Query failed:', { error: queryError instanceof Error ? queryError.message : 'Unknown' });
+        throw new functions.https.HttpsError('internal', 'Failed to query matches: ' + (queryError instanceof Error ? queryError.message : 'Unknown error'));
+      }
     }
 
     // Collect eligible matches and submit immediately
     const results: { matchId: string; success: boolean; duprMatchId?: string; error?: string }[] = [];
     let successCount = 0;
     let failureCount = 0;
+    let skippedCount = 0;
 
     for (const matchId of matchIds) {
-      const matchPath = getMatchPath(eventType, eventId, matchId);
-      const matchDoc = await db.doc(matchPath).get();
+      // CRITICAL: Wrap entire per-match processing in try/catch
+      // so one match failure doesn't abort the entire batch
+      try {
+        const matchPath = getMatchPath(eventType, eventId, matchId);
+        const matchDoc = await db.doc(matchPath).get();
 
-      if (!matchDoc.exists) {
-        results.push({ matchId, success: false, error: 'Match not found' });
-        failureCount++;
-        continue;
-      }
+        if (!matchDoc.exists) {
+          results.push({ matchId, success: false, error: 'Match not found' });
+          failureCount++;
+          continue;
+        }
 
-      const match = { id: matchDoc.id, ...matchDoc.data() } as Match;
+        const match = { id: matchDoc.id, ...matchDoc.data() } as Match;
 
-      // Check eligibility
-      if (
-        !match.officialResult ||
-        match.status !== 'completed' ||
-        match.scoreState !== 'official' ||
-        match.dupr?.eligible === false ||
-        match.dupr?.submitted
-      ) {
-        // Skip ineligible matches silently
-        continue;
-      }
+        // Check if already submitted (skip gracefully)
+        if (match.dupr?.submitted) {
+          skippedCount++;
+          continue;
+        }
 
-      // Submit to DUPR immediately
-      logger.info(`[DUPR] Submitting match ${matchId} to DUPR...`);
-      const result = await submitMatchToDupr(match, eventName, eventType, eventId, token);
+        // Check other eligibility
+        if (
+          !match.officialResult ||
+          match.status !== 'completed' ||
+          match.scoreState !== 'official' ||
+          match.dupr?.eligible === false
+        ) {
+          // Skip ineligible matches silently
+          continue;
+        }
 
-      // Only include defined values to avoid Firestore undefined error
-      const resultEntry: { matchId: string; success: boolean; duprMatchId?: string; error?: string } = {
-        matchId,
-        success: result.success,
-      };
-      if (result.duprMatchId) resultEntry.duprMatchId = result.duprMatchId;
-      if (result.error) resultEntry.error = result.error;
-      results.push(resultEntry);
+        // Submit to DUPR immediately
+        logger.info(`[DUPR] Submitting match ${matchId} to DUPR...`);
+        const result = await submitMatchToDupr(match, eventName, eventType, eventId, token);
 
-      if (result.success) {
-        successCount++;
+        // Only include defined values to avoid Firestore undefined error
+        const resultEntry: { matchId: string; success: boolean; duprMatchId?: string; error?: string } = {
+          matchId,
+          success: result.success,
+        };
+        if (result.duprMatchId) resultEntry.duprMatchId = result.duprMatchId;
+        if (result.error) resultEntry.error = result.error;
+        results.push(resultEntry);
 
-        // Update match with successful submission
-        await db.doc(matchPath).update({
-          'dupr.submitted': true,
-          'dupr.submittedAt': Date.now(),
-          'dupr.submissionId': result.duprMatchId,
-          'dupr.pendingSubmission': false,
-          'dupr.submissionError': null,
-          scoreState: 'submittedToDupr',
-          updatedAt: Date.now(),
+        if (result.success) {
+          successCount++;
+
+          // Update match with successful submission
+          // Build update object with only defined values (Firestore doesn't allow undefined)
+          try {
+            const updateData: Record<string, unknown> = {
+              'dupr.submitted': true,
+              'dupr.submittedAt': Date.now(),
+              'dupr.pendingSubmission': false,
+              scoreState: 'submittedToDupr',
+              updatedAt: Date.now(),
+            };
+            // Only include submissionId if it's defined
+            if (result.duprMatchId) {
+              updateData['dupr.submissionId'] = result.duprMatchId;
+            }
+            // Use FieldValue.delete() to remove error field instead of null
+            updateData['dupr.submissionError'] = admin.firestore.FieldValue.delete();
+
+            await db.doc(matchPath).update(updateData);
+          } catch (updateError) {
+            logger.error(`[DUPR] Failed to update success state for ${matchId}:`, {
+              error: updateError instanceof Error ? updateError.message : 'Unknown',
+            });
+            // Don't fail the submission just because DB update failed
+          }
+
+          logger.info(`[DUPR] Match ${matchId} submitted successfully: ${result.duprMatchId || 'no-id-returned'}`);
+        } else {
+          failureCount++;
+
+          // Update match with error (ensure error message is never undefined)
+          const errorMessage = result.error || 'Unknown submission error';
+          try {
+            await db.doc(matchPath).update({
+              'dupr.submissionError': errorMessage,
+              'dupr.lastAttemptAt': Date.now(),
+              'dupr.attemptCount': admin.firestore.FieldValue.increment(1),
+              updatedAt: Date.now(),
+            });
+          } catch (updateError) {
+            logger.error(`[DUPR] Failed to update error state for ${matchId}:`, {
+              error: updateError instanceof Error ? updateError.message : 'Unknown',
+            });
+          }
+
+          logger.error(`[DUPR] Match ${matchId} submission failed: ${errorMessage}`);
+        }
+
+      } catch (matchError) {
+        // Capture error and CONTINUE to next match - never abort batch
+        logger.error(`[DUPR] Match ${matchId} threw exception:`, {
+          error: matchError instanceof Error ? matchError.message : 'Unknown',
+          stack: matchError instanceof Error ? matchError.stack?.substring(0, 500) : undefined,
         });
 
-        logger.info(`[DUPR] Match ${matchId} submitted successfully: ${result.duprMatchId}`);
-      } else {
+        results.push({
+          matchId,
+          success: false,
+          error: matchError instanceof Error ? matchError.message : 'Unknown error',
+        });
         failureCount++;
 
-        // Update match with error
-        await db.doc(matchPath).update({
-          'dupr.submissionError': result.error,
-          'dupr.lastAttemptAt': Date.now(),
-          updatedAt: Date.now(),
-        });
+        // Try to update match with error state (nested try/catch so this doesn't throw either)
+        try {
+          await db.doc(getMatchPath(eventType, eventId, matchId)).update({
+            'dupr.submissionError': matchError instanceof Error ? matchError.message : 'Unknown error',
+            'dupr.lastAttemptAt': Date.now(),
+            'dupr.attemptCount': admin.firestore.FieldValue.increment(1),
+            updatedAt: Date.now(),
+          });
+        } catch (updateError) {
+          logger.error(`[DUPR] Failed to update error state for ${matchId} after exception`);
+        }
 
-        logger.error(`[DUPR] Match ${matchId} submission failed: ${result.error}`);
+        // Continue to next match - DO NOT throw
+        continue;
       }
 
       // Small delay between submissions to avoid rate limiting
@@ -700,18 +785,19 @@ export const dupr_submitMatches = functions
 
     await db.collection('dupr_submission_batches').doc(batchId).set(batch);
 
-    logger.info(`[DUPR] Batch ${batchId} complete: ${successCount} success, ${failureCount} failed`);
+    logger.info(`[DUPR] Batch ${batchId} complete: ${successCount} success, ${failureCount} failed, ${skippedCount} skipped`);
 
     return {
-      success: successCount > 0,
+      success: successCount > 0 || skippedCount > 0,
       batchId,
       message: failureCount === 0
-        ? `Successfully submitted ${successCount} matches to DUPR`
+        ? `Successfully submitted ${successCount} matches to DUPR${skippedCount > 0 ? `, ${skippedCount} already submitted` : ''}`
         : successCount > 0
-        ? `Submitted ${successCount} matches, ${failureCount} failed`
+        ? `Submitted ${successCount}, failed ${failureCount}${skippedCount > 0 ? `, skipped ${skippedCount}` : ''}`
         : `Failed to submit ${failureCount} matches to DUPR`,
       eligibleCount: successCount,
       ineligibleCount: failureCount,
+      skippedCount,
     };
   }
 );
@@ -1031,11 +1117,17 @@ export const dupr_syncRatings = functions.pubsub
       if (!duprId) continue;
 
       try {
-        // Fetch player data from DUPR
-        const response = await fetch(`${baseUrl}/player/v1.0/${duprId}`, {
+        // Fetch player data from DUPR via POST /v1.0/player (verified via Swagger)
+        const response = await fetch(`${baseUrl}/v1.0/player`, {
+          method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
+          body: JSON.stringify({
+            duprIds: [duprId],
+            sortBy: '',
+          }),
         });
 
         if (!response.ok) {
@@ -1045,27 +1137,33 @@ export const dupr_syncRatings = functions.pubsub
         }
 
         const data = await response.json();
-        const result = data.result || data;
 
-        // Extract ratings
-        const doublesRating = result.ratings?.doubles || result.doublesRating;
-        const singlesRating = result.ratings?.singles || result.singlesRating;
-        const doublesReliability = result.ratings?.doublesReliability;
-        const singlesReliability = result.ratings?.singlesReliability;
+        // Response structure: { status: "SUCCESS", results: [{ ratings: { singles, doubles } }] }
+        if (data.status !== 'SUCCESS' || !data.results?.length) {
+          logger.warn(`[DUPR] No results for user ${userDoc.id} (DUPR: ${duprId})`);
+          failureCount++;
+          continue;
+        }
+
+        const player = data.results[0];
+        const singlesStr = player.ratings?.singles;
+        const doublesStr = player.ratings?.doubles;
+
+        // Convert string ratings to numbers (handle "NR" as null)
+        const singlesRating = singlesStr && singlesStr !== 'NR' ? parseFloat(singlesStr) : null;
+        const doublesRating = doublesStr && doublesStr !== 'NR' ? parseFloat(doublesStr) : null;
 
         // Only update if we got valid data
-        if (doublesRating !== undefined || singlesRating !== undefined) {
+        if (doublesRating !== null || singlesRating !== null) {
           const updateData: Record<string, unknown> = {
             duprLastSyncAt: Date.now(),
           };
 
-          if (doublesRating !== undefined) {
-            updateData.duprDoubles = doublesRating;
-            updateData.duprDoublesReliability = doublesReliability;
+          if (doublesRating !== null) {
+            updateData.duprDoublesRating = doublesRating;
           }
-          if (singlesRating !== undefined) {
-            updateData.duprSingles = singlesRating;
-            updateData.duprSinglesReliability = singlesReliability;
+          if (singlesRating !== null) {
+            updateData.duprSinglesRating = singlesRating;
           }
 
           await userDoc.ref.update(updateData);
@@ -1087,23 +1185,28 @@ export const dupr_syncRatings = functions.pubsub
   });
 
 // ============================================
-// Callable Function: Manual Rating Refresh
+// Callable Function: Manual Rating Refresh (v2 - client credentials)
 // ============================================
 
 /**
  * Manually refresh DUPR rating for current user
- * Can be called from profile page
+ * V2: Uses server-side client credentials (identical to dupr_syncRatings)
+ * NO SSO tokens, NO session refresh - pure client-credential flow
  */
 export const dupr_refreshMyRating = functions.https.onCall(
   async (_data: unknown, context) => {
+    // Auth check
     if (!context.auth) {
       throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
 
-    const userId = context.auth.uid;
+    const uid = context.auth.uid;
 
-    // Get user document
-    const userDoc = await db.collection('users').doc(userId).get();
+    // Signature log to prove v2 is executing
+    logger.info('[DUPR] refreshMyRating v2 (client-credentials) starting', { uid });
+
+    // Load user document and read duprId
+    const userDoc = await db.collection('users').doc(uid).get();
     if (!userDoc.exists) {
       throw new functions.https.HttpsError('not-found', 'User not found');
     }
@@ -1115,63 +1218,109 @@ export const dupr_refreshMyRating = functions.https.onCall(
       throw new functions.https.HttpsError('failed-precondition', 'No DUPR account linked');
     }
 
-    // Get DUPR API token
+    // Rate limit: 60 seconds between refreshes
+    const lastSync = userData?.duprLastSyncAt;
+    if (lastSync && Date.now() - lastSync < 60000) {
+      const secondsRemaining = Math.ceil((60000 - (Date.now() - lastSync)) / 1000);
+      return {
+        success: false,
+        rateLimited: true,
+        message: `Please wait ${secondsRemaining} seconds before refreshing again`,
+      };
+    }
+
+    // Get bearer token via client credentials (same as dupr_syncRatings)
     const token = await getDuprToken();
     if (!token) {
+      logger.error('[DUPR] refreshMyRating v2: failed to get API token');
       throw new functions.https.HttpsError('unavailable', 'DUPR API unavailable');
     }
 
     const baseUrl = CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_BASE_URL : CONFIG.PROD_BASE_URL;
 
-    try {
-      // Fetch player data from DUPR
-      const response = await fetch(`${baseUrl}/player/v1.0/${duprId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
+    // Fetch player ratings via POST /v1.0/player (verified via Swagger)
+    const response = await fetch(`${baseUrl}/v1.0/player`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        duprIds: [duprId],
+        sortBy: '',
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      logger.error('[DUPR] refreshMyRating v2: player lookup failed', {
+        duprId,
+        status: response.status,
+        errorText,
       });
-
-      if (!response.ok) {
-        throw new functions.https.HttpsError('unavailable', `Failed to fetch DUPR data: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const result = data.result || data;
-
-      // Extract ratings
-      const doublesRating = result.ratings?.doubles || result.doublesRating;
-      const singlesRating = result.ratings?.singles || result.singlesRating;
-      const doublesReliability = result.ratings?.doublesReliability;
-      const singlesReliability = result.ratings?.singlesReliability;
-
-      // Update user profile
-      const updateData: Record<string, unknown> = {
-        duprLastSyncAt: Date.now(),
-      };
-
-      if (doublesRating !== undefined) {
-        updateData.duprDoubles = doublesRating;
-        updateData.duprDoublesReliability = doublesReliability;
-      }
-      if (singlesRating !== undefined) {
-        updateData.duprSingles = singlesRating;
-        updateData.duprSinglesReliability = singlesReliability;
-      }
-
-      await userDoc.ref.update(updateData);
-
-      return {
-        success: true,
-        doublesRating,
-        singlesRating,
-        doublesReliability,
-        singlesReliability,
-        syncedAt: Date.now(),
-      };
-    } catch (error) {
-      logger.error('[DUPR] Error refreshing rating:', error);
-      throw new functions.https.HttpsError('internal', 'Failed to refresh rating');
+      throw new functions.https.HttpsError(
+        'unavailable',
+        'Unable to fetch DUPR rating. Please try again later.'
+      );
     }
+
+    // Parse response - structure: { status: "SUCCESS", results: [{ ratings: { singles, doubles } }] }
+    const data = await response.json();
+
+    if (data.status !== 'SUCCESS' || !data.results?.length) {
+      logger.error('[DUPR] refreshMyRating v2: unexpected response', { data });
+      throw new functions.https.HttpsError('unavailable', 'No player data returned from DUPR');
+    }
+
+    const player = data.results[0];
+    const singlesStr = player.ratings?.singles;
+    const doublesStr = player.ratings?.doubles;
+
+    // Convert string ratings to numbers (handle "NR" as null)
+    const singlesRating = singlesStr && singlesStr !== 'NR' ? parseFloat(singlesStr) : null;
+    const doublesRating = doublesStr && doublesStr !== 'NR' ? parseFloat(doublesStr) : null;
+
+    // Note: reliability fields not in this endpoint response
+    const singlesReliability = null;
+    const doublesReliability = null;
+
+    logger.info('[DUPR] refreshMyRating v2: ratings fetched', {
+      duprId,
+      doublesRating,
+      singlesRating,
+    });
+
+    // Update user doc (same field names as UI expects)
+    const updateData: Record<string, unknown> = {
+      duprLastSyncAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    if (doublesRating !== undefined && doublesRating !== null) {
+      updateData.duprDoublesRating = doublesRating;
+    }
+    if (doublesReliability !== undefined && doublesReliability !== null) {
+      updateData.duprDoublesReliability = doublesReliability;
+    }
+    if (singlesRating !== undefined && singlesRating !== null) {
+      updateData.duprSinglesRating = singlesRating;
+    }
+    if (singlesReliability !== undefined && singlesReliability !== null) {
+      updateData.duprSinglesReliability = singlesReliability;
+    }
+
+    await userDoc.ref.update(updateData);
+
+    logger.info('[DUPR] refreshMyRating v2: complete', { uid, duprId });
+
+    return {
+      success: true,
+      doublesRating: doublesRating ?? null,
+      singlesRating: singlesRating ?? null,
+      doublesReliability: doublesReliability ?? null,
+      singlesReliability: singlesReliability ?? null,
+      syncedAt: Date.now(),
+    };
   }
 );
 

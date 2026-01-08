@@ -1,8 +1,12 @@
 /**
- * LiveCourtsTab - V07.02
+ * LiveCourtsTab - V07.04
  *
  * Redesigned Live Courts interface with "Sports Command Center" aesthetic.
  * Features glass-morphism cards, live status indicators, and polished court cards.
+ *
+ * V07.04 Changes:
+ * - Added isOrganizer and onFinaliseResult props for DUPR-compliant scoring
+ * - Organizers now use FinaliseScoreModal when entering match scores
  *
  * V07.02 Changes:
  * - Added court tier badges (🥇 Gold, 🥈 Plate, ⭐ Semi)
@@ -30,6 +34,9 @@ interface LiveCourtsTabProps {
   assignMatchToCourt: (matchId: string, courtName: string) => Promise<void>;
   startMatchOnCourt: (courtId: string) => Promise<void>;
   finishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number) => void;
+  // V07.04: DUPR-Compliant Scoring
+  isOrganizer?: boolean;
+  onFinaliseResult?: (matchId: string, scores: import('../../types').GameScore[], winnerId: string, duprEligible: boolean) => Promise<void>;
 }
 
 // Styled card component matching DivisionSettingsTab
@@ -215,6 +222,9 @@ export const LiveCourtsTab: React.FC<LiveCourtsTabProps> = ({
   assignMatchToCourt,
   startMatchOnCourt,
   finishMatchOnCourt,
+  // V07.04: DUPR-Compliant Scoring
+  isOrganizer = true,  // Default true since this is organizer UI
+  onFinaliseResult,
 }) => {
   // Calculate stats
   const inProgressCount = (courtMatchModels || []).filter(m => m.status === 'IN_PROGRESS').length;
@@ -439,6 +449,7 @@ export const LiveCourtsTab: React.FC<LiveCourtsTabProps> = ({
         filteredQueue={queueMatchModels}
         courtSettings={tournament.courtSettings}  // V07.02: Pass court tier settings
         firestoreCourts={courts}  // V07.02: Pass Firestore courts for ID lookup
+        isOrganizer={isOrganizer}  // V07.04: DUPR-compliant scoring
         onAssignMatchToCourt={async (matchId, courtId) => {
           const court = (courts || []).find(c => c.id === courtId);
           if (!court) return;
@@ -448,6 +459,7 @@ export const LiveCourtsTab: React.FC<LiveCourtsTabProps> = ({
           await startMatchOnCourt(courtId);
         }}
         onFinishMatchOnCourt={finishMatchOnCourt}
+        onFinaliseResult={onFinaliseResult}  // V07.04: DUPR-compliant finalization
       />
     </div>
   );

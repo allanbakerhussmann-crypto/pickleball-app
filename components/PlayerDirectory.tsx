@@ -39,9 +39,9 @@ export const PlayerDirectory: React.FC<PlayerDirectoryProps> = ({ onBack }) => {
     const term = searchTerm.toLowerCase();
     const filtered = players.filter(p => {
       const name = (p.displayName || '').toLowerCase();
-      const email = (p.email || '').toLowerCase();
       const region = (p.region || '').toLowerCase();
-      return name.includes(term) || email.includes(term) || region.includes(term);
+      // Privacy: Do NOT search by email - it's private information
+      return name.includes(term) || region.includes(term);
     });
     setFilteredPlayers(filtered);
   }, [searchTerm, players]);
@@ -140,7 +140,7 @@ export const PlayerDirectory: React.FC<PlayerDirectoryProps> = ({ onBack }) => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search by name, email, or region..."
+            placeholder="Search by name or region..."
             className="w-full bg-gray-800 text-white pl-10 pr-4 py-3 rounded-lg border border-gray-700 focus:border-blue-500 outline-none"
           />
         </div>
@@ -275,9 +275,7 @@ export const PlayerDirectory: React.FC<PlayerDirectoryProps> = ({ onBack }) => {
                   </h2>
                   {getRoleBadge(selectedPlayer.roles || [])}
                 </div>
-                {selectedPlayer.email && (
-                  <p className="text-gray-400 text-sm">{selectedPlayer.email}</p>
-                )}
+                {/* Privacy: Email is NOT shown publicly */}
               </div>
 
               {/* Stats Grid */}
