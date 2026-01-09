@@ -1700,14 +1700,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                         e.stopPropagation();
                         handleToggleWeekLock(week);
                       }}
-                      className={`p-1 rounded text-xs transition-colors ${
+                      disabled={isRecalculating}
+                      className={`px-2 py-1 rounded text-xs font-medium transition-colors border ${
                         weekUnlocked
-                          ? 'text-lime-400 hover:bg-lime-900/30'
-                          : 'text-gray-400 hover:bg-gray-700'
-                      }`}
+                          ? 'bg-lime-900/30 text-lime-400 border-lime-600/50 hover:bg-lime-900/50'
+                          : 'bg-gray-800 text-gray-400 border-gray-600/50 hover:bg-gray-700'
+                      } ${isRecalculating ? 'opacity-50 cursor-not-allowed' : ''}`}
                       title={weekUnlocked ? 'Lock week (disable scoring)' : 'Unlock week (enable scoring)'}
                     >
-                      {weekUnlocked ? '🔓' : '🔒'}
+                      {weekUnlocked ? '🔓 Open' : '🔒 Closed'}
                     </button>
                   )}
                 </div>
