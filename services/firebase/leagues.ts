@@ -36,6 +36,7 @@ import type {
   LeagueDivision,
   LeagueTeam,
   LeaguePartnerInvite,
+  LeagueJoinRequest,
   LeagueRegistration,
   LeagueStatus,
   LeagueType,
@@ -301,6 +302,32 @@ export const deleteLeagueDivision = async (
  * Join a league (creates a member record)
  * V07.15: Uses transaction for atomic max members check
  */
+/**
+ * V07.27: Count members toward capacity (active + pending_partner)
+ * For doubles leagues, pending_partner counts as they occupy a slot
+ */
+const countMembersTowardCapacity = async (
+  leagueId: string,
+  divisionId?: string | null
+): Promise<number> => {
+  const q = query(collection(db, 'leagues', leagueId, 'members'));
+  const snap = await getDocs(q);
+
+  let count = 0;
+  snap.docs.forEach(d => {
+    const member = d.data() as LeagueMember;
+    // Count active and pending_partner toward capacity
+    if (member.status === 'active' || member.status === 'pending_partner') {
+      // Filter by division if specified
+      if (!divisionId || member.divisionId === divisionId) {
+        count++;
+      }
+    }
+  });
+
+  return count;
+};
+
 export const joinLeague = async (
   leagueId: string,
   userId: string,
@@ -375,20 +402,77 @@ export const joinLeague = async (
 
 /**
  * Leave a league
+ * V07.27: Updated to handle partners leaving differently than primary members
+ * - If partner leaves: Clears partner fields, reverts team to pending_partner
+ * - If primary member leaves: Withdraws the entire team
  */
 export const leaveLeague = async (
   leagueId: string,
-  memberId: string
+  memberId: string,
+  userId?: string
 ): Promise<void> => {
-  await updateDoc(doc(db, 'leagues', leagueId, 'members', memberId), {
-    status: 'withdrawn',
-  });
-  
-  // Decrement member count
-  await updateDoc(doc(db, 'leagues', leagueId), {
-    memberCount: increment(-1),
-    updatedAt: Date.now(),
-  });
+  const memberRef = doc(db, 'leagues', leagueId, 'members', memberId);
+  const memberSnap = await getDoc(memberRef);
+  const member = memberSnap.exists() ? memberSnap.data() as LeagueMember : null;
+
+  if (!member) {
+    throw new Error('Member not found');
+  }
+
+  const now = Date.now();
+
+  // V07.27: Check if the user leaving is the partner (not the primary member)
+  const isPartner = userId && member.partnerUserId === userId && member.userId !== userId;
+
+  if (isPartner) {
+    // Partner is leaving - clear partner fields and revert to looking for partner
+    await updateDoc(memberRef, {
+      partnerUserId: null,
+      partnerDisplayName: null,
+      partnerDuprId: null,
+      partnerLockedAt: null,
+      teamName: member.displayName, // Revert to just primary member's name
+      status: 'pending_partner',
+      isLookingForPartner: true,
+      // Clear invite tracking since the original invite was already accepted
+      pendingInviteId: null,
+      pendingInvitedUserId: null,
+      lastActiveAt: now,
+    });
+    // Note: Don't decrement member count - the team still exists, just without a partner
+  } else {
+    // Primary member is leaving - withdraw the entire team
+    await updateDoc(memberRef, {
+      status: 'withdrawn',
+      lastActiveAt: now,
+    });
+
+    // Decrement member count
+    await updateDoc(doc(db, 'leagues', leagueId), {
+      memberCount: increment(-1),
+      updatedAt: now,
+    });
+
+    // Cancel any pending invites this member sent
+    // V07.27: Only cancel if pendingInviteId is set AND we have userId for security rules
+    // Also include inviterId filter to satisfy Firestore security rules
+    if (member.pendingInviteId && userId) {
+      try {
+        // Cancel the specific pending invite by ID
+        const inviteRef = doc(db, 'leaguePartnerInvites', member.pendingInviteId);
+        const inviteSnap = await getDoc(inviteRef);
+        if (inviteSnap.exists() && inviteSnap.data().status === 'pending') {
+          await updateDoc(inviteRef, {
+            status: 'cancelled',
+            cancelledAt: now,
+          });
+        }
+      } catch (error) {
+        // Silently ignore permission errors - invite may have been handled already
+        console.warn('Could not cancel pending invite:', error);
+      }
+    }
+  }
 };
 
 /**
@@ -401,12 +485,16 @@ export const getLeagueMemberByUserId = async (
 ): Promise<LeagueMember | null> => {
   // Get all members and filter client-side
   const q = query(collection(db, 'leagues', leagueId, 'members'));
-  
+
   const snap = await getDocs(q);
   const members = snap.docs.map(d => d.data() as LeagueMember);
-  
-  // Find active member with matching userId
-  const member = members.find(m => m.userId === userId && m.status === 'active');
+
+  // V07.27: Find member where user is EITHER the primary member OR the partner
+  // For doubles leagues, partners join an existing team rather than creating their own member doc
+  const member = members.find(m =>
+    (m.status === 'active' || m.status === 'pending_partner') &&
+    (m.userId === userId || m.partnerUserId === userId)
+  );
   return member || null;
 };
 
@@ -452,18 +540,25 @@ export const subscribeToLeagueMembers = (
   
   return onSnapshot(q, (snap) => {
     let members = snap.docs.map(d => d.data() as LeagueMember);
-    
-    // Filter to active members only
-    members = members.filter(m => m.status === 'active');
-    
+
+    // V07.27: Include active AND pending_partner members
+    // pending_partner members are teams waiting for partner acceptance (doubles leagues)
+    members = members.filter(m => m.status === 'active' || m.status === 'pending_partner');
+
     // Filter by division if specified
     if (divisionId) {
       members = members.filter(m => m.divisionId === divisionId);
     }
-    
-    // Sort by currentRank ascending
-    members.sort((a, b) => (a.currentRank || 999) - (b.currentRank || 999));
-    
+
+    // Sort by currentRank ascending (pending_partner members sort to end with rank 999)
+    members.sort((a, b) => {
+      // Active members before pending_partner members
+      if (a.status === 'active' && b.status === 'pending_partner') return -1;
+      if (a.status === 'pending_partner' && b.status === 'active') return 1;
+      // Then by rank
+      return (a.currentRank || 999) - (b.currentRank || 999);
+    });
+
     callback(members);
   }, (error) => {
     console.error('Error subscribing to league members:', error);
@@ -1349,4 +1444,742 @@ export const getExpectedLeagueStatus = (league: League): LeagueStatus => {
 
   // Default to draft
   return league.status;
+};
+
+// ============================================
+// DOUBLES PARTNER INVITE SYSTEM (V07.26)
+// ============================================
+
+/**
+ * Subscribe to pending partner invites for a user
+ * Real-time subscription for the invites page
+ */
+export const subscribeToUserLeaguePartnerInvites = (
+  userId: string,
+  callback: (invites: LeaguePartnerInvite[]) => void
+): (() => void) => {
+  const q = query(
+    collection(db, 'leaguePartnerInvites'),
+    where('invitedUserId', '==', userId),
+    where('status', '==', 'pending')
+  );
+
+  return onSnapshot(q, (snap) => {
+    const invites = snap.docs.map(d => d.data() as LeaguePartnerInvite);
+    callback(invites);
+  });
+};
+
+/**
+ * Subscribe to join requests for open teams owned by the user
+ * Real-time subscription for users who have open teams
+ */
+export const subscribeToMyOpenTeamRequests = (
+  userId: string,
+  callback: (requests: LeagueJoinRequest[]) => void
+): (() => void) => {
+  const q = query(
+    collection(db, 'leagueJoinRequests'),
+    where('openTeamOwnerUserId', '==', userId),
+    where('status', '==', 'pending')
+  );
+
+  return onSnapshot(q, (snap) => {
+    const requests = snap.docs.map(d => d.data() as LeagueJoinRequest);
+    callback(requests);
+  });
+};
+
+/**
+ * Get open league members (teams looking for partners)
+ */
+export const getOpenLeagueMembers = async (
+  leagueId: string,
+  divisionId?: string | null
+): Promise<LeagueMember[]> => {
+  let q = query(
+    collection(db, 'leagues', leagueId, 'members'),
+    where('isLookingForPartner', '==', true),
+    where('status', '==', 'pending_partner')
+  );
+
+  const snap = await getDocs(q);
+  let members = snap.docs.map(d => d.data() as LeagueMember);
+
+  // Filter by division if specified
+  if (divisionId) {
+    members = members.filter(m => m.divisionId === divisionId);
+  }
+
+  return members;
+};
+
+/**
+ * Join league with partner invite (atomic operation)
+ * Creates member with pending_partner status and partner invite in one transaction
+ */
+export const joinLeagueWithPartnerInvite = async (
+  leagueId: string,
+  userId: string,
+  displayName: string,
+  duprId: string | null,
+  partnerId: string,
+  partnerName: string,
+  partnerDuprId: string | null,
+  divisionId?: string | null,
+  leagueName?: string
+): Promise<{ memberId: string; inviteId: string }> => {
+  return runTransaction(db, async (transaction) => {
+    const memberRef = doc(collection(db, 'leagues', leagueId, 'members'));
+    const inviteRef = doc(collection(db, 'leaguePartnerInvites'));
+    const leagueRef = doc(db, 'leagues', leagueId);
+    const now = Date.now();
+
+    // Generate deterministic teamKey (sorted user IDs)
+    const teamKey = [userId, partnerId].sort().join('_');
+
+    // Check for existing team with same teamKey
+    const existingTeamQuery = query(
+      collection(db, 'leagues', leagueId, 'members'),
+      where('teamKey', '==', teamKey),
+      where('status', 'in', ['active', 'pending_partner'])
+    );
+    const existingTeamSnap = await getDocs(existingTeamQuery);
+    if (!existingTeamSnap.empty) {
+      throw new Error('A team with these players already exists in this league');
+    }
+
+    // V07.27: Check venue-based capacity if configured
+    const leagueSnap = await transaction.get(leagueRef);
+    if (leagueSnap.exists()) {
+      const league = leagueSnap.data() as League;
+      const maxTeams = league.maxTeamsPerDivision;
+      if (maxTeams) {
+        // Count current teams (active + pending_partner toward capacity)
+        const membersQuery = query(collection(db, 'leagues', leagueId, 'members'));
+        const membersSnap = await getDocs(membersQuery);
+        let currentTeamCount = 0;
+        membersSnap.docs.forEach(d => {
+          const m = d.data() as LeagueMember;
+          if ((m.status === 'active' || m.status === 'pending_partner') &&
+              (!divisionId || m.divisionId === divisionId)) {
+            currentTeamCount++;
+          }
+        });
+
+        if (currentTeamCount >= maxTeams) {
+          throw new Error(`This division is full (${currentTeamCount}/${maxTeams} teams). No more teams can join.`);
+        }
+      }
+    }
+
+    // Create member with pending_partner status
+    const newMember: LeagueMember = {
+      id: memberRef.id,
+      leagueId,
+      divisionId: divisionId || null,
+      userId,
+      displayName,
+      duprId: duprId || null,
+      partnerUserId: null,
+      partnerDisplayName: null,
+      partnerDuprId: null,
+      teamId: null,
+      teamName: `${displayName} (Pending Partner)`,
+      isLookingForPartner: false,
+      pendingInviteId: inviteRef.id,
+      pendingInvitedUserId: partnerId,
+      partnerLockedAt: null,
+      teamKey,
+      status: 'pending_partner',
+      role: 'member',
+      paymentStatus: 'unpaid',
+      currentRank: 0,
+      stats: {
+        played: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        forfeits: 0,
+        points: 0,
+        gamesWon: 0,
+        gamesLost: 0,
+        pointsFor: 0,
+        pointsAgainst: 0,
+        currentStreak: 0,
+        bestWinStreak: 0,
+        recentForm: [],
+      },
+      joinedAt: now,
+      lastActiveAt: now,
+    };
+
+    // Create partner invite
+    const newInvite: LeaguePartnerInvite = {
+      id: inviteRef.id,
+      leagueId,
+      leagueName: leagueName || undefined,
+      divisionId: divisionId || null,
+      teamId: null,
+      memberId: memberRef.id,
+      inviterId: userId,
+      inviterName: displayName,
+      inviterDuprId: duprId || null,
+      invitedUserId: partnerId,
+      invitedUserName: partnerName,
+      invitedUserDuprId: partnerDuprId || null,
+      status: 'pending',
+      createdAt: now,
+      expiresAt: now + (7 * 24 * 60 * 60 * 1000), // 7 days
+    };
+
+    // Execute transaction
+    transaction.set(memberRef, newMember);
+    transaction.set(inviteRef, newInvite);
+    transaction.update(leagueRef, {
+      memberCount: increment(1),
+      updatedAt: now,
+    });
+
+    return { memberId: memberRef.id, inviteId: inviteRef.id };
+  });
+};
+
+/**
+ * Join league as open team (looking for partner)
+ * Creates member with pending_partner status and isLookingForPartner=true
+ */
+export const joinLeagueAsOpenTeam = async (
+  leagueId: string,
+  userId: string,
+  displayName: string,
+  duprId: string | null,
+  divisionId?: string | null
+): Promise<string> => {
+  return runTransaction(db, async (transaction) => {
+    const memberRef = doc(collection(db, 'leagues', leagueId, 'members'));
+    const leagueRef = doc(db, 'leagues', leagueId);
+    const now = Date.now();
+
+    // Check for existing membership
+    const existingMemberQuery = query(
+      collection(db, 'leagues', leagueId, 'members'),
+      where('userId', '==', userId),
+      where('status', 'in', ['active', 'pending_partner'])
+    );
+    const existingSnap = await getDocs(existingMemberQuery);
+    if (!existingSnap.empty) {
+      throw new Error('You are already registered in this league');
+    }
+
+    // V07.27: Check venue-based capacity if configured
+    const leagueSnap = await transaction.get(leagueRef);
+    if (leagueSnap.exists()) {
+      const league = leagueSnap.data() as League;
+      const maxTeams = league.maxTeamsPerDivision;
+      if (maxTeams) {
+        // Count current teams (active + pending_partner toward capacity)
+        const membersQuery = query(collection(db, 'leagues', leagueId, 'members'));
+        const membersSnap = await getDocs(membersQuery);
+        let currentTeamCount = 0;
+        membersSnap.docs.forEach(d => {
+          const m = d.data() as LeagueMember;
+          if ((m.status === 'active' || m.status === 'pending_partner') &&
+              (!divisionId || m.divisionId === divisionId)) {
+            currentTeamCount++;
+          }
+        });
+
+        if (currentTeamCount >= maxTeams) {
+          throw new Error(`This division is full (${currentTeamCount}/${maxTeams} teams). No more teams can join.`);
+        }
+      }
+    }
+
+    // Create member with open team status
+    const newMember: LeagueMember = {
+      id: memberRef.id,
+      leagueId,
+      divisionId: divisionId || null,
+      userId,
+      displayName,
+      duprId: duprId || null,
+      partnerUserId: null,
+      partnerDisplayName: null,
+      partnerDuprId: null,
+      teamId: null,
+      teamName: `${displayName} (Looking for Partner)`,
+      isLookingForPartner: true,
+      pendingInviteId: null,
+      pendingInvitedUserId: null,
+      partnerLockedAt: null,
+      teamKey: null,
+      status: 'pending_partner',
+      role: 'member',
+      paymentStatus: 'unpaid',
+      currentRank: 0,
+      stats: {
+        played: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        forfeits: 0,
+        points: 0,
+        gamesWon: 0,
+        gamesLost: 0,
+        pointsFor: 0,
+        pointsAgainst: 0,
+        currentStreak: 0,
+        bestWinStreak: 0,
+        recentForm: [],
+      },
+      joinedAt: now,
+      lastActiveAt: now,
+    };
+
+    // Execute transaction
+    transaction.set(memberRef, newMember);
+    transaction.update(leagueRef, {
+      memberCount: increment(1),
+      updatedAt: now,
+    });
+
+    return memberRef.id;
+  });
+};
+
+/**
+ * Join an open team directly (no request/approval needed)
+ * V07.27: Simplified flow - joining an open team automatically makes you the partner
+ * The team owner consented to this by creating an "open team"
+ *
+ * @returns The member ID of the updated team
+ */
+export const joinOpenTeamDirect = async (
+  leagueId: string,
+  openTeamMemberId: string,
+  joinerId: string,
+  joinerName: string,
+  joinerDuprId: string | null
+): Promise<{ memberId: string; teamName: string }> => {
+  // Check if joiner is already a member of this league (as primary)
+  const existingMembership = await getLeagueMemberByUserId(leagueId, joinerId);
+  if (existingMembership && existingMembership.userId === joinerId) {
+    throw new Error('You already have a team in this league. Leave your current team first to join another.');
+  }
+
+  return runTransaction(db, async (transaction) => {
+    const memberRef = doc(db, 'leagues', leagueId, 'members', openTeamMemberId);
+    const memberSnap = await transaction.get(memberRef);
+
+    if (!memberSnap.exists()) {
+      throw new Error('Team not found');
+    }
+
+    const member = memberSnap.data() as LeagueMember;
+
+    // Verify the team is still open
+    if (member.status !== 'pending_partner' || !member.isLookingForPartner) {
+      throw new Error('This team is no longer looking for a partner');
+    }
+
+    // Check for partner lock (someone else is joining at the same time)
+    if (member.partnerLockedAt) {
+      throw new Error('Someone else is already joining this team. Please try another team.');
+    }
+
+    // Check if team already has a partner
+    if (member.partnerUserId) {
+      throw new Error('This team already has a partner');
+    }
+
+    const now = Date.now();
+    const teamKey = [member.userId, joinerId].sort().join('_');
+    const teamName = `${member.displayName} / ${joinerName}`;
+
+    // Update member with the new partner
+    transaction.update(memberRef, {
+      partnerLockedAt: now,
+      partnerUserId: joinerId,
+      partnerDisplayName: joinerName,
+      partnerDuprId: joinerDuprId || null,
+      teamName,
+      teamKey,
+      status: 'active',
+      isLookingForPartner: false,
+      // Clear any pending request tracking
+      pendingJoinRequestId: null,
+      pendingRequesterId: null,
+      pendingRequesterName: null,
+      lastActiveAt: now,
+    });
+
+    // Cancel any pending join requests for this team (from other players)
+    // Note: We do this outside the transaction to avoid the read-after-write issue
+    // The requests will be cleaned up, but the transaction ensures atomicity of the join
+
+    return { memberId: openTeamMemberId, teamName };
+  });
+};
+
+/**
+ * Clean up pending join requests for a team that is now complete
+ * Called after joinOpenTeamDirect succeeds
+ */
+export const cancelPendingRequestsForTeam = async (
+  openTeamMemberId: string
+): Promise<void> => {
+  const requestsQuery = query(
+    collection(db, 'leagueJoinRequests'),
+    where('openTeamMemberId', '==', openTeamMemberId),
+    where('status', '==', 'pending')
+  );
+  const requestsSnap = await getDocs(requestsQuery);
+
+  const batch = writeBatch(db);
+  const now = Date.now();
+
+  requestsSnap.docs.forEach(reqDoc => {
+    batch.update(reqDoc.ref, {
+      status: 'cancelled',
+      respondedAt: now,
+      cancelReason: 'team_filled',
+    });
+  });
+
+  if (requestsSnap.docs.length > 0) {
+    await batch.commit();
+  }
+};
+
+/**
+ * Create a join request for an open team
+ * @deprecated Use joinOpenTeamDirect instead - open teams now auto-accept joiners
+ * V07.27: Also updates member document to track pending request for standings display
+ */
+export const createLeagueJoinRequest = async (
+  leagueId: string,
+  openTeamMemberId: string,
+  openTeamOwnerUserId: string,
+  openTeamOwnerName: string,
+  requesterId: string,
+  requesterName: string,
+  requesterDuprId: string | null,
+  divisionId?: string | null,
+  leagueName?: string
+): Promise<string> => {
+  const requestRef = doc(collection(db, 'leagueJoinRequests'));
+  const now = Date.now();
+
+  // V07.27: Check if requester is already a member of this league (as primary)
+  // They must leave their team first before joining someone else's team
+  const existingMembership = await getLeagueMemberByUserId(leagueId, requesterId);
+  if (existingMembership && existingMembership.userId === requesterId) {
+    // User is already a primary member - they can't join another team
+    throw new Error('You already have a team in this league. Leave your current team first to join another.');
+  }
+
+  // Check for existing pending request
+  const existingQuery = query(
+    collection(db, 'leagueJoinRequests'),
+    where('openTeamMemberId', '==', openTeamMemberId),
+    where('requesterId', '==', requesterId),
+    where('status', '==', 'pending')
+  );
+  const existingSnap = await getDocs(existingQuery);
+  if (!existingSnap.empty) {
+    throw new Error('You already have a pending request for this team');
+  }
+
+  const newRequest: LeagueJoinRequest = {
+    id: requestRef.id,
+    leagueId,
+    leagueName: leagueName || undefined,
+    divisionId: divisionId || null,
+    openTeamMemberId,
+    openTeamOwnerUserId,
+    openTeamOwnerName,
+    requesterId,
+    requesterName,
+    requesterDuprId: requesterDuprId || null,
+    status: 'pending',
+    createdAt: now,
+    expiresAt: now + (7 * 24 * 60 * 60 * 1000), // 7 days
+  };
+
+  await setDoc(requestRef, newRequest);
+
+  // V07.27: Update member document to track pending request (for standings display)
+  const memberRef = doc(db, 'leagues', leagueId, 'members', openTeamMemberId);
+  await updateDoc(memberRef, {
+    pendingJoinRequestId: requestRef.id,
+    pendingRequesterId: requesterId,
+    pendingRequesterName: requesterName,
+    lastActiveAt: now,
+  });
+
+  return requestRef.id;
+};
+
+/**
+ * Respond to league partner invite (atomic operation)
+ * On accept: Updates member with partner info, cancels other invites
+ */
+export const respondToLeaguePartnerInviteAtomic = async (
+  inviteId: string,
+  response: 'accepted' | 'declined'
+): Promise<{ leagueId: string; memberId: string } | null> => {
+  // V07.27: First, get the invite to know what queries we need
+  const inviteRef = doc(db, 'leaguePartnerInvites', inviteId);
+  const invitePreSnap = await getDoc(inviteRef);
+
+  if (!invitePreSnap.exists()) {
+    throw new Error('Invite not found');
+  }
+
+  const inviteData = invitePreSnap.data() as LeaguePartnerInvite;
+
+  return runTransaction(db, async (transaction) => {
+    const now = Date.now();
+
+    // ===== PHASE 1: ALL TRANSACTION READS FIRST =====
+    const inviteSnap = await transaction.get(inviteRef);
+
+    if (!inviteSnap.exists()) {
+      throw new Error('Invite not found');
+    }
+
+    const invite = inviteSnap.data() as LeaguePartnerInvite;
+
+    if (invite.status !== 'pending') {
+      throw new Error('Invite is no longer pending');
+    }
+
+    // Read member document if needed for acceptance
+    let member: LeagueMember | null = null;
+    let memberRef: ReturnType<typeof doc> | null = null;
+
+    if (response === 'accepted') {
+      if (!invite.memberId) {
+        throw new Error('Invite has no associated member');
+      }
+      memberRef = doc(db, 'leagues', invite.leagueId, 'members', invite.memberId);
+      const memberSnap = await transaction.get(memberRef);
+
+      if (!memberSnap.exists()) {
+        throw new Error('Member not found');
+      }
+
+      member = memberSnap.data() as LeagueMember;
+
+      // Check if member is still pending_partner
+      if (member.status !== 'pending_partner') {
+        throw new Error('Member already has a partner');
+      }
+
+      // Check partner lock
+      if (member.partnerLockedAt) {
+        throw new Error('Partner is already being assigned');
+      }
+    }
+
+    // ===== PHASE 2: ALL WRITES =====
+
+    // Update invite status
+    transaction.update(inviteRef, {
+      status: response,
+      respondedAt: now,
+    });
+
+    if (response === 'declined') {
+      // Just update the invite status and member to allow re-invite
+      if (invite.memberId) {
+        const declineMemberRef = doc(db, 'leagues', invite.leagueId, 'members', invite.memberId);
+        transaction.update(declineMemberRef, {
+          pendingInviteId: null,
+          pendingInvitedUserId: null,
+          lastActiveAt: now,
+        });
+      }
+      return null;
+    }
+
+    // ACCEPTED - Update member with partner info
+    if (memberRef && member) {
+      transaction.update(memberRef, {
+        partnerLockedAt: now,
+        partnerUserId: invite.invitedUserId,
+        partnerDisplayName: invite.invitedUserName || null,
+        partnerDuprId: invite.invitedUserDuprId || null,
+        teamName: `${member.displayName} / ${invite.invitedUserName || 'Partner'}`,
+        status: 'active',
+        pendingInviteId: null,
+        pendingInvitedUserId: null,
+        isLookingForPartner: false,
+        lastActiveAt: now,
+      });
+    }
+
+    // Note: Other pending invites from the same inviter will expire naturally
+    // We don't cancel them here because the accepting user doesn't have permission
+    // to modify invites they didn't send or receive
+
+    return { leagueId: invite.leagueId, memberId: invite.memberId! };
+  });
+};
+
+/**
+ * Respond to join request (atomic operation)
+ * On accept: Updates open team member with requester info
+ * V07.27: Clears pending request tracking fields on member
+ */
+export const respondToLeagueJoinRequest = async (
+  requestId: string,
+  response: 'accepted' | 'declined'
+): Promise<{ leagueId: string; memberId: string } | null> => {
+  // V07.27: Get the request first to know what queries we need
+  const requestRef = doc(db, 'leagueJoinRequests', requestId);
+  const requestPreSnap = await getDoc(requestRef);
+
+  if (!requestPreSnap.exists()) {
+    throw new Error('Request not found');
+  }
+
+  const requestData = requestPreSnap.data() as LeagueJoinRequest;
+
+  // For accepted: pre-fetch other requests and requester memberships OUTSIDE transaction
+  let otherRequestDocs: { ref: any; id: string }[] = [];
+  let requesterPendingDocs: { ref: any }[] = [];
+
+  if (response === 'accepted') {
+    // Get other pending requests for this team
+    const otherRequestsQuery = query(
+      collection(db, 'leagueJoinRequests'),
+      where('openTeamMemberId', '==', requestData.openTeamMemberId),
+      where('status', '==', 'pending')
+    );
+    const otherRequestsSnap = await getDocs(otherRequestsQuery);
+    otherRequestDocs = otherRequestsSnap.docs.map(d => ({ ref: d.ref, id: d.id }));
+
+    // Get requester's pending memberships in this league
+    const requesterPendingQuery = query(
+      collection(db, 'leagues', requestData.leagueId, 'members'),
+      where('userId', '==', requestData.requesterId),
+      where('status', '==', 'pending_partner')
+    );
+    const requesterPendingSnap = await getDocs(requesterPendingQuery);
+    requesterPendingDocs = requesterPendingSnap.docs.map(d => ({ ref: d.ref }));
+  }
+
+  return runTransaction(db, async (transaction) => {
+    // ===== PHASE 1: ALL READS FIRST =====
+    const requestSnap = await transaction.get(requestRef);
+
+    if (!requestSnap.exists()) {
+      throw new Error('Request not found');
+    }
+
+    const request = requestSnap.data() as LeagueJoinRequest;
+
+    if (request.status !== 'pending') {
+      throw new Error('Request is no longer pending');
+    }
+
+    const memberRef = doc(db, 'leagues', request.leagueId, 'members', request.openTeamMemberId);
+    const memberSnap = await transaction.get(memberRef);
+
+    if (!memberSnap.exists()) {
+      throw new Error('Open team member not found');
+    }
+
+    const member = memberSnap.data() as LeagueMember;
+
+    // ===== PHASE 2: VALIDATION =====
+    const now = Date.now();
+
+    if (response === 'accepted') {
+      // Check if member is still looking for partner
+      if (member.status !== 'pending_partner' || !member.isLookingForPartner) {
+        throw new Error('This team is no longer looking for a partner');
+      }
+
+      // Check partner lock
+      if (member.partnerLockedAt) {
+        throw new Error('Partner is already being assigned');
+      }
+    }
+
+    // ===== PHASE 3: ALL WRITES =====
+
+    // Update request status
+    transaction.update(requestRef, {
+      status: response,
+      respondedAt: now,
+    });
+
+    if (response === 'declined') {
+      // V07.27: Clear pending request tracking on member when declined
+      transaction.update(memberRef, {
+        pendingJoinRequestId: null,
+        pendingRequesterId: null,
+        pendingRequesterName: null,
+        lastActiveAt: now,
+      });
+      return null;
+    }
+
+    // ACCEPTED - Update open team member with requester info
+    const teamKey = [member.userId, request.requesterId].sort().join('_');
+
+    transaction.update(memberRef, {
+      partnerLockedAt: now,
+      partnerUserId: request.requesterId,
+      partnerDisplayName: request.requesterName,
+      partnerDuprId: request.requesterDuprId || null,
+      teamName: `${member.displayName} / ${request.requesterName}`,
+      teamKey,
+      status: 'active',
+      isLookingForPartner: false,
+      pendingJoinRequestId: null,
+      pendingRequesterId: null,
+      pendingRequesterName: null,
+      lastActiveAt: now,
+    });
+
+    // Cancel other pending join requests for this open team
+    otherRequestDocs.forEach(reqDoc => {
+      if (reqDoc.id !== requestId) {
+        transaction.update(reqDoc.ref, {
+          status: 'cancelled',
+          respondedAt: now,
+        });
+      }
+    });
+
+    // Withdraw any pending_partner memberships the requester has in this league
+    requesterPendingDocs.forEach(memberDoc => {
+      transaction.update(memberDoc.ref, {
+        status: 'withdrawn',
+        lastActiveAt: now,
+      });
+    });
+
+    return { leagueId: request.leagueId, memberId: request.openTeamMemberId };
+  });
+};
+
+/**
+ * Get pending join requests for current user's open teams
+ */
+export const getMyOpenTeamRequests = async (
+  userId: string
+): Promise<LeagueJoinRequest[]> => {
+  const q = query(
+    collection(db, 'leagueJoinRequests'),
+    where('openTeamOwnerUserId', '==', userId),
+    where('status', '==', 'pending')
+  );
+
+  const snap = await getDocs(q);
+  return snap.docs.map(d => d.data() as LeagueJoinRequest);
 };

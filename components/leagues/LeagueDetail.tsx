@@ -32,6 +32,11 @@ import {
   getAllLeagueStandings,
   getStandingsStatus,
   rebuildAllStandings,
+  // V07.27: Partner invites & join requests
+  subscribeToUserLeaguePartnerInvites,
+  respondToLeaguePartnerInviteAtomic,
+  subscribeToMyOpenTeamRequests,
+  respondToLeagueJoinRequest,
 } from '../../services/firebase';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
 import { BoxPlayerDragDrop } from './boxLeague';
@@ -44,10 +49,13 @@ import type {
   LeagueMatch,
   LeagueDivision,
   LeagueStandingsDoc,
+  LeaguePartnerInvite,
+  LeagueJoinRequest,
 } from '../../types';
 import type { BoxLeaguePlayer } from '../../types/boxLeague';
 import { LeagueStandings } from './LeagueStandings';
 import { LeagueCommsTab } from './LeagueCommsTab';
+import { LeagueRegistrationWizard } from './LeagueRegistrationWizard';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
 import { doc, updateDoc } from '@firebase/firestore';
@@ -105,6 +113,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [duprCheckboxChecked, setDuprCheckboxChecked] = useState(false); // V07.15: Local state for checkbox
   const [showDuprRequiredModal, setShowDuprRequiredModal] = useState(false); // V07.15: DUPR linking modal
   const [duprLinking, setDuprLinking] = useState(false); // V07.15: DUPR linking in progress
+  const [showRegistrationWizard, setShowRegistrationWizard] = useState(false); // V07.27: Registration wizard for doubles
+  const [pendingInvites, setPendingInvites] = useState<LeaguePartnerInvite[]>([]); // V07.27: Partner invites for current user
+  const [respondingToInvite, setRespondingToInvite] = useState<string | null>(null); // V07.27: Invite being responded to
+  const [confirmingInvite, setConfirmingInvite] = useState<LeaguePartnerInvite | null>(null); // V07.27: Invite awaiting confirmation
+  const [inviteAcknowledged, setInviteAcknowledged] = useState(false); // V07.27: User acknowledged league rules
+  // V07.27: Join requests now use direct join (no approval needed) - subscription kept for cleanup
+  const [pendingJoinRequests, setPendingJoinRequests] = useState<LeagueJoinRequest[]>([]);
   const [editForm, setEditForm] = useState({
     // Basic Info
     name: '',
@@ -341,6 +356,38 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   }, [leagueId, currentUser, members]);
 
+  // V07.27: Subscribe to pending partner invites for this league
+  useEffect(() => {
+    if (!currentUser) {
+      setPendingInvites([]);
+      return;
+    }
+
+    const unsubscribe = subscribeToUserLeaguePartnerInvites(currentUser.uid, (invites) => {
+      // Filter to only invites for this league
+      const leagueInvites = invites.filter(inv => inv.leagueId === leagueId);
+      setPendingInvites(leagueInvites);
+    });
+
+    return () => unsubscribe();
+  }, [leagueId, currentUser]);
+
+  // V07.27: Subscribe to join requests for my open team in this league
+  useEffect(() => {
+    if (!currentUser) {
+      setPendingJoinRequests([]);
+      return;
+    }
+
+    const unsubscribe = subscribeToMyOpenTeamRequests(currentUser.uid, (requests) => {
+      // Filter to only requests for this league
+      const leagueRequests = requests.filter(req => req.leagueId === leagueId);
+      setPendingJoinRequests(leagueRequests);
+    });
+
+    return () => unsubscribe();
+  }, [leagueId, currentUser]);
+
   // V07.14: Load standings snapshots from Firestore
   useEffect(() => {
     const loadStandings = async () => {
@@ -527,8 +574,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
 
     // V07.15: Check if league is full before attempting to join
+    // V07.27: Allow joining if there are open teams (joining completes existing team, doesn't create new)
     const maxMembers = freshLeague.maxMembers || freshLeague.settings?.maxMembers;
-    if (maxMembers && (freshLeague.memberCount || 0) >= maxMembers) {
+    const isLeagueFull = maxMembers && (freshLeague.memberCount || 0) >= maxMembers;
+    if (isLeagueFull && !hasOpenTeams) {
       alert(`League is full (${freshLeague.memberCount}/${maxMembers} players)`);
       return;
     }
@@ -574,10 +623,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       return;
     }
 
-    // Free league - join directly
+    // V07.27: For doubles/mixed leagues, show registration wizard with partner flow
+    const isDoublesType = freshLeague.type === 'doubles' || freshLeague.type === 'mixed_doubles';
+    if (isDoublesType) {
+      setShowRegistrationWizard(true);
+      return;
+    }
+
+    // Singles league - join directly
     setJoining(true);
     try {
-      // TODO: For doubles/mixed, show partner selection modal
       await joinLeague(
         leagueId,
         currentUser.uid,
@@ -659,8 +714,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
 
     // Check max members one more time
+    // V07.27: Allow joining if there are open teams
     const maxMembers = freshLeague.maxMembers || freshLeague.settings?.maxMembers;
-    if (maxMembers && (freshLeague.memberCount || 0) >= maxMembers) {
+    if (maxMembers && (freshLeague.memberCount || 0) >= maxMembers && !hasOpenTeams) {
       alert(`League is full (${freshLeague.memberCount}/${maxMembers} players)`);
       setShowPaymentModal(false);
       return;
@@ -693,15 +749,47 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   };
 
   const handleLeave = async () => {
-    if (!myMembership) return;
-    if (!confirm('Are you sure you want to leave this league?')) return;
+    if (!myMembership || !currentUser) return;
+
+    // V07.27: Check if current user is the partner (not primary member)
+    const isPartner = myMembership.partnerUserId === currentUser.uid && myMembership.userId !== currentUser.uid;
+
+    const confirmMessage = isPartner
+      ? 'Are you sure you want to leave this team? The team owner will need to find a new partner.'
+      : 'Are you sure you want to leave this league?';
+
+    if (!confirm(confirmMessage)) return;
+
     try {
-      await leaveLeague(leagueId, myMembership.id);
+      // V07.27: Pass userId so leaveLeague knows if partner or primary is leaving
+      await leaveLeague(leagueId, myMembership.id, currentUser.uid);
       setMyMembership(null);
     } catch (e: any) {
       alert('Failed to leave: ' + e.message);
     }
   };
+
+  // V07.27: Handle partner invite response (accept/decline)
+  const handleInviteResponse = async (inviteId: string, response: 'accepted' | 'declined') => {
+    setRespondingToInvite(inviteId);
+    try {
+      const result = await respondToLeaguePartnerInviteAtomic(inviteId, response);
+
+      if (response === 'accepted' && result) {
+        // Refresh membership after accepting
+        if (currentUser) {
+          const membership = await getLeagueMemberByUserId(leagueId, currentUser.uid);
+          setMyMembership(membership);
+        }
+      }
+    } catch (e: any) {
+      alert('Failed to respond to invite: ' + e.message);
+    } finally {
+      setRespondingToInvite(null);
+    }
+  };
+
+  // V07.27: Join request handler removed - direct join flow now used
 
   const handleChallenge = (member: LeagueMember) => {
     // TODO: Implement challenge modal
@@ -743,7 +831,23 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   // V07.15: Check both league.maxMembers and league.settings.maxMembers (stored in settings)
   const effectiveMaxMembers = league.maxMembers || league.settings?.maxMembers;
   const isFull = effectiveMaxMembers ? (league.memberCount || 0) >= effectiveMaxMembers : false;
-  const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active') && !isFull;
+
+  // V07.27: Check if there are open teams looking for partners
+  const openTeams = members.filter(m =>
+    m.status === 'pending_partner' &&
+    m.isLookingForPartner &&
+    !m.pendingRequesterName // Not already have someone requesting to join
+  );
+  const hasOpenTeams = openTeams.length > 0;
+
+  // V07.27: For doubles leagues, allow joining open teams even when league is "full"
+  // (joining an open team doesn't create a new team, it completes an existing one)
+  const canJoinOpenTeam = isDoublesOrMixed && isFull && hasOpenTeams && !myMembership &&
+    (league.status === 'registration' || league.status === 'active');
+  const canJoin = !myMembership && (league.status === 'registration' || league.status === 'active') && (!isFull || canJoinOpenTeam);
+
+  // V07.27: Join requests now use direct join - no approval UI needed
+  // pendingJoinRequests subscription kept for potential cleanup of old data
 
   // Determine which tabs to show - Schedule, Players, DUPR, and Comms tabs only for organizers
   const availableTabs: TabType[] = isOrganizer
@@ -944,10 +1048,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {!myMembership && (league.status === 'draft' || league.status === 'registration' || league.status === 'active') && (
               <button
                 onClick={() => handleJoin()}
-                disabled={joining || isFull}
+                disabled={joining || (isFull && !canJoinOpenTeam)}
                 className="bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
               >
-                {isFull ? '🚫 League Full' : joining ? 'Joining...' : '👤 Join as Player'}
+                {isFull && !canJoinOpenTeam
+                  ? '🚫 League Full'
+                  : joining
+                  ? 'Joining...'
+                  : canJoinOpenTeam
+                  ? '🤝 Join Open Team'
+                  : '👤 Join as Player'}
               </button>
             )}
           </div>
@@ -1023,16 +1133,50 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 </span>
               )}
             </div>
+
+            {/* V07.26: Venue & Game Times */}
+            {(league.venue || league.location || league.settings?.gameTime) && (
+              <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-gray-400">
+                {(league.venue || league.location) && (
+                  <div className="flex items-center gap-1.5">
+                    <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span>{league.venue || league.location}</span>
+                  </div>
+                )}
+                {league.settings?.gameTime && (
+                  <div className="flex items-center gap-1.5">
+                    <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>{league.settings.gameTime}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Full league notice - subtle inline display */}
           {isFull && (
-            <div className="bg-gray-700/50 border border-gray-600 rounded-lg px-4 py-2 flex items-center gap-3">
-              <span className="bg-orange-500/20 text-orange-400 px-2 py-1 rounded text-sm font-medium">
-                Full
+            <div className={`rounded-lg px-4 py-2 flex items-center gap-3 ${
+              hasOpenTeams
+                ? 'bg-lime-900/30 border border-lime-600/50'
+                : 'bg-gray-700/50 border border-gray-600'
+            }`}>
+              <span className={`px-2 py-1 rounded text-sm font-medium ${
+                hasOpenTeams
+                  ? 'bg-lime-500/20 text-lime-400'
+                  : 'bg-orange-500/20 text-orange-400'
+              }`}>
+                {hasOpenTeams ? 'Open Teams' : 'Full'}
               </span>
               <span className="text-gray-300 text-sm">
-                {effectiveMaxMembers}/{effectiveMaxMembers} {isDoublesOrMixed ? 'teams' : 'players'} — Registration closed
+                {hasOpenTeams
+                  ? `${openTeams.length} team${openTeams.length !== 1 ? 's' : ''} looking for partners — You can still join!`
+                  : `${effectiveMaxMembers}/${effectiveMaxMembers} ${isDoublesOrMixed ? 'teams' : 'players'} — Registration closed`
+                }
               </span>
             </div>
           )}
@@ -1058,9 +1202,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               <button
                 onClick={() => handleJoin()}
                 disabled={joining}
-                className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                className={`${canJoinOpenTeam ? 'bg-lime-600 hover:bg-lime-500' : 'bg-blue-600 hover:bg-blue-500'} disabled:bg-gray-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors`}
               >
-                {joining ? 'Joining...' : isDoublesOrMixed ? 'Register Team' : 'Join League'}
+                {joining
+                  ? 'Joining...'
+                  : canJoinOpenTeam
+                  ? '🤝 Join Open Team'
+                  : isDoublesOrMixed
+                  ? 'Register Team'
+                  : 'Join League'}
               </button>
             )
           )}
@@ -1071,9 +1221,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               <div className="text-sm text-gray-400 mb-1">
                 Your Rank: <span className="text-white font-bold text-lg">#{myMembership.currentRank}</span>
               </div>
-              <div className="text-xs text-gray-500">
+              <div className="text-xs text-gray-500 mb-2">
                 {myMembership.stats.wins}W - {myMembership.stats.losses}L
               </div>
+              <button
+                onClick={handleLeave}
+                className="text-red-400 hover:text-red-300 text-sm"
+              >
+                Leave League
+              </button>
             </div>
           )}
         </div>
@@ -1093,6 +1249,56 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           )}
         </div>
       </div>
+
+      {/* V07.27: Pending Partner Invites Banner */}
+      {pendingInvites.length > 0 && (
+        <div className="mb-4 space-y-3">
+          {pendingInvites.map((invite) => (
+            <div
+              key={invite.id}
+              className="bg-gradient-to-r from-lime-900/40 to-lime-800/20 border border-lime-600/50 rounded-xl p-4"
+            >
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-lime-600/30 flex items-center justify-center">
+                    <span className="text-lime-400 text-lg">🤝</span>
+                  </div>
+                  <div>
+                    <p className="text-white font-semibold">
+                      Partner Invitation from {invite.inviterName}
+                    </p>
+                    <p className="text-gray-400 text-sm">
+                      You've been invited to join their team in this league
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleInviteResponse(invite.id, 'declined')}
+                    disabled={respondingToInvite === invite.id}
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 text-gray-300 rounded-lg text-sm font-semibold transition-colors"
+                  >
+                    Decline
+                  </button>
+                  <button
+                    onClick={() => {
+                      setConfirmingInvite(invite);
+                      setInviteAcknowledged(false);
+                    }}
+                    disabled={respondingToInvite === invite.id}
+                    className="px-4 py-2 bg-lime-600 hover:bg-lime-500 disabled:bg-lime-800 text-white rounded-lg text-sm font-semibold transition-colors"
+                  >
+                    {respondingToInvite === invite.id ? 'Accepting...' : 'Review & Accept'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* V07.27: Join requests are now handled via direct join - no approval needed */}
+      {/* Old pending requests will be auto-cancelled when someone joins the team */}
 
       {/* Division Selector (if applicable) */}
       {league.hasDivisions && divisions.length > 0 && (
@@ -2353,6 +2559,144 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
               >
                 {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* V07.27: Registration Wizard Modal (for doubles/mixed leagues) */}
+      {showRegistrationWizard && league && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 rounded-2xl max-w-lg w-full max-h-[90vh] overflow-hidden shadow-2xl border border-gray-700">
+            <LeagueRegistrationWizard
+              league={league}
+              onClose={() => setShowRegistrationWizard(false)}
+              onComplete={async () => {
+                setShowRegistrationWizard(false);
+                // Refresh membership
+                if (currentUser) {
+                  const membership = await getLeagueMemberByUserId(leagueId, currentUser.uid);
+                  setMyMembership(membership);
+                }
+              }}
+              onlyJoinOpen={canJoinOpenTeam}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* V07.27: Partner Invite Confirmation Modal */}
+      {confirmingInvite && league && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-800 rounded-2xl max-w-md w-full shadow-2xl border border-gray-700 overflow-hidden">
+            {/* Header */}
+            <div className="bg-lime-600/20 border-b border-lime-500/30 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-lime-600/30 flex items-center justify-center">
+                  <span className="text-2xl">🤝</span>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white">Join Team</h3>
+                  <p className="text-lime-400 text-sm">
+                    Partner with {confirmingInvite.inviterName}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+              {/* League Info */}
+              <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
+                <h4 className="text-white font-semibold mb-2">{league.name}</h4>
+                {league.description && (
+                  <p className="text-gray-400 text-sm mb-3">{league.description}</p>
+                )}
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Type:</span>
+                    <span className="text-gray-300 capitalize">{league.type}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Format:</span>
+                    <span className="text-gray-300 capitalize">{league.format.replace('_', ' ')}</span>
+                  </div>
+                  {league.venue && (
+                    <div className="flex justify-between col-span-2">
+                      <span className="text-gray-500">Venue:</span>
+                      <span className="text-gray-300">{league.venue}</span>
+                    </div>
+                  )}
+                  {league.settings?.gameTime && (
+                    <div className="flex justify-between col-span-2">
+                      <span className="text-gray-500">Game Time:</span>
+                      <span className="text-gray-300">{league.settings.gameTime}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* What you're agreeing to */}
+              <div className="bg-amber-900/20 border border-amber-600/30 rounded-lg p-4">
+                <h5 className="text-amber-400 font-semibold text-sm mb-2">By accepting this invitation, you agree to:</h5>
+                <ul className="text-gray-300 text-sm space-y-1">
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5">•</span>
+                    <span>Play your scheduled matches or communicate with your opponent in advance</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5">•</span>
+                    <span>Report scores accurately and honestly</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5">•</span>
+                    <span>Follow the league rules and format</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5">•</span>
+                    <span>Play as a team with {confirmingInvite.inviterName} for the duration of this league</span>
+                  </li>
+                </ul>
+              </div>
+
+              {/* Acknowledgement checkbox */}
+              <label className="flex items-start gap-3 cursor-pointer p-3 bg-gray-900/30 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={inviteAcknowledged}
+                  onChange={(e) => setInviteAcknowledged(e.target.checked)}
+                  className="mt-1 w-5 h-5 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500 focus:ring-offset-gray-800"
+                />
+                <span className="text-gray-300 text-sm">
+                  I understand and agree to participate in this league as {confirmingInvite.inviterName}'s partner
+                </span>
+              </label>
+            </div>
+
+            {/* Footer */}
+            <div className="bg-gray-900/50 border-t border-gray-700 px-6 py-4 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setConfirmingInvite(null);
+                  setInviteAcknowledged(false);
+                }}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!confirmingInvite) return;
+                  const inviteId = confirmingInvite.id;
+                  setConfirmingInvite(null);
+                  setInviteAcknowledged(false);
+                  await handleInviteResponse(inviteId, 'accepted');
+                }}
+                disabled={!inviteAcknowledged || respondingToInvite === confirmingInvite.id}
+                className="px-6 py-2 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                {respondingToInvite === confirmingInvite.id ? 'Joining...' : 'Accept & Join Team'}
               </button>
             </div>
           </div>

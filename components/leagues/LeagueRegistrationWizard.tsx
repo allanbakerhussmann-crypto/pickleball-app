@@ -3,20 +3,24 @@
  *
  * Simple registration wizard for leagues.
  * For singles: direct join
- * For doubles: partner selection with invite/open modes
+ * For doubles: uses DoublesPartnerFlow with invite/open team/join modes
  *
  * FILE LOCATION: components/leagues/LeagueRegistrationWizard.tsx
- * VERSION: V07.24
+ * VERSION: V07.26
  */
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   joinLeague,
-  searchUsers,
   updateUserProfile,
+  joinLeagueWithPartnerInvite,
+  joinLeagueAsOpenTeam,
+  joinOpenTeamDirect,
+  cancelPendingRequestsForTeam,
 } from '../../services/firebase';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
+import { DoublesPartnerFlow, type PartnerSelection } from './DoublesPartnerFlow';
 import type { League, UserProfile } from '../../types';
 
 // ============================================
@@ -27,15 +31,8 @@ interface LeagueRegistrationWizardProps {
   league: League;
   onClose: () => void;
   onComplete: () => void;
-}
-
-type PartnerMode = 'invite' | 'open_team';
-
-interface PartnerSelection {
-  mode: PartnerMode;
-  partnerUserId?: string;
-  partnerName?: string;
-  partnerHasDupr?: boolean; // V07.24: Track if partner has DUPR linked
+  /** V07.27: When true, only shows join_open option (for full leagues with open teams) */
+  onlyJoinOpen?: boolean;
 }
 
 // ============================================
@@ -46,6 +43,7 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   league,
   onClose,
   onComplete,
+  onlyJoinOpen = false,
 }) => {
   const { currentUser, userProfile } = useAuth();
 
@@ -55,34 +53,29 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   const [error, setError] = useState<string | null>(null);
 
   // Partner selection (for doubles)
-  const [partnerSelection, setPartnerSelection] = useState<PartnerSelection>({ mode: 'invite' });
-  const [searchTerm, setSearchTerm] = useState('');
-  const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
+  const [partnerSelection, setPartnerSelection] = useState<PartnerSelection | null>(null);
 
-  // DUPR Required modal state (V07.24)
+  // DUPR Required modal state
   const [showDuprRequiredModal, setShowDuprRequiredModal] = useState(false);
   const [duprLinking, setDuprLinking] = useState(false);
   const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(userProfile);
-  const [duprLinkingFor, setDuprLinkingFor] = useState<'self' | 'partner'>('self');
 
   // Determine league characteristics
   const isDoubles = league.type === 'doubles';
 
   // Check if DUPR is required and user doesn't have it linked
-  const isDuprRequired = league.duprSettings?.mode === 'required';
+  const isDuprRequired = league.settings?.duprSettings?.mode === 'required';
   const userHasDupr = !!(currentUserProfile?.duprId);
   const needsDuprLink = isDuprRequired && !userHasDupr;
 
-  // V07.24: Show DUPR required modal if user doesn't have DUPR linked
+  // Show DUPR required modal if user doesn't have DUPR linked
   useEffect(() => {
     if (needsDuprLink) {
-      setDuprLinkingFor('self');
       setShowDuprRequiredModal(true);
     }
   }, [needsDuprLink]);
 
-  // V07.24: Listen for DUPR login messages
+  // Listen for DUPR login messages
   useEffect(() => {
     if (!showDuprRequiredModal) return;
 
@@ -126,55 +119,18 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
     window.addEventListener('message', handleDuprMessage);
     return () => window.removeEventListener('message', handleDuprMessage);
   }, [showDuprRequiredModal, currentUser?.uid]);
+
+  // For doubles: step 1 is partner selection, step 2 is confirm
+  // For singles: step 1 is confirm
   const totalSteps = isDoubles ? 2 : 1;
 
   // ============================================
-  // PARTNER SEARCH
+  // PARTNER SELECTION HANDLER
   // ============================================
 
-  const handlePartnerSearch = async (term: string) => {
-    setSearchTerm(term);
-    if (term.length < 2) {
-      setSearchResults([]);
-      return;
-    }
-    
-    setSearchLoading(true);
-    try {
-      // Use basic searchUsers for league partner search
-      const results = await searchUsers(term);
-      // Filter out current user
-      const filtered = results.filter(u => u.id !== currentUser?.uid);
-      setSearchResults(filtered);
-    } catch (e) {
-      console.error('Search failed:', e);
-    } finally {
-      setSearchLoading(false);
-    }
-  };
-
-  const handleSelectPartner = (user: UserProfile) => {
-    const partnerHasDupr = !!user.duprId;
-
-    // V07.24: Block selection if DUPR required but partner doesn't have it
-    if (isDuprRequired && !partnerHasDupr) {
-      setError(`${user.displayName || 'This player'} has not linked their DUPR account. All players must have DUPR linked to join this league.`);
-      return;
-    }
-
-    setPartnerSelection({
-      mode: 'invite',
-      partnerUserId: user.id,
-      partnerName: user.displayName || user.email || 'Partner',
-      partnerHasDupr,
-    });
-    setSearchTerm('');
-    setSearchResults([]);
-    setError(null);
-  };
-
-  const handleClearPartner = () => {
-    setPartnerSelection({ mode: partnerSelection.mode });
+  const handlePartnerSelected = (selection: PartnerSelection) => {
+    setPartnerSelection(selection);
+    setStep(2); // Move to confirmation step
   };
 
   // ============================================
@@ -183,27 +139,84 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
 
   const handleSubmit = async () => {
     if (!currentUser || !userProfile) return;
-    
+
     setError(null);
     setLoading(true);
-    
+
     try {
-      // Validate partner selection for doubles
-      if (isDoubles && partnerSelection.mode === 'invite' && !partnerSelection.partnerUserId) {
-        throw new Error('Please select a partner to invite');
+      if (isDoubles) {
+        // Handle doubles registration based on partner selection mode
+        if (!partnerSelection) {
+          throw new Error('Please select a partner option');
+        }
+
+        switch (partnerSelection.mode) {
+          case 'invite':
+            // Invite a specific partner - creates member + invite atomically
+            if (!partnerSelection.partnerUserId || !partnerSelection.partnerName) {
+              throw new Error('Please select a partner to invite');
+            }
+            await joinLeagueWithPartnerInvite(
+              league.id,
+              currentUser.uid,
+              userProfile.displayName || 'Player',
+              userProfile.duprId || null,
+              partnerSelection.partnerUserId,
+              partnerSelection.partnerName,
+              partnerSelection.partnerDuprId || null,
+              null, // divisionId
+              league.name
+            );
+            break;
+
+          case 'open_team':
+            // Create open team looking for partner
+            await joinLeagueAsOpenTeam(
+              league.id,
+              currentUser.uid,
+              userProfile.displayName || 'Player',
+              userProfile.duprId || null,
+              null // divisionId
+            );
+            break;
+
+          case 'join_open':
+            // V07.27: Direct join to open team (no request/approval needed)
+            // The team owner consented to auto-matching by creating an open team
+            if (!partnerSelection.openTeamMemberId || !partnerSelection.openTeamOwnerName) {
+              throw new Error('Please select a team to join');
+            }
+            // Directly join the open team - this makes us the partner immediately
+            const result = await joinOpenTeamDirect(
+              league.id,
+              partnerSelection.openTeamMemberId,
+              currentUser.uid,
+              userProfile.displayName || 'Player',
+              userProfile.duprId || null
+            );
+            console.log('Joined team:', result.teamName);
+            // Clean up any other pending requests for this team (non-critical, best effort)
+            try {
+              await cancelPendingRequestsForTeam(partnerSelection.openTeamMemberId);
+            } catch (cleanupErr) {
+              // Cleanup is not critical - old requests will expire naturally
+              console.log('Note: Could not clean up old requests:', cleanupErr);
+            }
+            break;
+
+          default:
+            throw new Error('Invalid partner selection mode');
+        }
+      } else {
+        // Singles league - direct join
+        await joinLeague(
+          league.id,
+          currentUser.uid,
+          userProfile.displayName || 'Player',
+          null // divisionId
+        );
       }
-      
-      // Join the league - pass all required arguments
-      // joinLeague(leagueId, userId, displayName, divisionId?, partnerUserId?, partnerDisplayName?)
-      await joinLeague(
-        league.id,
-        currentUser.uid,
-        userProfile.displayName || 'Player',
-        null, // divisionId - null for now
-        isDoubles ? (partnerSelection.partnerUserId || null) : null,
-        isDoubles ? (partnerSelection.partnerName || null) : null
-      );
-      
+
       onComplete();
     } catch (e: any) {
       console.error('Registration failed:', e);
@@ -218,10 +231,8 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   // ============================================
 
   const canProceed = () => {
-    if (step === 1 && isDoubles) {
-      if (partnerSelection.mode === 'invite' && !partnerSelection.partnerUserId) return false;
-      // open_team doesn't require selection to proceed
-    }
+    // For doubles on confirmation step, partner must be selected
+    if (isDoubles && step === 2 && !partnerSelection) return false;
     return true;
   };
 
@@ -236,6 +247,10 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   const handleBack = () => {
     if (step > 1) {
       setStep(step - 1);
+      if (isDoubles && step === 2) {
+        // Going back to partner selection, clear selection
+        setPartnerSelection(null);
+      }
     } else {
       onClose();
     }
@@ -245,183 +260,63 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   // RENDER
   // ============================================
 
-  const renderPartnerStep = () => (
-    <div className="space-y-6">
-      <p className="text-gray-400 text-sm">
-        Select how you want to find a doubles partner:
-      </p>
-      
-      {/* Partner Mode Selection */}
-      <div className="flex flex-col gap-3">
-        <label 
-          className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-            partnerSelection.mode === 'invite' 
-              ? 'border-blue-500 bg-blue-900/20' 
-              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
-          }`}
-        >
-          <input
-            type="radio"
-            checked={partnerSelection.mode === 'invite'}
-            onChange={() => setPartnerSelection({ mode: 'invite' })}
-            className="w-4 h-4"
-          />
-          <div>
-            <div className="font-semibold text-white">Invite a specific partner</div>
-            <div className="text-xs text-gray-400">Search for someone you know</div>
-          </div>
-        </label>
-        
-        <label 
-          className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-            partnerSelection.mode === 'open_team' 
-              ? 'border-blue-500 bg-blue-900/20' 
-              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
-          }`}
-        >
-          <input
-            type="radio"
-            checked={partnerSelection.mode === 'open_team'}
-            onChange={() => setPartnerSelection({ mode: 'open_team' })}
-            className="w-4 h-4"
-          />
-          <div>
-            <div className="font-semibold text-white">I don't have a partner yet</div>
-            <div className="text-xs text-gray-400">Register solo and find a partner later</div>
-          </div>
-        </label>
-      </div>
-
-      {/* Invite Partner Search */}
-      {partnerSelection.mode === 'invite' && (
-        <div className="space-y-3">
-          {partnerSelection.partnerUserId ? (
-            <div className="flex items-center justify-between p-3 bg-green-900/20 border border-green-700 rounded-lg">
-              <div>
-                <span className="text-green-400 font-semibold">Partner Selected:</span>
-                <span className="text-white ml-2">{partnerSelection.partnerName}</span>
-              </div>
-              <button
-                onClick={handleClearPartner}
-                className="text-gray-400 hover:text-white text-sm"
-              >
-                Change
-              </button>
-            </div>
-          ) : (
-            <>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => handlePartnerSearch(e.target.value)}
-                placeholder="Search by name or email..."
-                className="w-full bg-gray-900 border border-gray-700 text-white px-4 py-2 rounded-lg focus:outline-none focus:border-blue-500"
-              />
-              
-              {searchLoading && (
-                <div className="text-gray-400 text-sm">Searching...</div>
-              )}
-              
-              {searchResults.length > 0 && (
-                <div className="max-h-48 overflow-y-auto border border-gray-700 rounded-lg bg-gray-900">
-                  {searchResults.map(user => {
-                    const hasDupr = !!user.duprId;
-                    const isBlocked = isDuprRequired && !hasDupr;
-
-                    return (
-                      <div
-                        key={user.id}
-                        onClick={() => !isBlocked && handleSelectPartner(user)}
-                        className={`p-3 border-b border-gray-700 last:border-b-0 ${
-                          isBlocked
-                            ? 'opacity-50 cursor-not-allowed bg-gray-800'
-                            : 'hover:bg-gray-800 cursor-pointer'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-semibold text-white">{user.displayName}</div>
-                            <div className="text-xs text-gray-400">{user.email}</div>
-                          </div>
-                          {/* V07.24: Show DUPR status when league requires it */}
-                          {isDuprRequired && (
-                            <div className={`text-xs px-2 py-1 rounded ${
-                              hasDupr
-                                ? 'bg-lime-900/30 text-lime-400 border border-lime-700'
-                                : 'bg-red-900/30 text-red-400 border border-red-700'
-                            }`}>
-                              {hasDupr ? '✓ DUPR' : '✗ No DUPR'}
-                            </div>
-                          )}
-                        </div>
-                        {isBlocked && (
-                          <div className="text-xs text-red-400 mt-1">
-                            Must link DUPR account to join this league
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-              
-              {searchTerm.length >= 2 && !searchLoading && searchResults.length === 0 && (
-                <div className="text-gray-400 text-sm">No players found</div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Open Team */}
-      {partnerSelection.mode === 'open_team' && (
-        <div className="p-4 bg-blue-900/20 border border-blue-700 rounded-lg">
-          <p className="text-blue-300 text-sm">
-            ✓ You'll be registered and can find a partner later through the league page.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-
   const renderConfirmStep = () => (
     <div className="space-y-6">
       <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
         <h3 className="font-semibold text-white mb-3">Registration Summary</h3>
-        
+
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-gray-400">League:</span>
             <span className="text-white">{league.name}</span>
           </div>
-          
+
           <div className="flex justify-between">
             <span className="text-gray-400">Type:</span>
             <span className="text-white capitalize">{league.type}</span>
           </div>
-          
+
           <div className="flex justify-between">
             <span className="text-gray-400">Format:</span>
             <span className="text-white capitalize">{league.format.replace('_', ' ')}</span>
           </div>
-          
-          {isDoubles && (
+
+          {isDoubles && partnerSelection && (
             <div className="flex justify-between">
               <span className="text-gray-400">Partner:</span>
               <span className="text-white">
-                {partnerSelection.mode === 'open_team' 
-                  ? 'Finding later'
+                {partnerSelection.mode === 'open_team'
+                  ? 'Looking for partner'
+                  : partnerSelection.mode === 'join_open'
+                  ? `Joining ${partnerSelection.openTeamOwnerName}'s team`
                   : partnerSelection.partnerName || 'Not selected'}
               </span>
             </div>
           )}
         </div>
       </div>
-      
-      {isDoubles && partnerSelection.mode === 'invite' && partnerSelection.partnerUserId && (
-        <div className="bg-yellow-900/20 border border-yellow-700 rounded-lg p-3">
-          <p className="text-yellow-300 text-sm">
-            ⚠️ Your partner will receive an invitation to join your team.
+
+      {/* Mode-specific messages */}
+      {isDoubles && partnerSelection?.mode === 'invite' && (
+        <div className="bg-lime-900/20 border border-lime-700 rounded-lg p-3">
+          <p className="text-lime-300 text-sm">
+            Your partner will receive an invitation. Your team will show as "Pending Partner" until they accept.
+          </p>
+        </div>
+      )}
+
+      {isDoubles && partnerSelection?.mode === 'open_team' && (
+        <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+          <p className="text-blue-300 text-sm">
+            You'll be registered as an open team. The first eligible player who joins will automatically become your partner.
+          </p>
+        </div>
+      )}
+
+      {isDoubles && partnerSelection?.mode === 'join_open' && (
+        <div className="bg-lime-900/20 border border-lime-700 rounded-lg p-3">
+          <p className="text-lime-300 text-sm">
+            You will be automatically partnered with {partnerSelection.openTeamOwnerName}. Open teams accept all eligible players.
           </p>
         </div>
       )}
@@ -429,8 +324,16 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   );
 
   const renderCurrentStep = () => {
+    // For doubles, step 1 is partner selection using DoublesPartnerFlow
     if (isDoubles && step === 1) {
-      return renderPartnerStep();
+      return (
+        <DoublesPartnerFlow
+          league={league}
+          onPartnerSelected={handlePartnerSelected}
+          onBack={onClose}
+          onlyJoinOpen={onlyJoinOpen}
+        />
+      );
     }
     return renderConfirmStep();
   };
@@ -440,9 +343,12 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
     return 'Confirm Registration';
   };
 
+  // For doubles step 1, DoublesPartnerFlow handles its own navigation
+  const showFooter = !(isDoubles && step === 1);
+
   return (
     <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
-      {/* V07.24: DUPR Required Modal */}
+      {/* DUPR Required Modal */}
       {showDuprRequiredModal && (
         <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-[70] rounded-lg p-4 backdrop-blur-sm">
           <div className="bg-gray-800 p-6 rounded-lg border border-lime-500/50 shadow-2xl max-w-md w-full text-center">
@@ -453,9 +359,7 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
             </div>
             <h3 className="text-xl font-bold text-white mb-2">DUPR Account Required</h3>
             <p className="text-gray-300 mb-4 text-sm">
-              {duprLinkingFor === 'self'
-                ? 'This league requires a linked DUPR account for match result submissions. Please link your DUPR account to continue with registration.'
-                : 'Your partner must also have a linked DUPR account to join this league.'}
+              This league requires a linked DUPR account for match result submissions. Please link your DUPR account to continue with registration.
             </p>
 
             {duprLinking ? (
@@ -502,16 +406,16 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
               </svg>
             </button>
           </div>
-          
-          {/* Progress */}
-          {totalSteps > 1 && (
+
+          {/* Progress - only show when not on partner selection step */}
+          {totalSteps > 1 && !(isDoubles && step === 1) && (
             <>
               <div className="flex items-center gap-2 mt-3">
                 {Array.from({ length: totalSteps }).map((_, i) => (
                   <div
                     key={i}
                     className={`h-1 flex-1 rounded ${
-                      i < step ? 'bg-blue-500' : 'bg-gray-700'
+                      i < step ? 'bg-lime-500' : 'bg-gray-700'
                     }`}
                   />
                 ))}
@@ -530,27 +434,29 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
               {error}
             </div>
           )}
-          
+
           {renderCurrentStep()}
         </div>
 
-        {/* Footer */}
-        <div className="bg-gray-900 px-6 py-4 border-t border-gray-700 flex justify-between">
-          <button
-            onClick={handleBack}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-          >
-            {step === 1 ? 'Cancel' : 'Back'}
-          </button>
-          
-          <button
-            onClick={handleNext}
-            disabled={!canProceed() || loading}
-            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors"
-          >
-            {loading ? 'Joining...' : step === totalSteps ? 'Join League' : 'Next'}
-          </button>
-        </div>
+        {/* Footer - hide during partner selection (DoublesPartnerFlow has its own) */}
+        {showFooter && (
+          <div className="bg-gray-900 px-6 py-4 border-t border-gray-700 flex justify-between">
+            <button
+              onClick={handleBack}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+            >
+              Back
+            </button>
+
+            <button
+              onClick={handleNext}
+              disabled={!canProceed() || loading}
+              className="px-6 py-2 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors"
+            >
+              {loading ? 'Joining...' : 'Join League'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -266,7 +266,21 @@ export {
   createLeaguePartnerInvite,
   getPendingLeagueInvites,
   respondToLeaguePartnerInvite,
-  
+
+  // Doubles Partner System (V07.26)
+  subscribeToUserLeaguePartnerInvites,
+  subscribeToMyOpenTeamRequests,
+  getOpenLeagueMembers,
+  joinLeagueWithPartnerInvite,
+  joinLeagueAsOpenTeam,
+  createLeagueJoinRequest,
+  respondToLeaguePartnerInviteAtomic,
+  respondToLeagueJoinRequest,
+  getMyOpenTeamRequests,
+  // V07.27: Direct join for open teams (no request/approval needed)
+  joinOpenTeamDirect,
+  cancelPendingRequestsForTeam,
+
   // League Matches
   createLeagueMatch,
   getLeagueMatches,
@@ -299,6 +313,19 @@ export {
   checkAndUpdateLeagueStatus,
   getExpectedLeagueStatus,
 } from './leagues';
+
+// League Scheduling (V07.27)
+export {
+  scheduleMatchesToSlots,
+  applyScheduleToMatches,
+  getLeagueMatches as getLeagueMatchesForScheduling,
+  scheduleLeagueMatches,
+  updateScheduleStatus,
+  clearMatchSchedules,
+  checkTeamCapacity,
+  type ScheduleResult,
+  type ScheduledMatch,
+} from './leagueScheduling';
 
 // ============================================
 // LEAGUE MATCH GENERATION (NEW V05.32)

@@ -430,12 +430,18 @@ service cloud.firestore {
         allow read: if true;
         // Users can join leagues (create their membership)
         allow create: if isAuthenticated();
-        // League admin, app admin, member owner, or any league member can update stats
-        // (needed for score submission to update opponent stats)
+        // V07.28: Update rules for direct join flow
         allow update: if isLeagueAdmin(leagueId) ||
           isAppAdmin() ||
+          // Member owner (primary) can update their own record
           (isAuthenticated() && resource.data.userId == request.auth.uid) ||
-          isAuthenticated(); // Allow any authenticated user to update member stats
+          // Partner can also update (e.g., to leave the team)
+          (isAuthenticated() && resource.data.get('partnerUserId', '') == request.auth.uid) ||
+          // V07.28: Allow joining open teams - if team is looking for partner, anyone can join
+          (isAuthenticated() && resource.data.get('isLookingForPartner', false) == true) ||
+          // Allow any league member to update stats (for score submission)
+          (isAuthenticated() &&
+           exists(/databases/$(database)/documents/leagues/$(leagueId)/members/$(request.auth.uid)));
         allow delete: if isLeagueAdmin(leagueId);
       }
       match /matches/{matchId} {
@@ -506,7 +512,7 @@ service cloud.firestore {
          isTournamentOrganizer(resource.data.tournamentId));
     }
 
-    // Partner Invites - SECURED
+    // Partner Invites - SECURED (for tournaments)
     // Note: Data uses inviterId (sender) and invitedUserId (recipient) field names
     match /partnerInvites/{inviteId} {
       allow read: if isAuthenticated() && (
@@ -520,6 +526,42 @@ service cloud.firestore {
         resource.data.invitedUserId == request.auth.uid
       );
       allow delete: if isAuthenticated() && resource.data.inviterId == request.auth.uid;
+    }
+
+    // V07.27: League Partner Invites - SECURED (for doubles leagues)
+    // Note: Data uses inviterId (sender) and invitedUserId (recipient) field names
+    match /leaguePartnerInvites/{inviteId} {
+      allow read: if isAuthenticated() && (
+        resource.data.inviterId == request.auth.uid ||
+        resource.data.invitedUserId == request.auth.uid
+      );
+      // Users can create invites for themselves (inviterId must match)
+      allow create: if isAuthenticated() &&
+        request.resource.data.inviterId == request.auth.uid;
+      // Only sender or recipient can update (accept/decline)
+      allow update: if isAuthenticated() && (
+        resource.data.inviterId == request.auth.uid ||
+        resource.data.invitedUserId == request.auth.uid
+      );
+      // Sender can delete their own invites
+      allow delete: if isAuthenticated() && resource.data.inviterId == request.auth.uid;
+    }
+
+    // V07.27: League Join Requests - DEPRECATED (V07.28)
+    // This collection is no longer actively used since open teams now auto-accept partners.
+    // Rules kept for cleanup of legacy data only.
+    match /leagueJoinRequests/{requestId} {
+      allow read: if isAuthenticated() && (
+        resource.data.requesterId == request.auth.uid ||
+        resource.data.openTeamOwnerUserId == request.auth.uid
+      );
+      // No new requests should be created - direct join flow is now used
+      allow create: if false;
+      // Allow status updates for cleanup - any authenticated user can cancel pending requests
+      // This is safe since the collection is deprecated and requests expire naturally
+      allow update: if isAuthenticated();
+      // Allow deletion for cleanup
+      allow delete: if isAuthenticated();
     }
 
     // Social Events - SECURED

@@ -1429,6 +1429,27 @@ export interface LeagueVenueSettings {
   autoAssignCourts: boolean;
   avoidBackToBack?: boolean;
   balanceCourtUsage: boolean;
+
+  // V07.27: Single-session scheduling
+  minRestMinutes?: number;           // Min gap before same team plays again (player recovery)
+  sessionStartTime?: string;         // "18:00" (6pm) - session start
+  sessionEndTime?: string;           // "21:00" (9pm) - session end
+  sessionDay?: DayOfWeek;            // Primary day for this league
+
+  // Calculated capacity (stored for reference)
+  maxTeamsPerDivision?: number;      // Max teams that fit in single session
+  slotsPerCourt?: number;            // Time slots available per court
+  totalMatchSlots?: number;          // Total slots across all courts
+
+  // Division scheduling mode
+  divisionMode?: 'shared_time' | 'separate_time';
+  // shared_time: All divisions play same window on different courts
+  // separate_time: Each division has its own time window
+
+  // Schedule lifecycle
+  scheduleStatus?: 'draft' | 'published' | 'locked';
+  scheduleGenerationId?: string;     // For idempotency
+
   // Recurring schedule config (V05.35)
   scheduleConfig?: {
     numberOfWeeks: number;
@@ -1437,6 +1458,19 @@ export interface LeagueVenueSettings {
     matchEndTime: string;
     matchNights: string[];
   };
+}
+
+/**
+ * Per-division venue configuration (V07.27)
+ * For shared_time mode: assigns specific courts to each division
+ * For separate_time mode: assigns time windows to each division
+ */
+export interface DivisionVenueConfig {
+  divisionId: string;
+  courtIds: string[];                // Which courts this division uses (shared_time)
+  startTime?: string;                // Division-specific start time (separate_time)
+  endTime?: string;                  // Division-specific end time (separate_time)
+  maxTeams?: number;                 // Calculated max teams for this division
 }
 
 // ============================================
@@ -1545,7 +1579,8 @@ export interface LeagueSettings {
   // Match scheduling
   matchDays?: string[];
   matchDeadlineDays?: number;
-  
+  gameTime?: string | null; // V07.26: Game time display (e.g., "Sundays 2-5pm")
+
   // Score reporting
   allowSelfReporting: boolean;
   requireConfirmation: boolean;
@@ -1653,10 +1688,20 @@ export interface League {
   matchesPlayed: number;
   paidMemberCount?: number;
   totalCollected?: number;
-  
+
   // Has divisions?
   hasDivisions: boolean;
-  
+
+  // V07.27: Single-session venue scheduling
+  timezone?: string;                          // "Pacific/Auckland" - for DST handling
+  maxTeamsPerDivision?: number;               // Capacity limit per division
+  registrationOpen?: boolean;                 // Can be auto-closed when full
+  divisionVenueConfigs?: DivisionVenueConfig[]; // Per-division court/time assignments
+
+  // DUPR event tracking
+  duprEventId?: string;                       // Created when first match submitted
+  duprEventName?: string;                     // Event name for DUPR
+
   // Timestamps
   createdAt: number;
   updatedAt: number;
@@ -1666,7 +1711,7 @@ export interface League {
 // LEAGUE MEMBER TYPES (UPDATED V05.37)
 // ============================================
 
-export type MembershipStatus = 'pending' | 'active' | 'suspended' | 'withdrawn';
+export type MembershipStatus = 'pending' | 'pending_partner' | 'active' | 'suspended' | 'withdrawn';
 export type MemberRole = 'member' | 'captain' | 'admin';
 
 /**
@@ -1711,7 +1756,19 @@ export interface LeagueMember {
   // Team info
   teamId?: string | null;
   teamName?: string | null;
-  
+
+  // Partner invite tracking (for doubles)
+  isLookingForPartner?: boolean;
+  pendingInviteId?: string | null;
+  pendingInvitedUserId?: string | null;
+  partnerLockedAt?: number | null;
+  teamKey?: string | null;
+
+  // V07.27: Join request tracking (when someone requests to join open team)
+  pendingJoinRequestId?: string | null;
+  pendingRequesterId?: string | null;
+  pendingRequesterName?: string | null;
+
   // Status
   status: MembershipStatus;
   role: MemberRole;
@@ -1771,18 +1828,68 @@ export interface LeagueTeam {
 }
 
 /**
+ * Tournament partner invite (for doubles events)
+ * Used when a player invites another to be their partner
+ */
+export interface PartnerInvite {
+  id: string;
+  tournamentId: string;
+  divisionId: string;
+  inviterId: string;
+  inviterName?: string;
+  inviterDuprId?: string | null;
+  invitedUserId: string;
+  invitedUserName?: string;
+  invitedUserDuprId?: string | null;
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
+  createdAt: number;
+  respondedAt?: number | null;
+  expiresAt?: number | null;
+}
+
+/**
  * League partner invite
  */
 export interface LeaguePartnerInvite {
   id: string;
   leagueId: string;
+  leagueName?: string;
   divisionId?: string | null;
-  teamId: string;
+  teamId?: string | null;
+  memberId?: string | null;
   inviterId: string;
   inviterName: string;
+  inviterDuprId?: string | null;
   invitedUserId: string;
   invitedUserName?: string;
-  status: 'pending' | 'accepted' | 'declined' | 'expired';
+  invitedUserDuprId?: string | null;
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
+  createdAt: number;
+  respondedAt?: number | null;
+  expiresAt?: number | null;
+}
+
+/**
+ * League join request (for open teams looking for partners)
+ * Reverse of invite: requester wants to join an open team
+ */
+export interface LeagueJoinRequest {
+  id: string;
+  leagueId: string;
+  leagueName?: string;
+  divisionId?: string | null;
+
+  // Open team being requested to join
+  openTeamMemberId: string;
+  openTeamOwnerUserId: string;
+  openTeamOwnerName: string;
+
+  // Requester info
+  requesterId: string;
+  requesterName: string;
+  requesterDuprId?: string | null;
+
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired';
   createdAt: number;
   respondedAt?: number | null;
   expiresAt?: number | null;
@@ -1850,7 +1957,12 @@ export interface LeagueMatch {
   timeSlotId?: string | null;
   startTime?: string | null;
   endTime?: string | null;
-  
+  timeSlotIndex?: number | null;     // V07.27: 0, 1, 2... for ordering within session
+
+  // V07.27: Single-session scheduling
+  scheduledStartAt?: number | null;  // Absolute timestamp (derived from date + time + timezone)
+  scheduleGenerationId?: string;     // Which generation created this schedule (for idempotency)
+
   // Status
   status: LeagueMatchStatus;
   

@@ -142,7 +142,8 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
 
   // Sort and filter members
   const sortedMembers = useMemo(() => {
-    let filtered = (members || []).filter(m => m.status === 'active');
+    // V07.27: Include pending_partner members for doubles leagues
+    let filtered = (members || []).filter(m => m.status === 'active' || m.status === 'pending_partner');
 
     // Search filter
     if (searchTerm) {
@@ -423,7 +424,7 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
                       
                       {/* Name */}
                       <td className="py-3 px-4">
-                        <div 
+                        <div
                           className="flex items-center gap-2 cursor-pointer hover:opacity-80"
                           onClick={() => onViewProfile?.(member)}
                         >
@@ -437,6 +438,18 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
                             {isMe && (
                               <span className="ml-2 text-xs bg-blue-600/30 text-blue-400 px-1.5 py-0.5 rounded">
                                 You
+                              </span>
+                            )}
+                            {/* V07.27: Show pending partner indicator for doubles leagues */}
+                            {member.status === 'pending_partner' && (
+                              <span className="ml-2 text-xs bg-amber-600/30 text-amber-400 px-1.5 py-0.5 rounded">
+                                {member.pendingRequesterName
+                                  ? `Request from ${member.pendingRequesterName}`
+                                  : member.pendingInvitedUserId
+                                  ? 'Pending Partner'
+                                  : member.isLookingForPartner
+                                  ? 'Looking for Partner'
+                                  : 'Pending Partner'}
                               </span>
                             )}
                           </div>
