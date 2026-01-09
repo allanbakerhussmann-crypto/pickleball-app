@@ -1702,9 +1702,9 @@ export interface League {
   duprEventId?: string;                       // Created when first match submitted
   duprEventName?: string;                     // Event name for DUPR
 
-  // V07.29: Week-based match unlock
-  unlockedWeeks?: number[];                   // Weeks open for scoring (e.g., [1, 2])
-                                              // If undefined, all weeks are open (backwards compat)
+  // V07.29: Week-based match lock
+  lockedWeeks?: number[];                     // Weeks closed for scoring (e.g., [1] means week 1 is locked)
+                                              // If undefined/empty, all weeks are open (backwards compat)
 
   // Timestamps
   createdAt: number;

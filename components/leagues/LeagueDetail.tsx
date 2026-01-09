@@ -1664,6 +1664,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       {/* MATCHES TAB */}
       {activeTab === 'matches' && (
         <div className="space-y-4">
+          {/* V07.29: Organizer help text for week lock controls */}
+          {isOrganizer && (
+            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-sm text-gray-400">
+              <span className="font-medium text-gray-300">Week Scoring Controls:</span>{' '}
+              Click <span className="text-lime-400">🔓 Open</span> to lock a week after matches are complete.
+              Click <span className="text-gray-300">🔒 Closed</span> to allow players to enter scores.
+              Standings auto-update when you lock a week.
+            </div>
+          )}
           {/* Week Sub-Tabs */}
           <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-700">
             {weeks.map(week => {

@@ -2191,8 +2191,8 @@ export const getMyOpenTeamRequests = async (
 // ============================================
 
 /**
- * Unlock a week for scoring
- * Players can only enter scores for matches in unlocked weeks
+ * Unlock a week for scoring (remove from locked list)
+ * Players can enter scores for matches in unlocked weeks
  */
 export const unlockLeagueWeek = async (
   leagueId: string,
@@ -2200,13 +2200,13 @@ export const unlockLeagueWeek = async (
 ): Promise<void> => {
   const leagueRef = doc(db, 'leagues', leagueId);
   await updateDoc(leagueRef, {
-    unlockedWeeks: arrayUnion(weekNumber),
+    lockedWeeks: arrayRemove(weekNumber),
     updatedAt: Date.now(),
   });
 };
 
 /**
- * Lock a week (remove from unlocked list)
+ * Lock a week (add to locked list)
  * Prevents players from entering scores for matches in this week
  */
 export const lockLeagueWeek = async (
@@ -2215,20 +2215,21 @@ export const lockLeagueWeek = async (
 ): Promise<void> => {
   const leagueRef = doc(db, 'leagues', leagueId);
   await updateDoc(leagueRef, {
-    unlockedWeeks: arrayRemove(weekNumber),
+    lockedWeeks: arrayUnion(weekNumber),
     updatedAt: Date.now(),
   });
 };
 
 /**
  * Check if a week is unlocked for scoring
- * Returns true if unlockedWeeks is not set (backwards compat) or if weekNumber is in the array
+ * Returns true if lockedWeeks is not set (backwards compat) or if weekNumber is NOT in the locked array
  */
 export const isWeekUnlocked = (
   league: League,
   weekNumber: number
 ): boolean => {
-  // If unlockedWeeks not set, default to all weeks open (backwards compat)
-  if (!league.unlockedWeeks || league.unlockedWeeks.length === 0) return true;
-  return league.unlockedWeeks.includes(weekNumber);
+  // If lockedWeeks not set, default to all weeks open (backwards compat)
+  if (!league.lockedWeeks || league.lockedWeeks.length === 0) return true;
+  // Week is unlocked if it's NOT in the locked list
+  return !league.lockedWeeks.includes(weekNumber);
 };
