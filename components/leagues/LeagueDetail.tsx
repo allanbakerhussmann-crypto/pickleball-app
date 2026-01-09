@@ -1506,6 +1506,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   id: row.memberId,
                   userId: originalMember?.userId || row.memberId,
                   displayName: row.displayName,
+                  // V07.32: Include partner display name for doubles teams
+                  partnerDisplayName: row.partnerDisplayName || originalMember?.partnerDisplayName || null,
                   leagueId: leagueId,
                   currentRank: row.rank,
                   joinedAt: originalMember?.joinedAt || Date.now(),
@@ -1594,6 +1596,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   id: row.memberId,
                   userId: originalMember?.userId || row.memberId,
                   displayName: row.displayName,
+                  // V07.32: Include partner display name for doubles teams
+                  partnerDisplayName: row.partnerDisplayName || originalMember?.partnerDisplayName || null,
                   leagueId: leagueId,
                   currentRank: row.rank,
                   joinedAt: originalMember?.joinedAt || Date.now(),
