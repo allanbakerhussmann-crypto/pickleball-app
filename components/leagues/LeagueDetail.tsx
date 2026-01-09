@@ -567,13 +567,41 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   };
 
   // V07.29: Toggle week lock/unlock for match scoring
+  // V07.30: Auto-generate standings when locking a week
   const handleToggleWeekLock = async (weekNumber: number) => {
     if (!league) return;
 
     try {
       const isCurrentlyUnlocked = isWeekUnlocked(league, weekNumber);
       if (isCurrentlyUnlocked) {
+        // Locking the week - disable scoring and auto-generate standings
         await lockLeagueWeek(leagueId, weekNumber);
+
+        // Auto-regenerate all standings when locking a week
+        console.log(`[LeagueDetail] Week ${weekNumber} locked - regenerating standings...`);
+        setIsRecalculating(true);
+        try {
+          await rebuildAllStandings(leagueId, members, matches, league.settings);
+
+          // Reload standings after rebuild
+          const allStandings = await getAllLeagueStandings(leagueId);
+          const overall = allStandings.find(s => s.standingsKey === 'overall') || null;
+          setOverallStandings(overall);
+
+          const weekMap = new Map<number, LeagueStandingsDoc>();
+          allStandings
+            .filter(s => s.weekNumber !== null)
+            .forEach(s => weekMap.set(s.weekNumber!, s));
+          setWeekStandings(weekMap);
+
+          setStandingsStatus('current');
+          console.log(`[LeagueDetail] Standings regenerated after locking week ${weekNumber}`);
+        } catch (standingsErr) {
+          console.error('[LeagueDetail] Failed to regenerate standings:', standingsErr);
+          // Don't alert - week lock succeeded, standings can be manually regenerated
+        } finally {
+          setIsRecalculating(false);
+        }
       } else {
         await unlockLeagueWeek(leagueId, weekNumber);
       }
