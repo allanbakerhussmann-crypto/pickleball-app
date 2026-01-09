@@ -78,9 +78,14 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   const [showDisputeModal, setShowDisputeModal] = useState(false);
 
   // Determine user's role in this match
-  const isPlayerA = currentUser?.uid === match.userAId;
-  const isPlayerB = currentUser?.uid === match.userBId;
+  // V07.32: Check both primary players AND partners for doubles matches
+  const isPlayerA = currentUser?.uid === match.userAId || currentUser?.uid === match.partnerAId;
+  const isPlayerB = currentUser?.uid === match.userBId || currentUser?.uid === match.partnerBId;
   const isParticipant = isPlayerA || isPlayerB;
+
+  // V07.32: For DUPR compliance, when organizer is a participant, treat them as player (not organizer)
+  // This prevents organizer from directly finalizing their own match
+  const effectiveIsOrganizer = isOrganizer && !isParticipant;
 
   // Get all player IDs
   const matchPlayerIds = [match.userAId, match.userBId];
@@ -90,7 +95,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   // V07.04: Check verification status using scoreState (DUPR-compliant) with legacy fallback
   const verification = match.verification;
   const hasScore = match.status === 'completed' || match.status === 'pending_confirmation' ||
-    match.scores?.length > 0 || match.scoreProposal?.scores?.length > 0;
+    (match.scores?.length ?? 0) > 0 || (match.scoreProposal?.scores?.length ?? 0) > 0;
 
   // V07.04: Map scoreState to verification status for UI
   const verificationStatus = match.scoreState === 'proposed' ? 'pending' :
@@ -124,8 +129,9 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     !isDisputed &&
     verificationSettings.allowDisputes;
 
-  // Check if user can submit scores (participants or organizers)
-  const canSubmitScore = isParticipant || isOrganizer;
+  // Check if user can submit scores (participants or organizers who aren't playing this match)
+  // V07.32: Use effectiveIsOrganizer for DUPR compliance
+  const canSubmitScore = isParticipant || effectiveIsOrganizer;
 
   // Initialize games from existing scores or empty
   useEffect(() => {
@@ -344,8 +350,9 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
       const { winnerId, gamesA, gamesB } = calculateWinner();
 
       // V07.04: Use DUPR-compliant scoring
-      if (isOrganizer) {
-        // Organizer directly finalizes the result
+      // V07.32: Use effectiveIsOrganizer to prevent organizer-as-participant from finalizing their own match
+      if (effectiveIsOrganizer) {
+        // Organizer (not participating in this match) directly finalizes the result
         await finaliseResult(
           'league',
           leagueId,
@@ -449,7 +456,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                   hasScore && userCanConfirm ? 'Sign to Acknowledge' :
                   hasScore && !isFinal ? 'Score Proposed' :
                   hasScore ? 'Match Score' :
-                  isOrganizer ? 'Finalise Score' : 'Propose Score'}
+                  effectiveIsOrganizer ? 'Finalise Score' : 'Propose Score'}
               </h2>
               {/* Verification Badge */}
               {verificationStatus && (
@@ -670,8 +677,8 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                 disabled={loading || !canSubmitScore}
                 className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
               >
-                {loading ? (isOrganizer ? 'Finalising...' : 'Proposing...') :
-                  isOrganizer ? 'Finalise Official Score' : 'Propose Score'}
+                {loading ? (effectiveIsOrganizer ? 'Finalising...' : 'Proposing...') :
+                  effectiveIsOrganizer ? 'Finalise Official Score' : 'Propose Score'}
               </button>
             )}
           </div>
