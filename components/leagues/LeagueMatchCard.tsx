@@ -136,9 +136,13 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
     ? calculateGameScores(match.scores)
     : { gamesA: 0, gamesB: 0 };
 
-  // Determine if current user is a participant
-  const isPlayerA = currentUserId === match.userAId;
-  const isPlayerB = currentUserId === match.userBId;
+  // V07.30: Get team names - prefer sideA/sideB.name (full team name) over memberAName/memberBName
+  const teamAName = match.sideA?.name || teamAName;
+  const teamBName = match.sideB?.name || teamBName;
+
+  // Determine if current user is a participant (check both primary and partner)
+  const isPlayerA = currentUserId === match.userAId || currentUserId === match.partnerAId;
+  const isPlayerB = currentUserId === match.userBId || currentUserId === match.partnerBId;
   const isParticipant = isPlayerA || isPlayerB;
 
   // Get verification status from match
@@ -198,7 +202,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
             playerAWon ? 'text-green-400 font-semibold' : 
             isPlayerA ? 'text-blue-400' : 'text-white'
           }`}>
-            {match.memberAName}
+            {teamAName}
             {playerAWon && ' ✓'}
           </div>
 
@@ -220,7 +224,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
             isPlayerB ? 'text-blue-400' : 'text-white'
           }`}>
             {playerBWon && '✓ '}
-            {match.memberBName}
+            {teamBName}
           </div>
         </div>
 
@@ -287,7 +291,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
               playerAWon ? 'text-green-400' : 
               isPlayerA ? 'text-blue-400' : 'text-white'
             }`}>
-              {match.memberAName}
+              {teamAName}
               {playerAWon && <span className="ml-2">✓</span>}
             </div>
             {isPlayerA && (
@@ -330,7 +334,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
               isPlayerB ? 'text-blue-400' : 'text-white'
             }`}>
               {playerBWon && <span className="mr-2">✓</span>}
-              {match.memberBName}
+              {teamBName}
             </div>
             {isPlayerB && (
               <div className="text-xs text-blue-400">(You)</div>
