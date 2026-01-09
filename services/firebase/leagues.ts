@@ -26,8 +26,6 @@ import {
   writeBatch,
   increment,
   runTransaction,
-  arrayUnion,
-  arrayRemove,
 } from '@firebase/firestore';
 import { db } from './config';
 import type {
@@ -2264,3 +2262,30 @@ export const lockLeagueWeek = async (
 
 // Keep unlockLeagueWeek for backwards compat (same as openLeagueWeek)
 export const unlockLeagueWeek = openLeagueWeek;
+
+/**
+ * Initialize weekStates for a league after matches are generated
+ * All weeks start as 'closed' except Week 1 which is 'open'
+ *
+ * @param leagueId - League ID
+ * @param totalWeeks - Total number of weeks in the schedule
+ */
+export const initializeWeekStates = async (
+  leagueId: string,
+  totalWeeks: number
+): Promise<void> => {
+  if (totalWeeks < 1) return;
+
+  const weekStates: Record<number, WeekState> = {};
+
+  // All weeks start closed except Week 1 which is open
+  for (let week = 1; week <= totalWeeks; week++) {
+    weekStates[week] = week === 1 ? 'open' : 'closed';
+  }
+
+  const leagueRef = doc(db, 'leagues', leagueId);
+  await updateDoc(leagueRef, {
+    weekStates,
+    updatedAt: Date.now(),
+  });
+};

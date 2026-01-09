@@ -29,6 +29,8 @@ import type {
   LeagueMember,
   LeagueMatch,
 } from '../../types';
+import { scheduleLeagueMatches } from './leagueScheduling';
+import { initializeWeekStates } from './leagues';
 
 // ============================================
 // TYPES
@@ -39,6 +41,7 @@ export interface GenerationResult {
   matchesCreated: number;
   error?: string;
   matches?: LeagueMatch[];
+  scheduleResult?: any;  // V07.27: Auto-scheduling result
 }
 
 export interface MatchPairing {
@@ -77,13 +80,15 @@ export const generateRoundRobinSchedule = async (
     const settings = league.settings?.roundRobinSettings || { rounds: 1, scheduleGeneration: 'auto' };
     const rounds = settings.rounds || 1;
     
-    // Filter members by division if specified
-    const divisionMembers = divisionId 
+    // Filter members by division if specified, and only include active members
+    // V07.26: Exclude pending_partner members from match generation
+    const divisionMembers = (divisionId
       ? members.filter(m => m.divisionId === divisionId)
-      : members;
+      : members
+    ).filter(m => m.status === 'active');
 
     if (divisionMembers.length < 2) {
-      return { success: false, matchesCreated: 0, error: 'Need at least 2 members in this division' };
+      return { success: false, matchesCreated: 0, error: 'Need at least 2 active members in this division' };
     }
 
     // Generate all pairings using circle method
@@ -137,10 +142,29 @@ export const generateRoundRobinSchedule = async (
     // Batch write all matches
     await batchCreateLeagueMatches(league.id, allMatches);
 
+    // V07.32: Initialize week states - all closed except Week 1 open
+    const maxWeek = Math.max(...allMatches.map(m => m.weekNumber || 1));
+    await initializeWeekStates(league.id, maxWeek);
+
+    // V07.27: Auto-schedule if venue-based scheduling is enabled
+    const venueSettings = league.settings?.venueSettings;
+    let scheduleResult = null;
+    if (venueSettings?.sessionStartTime && venueSettings?.sessionEndTime) {
+      try {
+        scheduleResult = await scheduleLeagueMatches(league, divisionId);
+        if (!scheduleResult.success) {
+          console.warn('Auto-scheduling completed with warnings:', scheduleResult.errors);
+        }
+      } catch (scheduleError) {
+        console.error('Auto-scheduling failed (matches created but not scheduled):', scheduleError);
+      }
+    }
+
     return {
       success: true,
       matchesCreated: allMatches.length,
       matches: allMatches,
+      scheduleResult,  // Include scheduling result for caller to check
     };
   } catch (error: any) {
     console.error('Round Robin generation failed:', error);
@@ -229,13 +253,15 @@ export const generateSwissRound = async (
       return { success: false, matchesCreated: 0, error: 'Need at least 2 members' };
     }
 
-    // Filter by division
-    const divisionMembers = divisionId 
+    // Filter by division and only include active members
+    // V07.26: Exclude pending_partner members from match generation
+    const divisionMembers = (divisionId
       ? members.filter(m => m.divisionId === divisionId)
-      : members;
+      : members
+    ).filter(m => m.status === 'active');
 
     if (divisionMembers.length < 2) {
-      return { success: false, matchesCreated: 0, error: 'Need at least 2 members in division' };
+      return { success: false, matchesCreated: 0, error: 'Need at least 2 active members in division' };
     }
 
     // Get played pairings to avoid rematches
@@ -263,7 +289,7 @@ export const generateSwissRound = async (
     }
 
     // Create matches
-    const matches: LeagueMatch[] = pairings.map(pairing => 
+    const matches: LeagueMatch[] = pairings.map(pairing =>
       createMatchFromPairing(
         league.id,
         divisionId || null,
@@ -276,6 +302,12 @@ export const generateSwissRound = async (
 
     // Batch write
     await batchCreateLeagueMatches(league.id, matches);
+
+    // V07.32: Initialize week states when first round is generated
+    if (roundNumber === 1) {
+      const totalRounds = league.settings?.swissSettings?.rounds || 1;
+      await initializeWeekStates(league.id, totalRounds);
+    }
 
     return {
       success: true,
@@ -363,13 +395,15 @@ export const generateBoxLeagueSchedule = async (
       roundsPerBox: 1,
     };
 
-    // Filter by division
-    const divisionMembers = divisionId 
+    // Filter by division and only include active members
+    // V07.26: Exclude pending_partner members from match generation
+    const divisionMembers = (divisionId
       ? members.filter(m => m.divisionId === divisionId)
-      : members;
+      : members
+    ).filter(m => m.status === 'active');
 
     if (divisionMembers.length < 2) {
-      return { success: false, matchesCreated: 0, error: 'Need at least 2 members' };
+      return { success: false, matchesCreated: 0, error: 'Need at least 2 active members' };
     }
 
     // Sort by current rank
@@ -421,6 +455,10 @@ export const generateBoxLeagueSchedule = async (
 
     // Batch write
     await batchCreateLeagueMatches(league.id, allMatches);
+
+    // V07.32: Initialize week states - all closed except Week 1 open
+    const maxWeek = Math.max(...allMatches.map(m => m.weekNumber || 1));
+    await initializeWeekStates(league.id, maxWeek);
 
     return {
       success: true,

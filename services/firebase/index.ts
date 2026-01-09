@@ -289,6 +289,7 @@ export {
   lockLeagueWeek,
   unlockLeagueWeek,  // Alias for openLeagueWeek (backwards compat)
   isWeekUnlocked,
+  initializeWeekStates,  // V07.32: Initialize week states after match generation
 
   // League Matches
   createLeagueMatch,
