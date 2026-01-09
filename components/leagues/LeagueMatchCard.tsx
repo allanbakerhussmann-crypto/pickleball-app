@@ -39,6 +39,8 @@ interface LeagueMatchCardProps {
   leagueName?: string;
   onDuprSubmit?: (match: LeagueMatch, duprMatchId: string) => void;
   showDuprButton?: boolean;
+  // V07.29: Week lock - prevents players from scoring when week is locked
+  weekLocked?: boolean;
 }
 
 // ============================================
@@ -127,6 +129,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   leagueName,
   onDuprSubmit,
   showDuprButton = true,
+  weekLocked = false,
 }) => {
   // Calculate game scores
   const { gamesA, gamesB } = match.scores?.length > 0
@@ -145,17 +148,21 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   const requiredConfirmations = match.verification?.requiredConfirmations || 1;
 
   // Determine if user can confirm (has not already confirmed and is opponent)
+  // V07.29: Cannot confirm when week is locked (unless organizer)
   const hasAlreadyConfirmed = currentUserId ? confirmations.includes(currentUserId) : false;
   const isOpponent = isParticipant && match.submittedByUserId !== currentUserId;
   const canConfirm = isOpponent &&
     !hasAlreadyConfirmed &&
     verificationStatus === 'pending' &&
-    verificationSettings?.verificationMethod !== 'auto_confirm';
+    verificationSettings?.verificationMethod !== 'auto_confirm' &&
+    (!weekLocked || isOrganizer);
 
   // Determine if user can dispute
+  // V07.29: Cannot dispute when week is locked (unless organizer)
   const canDispute = isParticipant &&
     verificationStatus === 'pending' &&
-    verificationSettings?.allowDisputes !== false;
+    verificationSettings?.allowDisputes !== false &&
+    (!weekLocked || isOrganizer);
 
   // Determine if user needs to take action
   const isPendingConfirmation = match.status === 'pending_confirmation' || verificationStatus === 'pending';
@@ -164,8 +171,10 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
     isParticipant;
 
   // Can enter/edit score (participants and organizers)
+  // V07.29: Players cannot score when week is locked (organizers can still score)
   const canEnterScore = (isParticipant || isOrganizer) &&
-    (match.status === 'scheduled' || match.status === 'pending_confirmation' || match.status === 'disputed');
+    (match.status === 'scheduled' || match.status === 'pending_confirmation' || match.status === 'disputed') &&
+    (!weekLocked || isOrganizer);
 
   // Status badge (use verification status if available)
   const statusBadge = getStatusBadge(match.status);

@@ -281,6 +281,11 @@ export {
   joinOpenTeamDirect,
   cancelPendingRequestsForTeam,
 
+  // V07.29: Week lock/unlock for match scoring
+  unlockLeagueWeek,
+  lockLeagueWeek,
+  isWeekUnlocked,
+
   // League Matches
   createLeagueMatch,
   getLeagueMatches,

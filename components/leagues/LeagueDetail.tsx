@@ -37,6 +37,10 @@ import {
   respondToLeaguePartnerInviteAtomic,
   subscribeToMyOpenTeamRequests,
   respondToLeagueJoinRequest,
+  // V07.29: Week lock/unlock
+  unlockLeagueWeek,
+  lockLeagueWeek,
+  isWeekUnlocked,
 } from '../../services/firebase';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
 import { BoxPlayerDragDrop } from './boxLeague';
@@ -559,6 +563,24 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       alert('Failed to recalculate standings. Check console for details.');
     } finally {
       setIsRecalculating(false);
+    }
+  };
+
+  // V07.29: Toggle week lock/unlock for match scoring
+  const handleToggleWeekLock = async (weekNumber: number) => {
+    if (!league) return;
+
+    try {
+      const isCurrentlyUnlocked = isWeekUnlocked(league, weekNumber);
+      if (isCurrentlyUnlocked) {
+        await lockLeagueWeek(leagueId, weekNumber);
+      } else {
+        await unlockLeagueWeek(leagueId, weekNumber);
+      }
+      // League state will auto-update via subscription
+    } catch (err) {
+      console.error('[LeagueDetail] Failed to toggle week lock:', err);
+      alert('Failed to update week status');
     }
   };
 
@@ -1620,24 +1642,47 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               const weekMatches = matchesByWeek[week] || [];
               const completedCount = weekMatches.filter(m => m.status === 'completed').length;
               const isCurrentWeek = activeWeekTab === `week-${week}`;
+              const weekUnlocked = league ? isWeekUnlocked(league, week) : true;
 
               return (
-                <button
-                  key={`week-${week}`}
-                  onClick={() => setActiveWeekTab(`week-${week}`)}
-                  className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    isCurrentWeek
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  Week {week}
-                  {completedCount > 0 && (
-                    <span className={`ml-1 text-xs ${isCurrentWeek ? 'text-blue-200' : 'text-gray-500'}`}>
-                      ({completedCount}/{weekMatches.length})
-                    </span>
+                <div key={`week-${week}`} className="flex items-center gap-1">
+                  <button
+                    onClick={() => setActiveWeekTab(`week-${week}`)}
+                    className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      isCurrentWeek
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}
+                  >
+                    Week {week}
+                    {!weekUnlocked && (
+                      <span className="ml-1 text-gray-400">🔒</span>
+                    )}
+                    {completedCount > 0 && (
+                      <span className={`ml-1 text-xs ${isCurrentWeek ? 'text-blue-200' : 'text-gray-500'}`}>
+                        ({completedCount}/{weekMatches.length})
+                      </span>
+                    )}
+                  </button>
+
+                  {/* V07.29: Organizer lock/unlock toggle */}
+                  {isOrganizer && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleWeekLock(week);
+                      }}
+                      className={`p-1 rounded text-xs transition-colors ${
+                        weekUnlocked
+                          ? 'text-lime-400 hover:bg-lime-900/30'
+                          : 'text-gray-400 hover:bg-gray-700'
+                      }`}
+                      title={weekUnlocked ? 'Lock week (disable scoring)' : 'Unlock week (enable scoring)'}
+                    >
+                      {weekUnlocked ? '🔓' : '🔒'}
+                    </button>
                   )}
-                </button>
+                </div>
               );
             })}
 
@@ -1710,6 +1755,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               {(() => {
                 const currentWeekNumber = parseInt(activeWeekTab.replace('week-', ''), 10) || lastPlayedWeek;
                 const weekMatches = matchesByWeek[currentWeekNumber] || [];
+                const weekLocked = league ? !isWeekUnlocked(league, currentWeekNumber) : false;
 
                 if (weekMatches.length === 0) {
                   return (
@@ -1719,37 +1765,52 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   );
                 }
 
-                return weekMatches.map(match => (
-                  <LeagueMatchCard
-                    key={match.id}
-                    match={match}
-                    currentUserId={currentUser?.uid}
-                    isOrganizer={isOrganizer}
-                    showWeek={false}
-                    showRound={league?.format === 'swiss' || league?.format === 'box_league'}
-                    verificationSettings={league?.settings?.scoreVerification || undefined}
-                    onEnterScore={(m) => {
-                      setSelectedMatch(m);
-                      setShowScoreEntryModal(true);
-                    }}
-                    onViewDetails={(m) => {
-                      setSelectedMatch(m);
-                      setShowScoreEntryModal(true);
-                    }}
-                    onConfirmScore={(m) => {
-                      setSelectedMatch(m);
-                      setShowScoreEntryModal(true);
-                    }}
-                    onDisputeScore={(m) => {
-                      setSelectedMatch(m);
-                      setShowScoreEntryModal(true);
-                    }}
-                    leagueId={leagueId}
-                    duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
-                    leagueName={league?.name}
-                    showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
-                  />
-                ));
+                return (
+                  <>
+                    {/* V07.29: Show locked week banner for players */}
+                    {weekLocked && !isOrganizer && (
+                      <div className="bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-3 flex items-center gap-2">
+                        <span className="text-lg">🔒</span>
+                        <div>
+                          <p className="text-yellow-300 font-medium text-sm">Week {currentWeekNumber} is not yet open for scoring</p>
+                          <p className="text-yellow-200/70 text-xs">The organizer will unlock this week when it's time to play.</p>
+                        </div>
+                      </div>
+                    )}
+                    {weekMatches.map(match => (
+                      <LeagueMatchCard
+                        key={match.id}
+                        match={match}
+                        currentUserId={currentUser?.uid}
+                        isOrganizer={isOrganizer}
+                        showWeek={false}
+                        showRound={league?.format === 'swiss' || league?.format === 'box_league'}
+                        verificationSettings={league?.settings?.scoreVerification || undefined}
+                        weekLocked={weekLocked}
+                        onEnterScore={(m) => {
+                          setSelectedMatch(m);
+                          setShowScoreEntryModal(true);
+                        }}
+                        onViewDetails={(m) => {
+                          setSelectedMatch(m);
+                          setShowScoreEntryModal(true);
+                        }}
+                        onConfirmScore={(m) => {
+                          setSelectedMatch(m);
+                          setShowScoreEntryModal(true);
+                        }}
+                        onDisputeScore={(m) => {
+                          setSelectedMatch(m);
+                          setShowScoreEntryModal(true);
+                        }}
+                        leagueId={leagueId}
+                        duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
+                        leagueName={league?.name}
+                        showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
+                      />
+                    ))}
+                  </>
+                );
               })()}
             </div>
           )}

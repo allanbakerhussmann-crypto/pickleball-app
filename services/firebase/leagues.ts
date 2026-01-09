@@ -26,6 +26,8 @@ import {
   writeBatch,
   increment,
   runTransaction,
+  arrayUnion,
+  arrayRemove,
 } from '@firebase/firestore';
 import { db } from './config';
 import type {
@@ -2182,4 +2184,51 @@ export const getMyOpenTeamRequests = async (
 
   const snap = await getDocs(q);
   return snap.docs.map(d => d.data() as LeagueJoinRequest);
+};
+
+// ============================================
+// WEEK LOCK/UNLOCK (V07.29)
+// ============================================
+
+/**
+ * Unlock a week for scoring
+ * Players can only enter scores for matches in unlocked weeks
+ */
+export const unlockLeagueWeek = async (
+  leagueId: string,
+  weekNumber: number
+): Promise<void> => {
+  const leagueRef = doc(db, 'leagues', leagueId);
+  await updateDoc(leagueRef, {
+    unlockedWeeks: arrayUnion(weekNumber),
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Lock a week (remove from unlocked list)
+ * Prevents players from entering scores for matches in this week
+ */
+export const lockLeagueWeek = async (
+  leagueId: string,
+  weekNumber: number
+): Promise<void> => {
+  const leagueRef = doc(db, 'leagues', leagueId);
+  await updateDoc(leagueRef, {
+    unlockedWeeks: arrayRemove(weekNumber),
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Check if a week is unlocked for scoring
+ * Returns true if unlockedWeeks is not set (backwards compat) or if weekNumber is in the array
+ */
+export const isWeekUnlocked = (
+  league: League,
+  weekNumber: number
+): boolean => {
+  // If unlockedWeeks not set, default to all weeks open (backwards compat)
+  if (!league.unlockedWeeks || league.unlockedWeeks.length === 0) return true;
+  return league.unlockedWeeks.includes(weekNumber);
 };
