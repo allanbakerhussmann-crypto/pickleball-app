@@ -281,9 +281,13 @@ export {
   joinOpenTeamDirect,
   cancelPendingRequestsForTeam,
 
-  // V07.29: Week lock/unlock for match scoring
-  unlockLeagueWeek,
+  // V07.29: Week state management (closed/open/locked)
+  getWeekState,
+  setWeekState,
+  openLeagueWeek,
+  closeLeagueWeek,
   lockLeagueWeek,
+  unlockLeagueWeek,  // Alias for openLeagueWeek (backwards compat)
   isWeekUnlocked,
 
   // League Matches

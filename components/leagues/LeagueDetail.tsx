@@ -37,8 +37,10 @@ import {
   respondToLeaguePartnerInviteAtomic,
   subscribeToMyOpenTeamRequests,
   respondToLeagueJoinRequest,
-  // V07.29: Week lock/unlock
-  unlockLeagueWeek,
+  // V07.29: Week state management (closed/open/locked)
+  getWeekState,
+  openLeagueWeek,
+  closeLeagueWeek,
   lockLeagueWeek,
   isWeekUnlocked,
 } from '../../services/firebase';
@@ -566,19 +568,25 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   };
 
-  // V07.29: Toggle week lock/unlock for match scoring
+  // V07.29: Set week state (closed/open/locked)
   // V07.30: Auto-generate standings when locking a week
-  const handleToggleWeekLock = async (weekNumber: number) => {
+  type WeekState = 'closed' | 'open' | 'locked';
+
+  const handleSetWeekState = async (weekNumber: number, newState: WeekState) => {
     if (!league) return;
 
     try {
-      const isCurrentlyUnlocked = isWeekUnlocked(league, weekNumber);
-      if (isCurrentlyUnlocked) {
-        // Locking the week - disable scoring and auto-generate standings
+      if (newState === 'closed') {
+        await closeLeagueWeek(leagueId, weekNumber);
+        console.log(`[LeagueDetail] Week ${weekNumber} closed`);
+      } else if (newState === 'open') {
+        await openLeagueWeek(leagueId, weekNumber);
+        console.log(`[LeagueDetail] Week ${weekNumber} opened for scoring`);
+      } else if (newState === 'locked') {
+        // Locking the week - finalize and auto-generate standings
         await lockLeagueWeek(leagueId, weekNumber);
-
-        // Auto-regenerate all standings when locking a week
         console.log(`[LeagueDetail] Week ${weekNumber} locked - regenerating standings...`);
+
         setIsRecalculating(true);
         try {
           await rebuildAllStandings(leagueId, members, matches, league.settings);
@@ -598,16 +606,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           console.log(`[LeagueDetail] Standings regenerated after locking week ${weekNumber}`);
         } catch (standingsErr) {
           console.error('[LeagueDetail] Failed to regenerate standings:', standingsErr);
-          // Don't alert - week lock succeeded, standings can be manually regenerated
         } finally {
           setIsRecalculating(false);
         }
-      } else {
-        await unlockLeagueWeek(leagueId, weekNumber);
       }
       // League state will auto-update via subscription
     } catch (err) {
-      console.error('[LeagueDetail] Failed to toggle week lock:', err);
+      console.error('[LeagueDetail] Failed to set week state:', err);
       alert('Failed to update week status');
     }
   };
@@ -1664,13 +1669,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       {/* MATCHES TAB */}
       {activeTab === 'matches' && (
         <div className="space-y-4">
-          {/* V07.29: Organizer help text for week lock controls */}
+          {/* V07.29: Organizer help text for week state controls */}
           {isOrganizer && (
             <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-3 text-sm text-gray-400">
-              <span className="font-medium text-gray-300">Week Scoring Controls:</span>{' '}
-              Click <span className="text-lime-400">🔓 Open</span> to lock a week after matches are complete.
-              Click <span className="text-gray-300">🔒 Closed</span> to allow players to enter scores.
-              Standings auto-update when you lock a week.
+              <span className="font-medium text-gray-300">Week States:</span>{' '}
+              <span className="text-gray-500">Closed</span> = not yet started,{' '}
+              <span className="text-lime-400">Open</span> = players can enter scores,{' '}
+              <span className="text-blue-400">Locked</span> = finalized (auto-generates standings)
             </div>
           )}
           {/* Week Sub-Tabs */}
@@ -1679,7 +1684,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               const weekMatches = matchesByWeek[week] || [];
               const completedCount = weekMatches.filter(m => m.status === 'completed').length;
               const isCurrentWeek = activeWeekTab === `week-${week}`;
-              const weekUnlocked = league ? isWeekUnlocked(league, week) : true;
+              const weekState = league ? getWeekState(league, week) : 'open';
 
               return (
                 <div key={`week-${week}`} className="flex items-center gap-1">
@@ -1692,9 +1697,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                     }`}
                   >
                     Week {week}
-                    {!weekUnlocked && (
-                      <span className="ml-1 text-gray-400">🔒</span>
-                    )}
+                    {weekState === 'closed' && <span className="ml-1 text-gray-400">⏸</span>}
+                    {weekState === 'locked' && <span className="ml-1 text-blue-400">🔒</span>}
                     {completedCount > 0 && (
                       <span className={`ml-1 text-xs ${isCurrentWeek ? 'text-blue-200' : 'text-gray-500'}`}>
                         ({completedCount}/{weekMatches.length})
@@ -1702,23 +1706,49 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                     )}
                   </button>
 
-                  {/* V07.29: Organizer lock/unlock toggle */}
+                  {/* V07.29: Organizer week state controls */}
                   {isOrganizer && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleToggleWeekLock(week);
-                      }}
-                      disabled={isRecalculating}
-                      className={`px-2 py-1 rounded text-xs font-medium transition-colors border ${
-                        weekUnlocked
-                          ? 'bg-lime-900/30 text-lime-400 border-lime-600/50 hover:bg-lime-900/50'
-                          : 'bg-gray-800 text-gray-400 border-gray-600/50 hover:bg-gray-700'
-                      } ${isRecalculating ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      title={weekUnlocked ? 'Lock week (disable scoring)' : 'Unlock week (enable scoring)'}
-                    >
-                      {weekUnlocked ? '🔓 Open' : '🔒 Closed'}
-                    </button>
+                    <div className="flex gap-0.5">
+                      {/* Closed button */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleSetWeekState(week, 'closed'); }}
+                        disabled={isRecalculating || weekState === 'closed'}
+                        className={`px-2 py-1 rounded-l text-xs font-medium transition-colors border-y border-l ${
+                          weekState === 'closed'
+                            ? 'bg-gray-700 text-white border-gray-600'
+                            : 'bg-gray-800 text-gray-500 border-gray-700 hover:bg-gray-700 hover:text-gray-300'
+                        } ${isRecalculating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Close week (not yet started)"
+                      >
+                        Closed
+                      </button>
+                      {/* Open button */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleSetWeekState(week, 'open'); }}
+                        disabled={isRecalculating || weekState === 'open'}
+                        className={`px-2 py-1 text-xs font-medium transition-colors border ${
+                          weekState === 'open'
+                            ? 'bg-lime-900/50 text-lime-400 border-lime-600'
+                            : 'bg-gray-800 text-gray-500 border-gray-700 hover:bg-gray-700 hover:text-gray-300'
+                        } ${isRecalculating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Open week for scoring"
+                      >
+                        Open
+                      </button>
+                      {/* Locked button */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleSetWeekState(week, 'locked'); }}
+                        disabled={isRecalculating || weekState === 'locked'}
+                        className={`px-2 py-1 rounded-r text-xs font-medium transition-colors border-y border-r ${
+                          weekState === 'locked'
+                            ? 'bg-blue-900/50 text-blue-400 border-blue-600'
+                            : 'bg-gray-800 text-gray-500 border-gray-700 hover:bg-gray-700 hover:text-gray-300'
+                        } ${isRecalculating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Lock week (finalize & generate standings)"
+                      >
+                        Locked
+                      </button>
+                    </div>
                   )}
                 </div>
               );
@@ -1793,7 +1823,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               {(() => {
                 const currentWeekNumber = parseInt(activeWeekTab.replace('week-', ''), 10) || lastPlayedWeek;
                 const weekMatches = matchesByWeek[currentWeekNumber] || [];
-                const weekLocked = league ? !isWeekUnlocked(league, currentWeekNumber) : false;
+                const currentWeekState = league ? getWeekState(league, currentWeekNumber) : 'open';
+                const weekLocked = currentWeekState !== 'open'; // Scoring disabled if not 'open'
 
                 if (weekMatches.length === 0) {
                   return (
@@ -1805,13 +1836,22 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
                 return (
                   <>
-                    {/* V07.29: Show locked week banner for players */}
-                    {weekLocked && !isOrganizer && (
+                    {/* V07.29: Show week state banner for players */}
+                    {currentWeekState === 'closed' && !isOrganizer && (
                       <div className="bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-3 flex items-center gap-2">
-                        <span className="text-lg">🔒</span>
+                        <span className="text-lg">⏸</span>
                         <div>
                           <p className="text-yellow-300 font-medium text-sm">Week {currentWeekNumber} is not yet open for scoring</p>
-                          <p className="text-yellow-200/70 text-xs">The organizer will unlock this week when it's time to play.</p>
+                          <p className="text-yellow-200/70 text-xs">The organizer will open this week when it's time to play.</p>
+                        </div>
+                      </div>
+                    )}
+                    {currentWeekState === 'locked' && !isOrganizer && (
+                      <div className="bg-blue-900/30 border border-blue-600/50 rounded-lg p-3 flex items-center gap-2">
+                        <span className="text-lg">🔒</span>
+                        <div>
+                          <p className="text-blue-300 font-medium text-sm">Week {currentWeekNumber} has been finalized</p>
+                          <p className="text-blue-200/70 text-xs">Results are locked and standings have been updated.</p>
                         </div>
                       </div>
                     )}

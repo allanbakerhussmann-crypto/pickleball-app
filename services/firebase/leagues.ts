@@ -2187,49 +2187,80 @@ export const getMyOpenTeamRequests = async (
 };
 
 // ============================================
-// WEEK LOCK/UNLOCK (V07.29)
+// WEEK STATE MANAGEMENT (V07.29)
+// Three states: 'closed' (not started), 'open' (scoring enabled), 'locked' (finalized)
 // ============================================
 
+export type WeekState = 'closed' | 'open' | 'locked';
+
 /**
- * Unlock a week for scoring (remove from locked list)
- * Players can enter scores for matches in unlocked weeks
+ * Get the state of a week
+ * Returns 'open' if weekStates not set (backwards compat)
  */
-export const unlockLeagueWeek = async (
-  leagueId: string,
+export const getWeekState = (
+  league: League,
   weekNumber: number
-): Promise<void> => {
-  const leagueRef = doc(db, 'leagues', leagueId);
-  await updateDoc(leagueRef, {
-    lockedWeeks: arrayRemove(weekNumber),
-    updatedAt: Date.now(),
-  });
+): WeekState => {
+  if (!league.weekStates) return 'open'; // Backwards compat
+  return league.weekStates[weekNumber] || 'open';
 };
 
 /**
- * Lock a week (add to locked list)
- * Prevents players from entering scores for matches in this week
- */
-export const lockLeagueWeek = async (
-  leagueId: string,
-  weekNumber: number
-): Promise<void> => {
-  const leagueRef = doc(db, 'leagues', leagueId);
-  await updateDoc(leagueRef, {
-    lockedWeeks: arrayUnion(weekNumber),
-    updatedAt: Date.now(),
-  });
-};
-
-/**
- * Check if a week is unlocked for scoring
- * Returns true if lockedWeeks is not set (backwards compat) or if weekNumber is NOT in the locked array
+ * Check if a week allows scoring (state is 'open')
  */
 export const isWeekUnlocked = (
   league: League,
   weekNumber: number
 ): boolean => {
-  // If lockedWeeks not set, default to all weeks open (backwards compat)
-  if (!league.lockedWeeks || league.lockedWeeks.length === 0) return true;
-  // Week is unlocked if it's NOT in the locked list
-  return !league.lockedWeeks.includes(weekNumber);
+  return getWeekState(league, weekNumber) === 'open';
 };
+
+/**
+ * Set the state of a week
+ */
+export const setWeekState = async (
+  leagueId: string,
+  weekNumber: number,
+  state: WeekState
+): Promise<void> => {
+  const leagueRef = doc(db, 'leagues', leagueId);
+  await updateDoc(leagueRef, {
+    [`weekStates.${weekNumber}`]: state,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * Open a week for scoring (state: 'closed' -> 'open')
+ */
+export const openLeagueWeek = async (
+  leagueId: string,
+  weekNumber: number
+): Promise<void> => {
+  await setWeekState(leagueId, weekNumber, 'open');
+};
+
+/**
+ * Close a week (state: 'open' -> 'closed')
+ * Used when week hasn't started yet
+ */
+export const closeLeagueWeek = async (
+  leagueId: string,
+  weekNumber: number
+): Promise<void> => {
+  await setWeekState(leagueId, weekNumber, 'closed');
+};
+
+/**
+ * Lock a week (state: 'open' -> 'locked')
+ * Used after all matches are finalized, triggers standings generation
+ */
+export const lockLeagueWeek = async (
+  leagueId: string,
+  weekNumber: number
+): Promise<void> => {
+  await setWeekState(leagueId, weekNumber, 'locked');
+};
+
+// Keep unlockLeagueWeek for backwards compat (same as openLeagueWeek)
+export const unlockLeagueWeek = openLeagueWeek;

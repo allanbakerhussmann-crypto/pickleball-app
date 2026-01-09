@@ -1702,9 +1702,10 @@ export interface League {
   duprEventId?: string;                       // Created when first match submitted
   duprEventName?: string;                     // Event name for DUPR
 
-  // V07.29: Week-based match lock
-  lockedWeeks?: number[];                     // Weeks closed for scoring (e.g., [1] means week 1 is locked)
-                                              // If undefined/empty, all weeks are open (backwards compat)
+  // V07.29: Week-based match states
+  // Three states: 'closed' (not yet open), 'open' (players can score), 'locked' (finalized)
+  weekStates?: Record<number, 'closed' | 'open' | 'locked'>;
+  // If undefined, all weeks default to 'open' (backwards compat)
 
   // Timestamps
   createdAt: number;
