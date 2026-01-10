@@ -60,7 +60,8 @@ interface SubstituteAssignmentModalProps {
   week: BoxLeagueWeek;
   leagueId: string;
   absence: WeekAbsence;
-  eligibleSubstitutes: { id: string; name: string }[];
+  eligibleSubstitutes: { id: string; name: string; duprId?: string | null }[];
+  isDuprLeague: boolean;
   onSuccess: () => void;
 }
 
@@ -221,6 +222,7 @@ const SubstituteAssignmentModal: React.FC<SubstituteAssignmentModalProps> = ({
   leagueId,
   absence,
   eligibleSubstitutes,
+  isDuprLeague,
   onSuccess,
 }) => {
   const [selectedSubId, setSelectedSubId] = useState<string>('');
@@ -258,7 +260,11 @@ const SubstituteAssignmentModal: React.FC<SubstituteAssignmentModalProps> = ({
         <div className="bg-blue-900/30 rounded-lg p-3 mb-4 border border-blue-600/30">
           <p className="text-xs text-blue-300">
             <span className="font-medium">Note:</span> Ghost players fill the spot so games can happen.
-            Results do NOT count for anyone's standings or DUPR rating.
+            {isDuprLeague ? (
+              <> Matches will be submitted to DUPR using the substitute's DUPR ID.</>
+            ) : (
+              <> Results do NOT count for anyone's standings.</>
+            )}
           </p>
         </div>
 
@@ -276,23 +282,34 @@ const SubstituteAssignmentModal: React.FC<SubstituteAssignmentModalProps> = ({
               {eligibleSubstitutes.map((sub) => (
                 <label
                   key={sub.id}
-                  className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${
                     selectedSubId === sub.id
                       ? 'bg-lime-500/10 border-lime-500/50'
                       : 'bg-gray-900/50 border-gray-700/50 hover:border-gray-600'
                   }`}
                 >
-                  <input
-                    type="radio"
-                    name="substitute"
-                    value={sub.id}
-                    checked={selectedSubId === sub.id}
-                    onChange={() => setSelectedSubId(sub.id)}
-                    className="accent-lime-500"
-                  />
-                  <span className={selectedSubId === sub.id ? 'text-lime-400' : 'text-white'}>
-                    {sub.name}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="substitute"
+                      value={sub.id}
+                      checked={selectedSubId === sub.id}
+                      onChange={() => setSelectedSubId(sub.id)}
+                      className="accent-lime-500"
+                    />
+                    <span className={selectedSubId === sub.id ? 'text-lime-400' : 'text-white'}>
+                      {sub.name}
+                    </span>
+                  </div>
+                  {isDuprLeague && (
+                    <span className={`text-xs px-2 py-0.5 rounded ${
+                      sub.duprId
+                        ? 'bg-green-500/20 text-green-400'
+                        : 'bg-red-500/20 text-red-400'
+                    }`}>
+                      {sub.duprId ? 'DUPR ✓' : 'No DUPR'}
+                    </span>
+                  )}
                 </label>
               ))}
             </div>
@@ -581,7 +598,7 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
   const [loading, setLoading] = useState(true);
   const [declaringFor, setDeclaringFor] = useState<BoxLeagueWeek | null>(null);
   const [assigningSubFor, setAssigningSubFor] = useState<{ week: BoxLeagueWeek; absence: WeekAbsence } | null>(null);
-  const [eligibleSubs, setEligibleSubs] = useState<{ id: string; name: string }[]>([]);
+  const [eligibleSubs, setEligibleSubs] = useState<{ id: string; name: string; duprId?: string | null }[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Get absence policy from league settings
@@ -639,21 +656,33 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
   };
 
   const handleAssignSub = async (week: BoxLeagueWeek, absence: WeekAbsence) => {
-    // Fetch eligible substitutes
+    // Check if DUPR league - require DUPR linked for substitutes
+    const isDuprLeague = league.settings?.duprSettings?.mode === 'required';
+
+    // Fetch eligible substitutes with DUPR requirement if needed
     const settings = league.settings?.rotatingDoublesBox?.settings?.substituteEligibility || {
       subMustBeMember: false,
       subAllowedFromBoxes: 'same_or_lower' as const,
-      subMustHaveDuprLinked: false,
-      subMustHaveDuprConsent: false,
+      subMustHaveDuprLinked: isDuprLeague, // Require DUPR in DUPR leagues
+      subMustHaveDuprConsent: isDuprLeague,
     };
 
     try {
       const eligibleIds = await getEligibleSubstitutes(leagueId, absence.playerId, week, settings);
-      const memberMap = new Map(members.map(m => [m.userId, m]));
-      const subs = eligibleIds.map(id => ({
-        id,
-        name: memberMap.get(id)?.displayName || 'Unknown',
-      }));
+
+      // Create lookup maps for both userId and id fields
+      const memberByUserId = new Map(members.map(m => [m.userId, m]));
+      const memberById = new Map(members.map(m => [m.id, m]));
+
+      const subs = eligibleIds.map(id => {
+        // Try both userId and id fields for lookup
+        const member = memberByUserId.get(id) || memberById.get(id);
+        return {
+          id,
+          name: member?.displayName || 'Unknown',
+          duprId: member?.duprId,
+        };
+      });
       setEligibleSubs(subs);
       setAssigningSubFor({ week, absence });
     } catch (err) {
@@ -796,6 +825,7 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
           leagueId={leagueId}
           absence={assigningSubFor.absence}
           eligibleSubstitutes={eligibleSubs}
+          isDuprLeague={league.settings?.duprSettings?.mode === 'required'}
           onSuccess={() => setAssigningSubFor(null)}
         />
       )}
