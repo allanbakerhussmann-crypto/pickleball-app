@@ -88,7 +88,21 @@ const SortableMemberCard: React.FC<{
 
         {/* Player Info */}
         <div>
-          <div className="font-medium text-white">{member.displayName}</div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-white">
+              {member.displayName}
+              {/* V07.32: Show partner name for doubles teams */}
+              {member.partnerDisplayName && (
+                <span className="text-gray-400"> / {member.partnerDisplayName}</span>
+              )}
+            </span>
+            {/* V07.26: Pending Partner Badge */}
+            {member.status === 'pending_partner' && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                Pending Partner
+              </span>
+            )}
+          </div>
           {showStats && stats && (
             <div className="text-xs text-gray-500">
               {stats.wins}W - {stats.losses}L
@@ -134,7 +148,21 @@ const MemberDragOverlay: React.FC<{
           {rank}
         </div>
         <div>
-          <div className="font-medium text-white">{member.displayName}</div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-white">
+              {member.displayName}
+              {/* V07.32: Show partner name for doubles teams */}
+              {member.partnerDisplayName && (
+                <span className="text-gray-400"> / {member.partnerDisplayName}</span>
+              )}
+            </span>
+            {/* V07.26: Pending Partner Badge */}
+            {member.status === 'pending_partner' && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                Pending Partner
+              </span>
+            )}
+          </div>
           {showStats && stats && (
             <div className="text-xs text-gray-500">
               {stats.wins}W - {stats.losses}L
