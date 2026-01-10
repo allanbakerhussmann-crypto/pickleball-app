@@ -1,0 +1,596 @@
+/**
+ * Box League Match Factory
+ *
+ * Creates universal Match objects for box league matches.
+ * Matches are stored in leagues/{leagueId}/matches/{matchId}
+ * (same as singles weekly league for DUPR compatibility).
+ *
+ * FILE LOCATION: services/rotatingDoublesBox/boxLeagueMatchFactory.ts
+ * VERSION: V07.25
+ */
+
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  writeBatch,
+} from '@firebase/firestore';
+import { db } from '../firebase/config';
+import type { Match, MatchParticipant } from '../../types/game/match';
+import type { GameSettings } from '../../types/game/gameSettings';
+import type {
+  BoxLeagueWeek,
+  BoxAssignment,
+  GeneratedPairing,
+} from '../../types/rotatingDoublesBox';
+import { generateBoxPairings, PlayerInfo } from '../../types/rotatingDoublesBox';
+
+// ============================================
+// FIRESTORE PATHS
+// ============================================
+
+/**
+ * Get matches collection for a league
+ * CRITICAL: Matches are stored NESTED under leagues (not top-level)
+ */
+function getMatchesCollection(leagueId: string) {
+  return collection(db, 'leagues', leagueId, 'matches');
+}
+
+/**
+ * Get match document reference
+ */
+function getMatchDoc(leagueId: string, matchId: string) {
+  return doc(db, 'leagues', leagueId, 'matches', matchId);
+}
+
+// ============================================
+// IDEMPOTENCY KEY
+// ============================================
+
+/**
+ * Generate an idempotency key for a match
+ *
+ * Used to prevent duplicate match creation on retries
+ */
+function generateIdempotencyKey(
+  leagueId: string,
+  weekNumber: number,
+  boxNumber: number,
+  roundNumber: number
+): string {
+  return `${leagueId}_week${weekNumber}_box${boxNumber}_round${roundNumber}`;
+}
+
+// ============================================
+// MATCH CREATION
+// ============================================
+
+/**
+ * Player lookup for match creation
+ */
+export interface PlayerLookup {
+  [playerId: string]: {
+    name: string;
+    duprId?: string;
+    duprRating?: number;
+  };
+}
+
+/**
+ * Create a single box league match
+ *
+ * @returns Match without id, createdAt, updatedAt (caller provides these)
+ */
+export function createBoxLeagueMatch(params: {
+  leagueId: string;
+  weekNumber: number;
+  boxNumber: number;
+  roundNumber: number;
+  pairing: GeneratedPairing;
+  playerLookup: PlayerLookup;
+  gameSettings: GameSettings;
+  scheduledDate?: number;
+  court?: string;
+}): Omit<Match, 'id' | 'createdAt' | 'updatedAt'> {
+  const {
+    leagueId,
+    weekNumber,
+    boxNumber,
+    roundNumber,
+    pairing,
+    playerLookup,
+    gameSettings,
+    scheduledDate,
+    court,
+  } = params;
+
+  // Build sideA participant
+  const sideAPlayer1 = playerLookup[pairing.teamAPlayerIds[0]];
+  const sideAPlayer2 = playerLookup[pairing.teamAPlayerIds[1]];
+
+  const sideA: MatchParticipant = {
+    id: `${pairing.teamAPlayerIds[0]}_${pairing.teamAPlayerIds[1]}`, // Composite ID
+    name: `${sideAPlayer1?.name || 'Unknown'} & ${sideAPlayer2?.name || 'Unknown'}`,
+    playerIds: pairing.teamAPlayerIds,
+    playerNames: [sideAPlayer1?.name || 'Unknown', sideAPlayer2?.name || 'Unknown'],
+    duprIds: [sideAPlayer1?.duprId, sideAPlayer2?.duprId].filter(Boolean) as string[],
+  };
+
+  // Build sideB participant
+  const sideBPlayer1 = playerLookup[pairing.teamBPlayerIds[0]];
+  const sideBPlayer2 = playerLookup[pairing.teamBPlayerIds[1]];
+
+  const sideB: MatchParticipant = {
+    id: `${pairing.teamBPlayerIds[0]}_${pairing.teamBPlayerIds[1]}`, // Composite ID
+    name: `${sideBPlayer1?.name || 'Unknown'} & ${sideBPlayer2?.name || 'Unknown'}`,
+    playerIds: pairing.teamBPlayerIds,
+    playerNames: [sideBPlayer1?.name || 'Unknown', sideBPlayer2?.name || 'Unknown'],
+    duprIds: [sideBPlayer1?.duprId, sideBPlayer2?.duprId].filter(Boolean) as string[],
+  };
+
+  // Build match object
+  const match: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> = {
+    eventType: 'league',
+    eventId: leagueId,
+    format: 'rotating_doubles_box',
+    gameSettings,
+    sideA,
+    sideB,
+    status: 'scheduled',
+    scores: [],
+    weekNumber,
+    boxNumber,
+    roundNumber,
+    matchNumberInBox: roundNumber, // Round = match number for box league
+  };
+
+  // Optional fields
+  if (scheduledDate) {
+    match.scheduledDate = scheduledDate;
+  }
+  if (court) {
+    match.court = court;
+  }
+
+  // Track bye player for 5/6 player boxes
+  if (pairing.byePlayerId) {
+    (match as any).byePlayerId = pairing.byePlayerId;
+    (match as any).byePlayerName = pairing.byePlayerName;
+  }
+
+  return match;
+}
+
+/**
+ * Generate all matches for a week
+ *
+ * @returns Array of created match IDs
+ */
+export async function generateMatchesForWeek(
+  leagueId: string,
+  week: BoxLeagueWeek
+): Promise<string[]> {
+  // Get player lookup data from league members
+  const playerLookup = await getPlayerLookup(leagueId, week.boxAssignments);
+
+  const batch = writeBatch(db);
+  const matchIds: string[] = [];
+
+  // Find game settings from rules snapshot
+  const gameSettings: GameSettings = {
+    playType: 'doubles',
+    pointsPerGame: week.rulesSnapshot.pointsTo,
+    winBy: week.rulesSnapshot.winBy,
+    bestOf: week.rulesSnapshot.bestOf,
+  };
+
+  // Get court assignments map
+  const courtMap = new Map<number, string>();
+  for (const ca of week.courtAssignments) {
+    courtMap.set(ca.boxNumber, ca.courtLabel);
+  }
+
+  // Generate matches for each box
+  for (const boxAssignment of week.boxAssignments) {
+    const boxSize = boxAssignment.playerIds.length as 4 | 5 | 6;
+
+    // Build player info array for rotation
+    const players: PlayerInfo[] = boxAssignment.playerIds.map((id) => ({
+      id,
+      name: playerLookup[id]?.name || 'Unknown',
+    }));
+
+    // Generate pairings using rotation pattern
+    const pairings = generateBoxPairings(players, boxSize);
+
+    // Create match for each pairing
+    for (const pairing of pairings) {
+      // Check for existing match with idempotency key
+      const idempotencyKey = generateIdempotencyKey(
+        leagueId,
+        week.weekNumber,
+        boxAssignment.boxNumber,
+        pairing.roundNumber
+      );
+
+      const existingMatch = await getMatchByIdempotencyKey(leagueId, idempotencyKey);
+      if (existingMatch) {
+        matchIds.push(existingMatch.id);
+        continue;
+      }
+
+      // Create match document
+      const matchRef = doc(getMatchesCollection(leagueId));
+      const now = Date.now();
+
+      const matchData = createBoxLeagueMatch({
+        leagueId,
+        weekNumber: week.weekNumber,
+        boxNumber: boxAssignment.boxNumber,
+        roundNumber: pairing.roundNumber,
+        pairing,
+        playerLookup,
+        gameSettings,
+        scheduledDate: week.scheduledDate,
+        court: courtMap.get(boxAssignment.boxNumber),
+      });
+
+      const match: Match = {
+        ...matchData,
+        id: matchRef.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      // Add idempotency key for deduplication
+      (match as any).idempotencyKey = idempotencyKey;
+
+      batch.set(matchRef, match);
+      matchIds.push(matchRef.id);
+    }
+  }
+
+  await batch.commit();
+
+  return matchIds;
+}
+
+// ============================================
+// PLAYER LOOKUP
+// ============================================
+
+/**
+ * Get player lookup data from league members
+ */
+async function getPlayerLookup(
+  leagueId: string,
+  boxAssignments: BoxAssignment[]
+): Promise<PlayerLookup> {
+  const allPlayerIds = boxAssignments.flatMap((ba) => ba.playerIds);
+  const uniquePlayerIds = [...new Set(allPlayerIds)];
+
+  const lookup: PlayerLookup = {};
+
+  // Fetch member data from league members collection
+  const membersRef = collection(db, 'leagues', leagueId, 'members');
+
+  for (const playerId of uniquePlayerIds) {
+    const memberDoc = await getDoc(doc(membersRef, playerId));
+    if (memberDoc.exists()) {
+      const data = memberDoc.data();
+      lookup[playerId] = {
+        name: data.displayName || 'Unknown',
+        duprId: data.duprId,
+        duprRating: data.duprDoublesRating,
+      };
+    } else {
+      lookup[playerId] = { name: 'Unknown' };
+    }
+  }
+
+  return lookup;
+}
+
+/**
+ * Get a match by its idempotency key
+ */
+async function getMatchByIdempotencyKey(
+  leagueId: string,
+  idempotencyKey: string
+): Promise<Match | null> {
+  const q = query(
+    getMatchesCollection(leagueId),
+    where('idempotencyKey', '==', idempotencyKey)
+  );
+
+  const snapshot = await getDocs(q);
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  return snapshot.docs[0].data() as Match;
+}
+
+// ============================================
+// MATCH QUERIES
+// ============================================
+
+/**
+ * Get all matches for a week
+ */
+export async function getMatchesForWeek(
+  leagueId: string,
+  weekNumber: number
+): Promise<Match[]> {
+  const q = query(
+    getMatchesCollection(leagueId),
+    where('weekNumber', '==', weekNumber)
+  );
+
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d) => d.data() as Match);
+}
+
+/**
+ * Get matches for a specific box in a week
+ */
+export async function getMatchesForBox(
+  leagueId: string,
+  weekNumber: number,
+  boxNumber: number
+): Promise<Match[]> {
+  const q = query(
+    getMatchesCollection(leagueId),
+    where('weekNumber', '==', weekNumber),
+    where('boxNumber', '==', boxNumber)
+  );
+
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d) => d.data() as Match);
+}
+
+/**
+ * Get match counts by status for a set of match IDs
+ */
+export async function getMatchCounts(
+  leagueId: string,
+  matchIds: string[]
+): Promise<{
+  total: number;
+  completed: number;
+  pending: number;
+  disputed: number;
+  inProgress: number;
+  scheduled: number;
+}> {
+  if (matchIds.length === 0) {
+    return {
+      total: 0,
+      completed: 0,
+      pending: 0,
+      disputed: 0,
+      inProgress: 0,
+      scheduled: 0,
+    };
+  }
+
+  // Fetch all matches
+  const matches: Match[] = [];
+  for (const matchId of matchIds) {
+    const matchDoc = await getDoc(getMatchDoc(leagueId, matchId));
+    if (matchDoc.exists()) {
+      matches.push(matchDoc.data() as Match);
+    }
+  }
+
+  return {
+    total: matches.length,
+    completed: matches.filter((m) => m.status === 'completed').length,
+    pending: matches.filter((m) => m.status === 'pending_confirmation').length,
+    disputed: matches.filter((m) => m.status === 'disputed').length,
+    inProgress: matches.filter((m) => m.status === 'in_progress').length,
+    scheduled: matches.filter((m) => m.status === 'scheduled').length,
+  };
+}
+
+/**
+ * Get matches ready for DUPR submission
+ *
+ * Uses existing pattern from singles weekly league
+ */
+export async function getMatchesForDuprSubmission(
+  leagueId: string,
+  weekNumber?: number
+): Promise<Match[]> {
+  let q;
+
+  if (weekNumber) {
+    q = query(
+      getMatchesCollection(leagueId),
+      where('weekNumber', '==', weekNumber),
+      where('status', '==', 'completed'),
+      where('scoreState', '==', 'official'),
+      where('dupr.submitted', '==', false)
+    );
+  } else {
+    q = query(
+      getMatchesCollection(leagueId),
+      where('status', '==', 'completed'),
+      where('scoreState', '==', 'official'),
+      where('dupr.submitted', '==', false)
+    );
+  }
+
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d) => d.data() as Match);
+}
+
+// ============================================
+// INDIVIDUAL PLAYER RESULTS
+// ============================================
+
+/**
+ * Calculate individual player results for a match
+ *
+ * In rotating doubles, each player gets credited individually
+ * for their wins/losses in the match.
+ */
+export function calculatePlayerResults(match: Match): Match['playerResults'] {
+  if (match.status !== 'completed' || !match.winnerId) {
+    return undefined;
+  }
+
+  const playerResults: Match['playerResults'] = [];
+
+  // Get total points for each side
+  let totalPointsA = 0;
+  let totalPointsB = 0;
+  for (const game of match.scores) {
+    totalPointsA += game.scoreA;
+    totalPointsB += game.scoreB;
+  }
+
+  // Determine winning side
+  const sideAWon = match.winnerId === match.sideA.id;
+
+  // Side A players
+  for (let i = 0; i < match.sideA.playerIds.length; i++) {
+    playerResults.push({
+      playerId: match.sideA.playerIds[i],
+      playerName: match.sideA.playerNames?.[i] || 'Unknown',
+      won: sideAWon,
+      pointsFor: totalPointsA,
+      pointsAgainst: totalPointsB,
+    });
+  }
+
+  // Side B players
+  for (let i = 0; i < match.sideB.playerIds.length; i++) {
+    playerResults.push({
+      playerId: match.sideB.playerIds[i],
+      playerName: match.sideB.playerNames?.[i] || 'Unknown',
+      won: !sideAWon,
+      pointsFor: totalPointsB,
+      pointsAgainst: totalPointsA,
+    });
+  }
+
+  return playerResults;
+}
+
+// ============================================
+// VALIDATION
+// ============================================
+
+/**
+ * Validate match for DUPR submission
+ *
+ * Checks:
+ * - All 4 players have DUPR IDs
+ * - At least one team scored 6+ points
+ * - No tied games
+ */
+export function validateMatchForDupr(match: Match): {
+  valid: boolean;
+  errors: string[];
+} {
+  const errors: string[] = [];
+
+  // Check DUPR IDs
+  const allDuprIds = [
+    ...(match.sideA.duprIds || []),
+    ...(match.sideB.duprIds || []),
+  ];
+
+  if (allDuprIds.length !== 4) {
+    errors.push('Not all players have DUPR IDs linked');
+  }
+
+  // Check minimum score
+  let maxPointsAny = 0;
+  for (const game of match.scores) {
+    maxPointsAny = Math.max(maxPointsAny, game.scoreA, game.scoreB);
+  }
+
+  if (maxPointsAny < 6) {
+    errors.push('At least one team must score 6+ points');
+  }
+
+  // Check for tied games
+  for (const game of match.scores) {
+    if (game.scoreA === game.scoreB) {
+      errors.push(`Game ${game.gameNumber} is tied (${game.scoreA}-${game.scoreB})`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+// ============================================
+// SCORE CONFIRMATION RULES
+// ============================================
+
+/**
+ * Check if a user can confirm a score
+ *
+ * For rotating doubles:
+ * - Confirmation must come from the OPPOSING side
+ * - Partner cannot confirm (only opponents can)
+ */
+export function canConfirmScore(match: Match, userId: string): boolean {
+  const enteredBy = match.submittedByUserId;
+
+  if (!enteredBy) {
+    return false;
+  }
+
+  // Cannot confirm your own score submission
+  if (userId === enteredBy) {
+    return false;
+  }
+
+  // Find which side entered the score
+  const enteredBySideA = match.sideA.playerIds.includes(enteredBy);
+  const enteredBySideB = match.sideB.playerIds.includes(enteredBy);
+
+  // Confirmer must be on the OTHER side
+  if (enteredBySideA) {
+    return match.sideB.playerIds.includes(userId);
+  } else if (enteredBySideB) {
+    return match.sideA.playerIds.includes(userId);
+  }
+
+  return false;
+}
+
+/**
+ * Get list of users who can confirm a score
+ */
+export function getConfirmEligibleUsers(match: Match): string[] {
+  const enteredBy = match.submittedByUserId;
+
+  if (!enteredBy) {
+    return [];
+  }
+
+  // Find which side entered the score
+  const enteredBySideA = match.sideA.playerIds.includes(enteredBy);
+  const enteredBySideB = match.sideB.playerIds.includes(enteredBy);
+
+  // Return the other side's players
+  if (enteredBySideA) {
+    return [...match.sideB.playerIds];
+  } else if (enteredBySideB) {
+    return [...match.sideA.playerIds];
+  }
+
+  return [];
+}

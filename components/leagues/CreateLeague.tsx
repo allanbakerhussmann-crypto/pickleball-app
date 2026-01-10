@@ -32,7 +32,7 @@ import { formatTime } from '../../utils/timeFormat';
 import { StandingsPointsCard, RoundsSlider, type StandingsPointsConfig } from '../shared/PointsSlider';
 import { VenueCapacityCalculator, type CapacityResult } from './VenueCapacityCalculator';
 import { BoxLeagueVenueConfig } from './BoxLeagueVenueConfig';
-import type { BoxLeagueVenueSettings } from '../../types/rotatingDoublesBox';
+import type { BoxLeagueVenueSettings, AbsencePolicyType } from '../../types/rotatingDoublesBox';
 import { DEFAULT_BOX_LEAGUE_VENUE } from '../../types/rotatingDoublesBox';
 import { DEFAULT_WAIVER_TEXT } from '../../constants';
 
@@ -262,6 +262,9 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   // V07.25: Box League Venue Settings (multi-session support)
   const [boxVenue, setBoxVenue] = useState<BoxLeagueVenueSettings>(DEFAULT_BOX_LEAGUE_VENUE);
   const [boxSize, setBoxSize] = useState<4 | 5 | 6>(5);
+  // V07.27: Absence Policy (what happens to absent player's standings)
+  const [absencePolicy, setAbsencePolicy] = useState<AbsencePolicyType>('freeze');
+  const [allowSubstitutes, setAllowSubstitutes] = useState(true);
   const [tiebreakers, setTiebreakers] = useState<LeagueTiebreaker[]>(['head_to_head', 'game_diff', 'games_won']);
   
   // DUPR Settings (NEW V05.36)
@@ -491,7 +494,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
             initialSeeding: 'dupr',
             tiebreakers: ['wins', 'head_to_head', 'points_diff', 'points_for'],
             scoreVerification: verificationSettings,
-            absencePolicy: { policy: 'substitute', subApproval: 'organizer_only', maxSubsPerSeason: 2, autoRelegateOnAbsence: false },
+            absencePolicy: { policy: absencePolicy, allowSubstitutes: allowSubstitutes, subApproval: 'organizer_only', maxSubsPerSeason: 2 },
             newPlayerJoinPolicy: { allowMidSeason: true, entryBox: 'bottom', entryPosition: 'bottom' },
             substituteEligibility: { subMustBeMember: false, subAllowedFromBoxes: 'same_or_lower', subMustHaveDuprLinked: duprSettings.mode === 'required', subMustHaveDuprConsent: duprSettings.mode !== 'none' },
           },
@@ -981,6 +984,80 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                   onChange={setBoxVenue}
                   boxSize={boxSize}
                 />
+
+                {/* V07.27: Absence Policy */}
+                <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50">
+                  <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
+                    <span className="text-lime-400">📋</span> Absence Policy
+                  </h3>
+                  <p className="text-sm text-gray-400 mb-4">
+                    What happens to a player's standings when they're absent for a week?
+                  </p>
+
+                  {/* Policy Options */}
+                  <div className="space-y-2 mb-4">
+                    {([
+                      { value: 'freeze' as const, label: 'Freeze Position', desc: 'Player stays in their current box position (no movement)' },
+                      { value: 'ghost_score' as const, label: 'Ghost Score', desc: 'Player gets 0 wins, 0 points (likely relegates)' },
+                      { value: 'average_points' as const, label: 'Average Points', desc: 'Player gets their season average stats (normal movement rules)' },
+                      { value: 'auto_relegate' as const, label: 'Auto-Relegate', desc: 'Player automatically drops one box as penalty' },
+                    ]).map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                          absencePolicy === option.value
+                            ? 'bg-lime-500/10 border-lime-500/50'
+                            : 'bg-gray-900/50 border-gray-700/50 hover:border-gray-600'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="absencePolicy"
+                          value={option.value}
+                          checked={absencePolicy === option.value}
+                          onChange={() => setAbsencePolicy(option.value)}
+                          className="mt-1 accent-lime-500"
+                        />
+                        <div>
+                          <div className={`font-medium ${absencePolicy === option.value ? 'text-lime-400' : 'text-white'}`}>
+                            {option.label}
+                          </div>
+                          <div className="text-sm text-gray-400">{option.desc}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+
+                  {/* Allow Substitutes Toggle */}
+                  <div className="border-t border-gray-700/50 pt-4 mt-4">
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div>
+                        <div className="font-medium text-white">Allow Ghost Players (Substitutes)</div>
+                        <div className="text-sm text-gray-400">
+                          Fill absent spots with temporary players so games can happen
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAllowSubstitutes(!allowSubstitutes)}
+                        className={`w-12 h-6 rounded-full transition-colors ${
+                          allowSubstitutes ? 'bg-lime-500' : 'bg-gray-600'
+                        }`}
+                      >
+                        <div
+                          className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                            allowSubstitutes ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </label>
+                    {allowSubstitutes && (
+                      <p className="text-xs text-gray-500 mt-2">
+                        Ghost player matches are NOT submitted to DUPR. The substitute is just filling a spot - results don't count for anyone's rating.
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
