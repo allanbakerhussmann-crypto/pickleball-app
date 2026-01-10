@@ -43,9 +43,12 @@ import {
   closeLeagueWeek,
   lockLeagueWeek,
   isWeekUnlocked,
+  // V07.26: Fetch user profiles for DUPR access token check
+  getUsersByIds,
 } from '../../services/firebase';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
-import { BoxPlayerDragDrop } from './boxLeague';
+import { BoxPlayerDragDrop, RotatingBoxPlayerManager } from './boxLeague';
+import { BoxLeagueStandings } from './boxLeague/BoxLeagueStandings';
 import { PlayerSeedingList } from './PlayerSeedingList';
 import { LeagueMatchCard } from './LeagueMatchCard';
 import { LeagueScoreEntryModal } from './LeagueScoreEntryModal';
@@ -57,6 +60,7 @@ import type {
   LeagueStandingsDoc,
   LeaguePartnerInvite,
   LeagueJoinRequest,
+  UserProfile,
 } from '../../types';
 import type { BoxLeaguePlayer } from '../../types/boxLeague';
 import { LeagueStandings } from './LeagueStandings';
@@ -67,6 +71,7 @@ import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr'
 import { doc, updateDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import { StandingsPointsCard, RoundsSlider, type StandingsPointsConfig } from '../shared/PointsSlider';
+import { DEFAULT_WAIVER_TEXT } from '../../constants';
 
 // ============================================
 // TYPES
@@ -77,7 +82,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'players' | 'schedule' | 'dupr' | 'info' | 'comms';
+type TabType = 'standings' | 'matches' | 'players' | 'courts' | 'schedule' | 'dupr' | 'info' | 'comms';
 
 // ============================================
 // COMPONENT
@@ -94,6 +99,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [matches, setMatches] = useState<LeagueMatch[]>([]);
   const [myMembership, setMyMembership] = useState<LeagueMember | null>(null);
   const [boxPlayers, setBoxPlayers] = useState<BoxLeaguePlayer[]>([]);
+  // V07.26: User profiles for DUPR access token checking
+  const [userProfiles, setUserProfiles] = useState<Map<string, UserProfile>>(new Map());
 
   // V07.14: Standings snapshots from Firestore
   const [overallStandings, setOverallStandings] = useState<LeagueStandingsDoc | null>(null);
@@ -119,6 +126,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [duprCheckboxChecked, setDuprCheckboxChecked] = useState(false); // V07.15: Local state for checkbox
   const [showDuprRequiredModal, setShowDuprRequiredModal] = useState(false); // V07.15: DUPR linking modal
   const [duprLinking, setDuprLinking] = useState(false); // V07.15: DUPR linking in progress
+  const [showWaiverModal, setShowWaiverModal] = useState(false); // V07.25: Waiver acceptance modal
+  const [waiverAccepted, setWaiverAccepted] = useState(false); // V07.25: Waiver checkbox state
   const [showRegistrationWizard, setShowRegistrationWizard] = useState(false); // V07.27: Registration wizard for doubles
   const [pendingInvites, setPendingInvites] = useState<LeaguePartnerInvite[]>([]); // V07.27: Partner invites for current user
   const [respondingToInvite, setRespondingToInvite] = useState<string | null>(null); // V07.27: Invite being responded to
@@ -341,19 +350,45 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     return () => unsubscribe();
   }, [leagueId]);
 
+  // V07.26: Fetch user profiles for DUPR access token checking
+  useEffect(() => {
+    const fetchUserProfiles = async () => {
+      if (members.length === 0) return;
+
+      const userIds = members.map(m => m.userId);
+      try {
+        const profiles = await getUsersByIds(userIds);
+        const profileMap = new Map<string, UserProfile>();
+        profiles.forEach(p => {
+          if (p.odUserId) {
+            profileMap.set(p.odUserId, p);
+          }
+        });
+        setUserProfiles(profileMap);
+      } catch (error) {
+        console.error('Failed to fetch user profiles for DUPR check:', error);
+      }
+    };
+
+    fetchUserProfiles();
+  }, [members]);
+
   // Subscribe to matches
   useEffect(() => {
     const unsubscribe = subscribeToLeagueMatches(leagueId, setMatches);
     return () => unsubscribe();
   }, [leagueId]);
 
-  // Subscribe to box league players (only for box_league format)
+  // Subscribe to box league players (only for LEGACY box_league format, not rotating_doubles_box)
+  // V07.25: rotating_doubles_box uses members subcollection with RotatingBoxPlayerManager
   useEffect(() => {
-    if (league?.format === 'box_league') {
+    // Only subscribe for old box_league format, not new rotating_doubles_box
+    const isLegacyBoxLeague = league?.format === 'box_league' && !league?.competitionFormat;
+    if (isLegacyBoxLeague) {
       const unsubscribe = subscribeToBoxLeaguePlayers(leagueId, setBoxPlayers);
       return () => unsubscribe();
     }
-  }, [leagueId, league?.format]);
+  }, [leagueId, league?.format, league?.competitionFormat]);
 
   // Get my membership
   useEffect(() => {
@@ -490,12 +525,79 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     ? members.filter(m => m.divisionId === selectedDivisionId)
     : members;
 
-  // Filter matches by division
+  // V07.26: Build member lookup for name and DUPR linked status
+  // A player has DUPR properly linked ONLY if they have duprConnected: true in their user profile
+  const memberLookup = useMemo(() => {
+    const lookup = new Map<string, { displayName: string; duprId?: string; duprLinked: boolean }>();
+    members.forEach(m => {
+      // Check user profile for duprConnected - this is the definitive indicator DUPR is linked via SSO
+      const profile = userProfiles.get(m.userId);
+      const hasDuprConnected = Boolean(profile?.duprConnected);
+
+      lookup.set(m.userId, {
+        displayName: m.displayName || 'Unknown',
+        // Only include duprId if they have duprConnected: true (actually linked via SSO)
+        duprId: hasDuprConnected ? (profile?.duprId || m.duprId) : undefined,
+        duprLinked: hasDuprConnected,
+      });
+    });
+    return lookup;
+  }, [members, userProfiles]);
+
+  // V07.26: Enrich box league matches with player names and DUPR IDs from members
+  // DUPR IDs are only included if the player has duprConnected: true (actually linked via SSO)
+  const enrichBoxLeagueMatch = (match: LeagueMatch): LeagueMatch => {
+    // Only enrich box league matches with sideA/sideB
+    const sideA = (match as any).sideA;
+    const sideB = (match as any).sideB;
+
+    if (!sideA || !sideB) return match;
+    if (memberLookup.size === 0) return match;
+
+    // Always enrich with DUPR IDs for eligibility checking, and names if needed
+    const resolvedSideA = { ...sideA };
+    const resolvedSideB = { ...sideB };
+
+    if (sideA.playerIds?.length >= 2) {
+      const member1 = memberLookup.get(sideA.playerIds[0]);
+      const member2 = memberLookup.get(sideA.playerIds[1]);
+      const name1 = member1?.displayName || 'Unknown';
+      const name2 = member2?.displayName || 'Unknown';
+
+      // Always update names and DUPR IDs
+      resolvedSideA.name = `${name1} & ${name2}`;
+      resolvedSideA.playerNames = [name1, name2];
+      // Only include duprId if player has duprConnected: true (linked via SSO)
+      resolvedSideA.duprIds = [member1?.duprId, member2?.duprId].filter(Boolean) as string[];
+    }
+
+    if (sideB.playerIds?.length >= 2) {
+      const member1 = memberLookup.get(sideB.playerIds[0]);
+      const member2 = memberLookup.get(sideB.playerIds[1]);
+      const name1 = member1?.displayName || 'Unknown';
+      const name2 = member2?.displayName || 'Unknown';
+
+      resolvedSideB.name = `${name1} & ${name2}`;
+      resolvedSideB.playerNames = [name1, name2];
+      resolvedSideB.duprIds = [member1?.duprId, member2?.duprId].filter(Boolean) as string[];
+    }
+
+    return {
+      ...match,
+      sideA: resolvedSideA,
+      sideB: resolvedSideB,
+    } as LeagueMatch;
+  };
+
+  // Filter matches by division and enrich box league matches
   const filteredMatches = useMemo(() => {
-    return selectedDivisionId
+    const filtered = selectedDivisionId
       ? matches.filter(m => m.divisionId === selectedDivisionId)
       : matches;
-  }, [matches, selectedDivisionId]);
+
+    // Enrich box league matches with player names
+    return filtered.map(enrichBoxLeagueMatch);
+  }, [matches, selectedDivisionId, memberLookup]);
 
   // Group matches by week for sub-tabs
   const matchesByWeek = useMemo(() => {
@@ -624,13 +726,22 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   };
 
   // V07.15: skipDuprCheck param allows bypassing the acknowledgement check after user has confirmed
-  const handleJoin = async (skipDuprCheck: boolean = false) => {
+  // V07.25: skipWaiverCheck param allows bypassing after waiver has been accepted
+  const handleJoin = async (skipDuprCheck: boolean = false, skipWaiverCheck: boolean = false) => {
     if (!currentUser || !userProfile) return;
 
     // V07.15: Refresh league data to get current member count
     const freshLeague = await getLeague(leagueId);
     if (!freshLeague) {
       alert('League not found');
+      return;
+    }
+
+    // V07.25: Check waiver requirement first
+    const waiverRequired = freshLeague.settings?.waiverRequired;
+    if (waiverRequired && !skipWaiverCheck) {
+      setWaiverAccepted(false);
+      setShowWaiverModal(true);
       return;
     }
 
@@ -709,12 +820,19 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   };
   
+  // V07.25: Handle waiver acceptance
+  const handleWaiverAccept = () => {
+    setShowWaiverModal(false);
+    // Continue with join flow - pass skipWaiverCheck: true since waiver was just accepted
+    handleJoin(false, true);
+  };
+
   // V07.12: Handle DUPR acknowledgement confirmation
   const handleDuprAcknowledge = () => {
     setDuprAcknowledged(true);
     setShowDuprAcknowledgement(false);
-    // Continue with join flow - pass true to skip the DUPR check we just completed
-    handleJoin(true);
+    // Continue with join flow - pass true to skip DUPR check and waiver check (already completed)
+    handleJoin(true, true);
   };
 
   // V07.15: Handle DUPR iframe login message for required leagues
@@ -911,8 +1029,18 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   // pendingJoinRequests subscription kept for potential cleanup of old data
 
   // Determine which tabs to show - Schedule, Players, DUPR, and Comms tabs only for organizers
+  // V07.25: Courts tab only for box league organizers (check both competitionFormat and legacy format)
+  // V07.26: DUPR tab only if league has DUPR enabled (mode is 'optional' or 'required')
+  const isBoxLeagueFormat = league?.competitionFormat === 'rotating_doubles_box' || league?.competitionFormat === 'fixed_doubles_box' || league?.format === 'box_league';
+  const isDuprEnabled = league?.settings?.duprSettings?.mode && league.settings.duprSettings.mode !== 'none';
   const availableTabs: TabType[] = isOrganizer
-    ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info', 'comms']
+    ? isBoxLeagueFormat
+      ? isDuprEnabled
+        ? ['standings', 'matches', 'players', 'courts', 'schedule', 'dupr', 'info', 'comms']
+        : ['standings', 'matches', 'players', 'courts', 'schedule', 'info', 'comms']
+      : isDuprEnabled
+        ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info', 'comms']
+        : ['standings', 'matches', 'players', 'schedule', 'info', 'comms']
     : ['standings', 'matches', 'info'];
 
   return (
@@ -1419,6 +1547,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       {/* STANDINGS TAB */}
       {activeTab === 'standings' && league && (
         <div className="space-y-4">
+          {/* V07.26: Use BoxLeagueStandings for rotating_doubles_box format */}
+          {league.competitionFormat === 'rotating_doubles_box' ? (
+            <BoxLeagueStandings
+              leagueId={leagueId}
+              members={filteredMembers}
+              isOrganizer={isOrganizer}
+              currentUserId={currentUser?.uid}
+            />
+          ) : (
+          <>
           {/* V07.16: Standings Sub-Tabs (Overall + Weekly) */}
           <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-700">
             {/* Overall Tab */}
@@ -1673,6 +1811,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </div>
             );
           })()}
+          </>
+          )}
         </div>
       )}
 
@@ -1860,6 +2000,34 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   );
                 }
 
+                // V07.26: Group matches by box for box leagues
+                const isBoxLeague = league?.competitionFormat === 'rotating_doubles_box' ||
+                                   league?.competitionFormat === 'fixed_doubles_box';
+
+                // Group matches by box number
+                const matchesByBox: Record<number, typeof weekMatches> = {};
+                if (isBoxLeague) {
+                  weekMatches.forEach(match => {
+                    const boxNum = match.boxNumber || 0;
+                    if (!matchesByBox[boxNum]) matchesByBox[boxNum] = [];
+                    matchesByBox[boxNum].push(match);
+                  });
+                }
+                const boxNumbers = Object.keys(matchesByBox).map(Number).sort((a, b) => a - b);
+
+                // Box colors - gradient from darker (top box) to lighter (bottom box)
+                const BOX_COLORS = [
+                  'from-blue-900/40 to-blue-900/20 border-blue-700/50',      // Box 1 - darkest
+                  'from-blue-800/40 to-blue-800/20 border-blue-600/50',      // Box 2
+                  'from-sky-800/40 to-sky-800/20 border-sky-600/50',         // Box 3
+                  'from-sky-700/40 to-sky-700/20 border-sky-500/50',         // Box 4
+                  'from-cyan-700/40 to-cyan-700/20 border-cyan-500/50',      // Box 5
+                  'from-cyan-600/40 to-cyan-600/20 border-cyan-400/50',      // Box 6
+                  'from-teal-600/40 to-teal-600/20 border-teal-400/50',      // Box 7
+                  'from-teal-500/40 to-teal-500/20 border-teal-300/50',      // Box 8 - lightest
+                ];
+                const getBoxColor = (boxNum: number) => BOX_COLORS[Math.min(boxNum - 1, BOX_COLORS.length - 1)] || BOX_COLORS[0];
+
                 return (
                   <>
                     {/* V07.29: Show week state banner for players */}
@@ -1881,38 +2049,117 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                         </div>
                       </div>
                     )}
-                    {weekMatches.map(match => (
-                      <LeagueMatchCard
-                        key={match.id}
-                        match={match}
-                        currentUserId={currentUser?.uid}
-                        isOrganizer={isOrganizer}
-                        showWeek={false}
-                        showRound={league?.format === 'swiss' || league?.format === 'box_league'}
-                        verificationSettings={league?.settings?.scoreVerification || undefined}
-                        weekLocked={weekLocked}
-                        onEnterScore={(m) => {
-                          setSelectedMatch(m);
-                          setShowScoreEntryModal(true);
-                        }}
-                        onViewDetails={(m) => {
-                          setSelectedMatch(m);
-                          setShowScoreEntryModal(true);
-                        }}
-                        onConfirmScore={(m) => {
-                          setSelectedMatch(m);
-                          setShowScoreEntryModal(true);
-                        }}
-                        onDisputeScore={(m) => {
-                          setSelectedMatch(m);
-                          setShowScoreEntryModal(true);
-                        }}
-                        leagueId={leagueId}
-                        duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
-                        leagueName={league?.name}
-                        showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
-                      />
-                    ))}
+
+                    {/* V07.26: Box League - Group by boxes */}
+                    {isBoxLeague && boxNumbers.length > 0 ? (
+                      <div className="space-y-6">
+                        {boxNumbers.map(boxNum => {
+                          const boxMatches = matchesByBox[boxNum] || [];
+                          // Sort by round number
+                          boxMatches.sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0));
+                          const completedCount = boxMatches.filter(m => m.status === 'completed').length;
+
+                          return (
+                            <div
+                              key={`box-${boxNum}`}
+                              className={`rounded-xl border bg-gradient-to-b ${getBoxColor(boxNum)} overflow-hidden`}
+                            >
+                              {/* Box Header */}
+                              <div className="px-4 py-3 border-b border-gray-700/50 flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <span className="text-2xl font-bold text-white">Box {boxNum}</span>
+                                  <span className="text-sm text-gray-400">
+                                    {boxMatches.length} matches
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {completedCount === boxMatches.length ? (
+                                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full">
+                                      ✓ Complete
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs bg-gray-700/50 text-gray-400 px-2 py-1 rounded-full">
+                                      {completedCount}/{boxMatches.length} played
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Box Matches */}
+                              <div className="p-3 space-y-2">
+                                {boxMatches.map(match => (
+                                  <LeagueMatchCard
+                                    key={match.id}
+                                    match={match}
+                                    currentUserId={currentUser?.uid}
+                                    isOrganizer={isOrganizer}
+                                    showWeek={false}
+                                    showRound={true}
+                                    compact={true}
+                                    verificationSettings={league?.settings?.scoreVerification || undefined}
+                                    weekLocked={weekLocked}
+                                    onEnterScore={(m) => {
+                                      setSelectedMatch(m);
+                                      setShowScoreEntryModal(true);
+                                    }}
+                                    onViewDetails={(m) => {
+                                      setSelectedMatch(m);
+                                      setShowScoreEntryModal(true);
+                                    }}
+                                    onConfirmScore={(m) => {
+                                      setSelectedMatch(m);
+                                      setShowScoreEntryModal(true);
+                                    }}
+                                    onDisputeScore={(m) => {
+                                      setSelectedMatch(m);
+                                      setShowScoreEntryModal(true);
+                                    }}
+                                    leagueId={leagueId}
+                                    duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
+                                    leagueName={league?.name}
+                                    showDuprButton={false}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      /* Non-box league - flat list */
+                      weekMatches.map(match => (
+                        <LeagueMatchCard
+                          key={match.id}
+                          match={match}
+                          currentUserId={currentUser?.uid}
+                          isOrganizer={isOrganizer}
+                          showWeek={false}
+                          showRound={league?.format === 'swiss' || league?.format === 'box_league'}
+                          verificationSettings={league?.settings?.scoreVerification || undefined}
+                          weekLocked={weekLocked}
+                          onEnterScore={(m) => {
+                            setSelectedMatch(m);
+                            setShowScoreEntryModal(true);
+                          }}
+                          onViewDetails={(m) => {
+                            setSelectedMatch(m);
+                            setShowScoreEntryModal(true);
+                          }}
+                          onConfirmScore={(m) => {
+                            setSelectedMatch(m);
+                            setShowScoreEntryModal(true);
+                          }}
+                          onDisputeScore={(m) => {
+                            setSelectedMatch(m);
+                            setShowScoreEntryModal(true);
+                          }}
+                          leagueId={leagueId}
+                          duprClubId={league?.settings?.duprSettings?.duprClubId || undefined}
+                          leagueName={league?.name}
+                          showDuprButton={league?.settings?.duprSettings?.mode !== 'none'}
+                        />
+                      ))
+                    )}
                   </>
                 );
               })()}
@@ -1924,8 +2171,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       {/* PLAYERS TAB - Organizer Only */}
       {activeTab === 'players' && isOrganizer && (
         <div className="space-y-4">
-          {league.format === 'box_league' ? (
-            // Box League: Show box-based drag-drop management
+          {league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box' ? (
+            // V07.25: Rotating/Fixed Doubles Box - Show new box management component
+            <RotatingBoxPlayerManager
+              leagueId={leagueId}
+              members={members}
+              isOrganizer={isOrganizer}
+              disabled={league.status === 'completed'}
+            />
+          ) : league.format === 'box_league' && !league.competitionFormat ? (
+            // Legacy Box League: Show old box-based drag-drop management
             <BoxPlayerDragDrop
               leagueId={leagueId}
               players={boxPlayers}
@@ -1952,10 +2207,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           {/* Help text */}
           <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
             <h4 className="text-sm font-medium text-gray-300 mb-2">
-              {league.format === 'box_league' ? 'Managing Boxes' : 'Managing Seeding'}
+              {isBoxLeagueFormat ? 'Managing Boxes' : 'Managing Seeding'}
             </h4>
             <p className="text-sm text-gray-500">
-              {league.format === 'box_league'
+              {isBoxLeagueFormat
                 ? 'Drag players between boxes to rebalance skill levels. Players within a box will play against each other.'
                 : 'Drag players to reorder their seeding. Seeding affects match generation and bracket placement.'}
             </p>
@@ -1972,6 +2227,137 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           divisions={divisions}
           onScheduleGenerated={handleScheduleGenerated}
         />
+      )}
+
+      {/* COURTS TAB - Box League Organizer Only */}
+      {activeTab === 'courts' && isOrganizer && isBoxLeagueFormat && (
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="bg-lime-900/20 p-4 rounded-xl border border-lime-700/50">
+            <h3 className="font-semibold text-lime-400 flex items-center gap-2">
+              <span>🏟️</span> Courts & Sessions Management
+            </h3>
+            <p className="text-sm text-gray-400 mt-1">
+              Manage courts and session time slots for your box league.
+            </p>
+          </div>
+
+          {/* Current Configuration */}
+          <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+            <h4 className="text-lg font-bold text-white mb-4">Current Configuration</h4>
+
+            {league.settings?.rotatingDoublesBox?.venue?.courts && league.settings.rotatingDoublesBox.venue.courts.length > 0 ? (
+              <div className="space-y-4">
+                {/* Courts List */}
+                <div>
+                  <h5 className="text-sm font-medium text-gray-400 mb-2">Courts ({league.settings.rotatingDoublesBox.venue.courts.length})</h5>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {league.settings.rotatingDoublesBox.venue.courts.map((court, idx: number) => (
+                      <div
+                        key={court.id || idx}
+                        className={`
+                          p-3 rounded-lg border
+                          ${court.active !== false
+                            ? 'bg-lime-900/20 border-lime-700/50 text-lime-400'
+                            : 'bg-gray-900 border-gray-700 text-gray-500'
+                          }
+                        `}
+                      >
+                        <div className="font-medium">{court.name || `Court ${idx + 1}`}</div>
+                        <div className="text-xs opacity-75">
+                          {court.active !== false ? 'Active' : 'Inactive'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sessions (if box league has them) */}
+                {league.settings?.rotatingDoublesBox?.venue?.sessions && league.settings.rotatingDoublesBox.venue.sessions.length > 0 && (
+                  <div>
+                    <h5 className="text-sm font-medium text-gray-400 mb-2">
+                      Sessions ({league.settings.rotatingDoublesBox.venue.sessions.length})
+                    </h5>
+                    <div className="space-y-2">
+                      {league.settings.rotatingDoublesBox.venue.sessions.map((session, idx: number) => (
+                        <div
+                          key={session.id || idx}
+                          className={`
+                            p-3 rounded-lg border flex items-center justify-between
+                            ${session.active !== false
+                              ? 'bg-cyan-900/20 border-cyan-700/50'
+                              : 'bg-gray-900 border-gray-700 opacity-50'
+                            }
+                          `}
+                        >
+                          <div>
+                            <div className="font-medium text-white">{session.name || `Session ${idx + 1}`}</div>
+                            <div className="text-xs text-gray-400">
+                              {session.startTime} - {session.endTime}
+                            </div>
+                          </div>
+                          <span className={`text-xs px-2 py-1 rounded ${session.active !== false ? 'bg-cyan-500/20 text-cyan-400' : 'bg-gray-700 text-gray-500'}`}>
+                            {session.active !== false ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Capacity Summary */}
+                <div className="bg-gray-900 rounded-lg p-4 border border-gray-700">
+                  <h5 className="text-sm font-medium text-gray-400 mb-3">Capacity Summary</h5>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+                    <div>
+                      <div className="text-2xl font-bold text-white">
+                        {league.settings.rotatingDoublesBox.venue.courts.filter((c) => c.active !== false).length}
+                      </div>
+                      <div className="text-xs text-gray-500">Courts</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold text-white">
+                        {league.settings?.rotatingDoublesBox?.venue?.sessions?.filter((s) => s.active !== false).length || 1}
+                      </div>
+                      <div className="text-xs text-gray-500">Sessions</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold text-lime-400">
+                        {(league.settings.rotatingDoublesBox.venue.courts.filter((c) => c.active !== false).length) *
+                         (league.settings?.rotatingDoublesBox?.venue?.sessions?.filter((s) => s.active !== false).length || 1)}
+                      </div>
+                      <div className="text-xs text-gray-500">Boxes</div>
+                    </div>
+                    <div>
+                      <div className="text-2xl font-bold text-lime-400">
+                        {(league.settings.rotatingDoublesBox.venue.courts.filter((c) => c.active !== false).length) *
+                         (league.settings?.rotatingDoublesBox?.venue?.sessions?.filter((s) => s.active !== false).length || 1) *
+                         (league.settings?.rotatingDoublesBox?.settings?.boxSize || 5)}
+                      </div>
+                      <div className="text-xs text-gray-500">Max Players</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <div className="text-4xl mb-3">🏟️</div>
+                <p className="text-gray-400">No venue configured for this league.</p>
+                <p className="text-sm text-gray-500 mt-1">
+                  Courts and sessions were not set up during league creation.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Edit Notice */}
+          <div className="bg-gray-700/30 p-4 rounded-lg border border-gray-600">
+            <p className="text-gray-400 text-sm">
+              <strong className="text-white">Note:</strong> To modify courts or sessions,
+              edit the league settings. Changes will affect future weeks only.
+            </p>
+          </div>
+        </div>
       )}
 
       {/* DUPR TAB - Organizer Only */}
@@ -2080,6 +2466,108 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               <p className="text-sm text-gray-400 mt-1">Hosted by {league.clubName}</p>
             )}
           </div>
+
+          {/* V07.26: Box League Organizer Guide */}
+          {isOrganizer && (league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box') && (
+            <div className="bg-gradient-to-br from-blue-900/30 to-purple-900/30 rounded-xl p-5 border border-blue-700/50">
+              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                <span className="text-2xl">📋</span>
+                Organizer Guide - Running Your Box League
+              </h3>
+
+              {/* Starting the League */}
+              <div className="mb-6">
+                <h4 className="font-semibold text-lime-400 mb-2">1. Starting the League</h4>
+                <ul className="text-sm text-gray-300 space-y-1 ml-4">
+                  <li>• Go to <span className="text-white font-medium">Schedule tab</span></li>
+                  <li>• Click <span className="text-white font-medium">"Generate Schedule"</span></li>
+                  <li>• Week 1 is created with players sorted by DUPR rating into boxes</li>
+                  <li>• Matches are automatically generated for all boxes</li>
+                </ul>
+              </div>
+
+              {/* Week States */}
+              <div className="mb-6">
+                <h4 className="font-semibold text-lime-400 mb-2">2. Week States</h4>
+                <p className="text-sm text-gray-400 mb-2">Control week states from the strip at the top of the Matches tab:</p>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-gray-800/50 rounded-lg p-2 text-center">
+                    <div className="w-6 h-6 mx-auto mb-1 rounded bg-gray-700 border border-gray-600 flex items-center justify-center text-gray-400">⏸</div>
+                    <span className="text-gray-400">Not Started</span>
+                    <p className="text-gray-500 mt-1">Players can't score</p>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2 text-center">
+                    <div className="w-6 h-6 mx-auto mb-1 rounded bg-lime-500/20 border border-lime-500 flex items-center justify-center text-lime-400">●</div>
+                    <span className="text-lime-400">Scoring Open</span>
+                    <p className="text-gray-500 mt-1">Players enter scores</p>
+                  </div>
+                  <div className="bg-gray-800/50 rounded-lg p-2 text-center">
+                    <div className="w-6 h-6 mx-auto mb-1 rounded bg-blue-500/20 border border-blue-500 flex items-center justify-center text-blue-400">🔒</div>
+                    <span className="text-blue-400">Finalized</span>
+                    <p className="text-gray-500 mt-1">Scores locked</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">Click week numbers to cycle through states</p>
+              </div>
+
+              {/* Entering Scores */}
+              <div className="mb-6">
+                <h4 className="font-semibold text-lime-400 mb-2">3. Score Entry Flow</h4>
+                <div className="bg-gray-800/50 rounded-lg p-3 text-sm">
+                  <div className="flex items-center gap-2 text-gray-300">
+                    <span className="bg-blue-600 text-white text-xs px-2 py-0.5 rounded">Player A</span>
+                    <span>enters score</span>
+                    <span className="text-gray-500">→</span>
+                    <span className="bg-yellow-600/20 text-yellow-400 text-xs px-2 py-0.5 rounded">Awaiting Confirmation</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-gray-300 mt-2">
+                    <span className="bg-purple-600 text-white text-xs px-2 py-0.5 rounded">Opponent</span>
+                    <span>confirms</span>
+                    <span className="text-gray-500">→</span>
+                    <span className="bg-green-600/20 text-green-400 text-xs px-2 py-0.5 rounded">Completed</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">You can override/enter any score as organizer</p>
+                </div>
+              </div>
+
+              {/* Ending a Week */}
+              <div className="mb-6">
+                <h4 className="font-semibold text-lime-400 mb-2">4. Ending a Week</h4>
+                <ul className="text-sm text-gray-300 space-y-1 ml-4">
+                  <li>• Wait for all boxes to show <span className="text-green-400">✓ Complete</span></li>
+                  <li>• Click week number to change to <span className="text-blue-400">Finalized 🔒</span></li>
+                  <li>• Standings are automatically recalculated</li>
+                </ul>
+              </div>
+
+              {/* Moving to Next Week */}
+              <div className="mb-6">
+                <h4 className="font-semibold text-lime-400 mb-2">5. Moving to Next Week</h4>
+                <ul className="text-sm text-gray-300 space-y-1 ml-4">
+                  <li>• Go to <span className="text-white font-medium">Schedule tab</span></li>
+                  <li>• Click <span className="text-white font-medium">"Generate Next Week"</span></li>
+                  <li>• Promotions/relegations are applied automatically</li>
+                  <li>• New matches generated with updated box assignments</li>
+                </ul>
+              </div>
+
+              {/* Promotion Rules */}
+              <div className="bg-gray-800/50 rounded-lg p-3">
+                <h4 className="font-semibold text-white mb-2 text-sm">Promotion & Relegation</h4>
+                <div className="flex items-center gap-4 text-xs">
+                  <div className="flex items-center gap-1">
+                    <span className="text-green-400 font-bold">▲</span>
+                    <span className="text-gray-400">Top players promote up</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-red-400 font-bold">▼</span>
+                    <span className="text-gray-400">Bottom players relegate down</span>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">Box 1 (top): No promotion • Last box: No relegation</p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2269,6 +2757,67 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 className="w-full py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 text-white rounded-lg transition-colors"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* V07.25: Waiver Acceptance Modal - Purple Theme */}
+      {showWaiverModal && league?.settings?.waiverRequired && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-800 rounded-xl max-w-2xl w-full shadow-xl border border-violet-500/30 overflow-hidden">
+            {/* Header - Purple gradient */}
+            <div className="px-6 py-4 border-b border-violet-500/30 bg-gradient-to-r from-violet-600/20 to-purple-600/20">
+              <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                📋 Waiver Agreement
+              </h3>
+              <p className="text-sm text-gray-400 mt-1">
+                Please read and accept the waiver before joining
+              </p>
+            </div>
+
+            {/* Body - Scrollable content */}
+            <div className="p-6 space-y-4">
+              <div className="bg-gray-900/50 rounded-lg p-4 border border-violet-500/20 max-h-[50vh] overflow-y-auto">
+                <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">
+                  {DEFAULT_WAIVER_TEXT}
+                </p>
+              </div>
+
+              <label className="flex items-start gap-3 p-4 bg-gray-900/50 rounded-lg border border-violet-500/20 cursor-pointer hover:border-violet-500/50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={waiverAccepted}
+                  onChange={(e) => setWaiverAccepted(e.target.checked)}
+                  className="w-5 h-5 mt-0.5 accent-violet-500"
+                />
+                <span className="text-white text-sm">
+                  I have read and agree to the League & Tournament Participation Waiver.
+                </span>
+              </label>
+            </div>
+
+            {/* Footer - Purple button */}
+            <div className="px-6 py-4 bg-gray-900 border-t border-violet-500/30 flex justify-end gap-3">
+              <button
+                onClick={() => setShowWaiverModal(false)}
+                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (waiverAccepted) {
+                    handleWaiverAccept();
+                  } else {
+                    alert('Please check the box to accept the waiver.');
+                  }
+                }}
+                disabled={!waiverAccepted}
+                className="px-6 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+              >
+                Accept & Continue
               </button>
             </div>
           </div>

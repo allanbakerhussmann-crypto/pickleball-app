@@ -30,6 +30,11 @@ import { VerificationSettingsForm } from './verification';
 import { FormatCards } from '../shared/FormatSelector';
 import { formatTime } from '../../utils/timeFormat';
 import { StandingsPointsCard, RoundsSlider, type StandingsPointsConfig } from '../shared/PointsSlider';
+import { VenueCapacityCalculator, type CapacityResult } from './VenueCapacityCalculator';
+import { BoxLeagueVenueConfig } from './BoxLeagueVenueConfig';
+import type { BoxLeagueVenueSettings } from '../../types/rotatingDoublesBox';
+import { DEFAULT_BOX_LEAGUE_VENUE } from '../../types/rotatingDoublesBox';
+import { DEFAULT_WAIVER_TEXT } from '../../constants';
 
 // ============================================
 // LOCAL TYPES
@@ -57,6 +62,11 @@ interface LeagueVenueSettings {
   bufferMinutes: number;
   autoAssignCourts: boolean;
   balanceCourtUsage: boolean;
+  // V07.27: Single-session scheduling
+  sessionStartTime: string;         // "18:00" format
+  sessionEndTime: string;           // "21:00" format
+  minRestMinutes: number;           // Player recovery time
+  maxTeamsPerDivision?: number;     // Calculated capacity
 }
 
 interface CreateLeagueProps { onBack: () => void; onCreated: (leagueId: string) => void; }
@@ -210,7 +220,12 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     venueName: '', venueAddress: '',
     courts: [{ id: 'court_1', name: 'Court 1', order: 1, active: true }],
     matchDurationMinutes: 20, bufferMinutes: 5, autoAssignCourts: true, balanceCourtUsage: true,
+    // V07.27: Single-session defaults
+    sessionStartTime: '18:00', sessionEndTime: '21:00', minRestMinutes: 10,
   });
+
+  // V07.27: Calculated capacity
+  const [calculatedCapacity, setCalculatedCapacity] = useState<CapacityResult | null>(null);
   
   // Step 3: Divisions
   const [hasDivs, setHasDivs] = useState(false);
@@ -244,6 +259,9 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   const [box, setBox] = useState<LeagueBoxSettings>({
     playersPerBox: 4, promotionSpots: 1, relegationSpots: 1, roundsPerBox: 1
   });
+  // V07.25: Box League Venue Settings (multi-session support)
+  const [boxVenue, setBoxVenue] = useState<BoxLeagueVenueSettings>(DEFAULT_BOX_LEAGUE_VENUE);
+  const [boxSize, setBoxSize] = useState<4 | 5 | 6>(5);
   const [tiebreakers, setTiebreakers] = useState<LeagueTiebreaker[]>(['head_to_head', 'game_diff', 'games_won']);
   
   // DUPR Settings (NEW V05.36)
@@ -257,6 +275,10 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   const [verificationSettings, setVerificationSettings] = useState<ScoreVerificationSettings>(
     DEFAULT_SCORE_VERIFICATION
   );
+
+  // V07.25: Waiver Settings
+  const [waiverRequired, setWaiverRequired] = useState(true);
+  const [waiverText, setWaiverText] = useState(DEFAULT_WAIVER_TEXT);
 
   // Step 6: Payment
   // Payment modes: 'free' = no payment, 'external' = collect outside app, 'stripe' = collect via Stripe
@@ -302,6 +324,13 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     setBasic(b => ({ ...b, format: legacyFormat }));
   }, [selectedFormat]);
 
+  // V07.25: Auto-select 'singles' for rotating_doubles_box (individual entry, rotating partners)
+  useEffect(() => {
+    if (selectedFormat === 'rotating_doubles_box') {
+      setBasic(b => ({ ...b, type: 'singles' }));
+    }
+  }, [selectedFormat]);
+
   // V07.11: Auto-update tiebreakers when weekly full RR is enabled
   useEffect(() => {
     if (rr.weeklyFullRoundRobin) {
@@ -334,8 +363,9 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   const clubStripe = club?.stripeConnectedAccountId && club?.stripeChargesEnabled;
   const canPay = hasStripe || clubStripe;
   const isDoubles = basic.type === 'doubles' || basic.type === 'mixed_doubles';
+  // V07.25: Check if this is a box league format (uses special venue config)
+  const isBoxLeague = selectedFormat === 'rotating_doubles_box' || selectedFormat === 'fixed_doubles_box';
   const fmtCur = (c: number) => `$${(c / 100).toFixed(2)}`;
-  const parseCur = (v: string) => Math.round((parseFloat(v.replace(/[^0-9.]/g, '')) || 0) * 100);
   
   // ============================================
   // VALIDATION
@@ -346,8 +376,11 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
     if (s === 2 && !scheduleConfig.startDate) return 'Start date required';
     if (s === 2 && scheduleConfig.matchDays.length === 0) return 'Select at least one match day';
     if (s === 2 && scheduleConfig.numberOfWeeks < 1) return 'Must be at least 1 week';
-    if (s === 2 && venueEnabled && !venue.venueName.trim()) return 'Venue name required';
-    if (s === 3 && hasDivs && divs.length === 0) return 'Add at least one division';
+    // V07.25: Box league requires venue name (always has venue config)
+    if (s === 2 && isBoxLeague && !boxVenue.venueName.trim()) return 'Venue name required';
+    if (s === 2 && !isBoxLeague && venueEnabled && !venue.venueName.trim()) return 'Venue name required';
+    // V07.26: Skip divisions validation for box leagues (no divisions, just boxes)
+    if (s === 3 && !isBoxLeague && hasDivs && divs.length === 0) return 'Add at least one division';
     if (s === 6 && paymentMode !== 'free' && price.entryFee < 100) return 'Minimum entry fee is $1';
     return null;
   };
@@ -408,6 +441,11 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
         courts: venue.courts, matchDurationMinutes: venue.matchDurationMinutes,
         bufferMinutes: venue.bufferMinutes, autoAssignCourts: venue.autoAssignCourts,
         balanceCourtUsage: venue.balanceCourtUsage, schedulingMode: 'venue_based' as const,
+        // V07.27: Single-session scheduling
+        sessionStartTime: venue.sessionStartTime,
+        sessionEndTime: venue.sessionEndTime,
+        minRestMinutes: venue.minRestMinutes,
+        maxTeamsPerDivision: venue.maxTeamsPerDivision || calculatedCapacity?.maxTeams || null,
         scheduleConfig: {
           numberOfWeeks: scheduleConfig.numberOfWeeks, matchDays: scheduleConfig.matchDays,
           matchStartTime: scheduleConfig.matchStartTime, matchEndTime: scheduleConfig.matchEndTime,
@@ -431,6 +469,8 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
         venueSettings: venueSettings as any,
         duprSettings: duprSettings.mode !== 'none' ? duprSettings : null,
         scoreVerification: verificationSettings,
+        waiverRequired,
+        waiverText: waiverRequired ? waiverText : null,
       };
       
       if (basic.format === 'ladder') settings.challengeRules = challenge;
@@ -438,6 +478,25 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       else if (basic.format === 'swiss') settings.swissSettings = swiss;
       else if (basic.format === 'box_league') settings.boxSettings = box;
       if (isDoubles) settings.partnerSettings = partner;
+
+      // V07.26: Add rotatingDoublesBox settings for box leagues
+      if (isBoxLeague) {
+        settings.rotatingDoublesBox = {
+          venue: boxVenue,
+          settings: {
+            boxSize: boxSize,
+            gameSettings: { playType: 'doubles', pointsPerGame: 11, winBy: 2, bestOf: 1 },
+            promotionCount: 1,
+            relegationCount: 1,
+            initialSeeding: 'dupr',
+            tiebreakers: ['wins', 'head_to_head', 'points_diff', 'points_for'],
+            scoreVerification: verificationSettings,
+            absencePolicy: { policy: 'substitute', subApproval: 'organizer_only', maxSubsPerSeason: 2, autoRelegateOnAbsence: false },
+            newPlayerJoinPolicy: { allowMidSeason: true, entryBox: 'bottom', entryPosition: 'bottom' },
+            substituteEligibility: { subMustBeMember: false, subAllowedFromBoxes: 'same_or_lower', subMustHaveDuprLinked: duprSettings.mode === 'required', subMustHaveDuprConsent: duprSettings.mode !== 'none' },
+          },
+        };
+      }
 
       const pricing: LeaguePricing | null = paymentMode !== 'free' ? {
         paymentMode: paymentMode,
@@ -459,18 +518,23 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
         : hasStripe ? userProfile.stripeConnectedAccountId : null;
 
       const leagueId = await createLeague({
-        name: basic.name.trim(), description: basic.description.trim(), 
+        name: basic.name.trim(), description: basic.description.trim(),
         type: basic.type, format: basic.format,
-        clubId: basic.clubId || null, clubName: club?.name || null, 
+        competitionFormat: selectedFormat, // V07.25: Store the new unified format
+        clubId: basic.clubId || null, clubName: club?.name || null,
         createdByUserId: currentUser.uid,
         organizerName: userProfile.displayName || userProfile.email,
-        seasonStart: new Date(scheduleConfig.startDate).getTime(), 
+        seasonStart: new Date(scheduleConfig.startDate).getTime(),
         seasonEnd: seasonEndDate ? new Date(seasonEndDate).getTime() : new Date(scheduleConfig.startDate).getTime() + (scheduleConfig.numberOfWeeks * 7 * 24 * 60 * 60 * 1000),
         registrationOpens: null,
         registrationDeadline: scheduleConfig.startDate ? new Date(scheduleConfig.startDate).getTime() - (2 * 24 * 60 * 60 * 1000) : null,
         pricing, organizerStripeAccountId: stripeId, status: 'draft', settings,
-        location: basic.location || null, venue: venueEnabled ? venue.venueName : null, 
+        location: basic.location || null, venue: venueEnabled ? venue.venueName : null,
         visibility: basic.visibility, hasDivisions: hasDivs,
+        // V07.27: Single-session scheduling
+        timezone: 'Pacific/Auckland',  // Default NZ timezone
+        maxTeamsPerDivision: venueEnabled ? (calculatedCapacity?.maxTeams || venue.maxTeamsPerDivision || undefined) : undefined,
+        registrationOpen: true,
       });
 
       if (hasDivs) {
@@ -553,44 +617,65 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               <label className="block text-sm font-medium text-gray-300">
                 Play Type <span className="text-lime-500">*</span>
               </label>
+              {/* V07.25: Helper text for rotating doubles box */}
+              {selectedFormat === 'rotating_doubles_box' && (
+                <p className="text-xs text-cyan-400 bg-cyan-500/10 px-3 py-2 rounded-lg border border-cyan-500/20">
+                  👤 + 👥 Players enter individually but play doubles matches with rotating partners
+                </p>
+              )}
               <div className="grid grid-cols-3 gap-3">
-                {TYPES.map(t => (
-                  <label
-                    key={t.value}
-                    className={`
-                      relative flex flex-col items-center p-5 rounded-xl border-2 cursor-pointer
-                      transition-all duration-200 group
-                      ${basic.type === t.value
-                        ? 'bg-lime-500/10 border-lime-500/50 shadow-lg shadow-lime-500/10'
-                        : 'bg-gray-800/30 border-gray-700/50 hover:border-gray-600 hover:bg-gray-800/50'
-                      }
-                    `}
-                  >
-                    <input
-                      type="radio"
-                      checked={basic.type === t.value}
-                      onChange={() => setBasic({ ...basic, type: t.value })}
-                      className="sr-only"
-                    />
-                    {/* Selection Indicator */}
-                    {basic.type === t.value && (
-                      <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-lime-500 flex items-center justify-center">
-                        <span className="text-xs text-gray-900">✓</span>
-                      </div>
-                    )}
-                    <span className={`
-                      text-2xl mb-2
-                      ${basic.type === t.value ? 'scale-110' : 'group-hover:scale-105'}
-                      transition-transform
-                    `}>
-                      {t.value === 'singles' ? '👤' : t.value === 'doubles' ? '👥' : '👫'}
-                    </span>
-                    <span className={`font-semibold ${basic.type === t.value ? 'text-lime-400' : 'text-white'}`}>
-                      {t.label}
-                    </span>
-                    <span className="text-xs text-gray-500 mt-1">{t.desc}</span>
-                  </label>
-                ))}
+                {TYPES.map(t => {
+                  // V07.25: For rotating_doubles_box, highlight both Singles AND Doubles
+                  const isRotatingDoublesBox = selectedFormat === 'rotating_doubles_box';
+                  const isHighlighted = isRotatingDoublesBox
+                    ? (t.value === 'singles' || t.value === 'doubles')
+                    : basic.type === t.value;
+                  const isDisabled = isRotatingDoublesBox && t.value !== 'singles';
+
+                  return (
+                    <label
+                      key={t.value}
+                      className={`
+                        relative flex flex-col items-center p-5 rounded-xl border-2
+                        transition-all duration-200 group
+                        ${isHighlighted
+                          ? 'bg-lime-500/10 border-lime-500/50 shadow-lg shadow-lime-500/10'
+                          : 'bg-gray-800/30 border-gray-700/50 hover:border-gray-600 hover:bg-gray-800/50'
+                        }
+                        ${isRotatingDoublesBox ? 'cursor-not-allowed' : 'cursor-pointer'}
+                      `}
+                    >
+                      <input
+                        type="radio"
+                        checked={basic.type === t.value}
+                        onChange={() => !isRotatingDoublesBox && setBasic({ ...basic, type: t.value })}
+                        disabled={isRotatingDoublesBox}
+                        className="sr-only"
+                      />
+                      {/* Selection Indicator - show on highlighted items for rotating doubles box */}
+                      {isHighlighted && (
+                        <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-lime-500 flex items-center justify-center">
+                          <span className="text-xs text-gray-900">✓</span>
+                        </div>
+                      )}
+                      <span className={`
+                        text-2xl mb-2
+                        ${isHighlighted ? 'scale-110' : 'group-hover:scale-105'}
+                        transition-transform
+                        ${isDisabled ? 'opacity-100' : ''}
+                      `}>
+                        {t.value === 'singles' ? '👤' : t.value === 'doubles' ? '👥' : '👫'}
+                      </span>
+                      <span className={`font-semibold ${isHighlighted ? 'text-lime-400' : 'text-white'}`}>
+                        {t.label}
+                      </span>
+                      <span className="text-xs text-gray-500 mt-1">
+                        {isRotatingDoublesBox && t.value === 'singles' ? 'Entry' :
+                         isRotatingDoublesBox && t.value === 'doubles' ? 'Gameplay' : t.desc}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -631,7 +716,9 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                     <div className="flex-1">
                       <div className="text-white font-medium">Standard Round Robin</div>
                       <p className="text-xs text-gray-400 mt-0.5">
-                        Each player plays every other player once, but matches are scheduled across multiple weeks rather than all in the same week.
+                        {isDoubles
+                          ? 'Each team plays every other team once, but matches are scheduled across multiple weeks rather than all in the same week.'
+                          : 'Each player plays every other player once, but matches are scheduled across multiple weeks rather than all in the same week.'}
                       </p>
                     </div>
                   </label>
@@ -654,28 +741,43 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                     <div className="flex-1">
                       <div className="text-white font-medium">Weekly Full Round Robin</div>
                       <p className="text-xs text-gray-400 mt-0.5">
-                        Every week is a full round robin where each player plays all other players once. The same format repeats every week.
+                        {isDoubles
+                          ? 'Every week is a full round robin where each team plays all other teams once. The same format repeats every week.'
+                          : 'Every week is a full round robin where each player plays all other players once. The same format repeats every week.'}
                       </p>
                     </div>
                   </label>
                 </div>
 
-                {/* Max Players for Round Robin */}
+                {/* Max Teams/Players for Round Robin */}
                 <div className="mt-4 pt-4 border-t border-gray-700">
-                  <label className="block text-sm text-gray-400 mb-2">Maximum Players</label>
-                  <input
-                    type="number"
-                    value={singleDiv.maxParticipants || ''}
-                    onChange={e => setSingleDiv({ ...singleDiv, maxParticipants: e.target.value ? parseInt(e.target.value) : null })}
-                    className="w-32 bg-gray-900 text-white p-2 rounded border border-gray-600"
-                    placeholder="Unlimited"
-                    min={3}
-                    max={32}
-                  />
+                  <label className="block text-sm text-gray-400 mb-2">
+                    {isDoubles ? 'Maximum Teams' : 'Maximum Players'}
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      value={singleDiv.maxParticipants || ''}
+                      onChange={e => setSingleDiv({ ...singleDiv, maxParticipants: e.target.value ? parseInt(e.target.value) : null })}
+                      className="w-32 bg-gray-900 text-white p-2 rounded border border-gray-600"
+                      placeholder="Unlimited"
+                      min={3}
+                      max={32}
+                    />
+                    {isDoubles && singleDiv.maxParticipants && (
+                      <span className="text-sm text-gray-400">
+                        = {singleDiv.maxParticipants * 2} players
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-500 mt-1">
-                    {rr.weeklyFullRoundRobin
-                      ? 'Recommended: 4-8 players. More players = more matches per week.'
-                      : 'Recommended: 4-16 players for manageable scheduling.'}
+                    {isDoubles
+                      ? rr.weeklyFullRoundRobin
+                        ? 'Recommended: 4-8 teams. More teams = more matches per week.'
+                        : 'Recommended: 4-16 teams for manageable scheduling.'
+                      : rr.weeklyFullRoundRobin
+                        ? 'Recommended: 4-8 players. More players = more matches per week.'
+                        : 'Recommended: 4-16 players for manageable scheduling.'}
                   </p>
                 </div>
               </div>
@@ -827,14 +929,72 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               </div>
             )}
 
-            <label className="flex items-center justify-between p-4 bg-gray-800 rounded-lg border border-gray-700 cursor-pointer">
-              <div><div className="font-semibold text-white">🏟️ Venue-Based Scheduling</div><div className="text-sm text-gray-400">Assign courts to matches at a specific venue</div></div>
-              <button type="button" onClick={() => setVenueEnabled(!venueEnabled)} className={`w-12 h-6 rounded-full transition-colors ${venueEnabled ? 'bg-blue-600' : 'bg-gray-600'}`}>
-                <div className={`w-5 h-5 bg-white rounded-full transition-transform ${venueEnabled ? 'translate-x-6' : 'translate-x-1'}`}/>
-              </button>
-            </label>
+            {/* V07.25: Box League Venue Config (always shown for box leagues) */}
+            {isBoxLeague && (
+              <div className="space-y-6">
+                <div className="bg-lime-900/20 p-4 rounded-xl border border-lime-700/50">
+                  <h3 className="font-semibold text-lime-400 flex items-center gap-2">
+                    <span>📦</span> Box League Venue Setup
+                  </h3>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Configure courts and sessions. Each box uses one court per session.
+                  </p>
+                </div>
 
-            {venueEnabled && (
+                {/* Box Size Selector */}
+                <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50">
+                  <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+                    <span className="text-lime-400">👥</span> Box Size
+                  </h3>
+                  <div className="grid grid-cols-3 gap-3">
+                    {([4, 5, 6] as const).map((size) => {
+                      const rounds = size === 4 ? 3 : size === 5 ? 5 : 6;
+                      const duration = rounds * (boxVenue.matchDurationMinutes + boxVenue.bufferMinutes);
+                      return (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => setBoxSize(size)}
+                          className={`
+                            p-4 rounded-xl border-2 transition-all
+                            ${boxSize === size
+                              ? 'bg-lime-500/10 border-lime-500/50 shadow-lg shadow-lime-500/10'
+                              : 'bg-gray-800 border-gray-700/50 hover:border-gray-600'
+                            }
+                          `}
+                        >
+                          <div className={`text-2xl font-bold ${boxSize === size ? 'text-lime-400' : 'text-white'}`}>
+                            {size}
+                          </div>
+                          <div className="text-sm text-gray-400">players</div>
+                          <div className="text-xs text-gray-500 mt-2">
+                            {rounds} rounds (~{duration} min)
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <BoxLeagueVenueConfig
+                  value={boxVenue}
+                  onChange={setBoxVenue}
+                  boxSize={boxSize}
+                />
+              </div>
+            )}
+
+            {/* Regular Venue Toggle (non-box leagues) */}
+            {!isBoxLeague && (
+              <label className="flex items-center justify-between p-4 bg-gray-800 rounded-lg border border-gray-700 cursor-pointer">
+                <div><div className="font-semibold text-white">🏟️ Venue-Based Scheduling</div><div className="text-sm text-gray-400">Assign courts to matches at a specific venue</div></div>
+                <button type="button" onClick={() => setVenueEnabled(!venueEnabled)} className={`w-12 h-6 rounded-full transition-colors ${venueEnabled ? 'bg-blue-600' : 'bg-gray-600'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${venueEnabled ? 'translate-x-6' : 'translate-x-1'}`}/>
+                </button>
+              </label>
+            )}
+
+            {!isBoxLeague && venueEnabled && (
               <div className="space-y-4">
                 <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
                   <h3 className="font-semibold text-white mb-3">📍 Venue Details</h3>
@@ -871,25 +1031,63 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                   </div>
                 </div>
 
+                {/* V07.27: Session Time Window */}
                 <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-                  <h3 className="font-semibold text-white mb-3">⏱️ Match Timing</h3>
+                  <h3 className="font-semibold text-white mb-3">🕐 Session Time Window</h3>
+                  <p className="text-xs text-gray-500 mb-3">Define when your league session runs (all matches must fit in this window)</p>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Match Duration (min)</label>
-                      <input type="number" value={venue.matchDurationMinutes} onChange={e => setVenue({ ...venue, matchDurationMinutes: parseInt(e.target.value) || 20 })} 
-                        className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg" min={10} max={60}/>
+                      <label className="block text-xs text-gray-500 mb-1">Session Start</label>
+                      <input type="time" value={venue.sessionStartTime} onChange={e => setVenue({ ...venue, sessionStartTime: e.target.value })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg"/>
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Buffer Between (min)</label>
-                      <input type="number" value={venue.bufferMinutes} onChange={e => setVenue({ ...venue, bufferMinutes: parseInt(e.target.value) || 5 })} 
-                        className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg" min={0} max={30}/>
+                      <label className="block text-xs text-gray-500 mb-1">Session End</label>
+                      <input type="time" value={venue.sessionEndTime} onChange={e => setVenue({ ...venue, sessionEndTime: e.target.value })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg"/>
                     </div>
                   </div>
                 </div>
+
+                <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                  <h3 className="font-semibold text-white mb-3">⏱️ Match Timing</h3>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Match Duration (min)</label>
+                      <input type="number" value={venue.matchDurationMinutes} onChange={e => setVenue({ ...venue, matchDurationMinutes: parseInt(e.target.value) || 20 })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg" min={10} max={60}/>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Buffer (court)</label>
+                      <input type="number" value={venue.bufferMinutes} onChange={e => setVenue({ ...venue, bufferMinutes: parseInt(e.target.value) || 5 })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg" min={0} max={30}/>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Rest (player)</label>
+                      <input type="number" value={venue.minRestMinutes} onChange={e => setVenue({ ...venue, minRestMinutes: parseInt(e.target.value) || 10 })}
+                        className="w-full bg-gray-900 border border-gray-700 text-white p-2.5 rounded-lg" min={0} max={60}/>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-2">Buffer = court turnaround time. Rest = min gap before same team plays again.</p>
+                </div>
+
+                {/* V07.27: Capacity Calculator */}
+                <VenueCapacityCalculator
+                  courts={venue.courts.filter(c => c.active).length}
+                  sessionStartTime={venue.sessionStartTime}
+                  sessionEndTime={venue.sessionEndTime}
+                  matchDurationMinutes={venue.matchDurationMinutes}
+                  bufferMinutes={venue.bufferMinutes}
+                  minRestMinutes={venue.minRestMinutes}
+                  onCapacityCalculated={(result) => {
+                    setCalculatedCapacity(result);
+                    setVenue(prev => ({ ...prev, maxTeamsPerDivision: result.maxTeams }));
+                  }}
+                />
               </div>
             )}
 
-            {!venueEnabled && (
+            {!isBoxLeague && !venueEnabled && (
               <div className="bg-gray-700/30 p-4 rounded-lg border border-gray-600">
                 <p className="text-gray-400 text-sm"><strong className="text-white">Self-Scheduled Mode:</strong> Players arrange their own match times and venues.</p>
               </div>
@@ -1100,8 +1298,47 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               />
             </div>
 
-            {/* Match Deadline - Not needed for Weekly Full RR (matches happen same night) */}
-            {!rr.weeklyFullRoundRobin && (
+            {/* V07.25: Waiver Settings - Purple Theme */}
+            <div className="bg-gray-800 p-4 rounded-lg border border-violet-500/30">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600/30 to-purple-600/30 flex items-center justify-center">
+                  📋
+                </div>
+                <h3 className="font-semibold text-white">Waiver / Liability Agreement</h3>
+              </div>
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer p-3 bg-gray-900/50 rounded-lg border border-violet-500/20 hover:border-violet-500/40 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={waiverRequired}
+                    onChange={(e) => setWaiverRequired(e.target.checked)}
+                    className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-violet-500 focus:ring-violet-500 accent-violet-500"
+                  />
+                  <span className="text-white">Require waiver acceptance before joining</span>
+                </label>
+                {waiverRequired && (
+                  <div className="space-y-2">
+                    <label className="block text-sm text-gray-400">Waiver Text (14 sections - comprehensive legal coverage)</label>
+                    <div className="bg-gray-900/50 rounded-lg border border-violet-500/20 overflow-hidden">
+                      <div className="px-3 py-2 border-b border-violet-500/20 bg-gradient-to-r from-violet-600/10 to-purple-600/10">
+                        <span className="text-xs text-violet-400">Preview - scroll to review all sections</span>
+                      </div>
+                      <textarea
+                        value={waiverText}
+                        onChange={(e) => setWaiverText(e.target.value)}
+                        rows={8}
+                        className="w-full bg-transparent text-gray-300 p-3 text-sm resize-none focus:outline-none"
+                        placeholder="Enter waiver/liability text that players must accept..."
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500">Players must check a box agreeing to this text before joining</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Match Deadline - Not needed for Weekly Full RR or Box Leagues (matches happen same night at venue) */}
+            {!rr.weeklyFullRoundRobin && !isBoxLeague && (
               <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
                 <h3 className="font-semibold text-white mb-2">⏰ Match Deadline</h3>
                 <div className="flex items-center gap-2">
@@ -1120,9 +1357,9 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 Connect your league to DUPR for official rating tracking
               </p>
               
-              {/* DUPR Mode Selection */}
+              {/* DUPR Mode Selection - 'optional' hidden for now but kept in code for future use */}
               <div className="space-y-2 mb-4">
-                {DUPR_MODE_OPTIONS.map(opt => (
+                {DUPR_MODE_OPTIONS.filter(opt => opt.value !== 'optional').map(opt => (
                   <label 
                     key={opt.value}
                     className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
@@ -1263,7 +1500,8 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               />
             )}
 
-            {basic.format === 'box_league' && (
+            {/* V07.26: Hide for rotating/fixed doubles box - already configured in Schedule step */}
+            {basic.format === 'box_league' && !isBoxLeague && (
               <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
                 <h3 className="font-semibold text-white mb-2">📦 Box League</h3>
                 <div className="grid grid-cols-3 gap-3">
@@ -1634,7 +1872,8 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               const n = i + 1;
               const active = step === n;
               const done = step > n;
-              const skip = n === 4 && !isDoubles;
+              // Skip Divisions (3) and Partners (4) for box leagues; Skip Partners (4) for singles
+              const skip = (isBoxLeague && (n === 3 || n === 4)) || (n === 4 && !isDoubles);
 
               return (
                 <div
@@ -1702,7 +1941,15 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
       {/* Navigation */}
       <div className="flex items-center justify-between mt-8 pb-8">
         <button
-          onClick={() => setStep(Math.max(1, step - 1))}
+          onClick={() => {
+            let prevStep = step - 1;
+            // Box leagues: skip back over steps 3 and 4
+            if (isBoxLeague && prevStep === 4) prevStep = 2;
+            else if (isBoxLeague && prevStep === 3) prevStep = 2;
+            // Singles: skip back over step 4
+            else if (!isDoubles && prevStep === 4) prevStep = 3;
+            setStep(Math.max(1, prevStep));
+          }}
           disabled={step === 1}
           className={`
             group flex items-center gap-2 px-5 py-3 rounded-xl font-medium
@@ -1724,7 +1971,12 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
               if (e) setError(e);
               else {
                 setError(null);
-                setStep(step === 3 && !isDoubles ? 5 : step + 1);
+                let nextStep = step + 1;
+                // Box leagues: skip steps 3 and 4 (Divisions & Partners)
+                if (isBoxLeague && step === 2) nextStep = 5;
+                // Singles: skip step 4 (Partners)
+                else if (!isDoubles && step === 3) nextStep = 5;
+                setStep(nextStep);
               }
             }}
             className="

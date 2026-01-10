@@ -4,7 +4,7 @@
  * Helper functions for categorizing matches in the DUPR Organiser Control Panel.
  * Provides match categorization, eligibility checks, and statistics.
  *
- * @version V07.10
+ * @version V07.26
  * @file services/firebase/duprMatchStatus.ts
  */
 
@@ -51,6 +51,97 @@ export function hasValidParticipants(match: Match): boolean {
   return true;
 }
 
+/**
+ * V07.26: Check if all players in a match have DUPR IDs linked
+ * For doubles matches, all 4 players must have DUPR IDs
+ * For singles matches, both players must have DUPR IDs
+ *
+ * IMPORTANT: If duprIds arrays are completely empty, we assume the data wasn't
+ * stored at match creation time and skip the check (let backend validate).
+ * We only block if duprIds are PARTIALLY filled (some have, some don't).
+ */
+export function allPlayersHaveDuprIds(match: Match): { valid: boolean; missingCount: number; playerCount: number; noDataStored: boolean } {
+  const sideADuprIds = match.sideA?.duprIds || [];
+  const sideBDuprIds = match.sideB?.duprIds || [];
+  const sideAPlayerIds = match.sideA?.playerIds || [];
+  const sideBPlayerIds = match.sideB?.playerIds || [];
+
+  // Determine expected player count
+  const expectedSideACount = sideAPlayerIds.length || 1; // Default to 1 for singles
+  const expectedSideBCount = sideBPlayerIds.length || 1;
+  const playerCount = expectedSideACount + expectedSideBCount;
+
+  // Count valid (non-empty) DUPR IDs
+  const validSideADuprIds = sideADuprIds.filter(id => id && id.trim() !== '').length;
+  const validSideBDuprIds = sideBDuprIds.filter(id => id && id.trim() !== '').length;
+  const totalValidDuprIds = validSideADuprIds + validSideBDuprIds;
+
+  // If NO duprIds were stored at all, we can't validate - skip check
+  // This happens when matches were created before DUPR data was available
+  const noDataStored = totalValidDuprIds === 0;
+
+  const missingCount = playerCount - totalValidDuprIds;
+
+  return {
+    valid: noDataStored || missingCount === 0, // Valid if no data OR all present
+    missingCount: noDataStored ? 0 : missingCount,
+    playerCount,
+    noDataStored,
+  };
+}
+
+/**
+ * V07.26: Get names of players missing DUPR IDs from a match
+ *
+ * Note: The match factory uses .filter(Boolean) on duprIds, so if a player doesn't have
+ * a DUPR ID, the duprIds array is shorter (not padded with empty strings).
+ * We compare array lengths and use playerNames to identify who is missing.
+ *
+ * Returns empty array if no duprIds were stored (can't determine who's missing).
+ */
+export function getPlayersMissingDuprIds(match: Match): string[] {
+  const sideADuprIds = match.sideA?.duprIds || [];
+  const sideBDuprIds = match.sideB?.duprIds || [];
+  const sideAPlayerIds = match.sideA?.playerIds || [];
+  const sideBPlayerIds = match.sideB?.playerIds || [];
+
+  // Count valid DUPR IDs
+  const validSideADuprIds = sideADuprIds.filter(id => id && id.trim() !== '').length;
+  const validSideBDuprIds = sideBDuprIds.filter(id => id && id.trim() !== '').length;
+  const totalValidDuprIds = validSideADuprIds + validSideBDuprIds;
+
+  // If NO duprIds were stored at all, we can't determine who's missing
+  if (totalValidDuprIds === 0) {
+    return [];
+  }
+
+  const missing: string[] = [];
+  const sideAPlayerNames = (match.sideA as any)?.playerNames || match.sideA?.name?.split(' & ') || [];
+  const sideBPlayerNames = (match.sideB as any)?.playerNames || match.sideB?.name?.split(' & ') || [];
+
+  // Check side A - if we have fewer valid DUPR IDs than players, some are missing
+  const missingSideA = sideAPlayerIds.length - validSideADuprIds;
+  if (missingSideA > 0) {
+    sideAPlayerNames.forEach((name: string, idx: number) => {
+      if (idx >= validSideADuprIds) {
+        missing.push(name || `Player ${sideAPlayerIds[idx]?.slice(0, 6)}`);
+      }
+    });
+  }
+
+  // Check side B
+  const missingSideB = sideBPlayerIds.length - validSideBDuprIds;
+  if (missingSideB > 0) {
+    sideBPlayerNames.forEach((name: string, idx: number) => {
+      if (idx >= validSideBDuprIds) {
+        missing.push(name || `Player ${sideBPlayerIds[idx]?.slice(0, 6)}`);
+      }
+    });
+  }
+
+  return missing;
+}
+
 // ============================================
 // MATCH CATEGORIZATION
 // ============================================
@@ -76,6 +167,12 @@ export function categorizeMatch(match: Match): DuprMatchCategory {
 
   // Check for TBD/placeholder matches - these should be blocked
   if (!hasValidParticipants(match)) {
+    return 'blocked';
+  }
+
+  // V07.26: Check for missing DUPR IDs - only block if we have partial data
+  const duprIdCheck = allPlayersHaveDuprIds(match);
+  if (!duprIdCheck.valid && !duprIdCheck.noDataStored) {
     return 'blocked';
   }
 
@@ -173,6 +270,7 @@ export function getDuprPanelStats(matches: Match[]): DuprPanelStats {
  *
  * Requirements:
  * - Has valid participants (not TBD/BYE)
+ * - All players have DUPR IDs linked (V07.26)
  * - Has officialResult
  * - status === 'completed'
  * - scoreState === 'official'
@@ -185,6 +283,14 @@ export function canSubmitToDupr(match: Match): DuprEligibilityResult {
   // Must have valid participants (not TBD)
   if (!hasValidParticipants(match)) {
     return { eligible: false, reason: 'Match has TBD or missing participants' };
+  }
+
+  // V07.26: All players must have DUPR IDs linked (only check if we have stored data)
+  const duprIdCheck = allPlayersHaveDuprIds(match);
+  if (!duprIdCheck.valid && !duprIdCheck.noDataStored) {
+    const missingNames = getPlayersMissingDuprIds(match);
+    const namesList = missingNames.length > 0 ? `: ${missingNames.join(', ')}` : '';
+    return { eligible: false, reason: `${duprIdCheck.missingCount} player(s) missing DUPR ID${namesList}` };
   }
 
   // Must have official result
@@ -281,6 +387,16 @@ export function getBlockReason(match: Match): string | null {
   // Check for TBD/placeholder participants first
   if (!hasValidParticipants(match)) {
     return 'Match has TBD or missing participants';
+  }
+
+  // V07.26: Check for missing DUPR IDs (only if we have stored data)
+  const duprIdCheck = allPlayersHaveDuprIds(match);
+  if (!duprIdCheck.valid && !duprIdCheck.noDataStored) {
+    const missingNames = getPlayersMissingDuprIds(match);
+    if (missingNames.length > 0) {
+      return `Missing DUPR: ${missingNames.join(', ')}`;
+    }
+    return `${duprIdCheck.missingCount} player(s) missing DUPR ID`;
   }
 
   if (match.dupr?.needsCorrection) {
