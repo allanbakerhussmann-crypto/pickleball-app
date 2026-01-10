@@ -1712,7 +1712,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                                 : 'bg-blue-500/20 text-blue-400 border-2 border-blue-500 shadow-lg shadow-blue-500/20'
                             }
                           `}
-                          title={`Week ${week}: ${weekState.charAt(0).toUpperCase() + weekState.slice(1)}${allComplete ? ' ✓' : ''} - Click to change`}
+                          title={`Week ${week}: ${weekState === 'closed' ? 'Not Started' : weekState === 'open' ? 'Scoring Open' : 'Finalized'}${allComplete ? ' ✓' : ''} - Click to change`}
                         >
                           {week}
                           {weekState === 'locked' && (
@@ -1731,19 +1731,19 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   </div>
                 </div>
 
-                {/* Legend */}
-                <div className="flex items-center gap-3 text-xs">
+                {/* Legend - V07.32: More descriptive labels */}
+                <div className="flex items-center gap-4 text-xs">
                   <div className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded bg-gray-700 border border-gray-600" />
-                    <span className="text-gray-500">Closed</span>
+                    <span className="text-gray-500">Not Started</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded bg-lime-500/20 border border-lime-500" />
-                    <span className="text-gray-500">Open</span>
+                    <span className="text-gray-500">Scoring Open</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded bg-blue-500/20 border border-blue-500" />
-                    <span className="text-gray-500">Locked</span>
+                    <span className="text-gray-500">Finalized</span>
                   </div>
                 </div>
               </div>
