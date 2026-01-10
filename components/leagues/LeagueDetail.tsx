@@ -610,7 +610,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           setIsRecalculating(false);
         }
       }
-      // League state will auto-update via subscription
+
+      // V07.32: Refresh league state to update UI (no subscription for league doc)
+      const updatedLeague = await getLeague(leagueId);
+      if (updatedLeague) {
+        setLeague(updatedLeague);
+        console.log(`[LeagueDetail] League refreshed - weekStates:`, updatedLeague.weekStates);
+      }
     } catch (err) {
       console.error('[LeagueDetail] Failed to set week state:', err);
       alert('Failed to update week status');
