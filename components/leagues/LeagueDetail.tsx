@@ -47,7 +47,7 @@ import {
   getUsersByIds,
 } from '../../services/firebase';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
-import { BoxPlayerDragDrop, RotatingBoxPlayerManager } from './boxLeague';
+import { BoxPlayerDragDrop, RotatingBoxPlayerManager, BoxLeagueAbsencePanel } from './boxLeague';
 import { BoxLeagueStandings } from './boxLeague/BoxLeagueStandings';
 import { PlayerSeedingList } from './PlayerSeedingList';
 import { LeagueMatchCard } from './LeagueMatchCard';
@@ -2164,6 +2164,17 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 );
               })()}
             </div>
+          )}
+
+          {/* V07.28: Box League Absence Panel */}
+          {(league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box') && currentUser && (
+            <BoxLeagueAbsencePanel
+              leagueId={leagueId}
+              league={league}
+              currentUserId={currentUser.uid}
+              isOrganizer={isOrganizer}
+              members={members}
+            />
           )}
         </div>
       )}
