@@ -1,19 +1,20 @@
 /**
- * LeagueScoreEntryModal Component V07.04
+ * LeagueScoreEntryModal Component V07.33
  *
  * Modal for entering league match scores with game-by-game entry.
  * Supports best of 1, 3, or 5 games with validation.
  *
+ * V07.33: Added vertical score picker wheel for touch-friendly input
  * V07.04: DUPR-Compliant Scoring
  * - Players "Propose Score" → opponents "Sign to Acknowledge" → organizers finalize
  * - Uses proposeScore, signScore from duprScoring service
  * - Updated UI labels per DUPR compliance requirements
  *
  * FILE LOCATION: components/leagues/LeagueScoreEntryModal.tsx
- * VERSION: V07.04
+ * VERSION: V07.33
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   notifyScoreConfirmation,
@@ -30,6 +31,8 @@ import {
   ScoreVerificationBadge,
   DisputeScoreModal,
 } from './verification';
+// V07.33: Score picker wheel
+import { VerticalScorePicker } from '../shared/VerticalScorePicker';
 
 // ============================================
 // TYPES
@@ -77,15 +80,24 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [showDisputeModal, setShowDisputeModal] = useState(false);
 
+  // V07.33: Score picker state
+  const [activePicker, setActivePicker] = useState<{
+    gameIndex: number;
+    field: 'scoreA' | 'scoreB';
+    anchorRect: DOMRect | null;
+  } | null>(null);
+
   // Determine user's role in this match
   // V07.32: Check both primary players AND partners for doubles matches
   const isPlayerA = currentUser?.uid === match.userAId || currentUser?.uid === match.partnerAId;
   const isPlayerB = currentUser?.uid === match.userBId || currentUser?.uid === match.partnerBId;
   const isParticipant = isPlayerA || isPlayerB;
 
-  // V07.32: For DUPR compliance, when organizer is a participant, treat them as player (not organizer)
-  // This prevents organizer from directly finalizing their own match
+  // V07.32: For DUPR compliance, when organizer is a participant:
+  // - They cannot finalize their own match (effectiveIsOrganizer = false)
+  // - They cannot propose their own match score (only opponent can propose)
   const effectiveIsOrganizer = isOrganizer && !isParticipant;
+  const isOrganizerParticipant = isOrganizer && isParticipant;
 
   // Get all player IDs
   const matchPlayerIds = [match.userAId, match.userBId];
@@ -129,9 +141,10 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     !isDisputed &&
     verificationSettings.allowDisputes;
 
-  // Check if user can submit scores (participants or organizers who aren't playing this match)
-  // V07.32: Use effectiveIsOrganizer for DUPR compliance
-  const canSubmitScore = isParticipant || effectiveIsOrganizer;
+  // Check if user can submit scores
+  // V07.32: DUPR compliance - organizer-as-participant CANNOT propose their own match
+  // Only opponent can propose, then organizer-participant can sign/confirm
+  const canSubmitScore = (isParticipant && !isOrganizerParticipant) || effectiveIsOrganizer;
 
   // Initialize games from existing scores or empty
   useEffect(() => {
@@ -272,6 +285,28 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     newGames[index] = { ...newGames[index], [field]: value };
     setGames(newGames);
     setError(null);
+  };
+
+  // V07.33: Open score picker on input click
+  const handleScoreInputClick = (
+    e: React.MouseEvent<HTMLDivElement>,
+    gameIndex: number,
+    field: 'scoreA' | 'scoreB'
+  ) => {
+    if (hasScore) return; // Don't open picker if score already submitted
+    const rect = e.currentTarget.getBoundingClientRect();
+    setActivePicker({ gameIndex, field, anchorRect: rect });
+  };
+
+  // V07.33: Handle score selection from picker
+  const handlePickerSelect = (value: number) => {
+    if (!activePicker) return;
+    const { gameIndex, field } = activePicker;
+    const newGames = [...games];
+    newGames[gameIndex] = { ...newGames[gameIndex], [field]: String(value) };
+    setGames(newGames);
+    setError(null);
+    setActivePicker(null);
   };
 
   // V07.03: Quick score button handler - sets winner to clicked score, loser to score - 2
@@ -505,6 +540,17 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             </div>
           )}
 
+          {/* V07.32: DUPR compliance - organizer-as-participant cannot propose */}
+          {isOrganizerParticipant && !hasScore && (
+            <div className="bg-amber-900/30 border border-amber-600/50 text-amber-200 px-4 py-3 rounded-lg text-sm">
+              <div className="font-semibold mb-1">DUPR Compliance</div>
+              <div className="text-amber-300/80">
+                As an organizer playing in this match, you cannot propose the score.
+                Your opponent must propose the score first, then you can confirm it.
+              </div>
+            </div>
+          )}
+
           {/* Score Entry */}
           {!showDisputeModal && (
             <>
@@ -521,25 +567,28 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                       <div className="flex items-center gap-3 mb-2">
                         <div className="text-xs text-gray-500 font-medium">Game {index + 1}</div>
                         <div className="flex-1 flex items-center gap-2 justify-center">
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={game.scoreA}
-                            onChange={(e) => handleGameChange(index, 'scoreA', e.target.value)}
-                            disabled={hasScore}
-                            placeholder="0"
-                            className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-lime-500 disabled:opacity-50 font-bold"
-                          />
+                          {/* V07.33: Clickable score boxes that open the picker */}
+                          <div
+                            onClick={(e) => handleScoreInputClick(e, index, 'scoreA')}
+                            className={`w-16 h-11 bg-gray-900 border border-gray-700 text-white text-center flex items-center justify-center rounded-lg font-bold text-lg cursor-pointer transition-all ${
+                              hasScore
+                                ? 'opacity-50 cursor-not-allowed'
+                                : 'hover:border-lime-500 hover:bg-gray-800 active:scale-95'
+                            }`}
+                          >
+                            {game.scoreA || <span className="text-gray-600">0</span>}
+                          </div>
                           <span className="text-gray-500 font-bold">-</span>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={game.scoreB}
-                            onChange={(e) => handleGameChange(index, 'scoreB', e.target.value)}
-                            disabled={hasScore}
-                            placeholder="0"
-                            className="w-16 bg-gray-900 border border-gray-700 text-white text-center py-2 rounded-lg focus:outline-none focus:border-lime-500 disabled:opacity-50 font-bold"
-                          />
+                          <div
+                            onClick={(e) => handleScoreInputClick(e, index, 'scoreB')}
+                            className={`w-16 h-11 bg-gray-900 border border-gray-700 text-white text-center flex items-center justify-center rounded-lg font-bold text-lg cursor-pointer transition-all ${
+                              hasScore
+                                ? 'opacity-50 cursor-not-allowed'
+                                : 'hover:border-lime-500 hover:bg-gray-800 active:scale-95'
+                            }`}
+                          >
+                            {game.scoreB || <span className="text-gray-600">0</span>}
+                          </div>
                         </div>
                         {games.length > 1 && !hasScore && (
                           <button
@@ -703,6 +752,17 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
           setShowDisputeModal(false);
         }}
       />
+
+      {/* V07.33: Score Picker Wheel */}
+      {activePicker && (
+        <VerticalScorePicker
+          value={parseInt(games[activePicker.gameIndex]?.[activePicker.field] || '0') || 0}
+          onChange={handlePickerSelect}
+          onClose={() => setActivePicker(null)}
+          maxScore={pointsPerGame + 10} // Allow for deuce scenarios
+          anchorRect={activePicker.anchorRect}
+        />
+      )}
     </div>
   );
 };

@@ -9,7 +9,11 @@
  * - DUPR eligibility toggle
  * - Finalise button
  *
- * @version V07.10
+ * V07.33: DUPR Compliance - Block finalization until opponent signs
+ * - Opponent acknowledgement is REQUIRED before organizer can finalize
+ * - Sequence: Propose → Sign → Finalize
+ *
+ * @version V07.33
  * @file components/shared/DuprReviewModal.tsx
  */
 
@@ -96,10 +100,22 @@ export function DuprReviewModal({
     }
   };
 
+  // V07.33: DUPR Compliance - Check if opponent has signed
+  // Finalization is ONLY allowed if:
+  // 1. There's no proposal (organizer entering directly), OR
+  // 2. The proposal status is 'signed' (opponent acknowledged)
+  const isProposalSigned = !proposal || proposal.status === 'signed';
+  const canFinalise = winnerId && isProposalSigned;
+
   // Handle finalise
   const handleFinalise = async () => {
     if (!winnerId) {
       alert('Cannot finalize: No winner determined');
+      return;
+    }
+    // V07.33: Block if opponent hasn't signed
+    if (proposal && proposal.status !== 'signed') {
+      alert('Cannot finalize: Opponent must acknowledge the score first. This is required for DUPR compliance.');
       return;
     }
     await onFinalise(match.id, scores, winnerId, duprEligible);
@@ -301,37 +317,57 @@ export function DuprReviewModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-700 bg-gray-800/50">
-          <button
-            onClick={onClose}
-            disabled={isSaving}
-            className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleFinalise}
-            disabled={isSaving || !winnerId}
-            className={`
-              inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all
-              ${!isSaving && winnerId
-                ? 'bg-lime-500 text-gray-900 hover:bg-lime-400'
-                : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-              }
-            `}
-          >
-            {isSaving ? (
-              <>
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        <div className="border-t border-gray-700 bg-gray-800/50">
+          {/* V07.33: DUPR Compliance Warning - Show when proposal exists but not signed */}
+          {proposal && proposal.status === 'proposed' && (
+            <div className="px-6 py-3 bg-amber-900/30 border-b border-amber-600/30">
+              <div className="flex items-start gap-2">
+                <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
-                Saving...
-              </>
-            ) : (
-              'Finalise Official Result'
-            )}
-          </button>
+                <div>
+                  <p className="text-sm font-medium text-amber-300">Awaiting Opponent Acknowledgement</p>
+                  <p className="text-xs text-amber-400/80 mt-0.5">
+                    DUPR requires the opponent to sign/acknowledge the score before you can finalize.
+                    The opponent must click "Sign to Acknowledge" first.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 px-6 py-4">
+            <button
+              onClick={onClose}
+              disabled={isSaving}
+              className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleFinalise}
+              disabled={isSaving || !canFinalise}
+              className={`
+                inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all
+                ${!isSaving && canFinalise
+                  ? 'bg-lime-500 text-gray-900 hover:bg-lime-400'
+                  : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                }
+              `}
+            >
+              {isSaving ? (
+                <>
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Saving...
+                </>
+              ) : (
+                'Finalise Official Result'
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

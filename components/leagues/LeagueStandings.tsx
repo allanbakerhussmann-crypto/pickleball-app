@@ -1,8 +1,9 @@
 /**
- * LeagueStandings Component V07.13
+ * LeagueStandings Component V07.33
  *
- * Enhanced standings display with rankings, stats, form, and visual improvements.
+ * Enhanced standings display with rankings, stats, and visual improvements.
  * Supports ladder challenge buttons for ladder format leagues.
+ * V07.33: Replaced Streak/Form columns with DIFF (point differential) for tiebreaker visibility.
  * V07.11: Added tiebreaker-based sorting for weekly round robin mode.
  * V07.13: Added showPointsForAgainst prop for displaying PF/PA columns.
  *
@@ -33,22 +34,12 @@ interface LeagueStandingsProps {
   showPointsForAgainst?: boolean;
 }
 
-type SortField = 'rank' | 'points' | 'wins' | 'played' | 'winRate' | 'streak';
+type SortField = 'rank' | 'points' | 'wins' | 'played' | 'winRate';
 type SortDirection = 'asc' | 'desc';
 
 // ============================================
 // HELPERS
 // ============================================
-
-const getFormBadge = (result: 'W' | 'L' | 'D' | 'F'): { label: string; bg: string; text: string } => {
-  switch (result) {
-    case 'W': return { label: 'W', bg: 'bg-green-600', text: 'text-white' };
-    case 'L': return { label: 'L', bg: 'bg-red-600', text: 'text-white' };
-    case 'D': return { label: 'D', bg: 'bg-gray-600', text: 'text-white' };
-    case 'F': return { label: 'F', bg: 'bg-orange-600', text: 'text-white' };
-    default: return { label: '-', bg: 'bg-gray-700', text: 'text-gray-400' };
-  }
-};
 
 const getRankDisplay = (rank: number): { emoji: string; color: string } => {
   switch (rank) {
@@ -62,12 +53,6 @@ const getRankDisplay = (rank: number): { emoji: string; color: string } => {
 const calculateWinRate = (wins: number, played: number): number => {
   if (played === 0) return 0;
   return Math.round((wins / played) * 100);
-};
-
-const getStreakDisplay = (streak: number): { text: string; color: string } => {
-  if (streak > 0) return { text: `${streak}W`, color: 'text-green-400' };
-  if (streak < 0) return { text: `${Math.abs(streak)}L`, color: 'text-red-400' };
-  return { text: '-', color: 'text-gray-500' };
 };
 
 // V07.11: Compare two members by a single tiebreaker (higher is better, returns negative if a > b)
@@ -187,10 +172,6 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
         case 'winRate':
           aVal = calculateWinRate(a.stats?.wins || 0, a.stats?.played || 0);
           bVal = calculateWinRate(b.stats?.wins || 0, b.stats?.played || 0);
-          break;
-        case 'streak':
-          aVal = a.stats?.currentStreak || 0;
-          bVal = b.stats?.currentStreak || 0;
           break;
         default:
           aVal = a.currentRank || 999;
@@ -378,13 +359,7 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
                   >
                     Pts <SortIcon field="points" />
                   </th>
-                  <th 
-                    className="py-3 px-4 text-center hidden lg:table-cell cursor-pointer hover:bg-gray-800 transition-colors"
-                    onClick={() => handleSort('streak')}
-                  >
-                    Streak <SortIcon field="streak" />
-                  </th>
-                  <th className="py-3 px-4 text-center hidden md:table-cell">Form</th>
+                  <th className="py-3 px-4 text-center hidden md:table-cell">DIFF</th>
                   {format === 'ladder' && onChallenge && (
                     <th className="py-3 px-4 text-center w-24">Action</th>
                   )}
@@ -396,8 +371,6 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
                   const rank = getRankDisplay(member.currentRank);
                   const winRate = calculateWinRate(member.stats?.wins || 0, member.stats?.played || 0);
                   const gameDiff = (member.stats?.gamesWon || 0) - (member.stats?.gamesLost || 0);
-                  const streak = getStreakDisplay(member.stats?.currentStreak || 0);
-                  const form = member.stats?.recentForm || [];
                   const showChallenge = canChallenge(member);
                   
                   return (
@@ -514,32 +487,20 @@ export const LeagueStandings: React.FC<LeagueStandingsProps> = ({
                         </span>
                       </td>
                       
-                      {/* Streak */}
-                      <td className="py-3 px-4 text-center hidden lg:table-cell">
-                        <span className={`font-medium ${streak.color}`}>
-                          {streak.text}
-                        </span>
-                      </td>
-                      
-                      {/* Form (last 5) */}
-                      <td className="py-3 px-4 hidden md:table-cell">
-                        <div className="flex gap-1 justify-center">
-                          {form.length > 0 ? (
-                            form.slice(-5).map((result, i) => {
-                              const badge = getFormBadge(result);
-                              return (
-                                <span
-                                  key={i}
-                                  className={`w-5 h-5 flex items-center justify-center rounded text-xs font-bold ${badge.bg} ${badge.text}`}
-                                >
-                                  {badge.label}
-                                </span>
-                              );
-                            })
-                          ) : (
-                            <span className="text-gray-600 text-xs">-</span>
-                          )}
-                        </div>
+                      {/* DIFF - Point Differential (tiebreaker) */}
+                      <td className="py-3 px-4 text-center hidden md:table-cell">
+                        {(() => {
+                          const pointDiff = (member.stats?.pointsFor || 0) - (member.stats?.pointsAgainst || 0);
+                          return (
+                            <span className={`font-medium ${
+                              pointDiff > 0 ? 'text-green-400' :
+                              pointDiff < 0 ? 'text-red-400' :
+                              'text-gray-500'
+                            }`}>
+                              {pointDiff > 0 ? '+' : ''}{pointDiff}
+                            </span>
+                          );
+                        })()}
                       </td>
                       
                       {/* Challenge Button (Ladder only) */}
