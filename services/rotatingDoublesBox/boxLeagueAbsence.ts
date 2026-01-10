@@ -180,12 +180,16 @@ export async function recordNoShowAbsence(
 }
 
 /**
- * Cancel an absence declaration
+ * Cancel an absence declaration (make player active again)
+ *
+ * Players can only cancel during draft state.
+ * Organizers can cancel during draft or active state.
  */
 export async function cancelAbsence(
   leagueId: string,
   weekNumber: number,
-  playerId: string
+  playerId: string,
+  isOrganizer: boolean = false
 ): Promise<void> {
   const week = await getWeek(leagueId, weekNumber);
 
@@ -193,9 +197,14 @@ export async function cancelAbsence(
     throw new Error(`Week ${weekNumber} not found`);
   }
 
-  // Can only cancel before activation
-  if (week.state !== 'draft') {
-    throw new Error('Cannot cancel absence after week is activated');
+  // Players can only cancel before activation
+  // Organizers can cancel during draft or active state
+  if (week.state === 'finalized' || week.state === 'closing') {
+    throw new Error('Cannot make player active after week is finalized');
+  }
+
+  if (week.state === 'active' && !isOrganizer) {
+    throw new Error('Only organizers can make players active during an active week');
   }
 
   const updatedAbsences = (week.absences || []).filter(

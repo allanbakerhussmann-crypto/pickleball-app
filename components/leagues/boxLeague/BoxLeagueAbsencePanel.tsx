@@ -345,6 +345,7 @@ interface WeekAbsenceCardProps {
   onAssignSub: (week: BoxLeagueWeek, absence: WeekAbsence) => void;
   onRemoveSub: (week: BoxLeagueWeek, absence: WeekAbsence) => void;
   onMarkNoShow: (week: BoxLeagueWeek, playerId: string, playerName: string) => void;
+  onMakeActive: (week: BoxLeagueWeek, playerId: string) => void;
 }
 
 const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
@@ -360,6 +361,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
   onAssignSub,
   onRemoveSub,
   onMarkNoShow,
+  onMakeActive,
 }) => {
   const memberMap = useMemo(() => new Map(members.map(m => [m.userId, m])), [members]);
 
@@ -518,6 +520,14 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                           Remove Sub
                         </button>
                       )}
+                      {week.state !== 'finalized' && (
+                        <button
+                          onClick={() => onMakeActive(week, absence.playerId)}
+                          className="px-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-medium transition-colors"
+                        >
+                          Make Active
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -539,7 +549,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                         <button
                           key={pid}
                           onClick={() => onMarkNoShow(week, pid, m?.displayName || 'Unknown')}
-                          className="px-2 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-600/50 rounded text-xs font-medium transition-colors"
+                          className="px-2 py-1 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 border border-orange-600/50 rounded text-xs font-medium transition-colors"
                         >
                           {m?.displayName || pid.slice(0, 8)}
                         </button>
@@ -670,6 +680,15 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
     }
   };
 
+  // Make player active again (remove absence)
+  const handleMakeActive = async (week: BoxLeagueWeek, playerId: string) => {
+    try {
+      await cancelAbsence(leagueId, week.weekNumber, playerId, isOrganizer);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to make player active');
+    }
+  };
+
   // Loading
   if (loading) {
     return (
@@ -749,6 +768,7 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
               onAssignSub={handleAssignSub}
               onRemoveSub={handleRemoveSub}
               onMarkNoShow={handleMarkNoShow}
+              onMakeActive={handleMakeActive}
             />
           ))}
         </div>
