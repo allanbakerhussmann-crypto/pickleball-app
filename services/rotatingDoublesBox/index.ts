@@ -2,7 +2,7 @@
  * Rotating Doubles Box League Services - Barrel Exports
  *
  * FILE LOCATION: services/rotatingDoublesBox/index.ts
- * VERSION: V07.27
+ * VERSION: V07.28
  */
 
 // ============================================
@@ -180,6 +180,8 @@ export {
   // Policy application
   applyAbsencePolicy,
   canSubmitMatchToDupr,
+  getDuprPlayerIdsForMatch,
+  getSubstituteInfoForMatch,
   canBoxRunMatches,
 
   // Display helpers

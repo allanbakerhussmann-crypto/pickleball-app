@@ -4,15 +4,24 @@
  * Handles absence declaration and substitute (ghost player) management.
  *
  * Two separate concepts:
- * 1. Substitute = Ghost Player - fills spot so games can happen, results don't count
+ * 1. Substitute = Ghost Player - fills spot so games can happen
+ *    - In DUPR leagues: sub MUST have DUPR ID → matches submitted with sub's DUPR ID
+ *    - Absent player's standings determined by absence policy (not sub's results)
+ *    - Next week: sub leaves, absent player returns to position per policy
+ *
  * 2. Absentee Policy - what happens to absent player's standings:
  *    - freeze: No change, stay in position
  *    - ghost_score: 0 wins, 0 points (ranks last)
  *    - average_points: Use season average stats
  *    - auto_relegate: Always drop one box
  *
+ * DUPR Submission Rules:
+ * - If substitute has DUPR ID linked → match IS submitted using sub's DUPR ID
+ * - Absent player's DUPR ID is NOT used (they didn't play)
+ * - If substitute lacks DUPR ID → match NOT submitted (in DUPR-required leagues)
+ *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueAbsence.ts
- * VERSION: V07.27
+ * VERSION: V07.28
  */
 
 import { doc, updateDoc, getDoc, getDocs, collection } from '@firebase/firestore';
@@ -698,38 +707,136 @@ export function applyAbsencePolicy(
 }
 
 /**
- * Check if a match should be submitted to DUPR based on absence status
+ * Check if a match can be submitted to DUPR based on absence/substitute status
  *
- * Ghost player matches should NOT be submitted to DUPR because:
- * - The absent player didn't actually play
- * - The ghost player's results don't count for anyone's rating
+ * DUPR Submission Rules:
+ * - If substitute has DUPR ID → match CAN be submitted using sub's DUPR ID
+ * - If substitute lacks DUPR ID → match CANNOT be submitted (in DUPR leagues)
+ * - Absent player's DUPR ID is NOT used (they didn't play)
+ *
+ * @param matchPlayerIds - Original player IDs in the match (includes absent player's ID)
+ * @param absences - Week absences with substitute info
+ * @param memberDuprIds - Map of playerId → duprId for all relevant players
+ * @param isDuprLeague - Whether the league requires DUPR submission
  */
 export function canSubmitMatchToDupr(
   matchPlayerIds: string[],
-  absences: WeekAbsence[]
-): { canSubmit: boolean; reason?: string } {
-  // Check if any player in this match is absent (with a ghost sub)
+  absences: WeekAbsence[],
+  memberDuprIds?: Map<string, string | undefined>,
+  isDuprLeague: boolean = false
+): { canSubmit: boolean; reason?: string; substituteMappings?: Array<{ absentId: string; substituteId: string }> } {
+  const substituteMappings: Array<{ absentId: string; substituteId: string }> = [];
+
+  // Check each player in the match
   for (const playerId of matchPlayerIds) {
     const absence = absences.find((a) => a.playerId === playerId);
+
     if (absence) {
-      return {
-        canSubmit: false,
-        reason: `Match includes absent player ${absence.playerName || playerId} - ghost sub matches are not submitted to DUPR`,
-      };
+      // This player is absent
+      if (!absence.substituteId) {
+        // No substitute assigned - cannot submit
+        return {
+          canSubmit: false,
+          reason: `Absent player ${absence.playerName || playerId} has no substitute assigned`,
+        };
+      }
+
+      // Substitute is assigned - check if they have DUPR ID (required for DUPR leagues)
+      if (isDuprLeague && memberDuprIds) {
+        const subDuprId = memberDuprIds.get(absence.substituteId);
+        if (!subDuprId) {
+          return {
+            canSubmit: false,
+            reason: `Substitute for ${absence.playerName || playerId} does not have DUPR ID linked`,
+          };
+        }
+      }
+
+      // Track the substitution for DUPR submission
+      substituteMappings.push({
+        absentId: playerId,
+        substituteId: absence.substituteId,
+      });
     }
   }
 
-  // Check if any player is a ghost substitute
+  // Also check if any player in match IS a substitute (they played in place of someone)
   for (const absence of absences) {
     if (absence.substituteId && matchPlayerIds.includes(absence.substituteId)) {
-      return {
-        canSubmit: false,
-        reason: `Match includes ghost substitute - results don't count for DUPR`,
-      };
+      // This player IS a substitute - check DUPR ID
+      if (isDuprLeague && memberDuprIds) {
+        const subDuprId = memberDuprIds.get(absence.substituteId);
+        if (!subDuprId) {
+          return {
+            canSubmit: false,
+            reason: `Substitute player does not have DUPR ID linked`,
+          };
+        }
+      }
+      // The substitute played, so the match can be submitted using their DUPR ID
     }
   }
 
-  return { canSubmit: true };
+  return { canSubmit: true, substituteMappings };
+}
+
+/**
+ * Get the actual player IDs to use for DUPR submission
+ *
+ * Replaces absent player IDs with their substitute's IDs
+ * so DUPR submission uses the actual players who played.
+ *
+ * @param matchPlayerIds - Original player IDs in the match
+ * @param absences - Week absences with substitute info
+ * @returns Array of player IDs to use for DUPR (with subs replacing absent players)
+ */
+export function getDuprPlayerIdsForMatch(
+  matchPlayerIds: string[],
+  absences: WeekAbsence[]
+): string[] {
+  return matchPlayerIds.map((playerId) => {
+    // Check if this player was absent
+    const absence = absences.find((a) => a.playerId === playerId);
+    if (absence?.substituteId) {
+      // Use substitute's ID for DUPR submission
+      return absence.substituteId;
+    }
+    return playerId;
+  });
+}
+
+/**
+ * Get substitute info for a match (for display/reporting)
+ */
+export function getSubstituteInfoForMatch(
+  matchPlayerIds: string[],
+  absences: WeekAbsence[]
+): Array<{
+  absentPlayerId: string;
+  absentPlayerName?: string;
+  substituteId: string;
+  substituteName?: string;
+}> {
+  const subs: Array<{
+    absentPlayerId: string;
+    absentPlayerName?: string;
+    substituteId: string;
+    substituteName?: string;
+  }> = [];
+
+  for (const playerId of matchPlayerIds) {
+    const absence = absences.find((a) => a.playerId === playerId);
+    if (absence?.substituteId) {
+      subs.push({
+        absentPlayerId: playerId,
+        absentPlayerName: absence.playerName,
+        substituteId: absence.substituteId,
+        substituteName: absence.substituteName,
+      });
+    }
+  }
+
+  return subs;
 }
 
 /**
