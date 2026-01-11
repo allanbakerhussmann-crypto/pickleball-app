@@ -501,9 +501,20 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                     <div className="mb-6">
                         <h4 className="text-gray-300 font-medium mb-2">Password</h4>
                         {passwordResetSent ? (
-                            <p className="text-sm text-green-400">
-                                Password reset email sent. Check your inbox (and spam folder).
-                            </p>
+                            <div>
+                                <p className="text-sm text-green-400 mb-2">
+                                    Password reset email sent. Check your inbox (and spam folder).
+                                </p>
+                                <button
+                                    onClick={() => {
+                                        setPasswordResetSent(false);
+                                        setPasswordResetError(null);
+                                    }}
+                                    className="text-sm text-gray-400 hover:text-gray-300"
+                                >
+                                    Send Again
+                                </button>
+                            </div>
                         ) : (
                             <>
                                 <button
