@@ -54,7 +54,7 @@ interface ProfileProps {
 }
 
 export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
-    const { currentUser, userProfile, updateUserProfile, updateUserEmail, updateUserExtendedProfile } = useAuth();
+    const { currentUser, userProfile, updateUserProfile, updateUserEmail, updateUserExtendedProfile, resetPassword } = useAuth();
     const fileInputRef = useRef<HTMLInputElement>(null);
     
     // Cast userProfile to any to access extended fields stored via updateUserExtendedProfile
@@ -81,6 +81,9 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showPhoneVerification, setShowPhoneVerification] = useState(false);
+    const [passwordResetSent, setPasswordResetSent] = useState(false);
+    const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
+    const [passwordResetLoading, setPasswordResetLoading] = useState(false);
 
     // Auto-correct legacy phone numbers without country code
     const normalizePhone = (phone: string | undefined): string => {
@@ -173,6 +176,22 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                 setPhotoMimeType(file.type);
             };
             reader.readAsDataURL(file);
+        }
+    };
+
+    const handleChangePassword = async () => {
+        if (!userProfile?.email) return;
+
+        setPasswordResetError(null);
+        setPasswordResetLoading(true);
+
+        try {
+            await resetPassword(userProfile.email);
+            setPasswordResetSent(true);
+        } catch (err: any) {
+            setPasswordResetError(err.message || 'Failed to send password reset email');
+        } finally {
+            setPasswordResetLoading(false);
         }
     };
 
@@ -476,6 +495,29 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                     {/* Data Export */}
                     <div className="mb-6">
                         <DataExportButton />
+                    </div>
+
+                    {/* Change Password */}
+                    <div className="mb-6">
+                        <h4 className="text-gray-300 font-medium mb-2">Password</h4>
+                        {passwordResetSent ? (
+                            <p className="text-sm text-green-400">
+                                Password reset email sent. Check your inbox (and spam folder).
+                            </p>
+                        ) : (
+                            <>
+                                <button
+                                    onClick={handleChangePassword}
+                                    disabled={passwordResetLoading}
+                                    className="text-sm text-lime-500 hover:text-lime-400 disabled:text-gray-500 disabled:cursor-not-allowed"
+                                >
+                                    {passwordResetLoading ? 'Sending...' : 'Change Password'}
+                                </button>
+                                {passwordResetError && (
+                                    <p className="text-sm text-red-400 mt-1">{passwordResetError}</p>
+                                )}
+                            </>
+                        )}
                     </div>
 
                     {/* Delete Account */}
