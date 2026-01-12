@@ -1,12 +1,12 @@
 /**
- * Box League Standings Component V07.26
+ * Box League Standings Component V07.42
  *
  * Complete standings UI for rotating doubles box leagues.
  * Shows Overall season ladder + Weekly tabs with per-box standings.
  * Includes promotion/relegation indicators, movement summaries, and tiebreak explanations.
  *
  * FILE LOCATION: components/leagues/boxLeague/BoxLeagueStandings.tsx
- * VERSION: V07.26
+ * VERSION: V07.42
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -632,9 +632,7 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
 
     const result = new Map<number, BoxStanding[]>();
 
-    if (currentWeek.standingsSnapshot?.boxes) {
-      // Debug: Log what we read from snapshot
-      console.log('[BoxLeagueStandings] Reading from snapshot, boxes:', currentWeek.standingsSnapshot.boxes.map(s => ({ playerId: s.playerId, playerName: s.playerName })));
+    if (currentWeek.standingsSnapshot?.boxes && currentWeek.standingsSnapshot.boxes.length > 0) {
 
       // Group standings by box number
       const boxGroups = new Map<number, BoxStanding[]>();
@@ -650,6 +648,7 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
       }
     } else if (currentWeek.boxAssignments) {
       // Fallback: Create placeholder standings from box assignments
+
       const memberMap = new Map(members.map(m => [m.userId, m]));
 
       for (const box of currentWeek.boxAssignments) {

@@ -1,8 +1,9 @@
 /**
- * LeagueScheduleManager Component V07.39
+ * LeagueScheduleManager Component V07.42
  *
  * Organizer tool to generate and manage league match schedules.
  * V07.39: Added box league weeks management with idempotent activation
+ * V07.42: Added "Create Next Week" button for finalized weeks
  *
  * FILE LOCATION: components/leagues/LeagueScheduleManager.tsx
  */
@@ -464,6 +465,71 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     } catch (err) {
       console.error('[handleFinalizeWeek] Error:', err);
       setError(`Failed to finalize week: ${(err as Error).message}`);
+    } finally {
+      setLoadingWeekAction(null);
+    }
+  }, [league.id, currentUser?.uid, onScheduleGenerated]);
+
+  // V07.42: Create Next Week from finalized week (if it wasn't auto-created)
+  const handleCreateNextWeek = useCallback(async (weekNumber: number) => {
+    if (!currentUser?.uid) return;
+
+    setLoadingWeekAction(weekNumber);
+    setError(null);
+    try {
+      // Import services
+      const { createWeekDraft, getWeek, getSeason } = await import('../../services/rotatingDoublesBox');
+      const { applyMovements, generateNextWeekAssignments } = await import('../../services/rotatingDoublesBox/boxLeaguePromotion');
+
+      // Get the finalized week
+      const finalizedWeek = await getWeek(league.id, weekNumber);
+      if (!finalizedWeek || finalizedWeek.state !== 'finalized') {
+        throw new Error(`Week ${weekNumber} is not finalized`);
+      }
+
+      if (!finalizedWeek.standingsSnapshot?.boxes) {
+        throw new Error(`Week ${weekNumber} has no standings snapshot`);
+      }
+
+      // Get season info
+      const season = await getSeason(league.id, finalizedWeek.seasonId);
+      if (!season) {
+        throw new Error('Season not found');
+      }
+
+      // Calculate movements from finalized standings
+      const movements = applyMovements(finalizedWeek, finalizedWeek.standingsSnapshot.boxes);
+
+      // Generate next week assignments
+      const nextWeekAssignments = generateNextWeekAssignments(finalizedWeek.boxAssignments, movements);
+
+      // Determine scheduled date
+      const nextWeekNumber = weekNumber + 1;
+      const nextWeekSchedule = season.weekSchedule.find(w => w.weekNumber === nextWeekNumber);
+      const scheduledDate = nextWeekSchedule?.scheduledDate || Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+      // Create the next week draft
+      await createWeekDraft({
+        leagueId: league.id,
+        seasonId: finalizedWeek.seasonId,
+        weekNumber: nextWeekNumber,
+        scheduledDate,
+        boxAssignments: nextWeekAssignments,
+        sessions: finalizedWeek.sessions,
+        courtAssignments: finalizedWeek.courtAssignments,
+        settings: season.rulesSnapshot,
+      });
+
+      const movementCount = movements.filter(m => m.reason !== 'stayed').length;
+      setResult({
+        success: true,
+        matchesCreated: 0,
+        error: `Week ${nextWeekNumber} draft created with ${movementCount} player movement(s)!`,
+      });
+      onScheduleGenerated();
+    } catch (err) {
+      console.error('[handleCreateNextWeek] Error:', err);
+      setError(`Failed to create next week: ${(err as Error).message}`);
     } finally {
       setLoadingWeekAction(null);
     }
@@ -1117,6 +1183,18 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                                 title="Finalize week, apply promotion/relegation, and create next week draft"
                               >
                                 {loadingWeekAction === week.weekNumber ? 'Finalizing...' : 'Finalize Week'}
+                              </button>
+                            )}
+
+                            {/* Action Buttons - Finalized State: Create Next Week if missing */}
+                            {week.state === 'finalized' && !boxWeeks.some(w => w.weekNumber === week.weekNumber + 1) && (
+                              <button
+                                onClick={() => handleCreateNextWeek(week.weekNumber)}
+                                disabled={loadingWeekAction === week.weekNumber}
+                                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                                title="Create next week draft from this week's standings"
+                              >
+                                {loadingWeekAction === week.weekNumber ? 'Creating...' : 'Create Next Week'}
                               </button>
                             )}
                           </div>

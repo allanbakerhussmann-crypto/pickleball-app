@@ -5,7 +5,7 @@
  * Generates next week's box assignments based on standings.
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeaguePromotion.ts
- * VERSION: V07.25
+ * VERSION: V07.42
  */
 
 import type {
@@ -45,10 +45,7 @@ export function applyMovements(
     boxStandings.sort((a, b) => a.positionInBox - b.positionInBox);
   }
 
-  // V07.38: Debug logging
   const totalBoxes = week.boxAssignments.length;
-  console.log(`[applyMovements] totalBoxes=${totalBoxes}, boxAssignments=`, week.boxAssignments.map(a => a.boxNumber));
-  console.log(`[applyMovements] boxStandingsMap sizes:`, Array.from(boxStandingsMap.entries()).map(([box, players]) => ({ box, count: players.length })));
 
   // Process each player
   for (const standing of standings) {
@@ -68,6 +65,10 @@ export function applyMovements(
 
 /**
  * Calculate movement for a single player
+ *
+ * V07.42: IMPORTANT - We calculate movement based on POSITION, not the pre-calculated
+ * standing.movement field. The standing.movement is for DISPLAY purposes only.
+ * Actual promotion/relegation is determined by position in box.
  */
 function calculatePlayerMovement(
   standing: BoxStanding,
@@ -79,30 +80,16 @@ function calculatePlayerMovement(
   const promotionCount = week.rulesSnapshot?.promotionCount ?? 1;
   const relegationCount = week.rulesSnapshot?.relegationCount ?? 1;
 
-  // V07.38: Debug logging
-  console.log(`[calculatePlayerMovement] ${standing.playerName}: box=${standing.boxNumber}, pos=${standing.positionInBox}, boxSize=${boxSize}, totalBoxes=${totalBoxes}, promoCount=${promotionCount}, relegCount=${relegationCount}`);
 
-  // Check if movement is frozen for this player
-  if (standing.movement === 'frozen') {
-    return {
-      playerId: standing.playerId,
-      playerName: standing.playerName,
-      fromBox: standing.boxNumber,
-      toBox: standing.boxNumber,
-      fromPosition: standing.positionInBox,
-      toPosition: standing.positionInBox, // Stays in same position
-      reason: 'frozen',
-      wasAbsent: standing.wasAbsent,
-    };
-  }
+  // V07.42: REMOVED the check for standing.movement === 'frozen'
+  // The standing.movement field is for UI display, not for determining actual movements.
+  // Actual movements are calculated based on position in box below.
 
   // Check for promotion (top N in box, not in box 1)
   const isPromotionPosition = standing.positionInBox <= promotionCount;
   const canPromote = standing.boxNumber > 1;
-  console.log(`[calculatePlayerMovement] ${standing.playerName}: PROMO CHECK - pos(${standing.positionInBox}) <= promoCount(${promotionCount})? ${isPromotionPosition}, box(${standing.boxNumber}) > 1? ${canPromote}`);
 
   if (isPromotionPosition && canPromote) {
-    console.log(`[calculatePlayerMovement] ${standing.playerName} -> PROMOTED from box ${standing.boxNumber} to box ${standing.boxNumber - 1}`);
     return {
       playerId: standing.playerId,
       playerName: standing.playerName,
@@ -119,11 +106,9 @@ function calculatePlayerMovement(
   const relegationThreshold = boxSize - relegationCount;
   const isRelegationPosition = standing.positionInBox > relegationThreshold;
   const canRelegate = standing.boxNumber < totalBoxes;
-  console.log(`[calculatePlayerMovement] ${standing.playerName}: RELEG CHECK - pos(${standing.positionInBox}) > threshold(${relegationThreshold})? ${isRelegationPosition}, box(${standing.boxNumber}) < totalBoxes(${totalBoxes})? ${canRelegate}`);
 
   if (isRelegationPosition && canRelegate) {
     const relegationPosition = standing.positionInBox - relegationThreshold;
-    console.log(`[calculatePlayerMovement] ${standing.playerName} -> RELEGATED from box ${standing.boxNumber} to box ${standing.boxNumber + 1}`);
     return {
       playerId: standing.playerId,
       playerName: standing.playerName,
@@ -137,7 +122,6 @@ function calculatePlayerMovement(
   }
 
   // No movement - stay in place
-  console.log(`[calculatePlayerMovement] ${standing.playerName} -> STAYED (box ${standing.boxNumber}, pos ${standing.positionInBox})`);
   return {
     playerId: standing.playerId,
     playerName: standing.playerName,
@@ -161,8 +145,9 @@ export function generateNextWeekAssignments(
   currentAssignments: BoxAssignment[],
   movements: PlayerMovement[]
 ): BoxAssignment[] {
+
   // Group movements by destination box
-  const boxPlayersMap = new Map<number, { playerId: string; position: number }[]>();
+  const boxPlayersMap = new Map<number, { playerId: string; position: number; playerName?: string }[]>();
 
   // Initialize all boxes
   for (const assignment of currentAssignments) {
@@ -174,10 +159,12 @@ export function generateNextWeekAssignments(
     const boxPlayers = boxPlayersMap.get(movement.toBox) || [];
     boxPlayers.push({
       playerId: movement.playerId,
+      playerName: movement.playerName,
       position: movement.toPosition,
     });
     boxPlayersMap.set(movement.toBox, boxPlayers);
   }
+
 
   // Build new assignments with players sorted by position
   const newAssignments: BoxAssignment[] = [];
@@ -194,6 +181,7 @@ export function generateNextWeekAssignments(
 
   // Sort assignments by box number
   newAssignments.sort((a, b) => a.boxNumber - b.boxNumber);
+
 
   return newAssignments;
 }

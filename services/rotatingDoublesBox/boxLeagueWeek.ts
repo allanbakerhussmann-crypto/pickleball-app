@@ -5,7 +5,7 @@
  * Draft → Active → Closing → Finalized
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueWeek.ts
- * VERSION: V07.40
+ * VERSION: V07.42
  */
 
 import {
@@ -364,7 +364,6 @@ export async function activateWeek(
 
     // V07.40: PROMOTION FIX - Compute correct assignments for Week 2+
     let assignmentsToUse = week.boxAssignments;
-    let assignmentsWereUpdated = false;
 
     if (weekNumber > 1) {
       // Read previous week inside the transaction
@@ -389,19 +388,23 @@ export async function activateWeek(
         const correctAssignments = generateNextWeekAssignments(prevWeek.boxAssignments, movements);
         assignmentsToUse = correctAssignments;
 
-        // Check if assignments differ from what's stored in week doc
-        if (!deepEqualBoxAssignments(week.boxAssignments, correctAssignments)) {
-          console.log(`[activateWeek] Week ${weekNumber}: Assignments differ, updating in transaction`);
-          assignmentsWereUpdated = true;
-        }
+        console.log(`[activateWeek] Week ${weekNumber}: Computed assignments from finalized standings`);
       }
     }
 
-    // Generate match docs using the CORRECT assignments
-    const rotationVersion = 1;
-    const matchDocs = await generateMatchDocsForWeek(leagueId, week, rotationVersion, assignmentsToUse);
+    // Debug log: show what assignments we're using
 
-    console.log(`[activateWeek] Generated ${matchDocs.length} match docs for week ${weekNumber}`);
+    // Guard: ensure we have assignments
+    if (!assignmentsToUse || assignmentsToUse.length === 0) {
+      throw new Error(`Week ${weekNumber} has no box assignments`);
+    }
+
+    // Belt-and-suspenders: pass week object with corrected assignments
+    // Even if generator accidentally references week.boxAssignments, it will be correct
+    const rotationVersion = 1;
+    const weekForMatchGen: BoxLeagueWeek = { ...week, boxAssignments: assignmentsToUse };
+    const matchDocs = await generateMatchDocsForWeek(leagueId, weekForMatchGen, rotationVersion, assignmentsToUse);
+
 
     // Write all match documents
     const matchIds: string[] = [];
@@ -411,38 +414,20 @@ export async function activateWeek(
       matchIds.push(matchDoc.id);
     }
 
-    // Build the update object
+    // ALWAYS write boxAssignments - ensures week doc matches generated matches
     const now = Date.now();
-
-    // If assignments were corrected, include them in the update (atomically)
-    if (assignmentsWereUpdated) {
-      console.log(`[activateWeek] Week ${weekNumber}: Including corrected boxAssignments in update`);
-      transaction.update(weekRef, {
-        state: 'active' as BoxWeekState,
-        activatedAt: now,
-        matchIds,
-        totalMatches: matchIds.length,
-        completedMatches: 0,
-        pendingVerificationCount: 0,
-        disputedCount: 0,
-        weekStatus: 'active',
-        rotationVersion,
-        boxAssignments: assignmentsToUse,
-      });
-    } else {
-      // Update week document atomically (without changing boxAssignments)
-      transaction.update(weekRef, {
-        state: 'active' as BoxWeekState,
-        activatedAt: now,
-        matchIds,
-        totalMatches: matchIds.length,
-        completedMatches: 0,
-        pendingVerificationCount: 0,
-        disputedCount: 0,
-        weekStatus: 'active',
-        rotationVersion,
-      });
-    }
+    transaction.update(weekRef, {
+      state: 'active' as BoxWeekState,
+      activatedAt: now,
+      matchIds,
+      totalMatches: matchIds.length,
+      completedMatches: 0,
+      pendingVerificationCount: 0,
+      disputedCount: 0,
+      weekStatus: 'active',
+      rotationVersion,
+      boxAssignments: assignmentsToUse,  // ALWAYS write
+    });
 
     return { matchIds, alreadyActive: false, seasonId: week.seasonId };
   });
@@ -454,6 +439,61 @@ export async function activateWeek(
   }
 
   return { matchIds: result.matchIds };
+}
+
+/**
+ * V07.40: Deactivate a week (active → draft) for testing/fixing
+ *
+ * WARNING: This deletes all matches for the week!
+ * Use only for testing or fixing broken activations.
+ *
+ * @returns Number of matches deleted
+ */
+export async function deactivateWeek(
+  leagueId: string,
+  weekNumber: number
+): Promise<{ deletedMatchCount: number }> {
+  const week = await getWeek(leagueId, weekNumber);
+
+  if (!week) {
+    throw new Error(`Week ${weekNumber} not found`);
+  }
+
+  if (week.state !== 'active') {
+    throw new Error(`Week ${weekNumber} is '${week.state}', expected 'active'`);
+  }
+
+  // Delete all matches for this week
+  const matchIds = week.matchIds || [];
+  let deletedCount = 0;
+
+  for (const matchId of matchIds) {
+    try {
+      const matchRef = doc(db, 'leagues', leagueId, 'matches', matchId);
+      const { deleteDoc } = await import('@firebase/firestore');
+      await deleteDoc(matchRef);
+      deletedCount++;
+    } catch (err) {
+      console.warn(`[deactivateWeek] Failed to delete match ${matchId}:`, err);
+    }
+  }
+
+  // Reset week to draft state
+  await updateDoc(getWeekDoc(leagueId, weekNumber), {
+    state: 'draft',
+    activatedAt: null,
+    matchIds: [],
+    totalMatches: 0,
+    completedMatches: 0,
+    pendingVerificationCount: 0,
+    disputedCount: 0,
+    weekStatus: 'scheduled',
+    rotationVersion: null,
+  });
+
+  console.log(`[deactivateWeek] Week ${weekNumber} reset to draft, deleted ${deletedCount} matches`);
+
+  return { deletedMatchCount: deletedCount };
 }
 
 /**
@@ -545,11 +585,13 @@ export async function finalizeWeek(
   // Apply movements (promotion/relegation)
   const movements = applyMovements(week, standings);
 
+
   // Generate next week assignments
   const nextWeekAssignments = generateNextWeekAssignments(
     week.boxAssignments,
     movements
   );
+
 
   // Update week with finalization data
   const now = Date.now();
@@ -763,13 +805,6 @@ export async function refreshDraftWeekAssignments(
   const promotionCount = boxSettings?.promotionCount ?? previousWeek.rulesSnapshot.promotionCount ?? 1;
   const relegationCount = boxSettings?.relegationCount ?? previousWeek.rulesSnapshot.relegationCount ?? 1;
 
-  console.log(`[refreshDraftWeekAssignments] Using promotionCount=${promotionCount}, relegationCount=${relegationCount}`);
-  console.log(`[refreshDraftWeekAssignments] Previous week standings:`, previousWeek.standingsSnapshot.boxes.map(s => ({
-    playerId: s.playerId,
-    playerName: s.playerName,
-    box: s.boxNumber,
-    pos: s.positionInBox
-  })));
 
   const weekWithCurrentSettings: BoxLeagueWeek = {
     ...previousWeek,
@@ -783,20 +818,8 @@ export async function refreshDraftWeekAssignments(
   // Re-apply movements with current settings
   const movements = applyMovements(weekWithCurrentSettings, previousWeek.standingsSnapshot.boxes);
 
-  console.log(`[refreshDraftWeekAssignments] Calculated movements:`, movements.map(m => ({
-    player: m.playerName,
-    from: m.fromBox,
-    to: m.toBox,
-    reason: m.reason
-  })));
-
   // Generate new box assignments
   const newAssignments = generateNextWeekAssignments(previousWeek.boxAssignments, movements);
-
-  console.log(`[refreshDraftWeekAssignments] New assignments:`, newAssignments.map(a => ({
-    box: a.boxNumber,
-    players: a.playerIds
-  })));
 
   // Update the draft week with new assignments
   await updateBoxAssignments(leagueId, weekNumber, newAssignments);
@@ -811,11 +834,10 @@ export async function refreshDraftWeekAssignments(
     },
   });
 
-  // Recalculate standings to update the display (the standingsSnapshot)
-  // This will create standings entries for the new box assignments
-  await recalculateWeekStandings(leagueId, weekNumber);
-
-  console.log(`[refreshDraftWeekAssignments] Week ${weekNumber} assignments refreshed with ${movements.filter(m => m.reason !== 'stayed').length} movements`);
+  // V07.42: For draft weeks, clear standingsSnapshot so UI uses boxAssignments fallback
+  await updateDoc(getWeekDoc(leagueId, weekNumber), {
+    standingsSnapshot: null,
+  });
 
   return { movements, boxAssignments: newAssignments };
 }
