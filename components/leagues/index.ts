@@ -23,10 +23,5 @@ export { LeagueScheduleManager } from './LeagueScheduleManager';
 export { LeagueMatchCard } from './LeagueMatchCard';
 export { LeagueStandings } from './LeagueStandings';
 
-// Postpone/Reschedule Components (NEW V05.37)
-export { PostponeMatchModal } from './PostponeMatchModal';
-export { PostponeWeekModal } from './PostponeWeekModal';
-export { PostponedMatchesList } from './PostponedMatchesList';
-
 // Note: Import ChallengeModal directly when needed:
 // import { ChallengeModal } from './ChallengeModal';
