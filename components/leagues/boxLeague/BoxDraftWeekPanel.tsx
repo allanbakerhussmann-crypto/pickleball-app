@@ -178,6 +178,8 @@ interface DroppableBoxProps {
   isOver?: boolean;
   disabled?: boolean;
   totalBoxes: number;
+  isExpanded: boolean;
+  onToggle: () => void;
 }
 
 const DroppableBox: React.FC<DroppableBoxProps> = ({
@@ -186,6 +188,8 @@ const DroppableBox: React.FC<DroppableBoxProps> = ({
   isOver,
   disabled,
   totalBoxes,
+  isExpanded,
+  onToggle,
 }) => {
   const colors = getBoxColors(boxNumber);
   const isValidSize = players.length >= 4 && players.length <= 6;
@@ -196,9 +200,21 @@ const DroppableBox: React.FC<DroppableBoxProps> = ({
         isOver ? 'ring-2 ring-lime-500 scale-[1.02]' : ''
       }`}
     >
-      {/* Box Header */}
-      <div className={`${colors.bg} px-3 py-2 flex items-center justify-between`}>
+      {/* Box Header - Clickable to toggle */}
+      <button
+        onClick={onToggle}
+        className={`${colors.bg} px-3 py-2 flex items-center justify-between w-full text-left hover:brightness-110 transition-all`}
+      >
         <div className="flex items-center gap-2">
+          {/* Expand/Collapse Icon */}
+          <svg
+            className={`w-4 h-4 text-white/70 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
           <span className="text-lg font-bold text-white">Box {boxNumber}</span>
           {boxNumber === 1 && (
             <span className="px-1.5 py-0.5 bg-yellow-400/20 text-yellow-400 rounded text-xs">
@@ -215,29 +231,38 @@ const DroppableBox: React.FC<DroppableBoxProps> = ({
           {players.length} player{players.length !== 1 ? 's' : ''}
           {!isValidSize && ' (need 4-6)'}
         </span>
-      </div>
+      </button>
 
-      {/* Players List */}
-      <SortableContext
-        items={players.map(p => p.odUserId)}
-        strategy={verticalListSortingStrategy}
-      >
-        <div className={`${colors.bg} bg-opacity-50 p-2 space-y-1 min-h-[120px]`}>
-          {players.length === 0 ? (
-            <div className="text-center text-gray-500 py-4 text-sm">
-              Drop players here
-            </div>
-          ) : (
-            players.map((player) => (
-              <SortablePlayerCard
-                key={player.odUserId}
-                player={player}
-                disabled={disabled}
-              />
-            ))
-          )}
+      {/* Collapsed Preview - Show player names */}
+      {!isExpanded && players.length > 0 && (
+        <div className={`${colors.bg} bg-opacity-30 px-3 py-2 text-xs text-white/60 truncate`}>
+          {players.map(p => p.displayName).join(' • ')}
         </div>
-      </SortableContext>
+      )}
+
+      {/* Players List - Only when expanded */}
+      {isExpanded && (
+        <SortableContext
+          items={players.map(p => p.odUserId)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className={`${colors.bg} bg-opacity-50 p-2 space-y-1 min-h-[120px]`}>
+            {players.length === 0 ? (
+              <div className="text-center text-gray-500 py-4 text-sm">
+                Drop players here
+              </div>
+            ) : (
+              players.map((player) => (
+                <SortablePlayerCard
+                  key={player.odUserId}
+                  player={player}
+                  disabled={disabled}
+                />
+              ))
+            )}
+          </div>
+        </SortableContext>
+      )}
     </div>
   );
 };
@@ -265,6 +290,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [expandedBoxes, setExpandedBoxes] = useState<Set<number>>(new Set([1])); // Box 1 expanded by default
 
   // Initialize local assignments from week
   useEffect(() => {
@@ -568,6 +594,26 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
       {/* Boxes Grid */}
       <div className="p-4">
+        {/* Expand/Collapse Controls */}
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-sm text-gray-400">{totalBoxes} boxes</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setExpandedBoxes(new Set(boxNumbers))}
+              className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+            >
+              Expand All
+            </button>
+            <span className="text-gray-600">|</span>
+            <button
+              onClick={() => setExpandedBoxes(new Set())}
+              className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+            >
+              Collapse All
+            </button>
+          </div>
+        </div>
+
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -584,6 +630,18 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
                 isOver={overBoxNumber === boxNumber}
                 disabled={saving || activating || resetting}
                 totalBoxes={totalBoxes}
+                isExpanded={expandedBoxes.has(boxNumber)}
+                onToggle={() => {
+                  setExpandedBoxes(prev => {
+                    const next = new Set(prev);
+                    if (next.has(boxNumber)) {
+                      next.delete(boxNumber);
+                    } else {
+                      next.add(boxNumber);
+                    }
+                    return next;
+                  });
+                }}
               />
             ))}
           </div>
