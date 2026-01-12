@@ -52,11 +52,9 @@
  * - Logs console errors for debugging data corruption
  *
  * V06.10 Changes:
- * - Added team NAME matching in addition to team ID matching
- * - Fixes issue where teams on court still appeared in queue (pool play)
- * - busyTeamNames Set tracks teams by name (case-insensitive)
- * - Queue builder also tracks by team name to prevent duplicates
- * - autoAssignFreeCourts also checks team names for conflicts
+ * - Originally added team NAME matching for pool play
+ * - V07.29: REMOVED name matching - different players can have same name
+ * - Now relies solely on team ID and player ID matching
  *
  * V06.09 Changes:
  * - Added fair match queue distribution algorithm (load balancing)
@@ -75,7 +73,7 @@
 
 import { useMemo, useCallback, useEffect, useRef } from 'react';
 import type { Match, Court, Division, TournamentCourtSettings, TournamentMatchType } from '../../../types';
-import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment, updatePoolResultsOnMatchComplete } from '../../../services/firebase';
+import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment, updatePoolResultsOnMatchCompleteSafe } from '../../../services/firebase';
 import { validateGameScore } from '../../../services/game/scoreValidation';
 import type { GameSettings } from '../../../types/game/gameSettings';
 
@@ -401,9 +399,9 @@ export const useCourtManagement = ({
 
   const getEligibleMatches = useCallback((): { eligible: Match[]; scores: Record<string, number> } => {
     // Track busy teams AND busy players (currently on court)
+    // V07.29: Removed busyTeamNames - different players can have same name
     const busyTeams = new Set<string>();
     const busyPlayers = new Set<string>();
-    const busyTeamNames = new Set<string>(); // Also track by NAME for pool play
 
     // Calculate play counts per team (in_progress + completed safeMatches)
     const teamPlayCount = new Map<string, number>();
@@ -414,8 +412,6 @@ export const useCourtManagement = ({
     safeMatches.forEach(m => {
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
-      const teamAName = m.sideA?.name || '';
-      const teamBName = m.sideB?.name || '';
 
       // Count matches that are in_progress or completed for fair distribution
       const isPlayed = m.status === 'in_progress' || m.status === 'completed';
@@ -431,10 +427,6 @@ export const useCourtManagement = ({
       // Mark team IDs as busy
       if (teamAId && teamAId.trim()) busyTeams.add(teamAId);
       if (teamBId && teamBId.trim()) busyTeams.add(teamBId);
-
-      // Mark team NAMES as busy (for pool play where IDs might differ across safeMatches)
-      if (teamAName && teamAName.trim()) busyTeamNames.add(teamAName.toLowerCase());
-      if (teamBName && teamBName.trim()) busyTeamNames.add(teamBName.toLowerCase());
 
       // Mark player IDs as busy (from sideA/sideB.playerIds)
       (m.sideA?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
@@ -509,8 +501,15 @@ export const useCourtManagement = ({
       const teamAName = m.sideA?.name || '';
       const teamBName = m.sideB?.name || '';
 
-      // Skip matches with missing team IDs
-      if (!teamAId || !teamBId) {
+      // Skip matches with missing team IDs or TBD (bracket matches awaiting opponents)
+      // V07.29: Added TBD check - bracket matches have placeholder 'TBD' until winners advance
+      if (!teamAId || !teamBId || teamAId === 'TBD' || teamBId === 'TBD') {
+        scores[m.id] = -1;
+        return;
+      }
+
+      // Also check for TBD names (safety check for bracket matches)
+      if (teamAName === 'TBD' || teamBName === 'TBD') {
         scores[m.id] = -1;
         return;
       }
@@ -538,12 +537,8 @@ export const useCourtManagement = ({
                          busyPlayers.has(teamAId) ||
                          busyPlayers.has(teamBId);
 
-      // Check 2: Team NAME not currently on court (fallback for pool play)
-      const nameBusy =
-        (teamAName && busyTeamNames.has(teamAName.toLowerCase())) ||
-        (teamBName && busyTeamNames.has(teamBName.toLowerCase()));
-
-      if (teamBusy || playerBusy || nameBusy) {
+      // V07.29: Removed name-based check - different players can have same name
+      if (teamBusy || playerBusy) {
         scores[m.id] = scoreMatch(m) + 1000; // High penalty for conflicts
         return;
       }
@@ -586,9 +581,9 @@ export const useCourtManagement = ({
     const maxQueueSize = Math.max(activeCourts.length, availableCourtCount + 2);
 
     // Build queue by adding matches one at a time, blocking teams as we go
+    // V07.29: Removed queuedTeamNames - different players can have same name
     const queuedTeams = new Set<string>();
     const queuedPlayers = new Set<string>();
-    const queuedTeamNames = new Set<string>(); // Also track by name
     const finalQueue: Match[] = [];
 
     for (const match of eligible) {
@@ -599,17 +594,14 @@ export const useCourtManagement = ({
 
       const teamAId = match.teamAId || match.sideA?.id;
       const teamBId = match.teamBId || match.sideB?.id;
-      const teamAName = match.sideA?.name || '';
-      const teamBName = match.sideB?.name || '';
       const playerIdsA = match.sideA?.playerIds || [];
       const playerIdsB = match.sideB?.playerIds || [];
 
-      // Check if any team or player is already queued (by ID, name, or player ID)
+      // Check if any team or player is already queued (by ID or player ID)
+      // V07.29: Removed name-based check - different players can have same name
       const teamAlreadyQueued =
         (teamAId && queuedTeams.has(teamAId)) ||
         (teamBId && queuedTeams.has(teamBId)) ||
-        (teamAName && queuedTeamNames.has(teamAName.toLowerCase())) ||
-        (teamBName && queuedTeamNames.has(teamBName.toLowerCase())) ||
         playerIdsA.some(p => p && queuedPlayers.has(p)) ||
         playerIdsB.some(p => p && queuedPlayers.has(p));
 
@@ -622,8 +614,6 @@ export const useCourtManagement = ({
       finalQueue.push(match);
       if (teamAId) queuedTeams.add(teamAId);
       if (teamBId) queuedTeams.add(teamBId);
-      if (teamAName) queuedTeamNames.add(teamAName.toLowerCase());
-      if (teamBName) queuedTeamNames.add(teamBName.toLowerCase());
       playerIdsA.forEach(p => { if (p) queuedPlayers.add(p); });
       playerIdsB.forEach(p => { if (p) queuedPlayers.add(p); });
     }
@@ -721,9 +711,9 @@ export const useCourtManagement = ({
     });
 
     // Get busy teams/players (on court)
+    // V07.29: Removed busyTeamNames - different players can have same name
     const busyTeams = new Set<string>();
     const busyPlayers = new Set<string>();
-    const busyTeamNames = new Set<string>();
 
     safeMatches.forEach(m => {
       if (!m.court || m.status === 'completed') return;
@@ -731,8 +721,6 @@ export const useCourtManagement = ({
       const teamBId = m.teamBId || m.sideB?.id;
       if (teamAId) busyTeams.add(teamAId);
       if (teamBId) busyTeams.add(teamBId);
-      if (m.sideA?.name) busyTeamNames.add(m.sideA.name.toLowerCase());
-      if (m.sideB?.name) busyTeamNames.add(m.sideB.name.toLowerCase());
       (m.sideA?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
       (m.sideB?.playerIds || []).forEach(pid => { if (pid) busyPlayers.add(pid); });
     });
@@ -746,16 +734,21 @@ export const useCourtManagement = ({
       const teamBName = m.sideB?.name || teamBId || 'TBD';
 
       // Check if teams are busy (on court)
+      // V07.29: Removed name-based check - different players can have same name
       const isBusy =
         (teamAId && (busyTeams.has(teamAId) || busyPlayers.has(teamAId))) ||
         (teamBId && (busyTeams.has(teamBId) || busyPlayers.has(teamBId))) ||
-        (m.sideA?.name && busyTeamNames.has(m.sideA.name.toLowerCase())) ||
-        (m.sideB?.name && busyTeamNames.has(m.sideB.name.toLowerCase())) ||
         (m.sideA?.playerIds || []).some(p => p && busyPlayers.has(p)) ||
         (m.sideB?.playerIds || []).some(p => p && busyPlayers.has(p));
 
       // Skip matches where teams are on court
       if (isBusy) return null;
+
+      // V07.29: Skip TBD matches (bracket matches awaiting opponents)
+      if (!teamAId || !teamBId || teamAId === 'TBD' || teamBId === 'TBD' ||
+          teamAName === 'TBD' || teamBName === 'TBD') {
+        return null;
+      }
 
       // Skip self-matches
       if (teamAId && teamBId && teamAId === teamBId) return null;
@@ -852,12 +845,19 @@ export const useCourtManagement = ({
     const match = safeMatches.find(m => m.id === matchId);
     if (!match) return;
 
-    // CRITICAL: Prevent assigning matches where a team plays itself
+    // V07.29: Block matches with TBD (undetermined) opponents
     const teamAId = match.teamAId || match.sideA?.id;
     const teamBId = match.teamBId || match.sideB?.id;
     const teamAName = match.sideA?.name || '';
     const teamBName = match.sideB?.name || '';
 
+    if (!teamAId || !teamBId || teamAId === 'TBD' || teamBId === 'TBD' ||
+        teamAName === 'TBD' || teamBName === 'TBD') {
+      alert('Cannot assign this match: one or more opponents have not been determined yet (TBD). Wait for earlier bracket matches to complete.');
+      return;
+    }
+
+    // CRITICAL: Prevent assigning matches where a team plays itself
     if (teamAId && teamBId && teamAId === teamBId) {
       alert('Cannot assign this match: both teams are the same (data error). Please delete and recreate this match.');
       console.error(`[Court Assignment] Match ${matchId} has same team ID on both sides: ${teamAId}`);
@@ -1107,8 +1107,9 @@ export const useCourtManagement = ({
       console.log('[finishMatchOnCourt] Save completed successfully!');
 
       // V06.36: Update pool results if this is a pool match
+      // V07.30: Use safe wrapper - pool results are secondary, match scoring should not fail
       if (currentMatch.divisionId) {
-        console.log('[finishMatchOnCourt] Calling updatePoolResultsOnMatchComplete...');
+        console.log('[finishMatchOnCourt] Calling updatePoolResultsOnMatchCompleteSafe...');
         const completedMatch: Match = {
           ...currentMatch,
           ...updates,
@@ -1116,7 +1117,7 @@ export const useCourtManagement = ({
           completedAt: now,
           updatedAt: now,
         } as Match;
-        await updatePoolResultsOnMatchComplete(tournamentId, currentMatch.divisionId, completedMatch);
+        await updatePoolResultsOnMatchCompleteSafe(tournamentId, currentMatch.divisionId, completedMatch);
       }
     }
 
@@ -1193,7 +1194,7 @@ export const useCourtManagement = ({
     const notifications: Promise<void>[] = [];
     const assignedMatchIds = new Set<string>();
     const assignedPlayerIds = new Set<string>(); // Track players we've assigned
-    const assignedTeamNames = new Set<string>(); // Track team names we've assigned
+    // V07.29: Removed assignedTeamNames - different players can have same name
     const assignedCourtIds = new Set<string>();  // V07.02: Track courts we've assigned
 
     // V07.02: First, try to assign finals/semis to their preferred courts
@@ -1206,41 +1207,35 @@ export const useCourtManagement = ({
     );
 
     // Helper to check if match conflicts with assigned
+    // V07.29: Removed name-based check - different players can have same name
     const hasConflict = (m: Match): boolean => {
       if (assignedMatchIds.has(m.id)) return true;
 
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
-      const teamAName = m.sideA?.name || '';
-      const teamBName = m.sideB?.name || '';
       const playerIdsA = m.sideA?.playerIds || [];
       const playerIdsB = m.sideB?.playerIds || [];
       const allPlayerIds = [...playerIdsA, ...playerIdsB].filter(Boolean);
 
       return allPlayerIds.some(pid => assignedPlayerIds.has(pid)) ||
-             (teamAId && assignedPlayerIds.has(teamAId)) ||
-             (teamBId && assignedPlayerIds.has(teamBId)) ||
-             (teamAName && assignedTeamNames.has(teamAName.toLowerCase())) ||
-             (teamBName && assignedTeamNames.has(teamBName.toLowerCase()));
+             !!(teamAId && assignedPlayerIds.has(teamAId)) ||
+             !!(teamBId && assignedPlayerIds.has(teamBId));
     };
 
     // Helper to mark match as assigned
+    // V07.29: Removed name tracking - different players can have same name
     const markAssigned = (m: Match, courtId: string): void => {
       assignedMatchIds.add(m.id);
       assignedCourtIds.add(courtId);
 
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
-      const teamAName = m.sideA?.name || '';
-      const teamBName = m.sideB?.name || '';
       const playerIdsA = m.sideA?.playerIds || [];
       const playerIdsB = m.sideB?.playerIds || [];
 
       [...playerIdsA, ...playerIdsB].filter(Boolean).forEach(pid => assignedPlayerIds.add(pid));
       if (teamAId) assignedPlayerIds.add(teamAId);
       if (teamBId) assignedPlayerIds.add(teamBId);
-      if (teamAName) assignedTeamNames.add(teamAName.toLowerCase());
-      if (teamBName) assignedTeamNames.add(teamBName.toLowerCase());
     };
 
     // V07.02: Process priority matches (finals/semis) first - assign to preferred courts
