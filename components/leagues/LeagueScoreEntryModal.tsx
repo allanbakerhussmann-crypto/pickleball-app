@@ -141,13 +141,28 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   const isDisputed = verificationStatus === 'disputed' || match.scoreState === 'disputed';
 
   // V07.04: Check if user can sign to acknowledge
-  // User must be opponent of the proposer (not the one who proposed)
+  // User must be opponent of the proposer (not the one who proposed, and not their partner)
   const proposerId = match.scoreProposal?.enteredByUserId || match.submittedByUserId;
+
+  // V07.40: Compute if user's team proposed BEFORE userCanConfirm
+  // (Full teamProposed logic is below, but we need a quick check here)
+  const proposerInSideA = proposerId && (
+    sideA?.playerIds?.includes(proposerId) ||
+    proposerId === match.userAId ||
+    proposerId === match.partnerAId
+  );
+  const proposerInSideB = proposerId && (
+    sideB?.playerIds?.includes(proposerId) ||
+    proposerId === match.userBId ||
+    proposerId === match.partnerBId
+  );
+  const userTeamProposed = (isPlayerA && proposerInSideA) || (isPlayerB && proposerInSideB);
+
   const userCanConfirm = isParticipant &&
     hasScore &&
     (match.scoreState === 'proposed' || isPending) && // V07.04: Check scoreState
     !isSigned && // Already signed
-    proposerId !== currentUser?.uid && // Not the proposer
+    !userTeamProposed && // V07.40: User's team must NOT have proposed (opponent must have)
     !(verification?.confirmations || []).includes(currentUser?.uid || '');
 
   // Check if user can dispute
@@ -161,6 +176,12 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   // V07.35: For DUPR leagues, organizer-as-participant CANNOT propose their own match
   // For non-DUPR leagues, anyone can propose (isOrganizerParticipant will be false)
   const canSubmitScore = (isParticipant && !isOrganizerParticipant) || effectiveIsOrganizer;
+
+  // V07.40: Check if user's team already proposed the score
+  // (proposerInSideA and proposerInSideB already computed above for userCanConfirm)
+  // User's teammate proposed if proposer is on same side but not the user themselves
+  const teammateProposed = proposerId !== currentUser?.uid && userTeamProposed;
+  const userOrTeamProposed = proposerId === currentUser?.uid || teammateProposed;
 
   // Initialize games from existing scores or empty
   useEffect(() => {
@@ -648,6 +669,29 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
               <div className="text-amber-300/80">
                 As an organizer playing in this match, you cannot propose the score.
                 Your opponent must propose the score first, then you can confirm it.
+              </div>
+            </div>
+          )}
+
+          {/* V07.40: Non-participant cannot propose score */}
+          {!isParticipant && !isOrganizer && !hasScore && (
+            <div className="bg-red-900/30 border border-red-600/50 text-red-200 px-4 py-3 rounded-lg text-sm">
+              <div className="font-semibold mb-1">Cannot Submit Score</div>
+              <div className="text-red-300/80">
+                Only players in this match can propose a score. Please ask one of the participants to enter the result.
+              </div>
+            </div>
+          )}
+
+          {/* V07.40: User or their partner already proposed the score */}
+          {userOrTeamProposed && hasScore && !isFinal && (
+            <div className="bg-blue-900/30 border border-blue-600/50 text-blue-200 px-4 py-3 rounded-lg text-sm">
+              <div className="font-semibold mb-1">Score Already Proposed</div>
+              <div className="text-blue-300/80">
+                {proposerId === currentUser?.uid
+                  ? 'You have already proposed the score for this match.'
+                  : 'Your partner has already proposed the score for this match.'
+                } Waiting for the opponent to confirm.
               </div>
             </div>
           )}

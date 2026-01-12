@@ -169,10 +169,25 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   const confirmations = match.verification?.confirmations || [];
   const requiredConfirmations = match.verification?.requiredConfirmations || 1;
 
-  // Determine if user can confirm (has not already confirmed and is opponent)
+  // V07.40: First compute who proposed - need this for all confirm/display logic
+  const proposerId = match.scoreProposal?.enteredByUserId || match.submittedByUserId;
+  const userProposed = proposerId === currentUserId;
+  const partnerProposedA = isPlayerA && proposerId && (
+    match.sideA?.playerIds?.includes(proposerId) ||
+    proposerId === match.partnerAId
+  ) && proposerId !== currentUserId;
+  const partnerProposedB = isPlayerB && proposerId && (
+    match.sideB?.playerIds?.includes(proposerId) ||
+    proposerId === match.partnerBId
+  ) && proposerId !== currentUserId;
+  const partnerProposed = partnerProposedA || partnerProposedB;
+  const teamProposed = userProposed || partnerProposed;
+
+  // Determine if user can confirm (has not already confirmed and is on OPPOSING team)
   // V07.29: Cannot confirm when week is locked (unless organizer)
+  // V07.40: User can only confirm if OPPONENT proposed (not user or their partner)
   const hasAlreadyConfirmed = currentUserId ? confirmations.includes(currentUserId) : false;
-  const isOpponent = isParticipant && match.submittedByUserId !== currentUserId;
+  const isOpponent = isParticipant && !teamProposed; // User is opponent if their team didn't propose
   const canConfirm = isOpponent &&
     !hasAlreadyConfirmed &&
     verificationStatus === 'pending' &&
@@ -188,9 +203,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
 
   // Determine if user needs to take action
   const isPendingConfirmation = match.status === 'pending_confirmation' || verificationStatus === 'pending';
-  const isWaitingOnYou = isPendingConfirmation &&
-    match.submittedByUserId !== currentUserId &&
-    isParticipant;
+  const isWaitingOnYou = isPendingConfirmation && isOpponent;
 
   // V07.35: Check scoreState for more precise status messages
   const scoreState = match.scoreState;
@@ -199,10 +212,14 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   const isOfficial = scoreState === 'official' || scoreState === 'submittedToDupr';
 
   // V07.35: Determine if current user needs to confirm (opponent entered score, user hasn't confirmed)
-  const hasScorePending = isProposed || match.status === 'pending_confirmation' || verificationStatus === 'pending';
-  const userNeedsToConfirm = hasScorePending &&
+  // V07.40: User can only confirm if:
+  // 1. Score is in 'proposed' state (NOT already signed or official)
+  // 2. User is a participant
+  // 3. Opponent's team proposed (not user's team)
+  const userNeedsToConfirm = isProposed && // Must be in proposed state, not signed
+    !isSigned && // Not already signed
     isParticipant &&
-    match.submittedByUserId !== currentUserId &&
+    !teamProposed && // Opponent must have proposed
     !hasAlreadyConfirmed &&
     (!weekLocked || isOrganizer);
 
@@ -267,10 +284,17 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
                 <span className="text-[10px] text-blue-400">Awaiting organizer</span>
               </>
             ) : match.status === 'pending_confirmation' || verificationStatus === 'pending' || isProposed ? (
-              // Has score but pending confirmation - show score with "Waiting" text
+              // Has score but pending confirmation - show score with status text
               <>
                 <span className="font-bold text-white text-sm">{formatActualScores(match.scores || [])}</span>
-                <span className="text-[10px] text-yellow-400">Awaiting confirmation</span>
+                <span className={`text-[10px] ${
+                  teamProposed ? 'text-blue-400' :
+                  isParticipant ? 'text-yellow-400' : 'text-gray-400'
+                }`}>
+                  {userProposed ? 'You proposed' :
+                   partnerProposed ? 'Partner proposed' :
+                   isParticipant ? 'Awaiting your confirmation' : 'Score proposed'}
+                </span>
               </>
             ) : isParticipant && match.status === 'scheduled' && !weekLocked ? (
               // Participant can enter score

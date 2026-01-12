@@ -200,6 +200,8 @@ export async function proposeScore(
       // Also update legacy fields for compatibility
       scores,
       status: 'pending_confirmation',
+      submittedByUserId: userId,  // V07.40: Also set legacy field for consistency
+      submittedAt: Date.now(),
       updatedAt: Date.now(),
     });
   });
