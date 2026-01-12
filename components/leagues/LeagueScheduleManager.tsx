@@ -18,8 +18,11 @@ import {
   canGenerateSchedule,
   formatPackingForDisplay,
   activateWeek,
+  deactivateWeek,
   refreshDraftWeekAssignments,
   getMatchesForWeek,
+  startClosing,
+  finalizeWeek,
 } from '../../services/rotatingDoublesBox';
 import type { BoxLeagueWeek } from '../../types/rotatingDoublesBox';
 import { doc, updateDoc, collection, query, orderBy, onSnapshot } from '@firebase/firestore';
@@ -351,6 +354,30 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     }
   }, [league.id, currentUserId, onScheduleGenerated]);
 
+  // V07.40: Deactivate week handler (for testing/fixing)
+  const handleDeactivateWeek = useCallback(async (weekNumber: number) => {
+    if (!confirm(`Are you sure you want to deactivate Week ${weekNumber}? This will DELETE all matches for this week.`)) {
+      return;
+    }
+
+    setLoadingWeekAction(weekNumber);
+    setError(null);
+    try {
+      const deactivateResult = await deactivateWeek(league.id, weekNumber);
+      console.log(`[handleDeactivateWeek] Week ${weekNumber} deactivated. Deleted ${deactivateResult.deletedMatchCount} matches.`);
+      setResult({
+        success: true,
+        matchesCreated: 0, // Reset - matches were deleted
+      });
+      onScheduleGenerated();
+    } catch (err) {
+      console.error('[handleDeactivateWeek] Error:', err);
+      setError(`Failed to deactivate week: ${(err as Error).message}`);
+    } finally {
+      setLoadingWeekAction(null);
+    }
+  }, [league.id, onScheduleGenerated]);
+
   const handleRecalculateBoxes = useCallback(async (weekNumber: number) => {
     // Guardrails
     const week = boxWeeks.find(w => w.weekNumber === weekNumber);
@@ -382,6 +409,65 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       setLoadingWeekAction(null);
     }
   }, [league.id, boxWeeks]);
+
+  // V07.40: Lock Week (active → closing)
+  const handleLockWeek = useCallback(async (weekNumber: number) => {
+    if (!currentUser?.uid) return;
+
+    setLoadingWeekAction(weekNumber);
+    setError(null);
+    try {
+      const lockResult = await startClosing(league.id, weekNumber);
+      console.log(`[handleLockWeek] Week ${weekNumber} locked. Pending: ${lockResult.pendingCount}, Disputed: ${lockResult.disputedCount}`);
+
+      if (lockResult.pendingCount > 0 || lockResult.disputedCount > 0) {
+        setResult({
+          success: true,
+          matchesCreated: 0,
+          error: `Week ${weekNumber} locked. ${lockResult.pendingCount} pending, ${lockResult.disputedCount} disputed matches need resolution.`,
+        });
+      } else {
+        setResult({
+          success: true,
+          matchesCreated: 0,
+          error: `Week ${weekNumber} locked. Ready to finalize.`,
+        });
+      }
+      onScheduleGenerated();
+    } catch (err) {
+      console.error('[handleLockWeek] Error:', err);
+      setError(`Failed to lock week: ${(err as Error).message}`);
+    } finally {
+      setLoadingWeekAction(null);
+    }
+  }, [league.id, currentUser?.uid, onScheduleGenerated]);
+
+  // V07.40: Finalize Week (closing → finalized)
+  const handleFinalizeWeek = useCallback(async (weekNumber: number) => {
+    if (!currentUser?.uid) return;
+
+    setLoadingWeekAction(weekNumber);
+    setError(null);
+    try {
+      const finalizeResult = await finalizeWeek(league.id, weekNumber, currentUser.uid);
+      console.log(`[handleFinalizeWeek] Week ${weekNumber} finalized.`, finalizeResult);
+
+      const movementCount = finalizeResult.movements?.filter(m => m.reason !== 'stayed').length || 0;
+      setResult({
+        success: true,
+        matchesCreated: 0,
+        error: finalizeResult.nextWeekCreated
+          ? `Week ${weekNumber} finalized! ${movementCount} player(s) moved. Week ${weekNumber + 1} draft created.`
+          : `Week ${weekNumber} finalized! ${movementCount} player(s) moved.`,
+      });
+      onScheduleGenerated();
+    } catch (err) {
+      console.error('[handleFinalizeWeek] Error:', err);
+      setError(`Failed to finalize week: ${(err as Error).message}`);
+    } finally {
+      setLoadingWeekAction(null);
+    }
+  }, [league.id, currentUser?.uid, onScheduleGenerated]);
 
   // ============================================
   // HANDLERS
@@ -707,24 +793,24 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
         </p>
       </div>
 
-      {/* Tabs - V05.37: Added Weeks tab */}
-      <div className="flex border-b border-gray-700">
+      {/* Tabs - V07.41: Updated styling to match main tabs */}
+      <div className="flex gap-1 border-b border-gray-700 overflow-x-auto">
         <button
           onClick={() => setActiveTab('generate')}
-          className={`flex-1 py-3 text-sm font-medium transition-colors ${
-            activeTab === 'generate' 
-              ? 'bg-gray-700 text-white border-b-2 border-blue-500' 
-              : 'text-gray-400 hover:text-white'
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
+            activeTab === 'generate'
+              ? 'border-blue-500 text-blue-400'
+              : 'border-transparent text-gray-400 hover:text-white'
           }`}
         >
           🎲 Generate
         </button>
         <button
           onClick={() => setActiveTab('weeks')}
-          className={`flex-1 py-3 text-sm font-medium transition-colors ${
-            activeTab === 'weeks' 
-              ? 'bg-gray-700 text-white border-b-2 border-blue-500' 
-              : 'text-gray-400 hover:text-white'
+          className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
+            activeTab === 'weeks'
+              ? 'border-blue-500 text-blue-400'
+              : 'border-transparent text-gray-400 hover:text-white'
           }`}
         >
           📆 Weeks
@@ -732,10 +818,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
         {hasVenue && (
           <button
             onClick={() => setActiveTab('courts')}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${
+            className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
               activeTab === 'courts'
-                ? 'bg-gray-700 text-white border-b-2 border-blue-500'
-                : 'text-gray-400 hover:text-white'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-gray-400 hover:text-white'
             }`}
           >
             🏟️ Courts
@@ -744,10 +830,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
         {hasVenue && (
           <button
             onClick={() => setActiveTab('timeline')}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${
+            className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
               activeTab === 'timeline'
-                ? 'bg-gray-700 text-white border-b-2 border-lime-500'
-                : 'text-gray-400 hover:text-white'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-gray-400 hover:text-white'
             }`}
           >
             📊 Timeline
@@ -929,9 +1015,12 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                                           week.weekNumber > 1 &&
                                           prevWeek?.state === 'finalized';
 
-                    // Compute match counts - prefer week doc fields, fallback to query
+                    // Compute match counts from actual matches (more reliable than cached week.completedMatches)
                     const weekMatches = matches.filter(m => m.weekNumber === week.weekNumber);
-                    const completedMatches = week.completedMatches ?? weekMatches.filter(m => m.status === 'completed').length;
+                    // Check both status === 'completed' and scoreState === 'official' for DUPR compliance
+                    const completedMatches = weekMatches.filter(m =>
+                      m.status === 'completed' || m.scoreState === 'official' || m.scoreState === 'submittedToDupr'
+                    ).length;
                     const totalMatches = week.totalMatches ?? weekMatches.length;
 
                     return (
@@ -992,6 +1081,43 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                                   {loadingWeekAction === week.weekNumber ? 'Activating...' : 'Activate Week'}
                                 </button>
                               </>
+                            )}
+
+                            {/* Action Buttons - Active State */}
+                            {week.state === 'active' && (
+                              <>
+                                {/* V07.41: Renamed to "Close Week" for consistency with Standings tab */}
+                                {completedMatches === totalMatches && totalMatches > 0 && (
+                                  <button
+                                    onClick={() => handleLockWeek(week.weekNumber)}
+                                    disabled={loadingWeekAction === week.weekNumber}
+                                    className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                                    title="Close week and prepare for finalization"
+                                  >
+                                    {loadingWeekAction === week.weekNumber ? 'Closing...' : 'Close Week'}
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleDeactivateWeek(week.weekNumber)}
+                                  disabled={loadingWeekAction === week.weekNumber}
+                                  className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                                  title="Reset to draft and delete all matches (for testing)"
+                                >
+                                  {loadingWeekAction === week.weekNumber ? 'Deactivating...' : 'Deactivate'}
+                                </button>
+                              </>
+                            )}
+
+                            {/* Action Buttons - Closing State */}
+                            {week.state === 'closing' && (
+                              <button
+                                onClick={() => handleFinalizeWeek(week.weekNumber)}
+                                disabled={loadingWeekAction === week.weekNumber}
+                                className="px-3 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                                title="Finalize week, apply promotion/relegation, and create next week draft"
+                              >
+                                {loadingWeekAction === week.weekNumber ? 'Finalizing...' : 'Finalize Week'}
+                              </button>
                             )}
                           </div>
                         </div>

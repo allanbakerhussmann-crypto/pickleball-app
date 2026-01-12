@@ -13,10 +13,9 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { collection, query, orderBy, onSnapshot, doc, getDoc, getDocs, where } from '@firebase/firestore';
 import { db } from '../../../services/firebase/config';
 // V07.36: Import recalculate function
-// V07.37: Import startClosing and finalizeWeek for week progression
-// V07.38: Import activateWeek for draft → active transition, refreshDraftWeekAssignments for re-applying movements
-import { recalculateWeekStandings, startClosing, finalizeWeek, activateWeek, refreshDraftWeekAssignments } from '../../../services/rotatingDoublesBox';
-import type { LeagueMember, UserProfile, Match } from '../../../types';
+// V07.41: Week lifecycle functions removed - now only used in Schedule tab
+import { recalculateWeekStandings } from '../../../services/rotatingDoublesBox';
+import type { LeagueMember, UserProfile, LeagueMatch } from '../../../types';
 import type {
   BoxLeagueWeek,
   BoxStanding,
@@ -32,6 +31,7 @@ import type {
 interface BoxLeagueStandingsProps {
   leagueId: string;
   members: LeagueMember[];
+  matches: LeagueMatch[];  // V07.41: Add matches prop to compute accurate counts
   isOrganizer: boolean;
   currentUserId?: string;
 }
@@ -66,25 +66,20 @@ const getBoxColors = (boxNumber: number) => {
 interface WeekHeaderProps {
   week: BoxLeagueWeek;
   isOrganizer: boolean;
+  completedMatches: number;  // V07.41: Computed from actual matches
+  totalMatches: number;      // V07.41: Computed from actual matches
   onRecalculate?: () => void;
-  onRefreshAssignments?: () => void;  // V07.38: Re-apply promotion/relegation
-  onActivate?: () => void;       // V07.38: Transition draft → active
-  onStartClosing?: () => void;  // V07.37: Transition active → closing
-  onFinalize?: () => void;
+  // V07.41: All week lifecycle props removed - management now only in Schedule tab
   isRecalculating?: boolean;
-  finalizeBlockers?: string[];
 }
 
 const WeekHeader: React.FC<WeekHeaderProps> = ({
   week,
   isOrganizer,
+  completedMatches,  // V07.41
+  totalMatches,      // V07.41
   onRecalculate,
-  onRefreshAssignments,  // V07.38
-  onActivate,      // V07.38
-  onStartClosing,  // V07.37
-  onFinalize,
   isRecalculating,
-  finalizeBlockers = [],
 }) => {
   const stateColors = {
     draft: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/50',
@@ -119,7 +114,7 @@ const WeekHeader: React.FC<WeekHeaderProps> = ({
           <div className="flex items-center gap-4 mt-2 text-sm">
             <span className="text-gray-400">
               Matches: <span className="text-white font-medium">
-                {week.completedMatches || 0} / {week.totalMatches || 0}
+                {completedMatches} / {totalMatches}
               </span>
             </span>
             {week.pendingVerificationCount > 0 && (
@@ -147,58 +142,7 @@ const WeekHeader: React.FC<WeekHeaderProps> = ({
                 {isRecalculating ? 'Calculating...' : 'Recalculate'}
               </button>
             )}
-            {/* V07.38: Refresh Box Assignments button - re-apply promotion/relegation for draft weeks */}
-            {week.state === 'draft' && week.weekNumber > 1 && onRefreshAssignments && (
-              <button
-                onClick={onRefreshAssignments}
-                disabled={isRecalculating}
-                className="px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
-                title="Re-apply promotion/relegation from previous week using current settings"
-              >
-                {isRecalculating ? 'Refreshing...' : 'Refresh Boxes'}
-              </button>
-            )}
-            {/* V07.38: Activate Week button - transition draft → active (generates matches) */}
-            {week.state === 'draft' && onActivate && (
-              <button
-                onClick={onActivate}
-                disabled={isRecalculating}
-                className="px-3 py-2 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                {isRecalculating ? 'Activating...' : 'Activate Week'}
-              </button>
-            )}
-            {/* V07.37: Close Week button - transition active → closing */}
-            {week.state === 'active' && onStartClosing && (
-              <button
-                onClick={onStartClosing}
-                disabled={isRecalculating}
-                className="px-3 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
-              >
-                {isRecalculating ? 'Closing...' : 'Close Week'}
-              </button>
-            )}
-            {week.state === 'closing' && onFinalize && (
-              <div className="relative group">
-                <button
-                  onClick={onFinalize}
-                  disabled={finalizeBlockers.length > 0 || isRecalculating}
-                  className="px-3 py-2 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
-                >
-                  Finalize Week
-                </button>
-                {finalizeBlockers.length > 0 && (
-                  <div className="absolute right-0 top-full mt-2 w-64 bg-gray-900 border border-red-500/50 rounded-lg p-3 text-xs text-red-400 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                    <p className="font-medium mb-1">Cannot finalize:</p>
-                    <ul className="list-disc list-inside space-y-1">
-                      {finalizeBlockers.map((blocker, i) => (
-                        <li key={i}>{blocker}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* V07.41: All week lifecycle buttons moved to Schedule tab (Refresh Boxes, Activate, Close, Finalize) */}
           </div>
         )}
       </div>
@@ -608,6 +552,7 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
 export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
   leagueId,
   members,
+  matches,  // V07.41: Receive matches to compute accurate counts
   isOrganizer,
   currentUserId,
 }) => {
@@ -645,7 +590,7 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
     return () => unsubscribe();
   }, [leagueId]);
 
-  // Fetch DUPR ratings for all members
+  // Fetch DUPR ratings for all members - only show if they have official duprId
   useEffect(() => {
     const fetchRatings = async () => {
       const ratings = new Map<string, number | undefined>();
@@ -655,9 +600,11 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
           const userDoc = await getDoc(doc(db, 'users', member.userId));
           if (userDoc.exists()) {
             const user = userDoc.data() as UserProfile;
-            const rating = user.duprDoublesRating ?? user.ratingDoubles ??
-                          user.duprSinglesRating ?? user.ratingSingles ?? undefined;
-            ratings.set(member.userId, rating);
+            // Only show rating if user has official DUPR ID linked
+            if (user.duprId) {
+              const rating = user.duprDoublesRating ?? user.duprSinglesRating ?? undefined;
+              ratings.set(member.userId, rating);
+            }
           }
         } catch (err) {
           // Ignore
@@ -727,23 +674,22 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
     return result;
   }, [currentWeek, members]);
 
-  // Calculate finalize blockers
-  const finalizeBlockers = useMemo(() => {
-    if (!currentWeek) return [];
-    const blockers: string[] = [];
+  // V07.41: Compute match counts from actual matches (more reliable than cached week values)
+  const weekMatchCounts = useMemo(() => {
+    if (!currentWeek) return { completed: 0, total: 0 };
 
-    if (currentWeek.disputedCount > 0) {
-      blockers.push(`${currentWeek.disputedCount} disputed matches must be resolved`);
-    }
-    if (currentWeek.pendingVerificationCount > 0) {
-      blockers.push(`${currentWeek.pendingVerificationCount} matches pending verification`);
-    }
-    if ((currentWeek.completedMatches || 0) < (currentWeek.totalMatches || 0)) {
-      blockers.push('Not all matches completed');
-    }
+    const weekMatches = matches.filter(m => m.weekNumber === currentWeek.weekNumber);
+    const completed = weekMatches.filter(m =>
+      m.status === 'completed' ||
+      (m as any).scoreState === 'official' ||
+      (m as any).scoreState === 'submittedToDupr'
+    ).length;
+    const total = currentWeek.totalMatches ?? weekMatches.length;
 
-    return blockers;
-  }, [currentWeek]);
+    return { completed, total };
+  }, [currentWeek, matches]);
+
+  // V07.41: Removed finalizeBlockers - finalize controls now only in Schedule tab
 
   // Check if next week exists
   const nextWeekExists = useMemo(() => {
@@ -769,78 +715,9 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
     }
   }, [currentWeek, leagueId]);
 
-  // V07.37: Handle transitioning week from active → closing
-  const handleStartClosing = useCallback(async () => {
-    if (!currentWeek) return;
-    setIsRecalculating(true);
-    try {
-      console.log('[BoxLeagueStandings] Starting closing for week', currentWeek.weekNumber);
-      await startClosing(leagueId, currentWeek.weekNumber);
-      console.log('[BoxLeagueStandings] Week is now closing');
-      // The onSnapshot listener will automatically update the UI
-    } catch (err) {
-      console.error('Failed to start closing:', err);
-      alert('Failed to close week: ' + (err as Error).message);
-    } finally {
-      setIsRecalculating(false);
-    }
-  }, [currentWeek, leagueId]);
+  // V07.41: Removed handleStartClosing and handleFinalize - week management now only in Schedule tab
 
-  // V07.37: Handle finalizing week and creating next week
-  const handleFinalize = useCallback(async () => {
-    if (!currentWeek || !currentUserId) return;
-    setIsRecalculating(true);
-    try {
-      console.log('[BoxLeagueStandings] Finalizing week', currentWeek.weekNumber);
-      const result = await finalizeWeek(leagueId, currentWeek.weekNumber, currentUserId);
-      console.log('[BoxLeagueStandings] Week finalized:', result);
-      if (result.nextWeekCreated) {
-        alert(`Week ${currentWeek.weekNumber} finalized! Week ${currentWeek.weekNumber + 1} draft created with updated box assignments.`);
-      } else {
-        alert(`Week ${currentWeek.weekNumber} finalized! This was the final week of the season.`);
-      }
-    } catch (err) {
-      console.error('Failed to finalize:', err);
-      alert('Failed to finalize week: ' + (err as Error).message);
-    } finally {
-      setIsRecalculating(false);
-    }
-  }, [currentWeek, currentUserId, leagueId]);
-
-  // V07.38: Handle activating week (draft → active, generates matches)
-  const handleActivateWeek = useCallback(async () => {
-    if (!currentWeek || !currentUserId) return;
-    setIsRecalculating(true);
-    try {
-      console.log('[BoxLeagueStandings] Activating week', currentWeek.weekNumber);
-      const result = await activateWeek(leagueId, currentWeek.weekNumber, currentUserId);
-      console.log('[BoxLeagueStandings] Week activated, matches generated:', result.matchIds.length);
-      alert(`Week ${currentWeek.weekNumber} activated! ${result.matchIds.length} matches generated.`);
-    } catch (err) {
-      console.error('Failed to activate week:', err);
-      alert('Failed to activate week: ' + (err as Error).message);
-    } finally {
-      setIsRecalculating(false);
-    }
-  }, [currentWeek, currentUserId, leagueId]);
-
-  // V07.38: Handle refreshing draft week box assignments from previous week standings
-  const handleRefreshAssignments = useCallback(async () => {
-    if (!currentWeek) return;
-    setIsRecalculating(true);
-    try {
-      console.log('[BoxLeagueStandings] Refreshing box assignments for week', currentWeek.weekNumber);
-      const result = await refreshDraftWeekAssignments(leagueId, currentWeek.weekNumber);
-      const movedCount = result.movements.filter(m => m.reason !== 'stayed').length;
-      console.log('[BoxLeagueStandings] Box assignments refreshed:', movedCount, 'players moved');
-      alert(`Box assignments refreshed! ${movedCount} player(s) moved based on Week ${currentWeek.weekNumber - 1} standings.`);
-    } catch (err) {
-      console.error('Failed to refresh box assignments:', err);
-      alert('Failed to refresh box assignments: ' + (err as Error).message);
-    } finally {
-      setIsRecalculating(false);
-    }
-  }, [currentWeek, leagueId]);
+  // V07.41: Removed handleActivateWeek and handleRefreshAssignments - now only in Schedule tab
 
   // Loading state
   if (loading) {
@@ -922,13 +799,10 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
           <WeekHeader
             week={currentWeek}
             isOrganizer={isOrganizer}
+            completedMatches={weekMatchCounts.completed}
+            totalMatches={weekMatchCounts.total}
             onRecalculate={handleRecalculate}
-            onRefreshAssignments={currentWeek.state === 'draft' && currentWeek.weekNumber > 1 ? handleRefreshAssignments : undefined}
-            onActivate={currentWeek.state === 'draft' ? handleActivateWeek : undefined}
-            onStartClosing={currentWeek.state === 'active' ? handleStartClosing : undefined}
-            onFinalize={currentWeek.state === 'closing' ? handleFinalize : undefined}
             isRecalculating={isRecalculating}
-            finalizeBlockers={finalizeBlockers}
           />
 
           {/* Box Selector */}

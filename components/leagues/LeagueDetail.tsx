@@ -37,11 +37,8 @@ import {
   respondToLeaguePartnerInviteAtomic,
   subscribeToMyOpenTeamRequests,
   respondToLeagueJoinRequest,
-  // V07.29: Week state management (closed/open/locked)
+  // V07.29: Week state management - V07.41: only getWeekState/isWeekUnlocked kept for scoring checks
   getWeekState,
-  openLeagueWeek,
-  closeLeagueWeek,
-  lockLeagueWeek,
   isWeekUnlocked,
   // V07.26: Fetch user profiles for DUPR access token check
   getUsersByIds,
@@ -456,8 +453,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         const profiles = await getUsersByIds(userIds);
         const profileMap = new Map<string, UserProfile>();
         profiles.forEach(p => {
-          if (p.odUserId) {
-            profileMap.set(p.odUserId, p);
+          // Use id (document ID = userId) as key, fallback to odUserId
+          const key = p.id || p.odUserId;
+          if (key) {
+            profileMap.set(key, p);
           }
         });
         setUserProfiles(profileMap);
@@ -826,60 +825,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   };
 
-  // V07.29: Set week state (closed/open/locked)
-  // V07.30: Auto-generate standings when locking a week
-  type WeekState = 'closed' | 'open' | 'locked';
-
-  const handleSetWeekState = async (weekNumber: number, newState: WeekState) => {
-    if (!league) return;
-
-    try {
-      if (newState === 'closed') {
-        await closeLeagueWeek(leagueId, weekNumber);
-        console.log(`[LeagueDetail] Week ${weekNumber} closed`);
-      } else if (newState === 'open') {
-        await openLeagueWeek(leagueId, weekNumber);
-        console.log(`[LeagueDetail] Week ${weekNumber} opened for scoring`);
-      } else if (newState === 'locked') {
-        // Locking the week - finalize and auto-generate standings
-        await lockLeagueWeek(leagueId, weekNumber);
-        console.log(`[LeagueDetail] Week ${weekNumber} locked - regenerating standings...`);
-
-        setIsRecalculating(true);
-        try {
-          await rebuildAllStandings(leagueId, members, matches, league.settings);
-
-          // Reload standings after rebuild
-          const allStandings = await getAllLeagueStandings(leagueId);
-          const overall = allStandings.find(s => s.standingsKey === 'overall') || null;
-          setOverallStandings(overall);
-
-          const weekMap = new Map<number, LeagueStandingsDoc>();
-          allStandings
-            .filter(s => s.weekNumber !== null)
-            .forEach(s => weekMap.set(s.weekNumber!, s));
-          setWeekStandings(weekMap);
-
-          setStandingsStatus('current');
-          console.log(`[LeagueDetail] Standings regenerated after locking week ${weekNumber}`);
-        } catch (standingsErr) {
-          console.error('[LeagueDetail] Failed to regenerate standings:', standingsErr);
-        } finally {
-          setIsRecalculating(false);
-        }
-      }
-
-      // V07.32: Refresh league state to update UI (no subscription for league doc)
-      const updatedLeague = await getLeague(leagueId);
-      if (updatedLeague) {
-        setLeague(updatedLeague);
-        console.log(`[LeagueDetail] League refreshed - weekStates:`, updatedLeague.weekStates);
-      }
-    } catch (err) {
-      console.error('[LeagueDetail] Failed to set week state:', err);
-      alert('Failed to update week status');
-    }
-  };
+  // V07.41: Removed handleSetWeekState - week management now only in Schedule tab
 
   // V07.15: skipDuprCheck param allows bypassing the acknowledgement check after user has confirmed
   // V07.25: skipWaiverCheck param allows bypassing after waiver has been accepted
@@ -1215,8 +1161,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   // Determine which tabs to show - Schedule, Players, DUPR, and Comms tabs only for organizers
   // V07.25: Courts tab only for box league organizers (check both competitionFormat and legacy format)
   // V07.26: DUPR tab only if league has DUPR enabled (mode is 'optional' or 'required')
+  // V07.40: Use isDuprLeague (defined above) - only true if mode is explicitly 'optional' or 'required'
   const isBoxLeagueFormat = league?.competitionFormat === 'rotating_doubles_box' || league?.competitionFormat === 'fixed_doubles_box' || league?.format === 'box_league';
-  const isDuprEnabled = league?.settings?.duprSettings?.mode && league.settings.duprSettings.mode !== 'none';
+  const isDuprEnabled = isDuprLeague; // Reuse existing check from line 1193
 
   const handleTiebreakerDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -1284,7 +1231,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       : isDuprEnabled
         ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info', 'comms']
         : ['standings', 'matches', 'players', 'schedule', 'organizer', 'info', 'comms']
-    : ['standings', 'matches', 'info'];
+    : ['standings', 'matches', 'players', 'info'];
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -1782,7 +1729,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {tab === 'dupr' && '📊 '}
             {tab === 'info' && 'ℹ️ '}
             {tab === 'comms' && '📨 '}
-            {tab === 'dupr' ? 'DUPR' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab === 'dupr' ? 'DUPR' : tab === 'schedule' ? 'Weekly Schedule' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
       </div>
@@ -1795,6 +1742,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             <BoxLeagueStandings
               leagueId={leagueId}
               members={filteredMembers}
+              matches={matches}
               isOrganizer={isOrganizer}
               currentUserId={currentUser?.uid}
             />
@@ -2063,75 +2011,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       {activeTab === 'matches' && (
         <div className="space-y-4">
           {/* V07.31: Compact Week State Control Strip (Organizer Only) */}
-          {isOrganizer && weeks.length > 0 && (
-            <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-xl p-3">
-              <div className="flex items-center justify-between gap-4 flex-wrap">
-                {/* Control strip */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Week Status</span>
-                  <div className="flex items-center gap-1 bg-gray-900/50 rounded-lg p-1">
-                    {weeks.map(week => {
-                      const weekState = league ? getWeekState(league, week) : 'open';
-                      const weekMatches = matchesByWeek[week] || [];
-                      const completedCount = weekMatches.filter(m => m.status === 'completed').length;
-                      const allComplete = weekMatches.length > 0 && completedCount === weekMatches.length;
-
-                      // Cycle through states: closed -> open -> locked -> closed
-                      const nextState = weekState === 'closed' ? 'open' : weekState === 'open' ? 'locked' : 'closed';
-
-                      return (
-                        <button
-                          key={`state-${week}`}
-                          onClick={() => handleSetWeekState(week, nextState)}
-                          disabled={isRecalculating}
-                          className={`
-                            relative w-8 h-8 rounded-lg font-mono text-sm font-bold
-                            transition-all duration-200 ease-out
-                            ${isRecalculating ? 'opacity-50 cursor-not-allowed' : 'hover:scale-110 hover:z-10'}
-                            ${weekState === 'closed'
-                              ? 'bg-gray-700 text-gray-400 border-2 border-gray-600'
-                              : weekState === 'open'
-                                ? 'bg-lime-500/20 text-lime-400 border-2 border-lime-500 shadow-lg shadow-lime-500/20'
-                                : 'bg-blue-500/20 text-blue-400 border-2 border-blue-500 shadow-lg shadow-blue-500/20'
-                            }
-                          `}
-                          title={`Week ${week}: ${weekState === 'closed' ? 'Not Started' : weekState === 'open' ? 'Scoring Open' : 'Finalized'}${allComplete ? ' ✓' : ''} - Click to change`}
-                        >
-                          {week}
-                          {weekState === 'locked' && (
-                            <span className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full flex items-center justify-center">
-                              <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-                              </svg>
-                            </span>
-                          )}
-                          {allComplete && weekState !== 'locked' && (
-                            <span className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Legend - V07.32: More descriptive labels */}
-                <div className="flex items-center gap-4 text-xs">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded bg-gray-700 border border-gray-600" />
-                    <span className="text-gray-500">Not Started</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded bg-lime-500/20 border border-lime-500" />
-                    <span className="text-gray-500">Scoring Open</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded bg-blue-500/20 border border-blue-500" />
-                    <span className="text-gray-500">Finalized</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* V07.41: Removed WEEK STATUS control bar - week management now only in Schedule tab */}
 
           {/* Week Sub-Tabs (Navigation Only) */}
           <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-gray-700">
@@ -2413,53 +2293,109 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         </div>
       )}
 
-      {/* PLAYERS TAB - Organizer Only */}
-      {activeTab === 'players' && isOrganizer && (
+      {/* PLAYERS TAB - Visible to all users */}
+      {activeTab === 'players' && (
         <div className="space-y-4">
-          {league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box' ? (
-            // V07.25: Rotating/Fixed Doubles Box - Show new box management component
-            <RotatingBoxPlayerManager
-              leagueId={leagueId}
-              members={members}
-              isOrganizer={isOrganizer}
-              disabled={league.status === 'completed'}
-            />
-          ) : league.format === 'box_league' && !league.competitionFormat ? (
-            // Legacy Box League: Show old box-based drag-drop management
-            <BoxPlayerDragDrop
-              leagueId={leagueId}
-              players={boxPlayers}
-              boxCount={Math.ceil(boxPlayers.length / (league.settings?.boxSettings?.playersPerBox || 4))}
-              boxSize={league.settings?.boxSettings?.playersPerBox || 4}
-              onPlayersUpdated={() => {
-                // Players will auto-update via subscription
-              }}
-              disabled={league.status === 'completed'}
-            />
-          ) : (
-            // Other formats: Show seeding list
-            <PlayerSeedingList
-              leagueId={leagueId}
-              members={filteredMembers}
-              onMembersUpdated={() => {
-                // Members will auto-update via subscription
-              }}
-              disabled={league.status === 'completed'}
-              showStats={true}
-            />
-          )}
+          {isOrganizer ? (
+            // Organizer view: Full management UI
+            <>
+              {league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box' ? (
+                // V07.25: Rotating/Fixed Doubles Box - Show new box management component
+                <RotatingBoxPlayerManager
+                  leagueId={leagueId}
+                  members={members}
+                  isOrganizer={isOrganizer}
+                  disabled={league.status === 'completed'}
+                />
+              ) : league.format === 'box_league' && !league.competitionFormat ? (
+                // Legacy Box League: Show old box-based drag-drop management
+                <BoxPlayerDragDrop
+                  leagueId={leagueId}
+                  players={boxPlayers}
+                  boxCount={Math.ceil(boxPlayers.length / (league.settings?.boxSettings?.playersPerBox || 4))}
+                  boxSize={league.settings?.boxSettings?.playersPerBox || 4}
+                  onPlayersUpdated={() => {
+                    // Players will auto-update via subscription
+                  }}
+                  disabled={league.status === 'completed'}
+                />
+              ) : (
+                // Other formats: Show seeding list
+                <PlayerSeedingList
+                  leagueId={leagueId}
+                  members={filteredMembers}
+                  onMembersUpdated={() => {
+                    // Members will auto-update via subscription
+                  }}
+                  disabled={league.status === 'completed'}
+                  showStats={true}
+                />
+              )}
 
-          {/* Help text */}
-          <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-            <h4 className="text-sm font-medium text-gray-300 mb-2">
-              {isBoxLeagueFormat ? 'Managing Boxes' : 'Managing Seeding'}
-            </h4>
-            <p className="text-sm text-gray-500">
-              {isBoxLeagueFormat
-                ? 'Drag players between boxes to rebalance skill levels. Players within a box will play against each other.'
-                : 'Drag players to reorder their seeding. Seeding affects match generation and bracket placement.'}
-            </p>
-          </div>
+              {/* Help text for organizers */}
+              <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+                <h4 className="text-sm font-medium text-gray-300 mb-2">
+                  {isBoxLeagueFormat ? 'Managing Boxes' : 'Managing Seeding'}
+                </h4>
+                <p className="text-sm text-gray-500">
+                  {isBoxLeagueFormat
+                    ? 'Drag players between boxes to rebalance skill levels. Players within a box will play against each other.'
+                    : 'Drag players to reorder their seeding. Seeding affects match generation and bracket placement.'}
+                </p>
+              </div>
+            </>
+          ) : (
+            // Public view: Read-only player list
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+              <h3 className="text-lg font-bold text-white mb-4">
+                Registered Players ({members.filter(m => m.status && !['withdrawn', 'cancelled', 'eliminated'].includes(m.status)).length})
+              </h3>
+              {members.filter(m => m.status && !['withdrawn', 'cancelled', 'eliminated'].includes(m.status)).length === 0 ? (
+                <p className="text-gray-400 text-center py-8">No players registered yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {members
+                    .filter(m => m.status && !['withdrawn', 'cancelled', 'eliminated'].includes(m.status))
+                    .sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''))
+                    .map((member, idx) => (
+                      <div
+                        key={member.oduserId || member.odtournamentplayerId || idx}
+                        className={`flex items-center justify-between p-3 rounded-lg ${
+                          member.oduserId === currentUser?.uid
+                            ? 'bg-lime-900/30 border border-lime-600/50'
+                            : 'bg-gray-700/50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-sm font-medium">
+                            {idx + 1}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-medium">
+                              {member.displayName || 'Unknown Player'}
+                            </span>
+                            {(() => {
+                              const profile = userProfiles.get(member.userId);
+                              // Only show rating if user has official DUPR ID linked
+                              if (!profile?.duprId) return null;
+                              const rating = profile?.duprDoublesRating ?? profile?.duprSinglesRating;
+                              return rating ? (
+                                <span className="text-sm text-blue-400">
+                                  ({rating.toFixed(2)})
+                                </span>
+                              ) : null;
+                            })()}
+                            {member.oduserId === currentUser?.uid && (
+                              <span className="text-xs text-lime-400">(You)</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
