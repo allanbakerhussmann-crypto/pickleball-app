@@ -54,10 +54,10 @@ export const ClubEventsPreview: React.FC<ClubEventsPreviewProps> = ({
         const now = Date.now();
         const allEvents: EventItem[] = [];
 
-        // Fetch tournaments
+        // Fetch tournaments (exclude draft tournaments from public view)
         const tournaments = await getAllTournaments();
         tournaments
-          .filter(t => t.clubId === clubId && t.startDate >= now)
+          .filter(t => t.clubId === clubId && t.startDate >= now && t.status !== 'draft')
           .forEach(t => {
             if (excludeEventType === 'tournament' && t.id === excludeEventId) return;
             allEvents.push({

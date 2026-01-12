@@ -28,6 +28,7 @@ import type {
     PlannerDivision
 } from '../types';
 import { saveTournament, getUserClubs, getAllClubs } from '../services/firebase';
+import { addCourt } from '../services/firebase/courts';
 import { createOrganizerRequest, getOrganizerRequestByUserId } from '../services/firebase/organizerRequests';
 import { useAuth } from '../contexts/AuthContext';
 import type { CompetitionFormat, PoolPlayMedalsSettings } from '../types/formats';
@@ -35,6 +36,7 @@ import { getFormatOption, DEFAULT_POOL_PLAY_MEDALS_SETTINGS } from '../types/for
 import { FormatCards } from './shared/FormatSelector';
 import { TournamentPlanner } from './tournament/planner';
 import { PhoneVerificationModal } from './auth/PhoneVerificationModal';
+import { DEFAULT_WAIVER_TEXT } from '../constants';
 
 interface CreateTournamentProps {
   onCreateTournament: (tournament: Tournament) => Promise<void> | void;
@@ -121,8 +123,8 @@ const mapCompetitionToTournamentFormat = (format: CompetitionFormat): Partial<Di
 
 export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTournament, onCancel, onCreateClub, userId }) => {
   const { isAppAdmin, isOrganizer, userProfile, currentUser } = useAuth();
-  // Step: 0 = mode selection, 'planner' = planner flow, 1 = basic info, 2 = divisions
-  const [step, setStep] = useState<number | 'planner'>(0);
+  // Step: 'planner' = planner flow, 1 = basic info, 2 = divisions
+  const [step, setStep] = useState<number | 'planner'>('planner');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -158,6 +160,18 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     duprSettings: {
       mode: 'none',
       autoSubmit: false,
+    },
+    // V07.25: Default waiver settings
+    settings: {
+      allowPartnerSignup: true,
+      requirePartner: false,
+      allowWaitlist: true,
+      checkInRequired: false,
+      seeding: 'rating',
+      consolationBracket: false,
+      thirdPlaceMatch: true,
+      waiverRequired: true,
+      waiverText: DEFAULT_WAIVER_TEXT,
     },
   });
 
@@ -259,6 +273,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     const divFormat: DivisionFormat = {
       ...DEFAULT_FORMAT,
       ...formatSettings,
+      // Always store competition format for proper editing/display
+      competitionFormat: plannerDiv.format,
       // Pool play settings (default for all matches)
       bestOfGames: settings.poolGameSettings.bestOf,
       pointsPerGame: settings.poolGameSettings.pointsToWin,
@@ -266,10 +282,18 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       // Medal round settings (per-round configuration)
       useSeparateMedalSettings: settings.useSeparateMedalSettings,
       ...(medalRoundSettings && { medalRoundSettings }),
-      // Pool play specific
-      ...(plannerDiv.format === 'pool_play_medals' && plannerDiv.poolSize && {
-        teamsPerPool: plannerDiv.poolSize,
-        numberOfPools: plannerDiv.poolCount || Math.ceil(plannerDiv.expectedPlayers / plannerDiv.poolSize),
+      // Pool play specific settings
+      ...(plannerDiv.format === 'pool_play_medals' && {
+        teamsPerPool: plannerDiv.poolSize || 4,
+        numberOfPools: plannerDiv.poolCount || Math.ceil(plannerDiv.expectedPlayers / (plannerDiv.poolSize || 4)),
+        // Store pool play medals settings for tiebreakers, advancement, etc.
+        poolPlayMedalsSettings: {
+          poolSize: plannerDiv.poolSize || 4,
+          advancementRule: 'top_2' as const,
+          bronzeMatch: 'yes' as const,
+          tiebreakers: ['wins', 'head_to_head', 'point_diff', 'points_scored'],
+        },
+        hasBronzeMatch: true,
       }),
     };
 
@@ -355,9 +379,9 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     setStep(1);
   };
 
-  // Handle planner back (return to mode selection)
+  // Handle planner back (exit wizard)
   const handlePlannerBack = () => {
-    setStep(0);
+    onCancel();
   };
 
   // Load Clubs
@@ -437,6 +461,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
   };
 
   const handleEditDivision = (div: Division) => {
+    // Restore basic info
     setNewDivBasic({
         gender: div.gender,
         type: div.type,
@@ -445,7 +470,32 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
         minAge: div.minAge ? div.minAge.toString() : '',
         maxAge: div.maxAge ? div.maxAge.toString() : ''
     });
+
+    // Restore format settings
     setNewDivFormat({ ...div.format });
+
+    // Restore selected format from stored competitionFormat or derive from format settings
+    const storedFormat = div.format.competitionFormat as CompetitionFormat | undefined;
+    if (storedFormat) {
+      setSelectedFormat(storedFormat);
+    } else {
+      // Derive format from settings if not explicitly stored
+      if (div.format.stageMode === 'two_stage') {
+        setSelectedFormat('pool_play_medals');
+      } else if (div.format.mainFormat === 'single_elim') {
+        setSelectedFormat(div.type === 'singles' ? 'singles_elimination' : 'doubles_elimination');
+      } else if (div.format.mainFormat === 'ladder') {
+        setSelectedFormat('ladder');
+      } else {
+        setSelectedFormat('round_robin');
+      }
+    }
+
+    // Restore pool play settings if they exist
+    if (div.format.poolPlayMedalsSettings) {
+      setPoolPlaySettings(div.format.poolPlayMedalsSettings);
+    }
+
     setEditingId(div.id);
     setErrorMessage(null);
   };
@@ -454,6 +504,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
     setEditingId(null);
     setNewDivBasic(prev => ({ ...prev, minRating: '', maxRating: '', minAge: '', maxAge: '' }));
     setNewDivFormat(DEFAULT_FORMAT);
+    setSelectedFormat('round_robin');
+    setPoolPlaySettings(DEFAULT_POOL_PLAY_MEDALS_SETTINGS);
     setErrorMessage(null);
   };
 
@@ -506,13 +558,14 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
       const name = `${genderLabel} ${typeLabel} ${ratingLabel} ${ageLabel} - ${formatLabel}`.trim().replace(/\s+/g, ' ');
 
-      // Build format object with pool play settings if applicable
+      // Build format object - always store competitionFormat for editing
       const divisionFormat: DivisionFormat = {
           ...newDivFormat,
+          // Always store the competition format for proper editing
+          competitionFormat: selectedFormat,
           // Store pool play settings in format for generator access
           ...(selectedFormat === 'pool_play_medals' && {
               poolPlayMedalsSettings: poolPlaySettings,
-              competitionFormat: selectedFormat,
           }),
       };
 
@@ -539,9 +592,12 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       } else {
           setDivisions(prev => [...prev, div]);
       }
-      
+
+      // Reset form to defaults
       setNewDivBasic(prev => ({ ...prev, minRating: '', maxRating: '', minAge: '', maxAge: '' }));
       setNewDivFormat(DEFAULT_FORMAT);
+      setSelectedFormat('round_robin');
+      setPoolPlaySettings(DEFAULT_POOL_PLAY_MEDALS_SETTINGS);
   };
 
   const handleNext = () => {
@@ -578,6 +634,16 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
           };
 
           await saveTournament(tournament, divisions);
+
+          // Create courts from planner settings
+          if (plannerSettings?.courts && plannerSettings.courts > 0) {
+            const courtPromises = [];
+            for (let i = 1; i <= plannerSettings.courts; i++) {
+              courtPromises.push(addCourt(tId, `Court ${i}`, i));
+            }
+            await Promise.all(courtPromises);
+          }
+
           await onCreateTournament(tournament);
       } catch (e: any) {
           setErrorMessage(e.message);
@@ -856,65 +922,6 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
   return (
       <div className="max-w-4xl mx-auto bg-gray-800 rounded-lg p-8 border border-gray-700 mb-10">
-          {/* Step 0: Mode Selection */}
-          {step === 0 && (
-            <div className="text-center py-8">
-              <h2 className="text-3xl text-white font-bold mb-4">Create Tournament</h2>
-              <p className="text-gray-400 mb-10 max-w-lg mx-auto">
-                Choose how you'd like to set up your tournament
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
-                {/* Planner Option */}
-                <button
-                  onClick={() => setStep('planner')}
-                  className="group bg-gradient-to-br from-blue-900/50 to-blue-800/30 border-2 border-blue-600/50 hover:border-blue-500 rounded-xl p-8 text-left transition-all hover:shadow-lg hover:shadow-blue-500/10"
-                >
-                  <div className="text-4xl mb-4">📊</div>
-                  <h3 className="text-xl font-bold text-white mb-2 group-hover:text-blue-400 transition-colors">
-                    Use Tournament Planner
-                  </h3>
-                  <p className="text-sm text-gray-400 mb-4">
-                    Answer a few questions about your courts, time, and divisions.
-                    We'll help you plan capacity and timing.
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="px-2 py-1 bg-blue-900/50 text-blue-300 text-xs rounded">Capacity planning</span>
-                    <span className="px-2 py-1 bg-blue-900/50 text-blue-300 text-xs rounded">Time estimates</span>
-                    <span className="px-2 py-1 bg-blue-900/50 text-blue-300 text-xs rounded">Guided setup</span>
-                  </div>
-                </button>
-
-                {/* Manual Option */}
-                <button
-                  onClick={() => setStep(1)}
-                  className="group bg-gradient-to-br from-gray-700/50 to-gray-800/30 border-2 border-gray-600/50 hover:border-gray-500 rounded-xl p-8 text-left transition-all hover:shadow-lg hover:shadow-gray-500/10"
-                >
-                  <div className="text-4xl mb-4">✏️</div>
-                  <h3 className="text-xl font-bold text-white mb-2 group-hover:text-gray-300 transition-colors">
-                    Create Manually
-                  </h3>
-                  <p className="text-sm text-gray-400 mb-4">
-                    Jump straight into creating divisions and setting up formats.
-                    Best if you know exactly what you want.
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="px-2 py-1 bg-gray-700/50 text-gray-400 text-xs rounded">Full control</span>
-                    <span className="px-2 py-1 bg-gray-700/50 text-gray-400 text-xs rounded">Quick setup</span>
-                    <span className="px-2 py-1 bg-gray-700/50 text-gray-400 text-xs rounded">Experienced users</span>
-                  </div>
-                </button>
-              </div>
-
-              <button
-                onClick={onCancel}
-                className="mt-8 text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-
           {/* Step 1: Basic Info */}
           {step === 1 && (
             <>
@@ -982,8 +989,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                   <div>
                       <label className="block text-sm font-medium text-gray-400 mb-1">Description</label>
                       <textarea
-                        className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none h-24"
-                        placeholder="Tell players about your event..."
+                        className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none h-28 placeholder-gray-600"
+                        placeholder="Include details like:&#10;• Venue address and parking info&#10;• Tournament rules and format&#10;• What to bring (paddles, water, etc.)&#10;• Contact information for questions"
                         value={formData.description}
                         onChange={e => setFormData({...formData, description: e.target.value})}
                       />
@@ -1075,15 +1082,19 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                           </button>
                           <button
                             type="button"
-                            onClick={() => setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'optional', autoSubmit: true }})}
+                            onClick={() => isAppAdmin && setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'optional', autoSubmit: true }})}
+                            disabled={!isAppAdmin}
                             className={`p-3 rounded-lg border text-center transition-all ${
                               formData.duprSettings?.mode === 'optional'
                                 ? 'bg-[#00B4D8]/20 border-[#00B4D8] text-[#00B4D8]'
-                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
+                                : !isAppAdmin
+                                  ? 'bg-gray-800/50 border-gray-700/50 text-gray-600 cursor-not-allowed opacity-50'
+                                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
                             }`}
                           >
                             <div className="text-lg mb-1">📊</div>
                             <div className="text-xs font-medium">DUPR Optional</div>
+                            {!isAppAdmin && <div className="text-[10px] text-gray-600 mt-1">Coming Soon</div>}
                           </button>
                           <button
                             type="button"
@@ -1118,10 +1129,10 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
                    <div className="flex justify-between items-center pt-4">
                       <button
-                        onClick={() => plannerSettings ? setStep(0) : onCancel()}
+                        onClick={() => plannerSettings ? setStep('planner') : onCancel()}
                         className="text-gray-400 hover:text-white"
                       >
-                        {plannerSettings ? 'Back to Options' : 'Cancel'}
+                        {plannerSettings ? 'Back to Planner' : 'Cancel'}
                       </button>
                       <button onClick={handleNext} className="bg-green-600 text-white px-6 py-2 rounded font-bold hover:bg-green-500">
                         {plannerSettings && divisions.length > 0 ? 'Review Divisions' : 'Next: Divisions'}
@@ -1132,35 +1143,81 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
           )}
 
           {step === 2 && (
-              <div className="space-y-8">
-                  {/* Planner Summary Banner */}
-                  {plannerSettings && (
-                    <div className="mb-2 p-4 bg-blue-900/20 border border-blue-700/50 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-blue-400">📊</span>
-                          <span className="text-blue-300 font-medium text-sm">From Planner</span>
-                        </div>
-                        <span className="text-xs text-gray-400">
-                          {plannerSettings.courts} courts • {plannerSettings.startTime} - {plannerSettings.endTime}
-                        </span>
-                      </div>
-                      {divisions.length > 0 && (
-                        <p className="text-xs text-gray-400 mt-2">
-                          {divisions.length} divisions pre-configured from planner. You can edit or add more below.
-                        </p>
-                      )}
-                    </div>
-                  )}
+              <div className="space-y-6">
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-2xl text-white font-bold">Tournament Divisions</h2>
+                    {plannerSettings && (
+                      <span className="text-xs text-gray-400 bg-gray-700/50 px-3 py-1 rounded-full">
+                        {plannerSettings.courts} courts • {plannerSettings.startTime} - {plannerSettings.endTime}
+                      </span>
+                    )}
+                  </div>
 
-                  {/* ADD DIVISION PANEL */}
-                  <div className={`bg-gray-700/50 p-6 rounded border ${editingId ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]' : 'border-gray-600'} space-y-6 transition-all duration-300`}>
-                      <div className="flex justify-between items-center border-b border-gray-600 pb-2">
-                          <h3 className="text-white font-bold text-lg">
-                              {editingId ? 'Edit Division' : 'Add Division'}
-                          </h3>
+                  {/* DIVISIONS LIST - Now at the top */}
+                  <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-white font-bold text-lg">Your Divisions</h4>
+                        <span className="text-xs text-gray-500">{divisions.length} division{divisions.length !== 1 ? 's' : ''}</span>
+                      </div>
+                      {divisions.length === 0 ? (
+                          <div className="bg-gray-900/50 border border-dashed border-gray-700 rounded-lg p-8 text-center">
+                            <p className="text-gray-500 text-sm">No divisions added yet.</p>
+                            <p className="text-gray-600 text-xs mt-1">Add your first division below</p>
+                          </div>
+                      ) : (
+                          divisions.map(d => (
+                              <div key={d.id} className={`bg-gray-900 p-4 rounded-lg flex justify-between items-center text-white border ${editingId === d.id ? 'border-green-500/50 bg-green-900/10' : 'border-gray-800 hover:border-gray-700'} transition-colors`}>
+                                  <div>
+                                      <div className="font-bold flex items-center gap-2">
+                                          {d.name}
+                                          {editingId === d.id && <span className="text-[10px] bg-green-600 text-white px-1.5 rounded uppercase">Editing</span>}
+                                      </div>
+                                      <div className="text-xs text-gray-400 mt-1 space-x-3">
+                                          <span>
+                                            {d.format.stageMode === 'single_stage'
+                                                ? `Single Stage: ${d.format.mainFormat?.replace('_', ' ')}`
+                                                : `Two Stage: ${d.format.numberOfPools} Pools → ${d.format.stage2Format?.replace('_', ' ')}`
+                                            }
+                                          </span>
+                                          <span>|</span>
+                                          <span>Best of {d.format.bestOfGames} to {d.format.pointsPerGame}</span>
+                                          {d.format.hasBronzeMatch && <span>| +Bronze</span>}
+                                          {d.format.plateEnabled && <span>| +Plate</span>}
+                                      </div>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                      <button
+                                          onClick={() => handleEditDivision(d)}
+                                          className="text-blue-400 hover:text-blue-300 text-sm font-medium"
+                                      >
+                                          Edit
+                                      </button>
+                                      <button
+                                          onClick={() => setDivisions(divisions.filter(x => x.id !== d.id))}
+                                          className="text-red-400 hover:text-red-300 text-sm font-medium"
+                                      >
+                                          Remove
+                                      </button>
+                                  </div>
+                              </div>
+                          ))
+                      )}
+                  </div>
+
+                  {/* ADD/EDIT DIVISION PANEL */}
+                  <div className={`bg-gray-700/50 p-6 rounded-lg border ${editingId ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]' : 'border-gray-600'} space-y-6 transition-all duration-300`}>
+                      <div className="flex justify-between items-center border-b border-gray-600 pb-3">
+                          <div>
+                            <h3 className="text-white font-bold text-lg">
+                                {editingId ? 'Edit Division' : 'Add New Division'}
+                            </h3>
+                            {!editingId && (
+                              <p className="text-xs text-gray-500 mt-1">Configure and add another division to your tournament</p>
+                            )}
+                          </div>
                           {editingId && (
-                              <span className="text-xs text-green-400 font-bold uppercase tracking-wider animate-pulse">
+                              <span className="text-xs text-green-400 font-bold uppercase tracking-wider animate-pulse bg-green-900/30 px-2 py-1 rounded">
                                   Editing Mode
                               </span>
                           )}
@@ -1249,6 +1306,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                                   playType={newDivBasic.type === 'singles' ? 'singles' : 'doubles'}
                                   eventType="tournament"
                                   theme="dark"
+                                  isAppAdmin={isAppAdmin}
                               />
                           </div>
 
@@ -1415,51 +1473,6 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                               {editingId ? 'Update Division' : 'Add Division'}
                           </button>
                       </div>
-                  </div>
-
-                  {/* LIST */}
-                  <div className="space-y-2">
-                      <h4 className="text-white font-bold">Divisions List</h4>
-                      {divisions.length === 0 ? (
-                          <p className="text-gray-500 italic text-sm">No divisions added yet.</p>
-                      ) : (
-                          divisions.map(d => (
-                              <div key={d.id} className={`bg-gray-900 p-4 rounded flex justify-between items-center text-white border ${editingId === d.id ? 'border-green-500/50 bg-green-900/10' : 'border-gray-800'}`}>
-                                  <div>
-                                      <div className="font-bold flex items-center gap-2">
-                                          {d.name}
-                                          {editingId === d.id && <span className="text-[10px] bg-green-600 text-white px-1.5 rounded uppercase">Editing</span>}
-                                      </div>
-                                      <div className="text-xs text-gray-400 mt-1 space-x-3">
-                                          <span>
-                                            {d.format.stageMode === 'single_stage' 
-                                                ? `Single Stage: ${d.format.mainFormat?.replace('_', ' ')}` 
-                                                : `Two Stage: ${d.format.numberOfPools} Pools → ${d.format.stage2Format?.replace('_', ' ')}`
-                                            }
-                                          </span>
-                                          <span>|</span>
-                                          <span>Best of {d.format.bestOfGames} to {d.format.pointsPerGame}</span>
-                                          {d.format.hasBronzeMatch && <span>| +Bronze</span>}
-                                          {d.format.plateEnabled && <span>| +Plate</span>}
-                                      </div>
-                                  </div>
-                                  <div className="flex items-center gap-3">
-                                      <button 
-                                          onClick={() => handleEditDivision(d)} 
-                                          className="text-blue-400 hover:text-blue-300 text-sm font-medium"
-                                      >
-                                          Edit
-                                      </button>
-                                      <button 
-                                          onClick={() => setDivisions(divisions.filter(x => x.id !== d.id))} 
-                                          className="text-red-400 hover:text-red-300 text-sm font-medium"
-                                      >
-                                          Remove
-                                      </button>
-                                  </div>
-                              </div>
-                          ))
-                      )}
                   </div>
 
                   <div className="flex justify-between pt-4 border-t border-gray-700">

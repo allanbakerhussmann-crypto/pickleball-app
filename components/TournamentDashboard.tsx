@@ -39,8 +39,14 @@ export const TournamentDashboard: React.FC<TournamentDashboardProps> = ({
       let filtered = tournaments || [];
 
       if (activeTab === 'managing') {
+          // Show all tournaments created by this user (including drafts)
           filtered = filtered.filter(t => t.createdByUserId === currentUser?.uid);
       } else {
+          // PUBLIC VIEW: Hide draft tournaments unless user is the organizer
+          filtered = filtered.filter(t =>
+              t.status !== 'draft' || t.createdByUserId === currentUser?.uid
+          );
+
           // Search Filter
           if (searchQuery) {
               filtered = filtered.filter(t => t.name.toLowerCase().includes(searchQuery.toLowerCase()));

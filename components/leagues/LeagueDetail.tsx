@@ -45,7 +45,27 @@ import {
   isWeekUnlocked,
   // V07.26: Fetch user profiles for DUPR access token check
   getUsersByIds,
+  // V07.36: Fetch organizer profile for contact info
+  getUserProfile,
 } from '../../services/firebase';
+// V07.36: Drag-and-drop for tiebreakers
+import {
+  DndContext,
+  DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
 import { BoxPlayerDragDrop, RotatingBoxPlayerManager, BoxLeagueAbsencePanel } from './boxLeague';
 import { BoxLeagueStandings } from './boxLeague/BoxLeagueStandings';
@@ -63,10 +83,13 @@ import type {
   UserProfile,
 } from '../../types';
 import type { BoxLeaguePlayer } from '../../types/boxLeague';
+import type { BoxLeagueWeek, WeekAbsence } from '../../types/rotatingDoublesBox';
+import { collection, onSnapshot, query, orderBy } from '@firebase/firestore';
 import { LeagueStandings } from './LeagueStandings';
 import { LeagueCommsTab } from './LeagueCommsTab';
 import { LeagueRegistrationWizard } from './LeagueRegistrationWizard';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
+import { OrganizerMatchPanel } from '../shared/OrganizerMatchPanel';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
 import { doc, updateDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
@@ -82,7 +105,68 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'players' | 'courts' | 'schedule' | 'dupr' | 'info' | 'comms';
+type TabType = 'standings' | 'matches' | 'players' | 'courts' | 'schedule' | 'dupr' | 'organizer' | 'info' | 'comms';
+
+// ============================================
+// SORTABLE TIEBREAKER ITEM (V07.36)
+// ============================================
+
+const TIEBREAKER_LABELS: Record<string, string> = {
+  league_points: 'Total League Points',
+  wins: 'Number of Wins',
+  point_diff: 'Point Differential (Points For - Points Against)',
+  points_diff: 'Point Differential (Points For - Points Against)',
+  points_for: 'Total Points Scored',
+  head_to_head: 'Head-to-Head Record',
+  points_against: 'Total Points Conceded (fewer is better)',
+};
+
+interface SortableTiebreakerItemProps {
+  id: string;
+  index: number;
+  isEditing: boolean;
+}
+
+const SortableTiebreakerItem: React.FC<SortableTiebreakerItemProps> = ({ id, index, isEditing }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id, disabled: !isEditing });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-center gap-3 ${isEditing ? 'bg-gray-700/50 rounded-lg p-2 -mx-2' : ''}`}
+    >
+      {isEditing && (
+        <button
+          {...attributes}
+          {...listeners}
+          className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-white"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
+          </svg>
+        </button>
+      )}
+      <span className="w-6 h-6 rounded-full bg-lime-600/20 text-lime-400 flex items-center justify-center text-xs font-bold flex-shrink-0">
+        {index + 1}
+      </span>
+      <span className="text-white">{TIEBREAKER_LABELS[id] || id}</span>
+    </li>
+  );
+};
 
 // ============================================
 // COMPONENT
@@ -99,8 +183,19 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [matches, setMatches] = useState<LeagueMatch[]>([]);
   const [myMembership, setMyMembership] = useState<LeagueMember | null>(null);
   const [boxPlayers, setBoxPlayers] = useState<BoxLeaguePlayer[]>([]);
+  const [boxWeeks, setBoxWeeks] = useState<BoxLeagueWeek[]>([]);
   // V07.26: User profiles for DUPR access token checking
   const [userProfiles, setUserProfiles] = useState<Map<string, UserProfile>>(new Map());
+  // V07.36: Organizer profile for contact info display
+  const [organizerProfile, setOrganizerProfile] = useState<UserProfile | null>(null);
+  // V07.36: Tiebreaker editing state
+  const [editingTiebreakers, setEditingTiebreakers] = useState(false);
+  const [savingTiebreakers, setSavingTiebreakers] = useState(false);
+  // V07.37: Promotion/relegation editing state
+  const [editingMovement, setEditingMovement] = useState(false);
+  const [savingMovement, setSavingMovement] = useState(false);
+  const [localPromotionCount, setLocalPromotionCount] = useState<1 | 2>(1);
+  const [localRelegationCount, setLocalRelegationCount] = useState<1 | 2>(1);
 
   // V07.14: Standings snapshots from Firestore
   const [overallStandings, setOverallStandings] = useState<LeagueStandingsDoc | null>(null);
@@ -113,6 +208,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [activeTab, setActiveTab] = useState<TabType>('standings');
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [activeWeekTab, setActiveWeekTab] = useState<string>(''); // For matches sub-tabs
+  const [organizerSubTab, setOrganizerSubTab] = useState<'matches' | 'absentees'>('matches'); // V07.37: Organizer sub-tabs
   const [activeStandingsTab, setActiveStandingsTab] = useState<string>('overall'); // V07.16: For standings sub-tabs
   const [joining, setJoining] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -373,6 +469,20 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     fetchUserProfiles();
   }, [members]);
 
+  // V07.36: Fetch organizer profile for contact info display
+  useEffect(() => {
+    const fetchOrganizerProfile = async () => {
+      if (!league?.createdByUserId) return;
+      try {
+        const profile = await getUserProfile(league.createdByUserId);
+        setOrganizerProfile(profile);
+      } catch (err) {
+        console.error('Failed to fetch organizer profile:', err);
+      }
+    };
+    fetchOrganizerProfile();
+  }, [league?.createdByUserId]);
+
   // Subscribe to matches
   useEffect(() => {
     const unsubscribe = subscribeToLeagueMatches(leagueId, setMatches);
@@ -389,6 +499,25 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       return () => unsubscribe();
     }
   }, [leagueId, league?.format, league?.competitionFormat]);
+
+  // Subscribe to box weeks (for rotating_doubles_box - to get absence/substitute info)
+  useEffect(() => {
+    const isRotatingBox = league?.competitionFormat === 'rotating_doubles_box' || league?.competitionFormat === 'fixed_doubles_box';
+    if (!isRotatingBox) {
+      setBoxWeeks([]);
+      return;
+    }
+
+    const weeksRef = collection(db, 'leagues', leagueId, 'boxWeeks');
+    const q = query(weeksRef, orderBy('weekNumber', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const weeks = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as BoxLeagueWeek));
+      setBoxWeeks(weeks);
+    });
+
+    return () => unsubscribe();
+  }, [leagueId, league?.competitionFormat]);
 
   // Get my membership
   useEffect(() => {
@@ -544,8 +673,20 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     return lookup;
   }, [members, userProfiles]);
 
+  // Create a lookup of absences by week for quick access
+  const absencesByWeek = useMemo(() => {
+    const lookup = new Map<number, WeekAbsence[]>();
+    for (const week of boxWeeks) {
+      if (week.absences?.length) {
+        lookup.set(week.weekNumber, week.absences);
+      }
+    }
+    return lookup;
+  }, [boxWeeks]);
+
   // V07.26: Enrich box league matches with player names and DUPR IDs from members
   // DUPR IDs are only included if the player has duprConnected: true (actually linked via SSO)
+  // V07.28: Also shows substitute names for absent players
   const enrichBoxLeagueMatch = (match: LeagueMatch): LeagueMatch => {
     // Only enrich box league matches with sideA/sideB
     const sideA = (match as any).sideA;
@@ -554,15 +695,30 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     if (!sideA || !sideB) return match;
     if (memberLookup.size === 0) return match;
 
+    // Get absences for this week to check for substitutes
+    const weekAbsences = absencesByWeek.get(match.weekNumber || 0) || [];
+
+    // Helper to get display name - shows substitute name if player is absent
+    const getDisplayName = (playerId: string): string => {
+      const absence = weekAbsences.find(a => a.playerId === playerId && a.substituteId);
+      if (absence?.substituteId && absence.substituteName) {
+        // Player is absent with substitute - show sub's name with indicator
+        return `${absence.substituteName} (Sub)`;
+      }
+      // Normal case - show member name
+      const member = memberLookup.get(playerId);
+      return member?.displayName || 'Unknown';
+    };
+
     // Always enrich with DUPR IDs for eligibility checking, and names if needed
     const resolvedSideA = { ...sideA };
     const resolvedSideB = { ...sideB };
 
     if (sideA.playerIds?.length >= 2) {
+      const name1 = getDisplayName(sideA.playerIds[0]);
+      const name2 = getDisplayName(sideA.playerIds[1]);
       const member1 = memberLookup.get(sideA.playerIds[0]);
       const member2 = memberLookup.get(sideA.playerIds[1]);
-      const name1 = member1?.displayName || 'Unknown';
-      const name2 = member2?.displayName || 'Unknown';
 
       // Always update names and DUPR IDs
       resolvedSideA.name = `${name1} & ${name2}`;
@@ -572,10 +728,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
 
     if (sideB.playerIds?.length >= 2) {
+      const name1 = getDisplayName(sideB.playerIds[0]);
+      const name2 = getDisplayName(sideB.playerIds[1]);
       const member1 = memberLookup.get(sideB.playerIds[0]);
       const member2 = memberLookup.get(sideB.playerIds[1]);
-      const name1 = member1?.displayName || 'Unknown';
-      const name2 = member2?.displayName || 'Unknown';
 
       resolvedSideB.name = `${name1} & ${name2}`;
       resolvedSideB.playerNames = [name1, name2];
@@ -597,7 +753,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
     // Enrich box league matches with player names
     return filtered.map(enrichBoxLeagueMatch);
-  }, [matches, selectedDivisionId, memberLookup]);
+  }, [matches, selectedDivisionId, memberLookup, absencesByWeek]);
 
   // Group matches by week for sub-tabs
   const matchesByWeek = useMemo(() => {
@@ -881,6 +1037,31 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   }, [showDuprRequiredModal, currentUser?.uid]);
 
+  // V07.36: Tiebreaker drag-and-drop - sensors and local state
+  // NOTE: These hooks MUST be before any early returns to follow React's rules of hooks
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+  const [localTiebreakers, setLocalTiebreakers] = useState<string[]>([]);
+
+  // Sync local tiebreakers with league settings when not editing
+  useEffect(() => {
+    if (!editingTiebreakers && league?.settings?.tiebreakers) {
+      setLocalTiebreakers(league.settings.tiebreakers);
+    }
+  }, [league?.settings?.tiebreakers, editingTiebreakers]);
+
+  // V07.37: Sync local movement settings with league settings when not editing
+  // For rotating doubles box, settings are in settings.rotatingDoublesBox.settings
+  useEffect(() => {
+    if (!editingMovement && league?.settings) {
+      const boxSettings = league.settings.rotatingDoublesBox?.settings;
+      setLocalPromotionCount((boxSettings?.promotionCount as 1 | 2) || 1);
+      setLocalRelegationCount((boxSettings?.relegationCount as 1 | 2) || 1);
+    }
+  }, [league?.settings?.rotatingDoublesBox?.settings?.promotionCount, league?.settings?.rotatingDoublesBox?.settings?.relegationCount, editingMovement]);
+
   // Handle free registration (after payment or for free leagues)
   const handleFreeJoin = async () => {
     if (!currentUser || !userProfile) return;
@@ -1007,6 +1188,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
   const isDoublesOrMixed = league.type === 'doubles' || league.type === 'mixed_doubles';
   const isOrganizer = currentUser?.uid === league.createdByUserId;
+  // V07.35: Check if this is a DUPR-enabled league (for score entry compliance rules)
+  const duprMode = league.settings?.duprSettings?.mode;
+  const isDuprLeague = duprMode === 'optional' || duprMode === 'required';
   // V07.15: Check both league.maxMembers and league.settings.maxMembers (stored in settings)
   const effectiveMaxMembers = league.maxMembers || league.settings?.maxMembers;
   const isFull = effectiveMaxMembers ? (league.memberCount || 0) >= effectiveMaxMembers : false;
@@ -1033,14 +1217,73 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   // V07.26: DUPR tab only if league has DUPR enabled (mode is 'optional' or 'required')
   const isBoxLeagueFormat = league?.competitionFormat === 'rotating_doubles_box' || league?.competitionFormat === 'fixed_doubles_box' || league?.format === 'box_league';
   const isDuprEnabled = league?.settings?.duprSettings?.mode && league.settings.duprSettings.mode !== 'none';
+
+  const handleTiebreakerDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const oldIndex = localTiebreakers.indexOf(active.id as string);
+      const newIndex = localTiebreakers.indexOf(over.id as string);
+      setLocalTiebreakers(arrayMove(localTiebreakers, oldIndex, newIndex));
+    }
+  };
+
+  const handleSaveTiebreakers = async () => {
+    if (!league) return;
+    setSavingTiebreakers(true);
+    try {
+      const leagueRef = doc(db, 'leagues', leagueId);
+      await updateDoc(leagueRef, {
+        'settings.tiebreakers': localTiebreakers,
+      });
+      setEditingTiebreakers(false);
+    } catch (err) {
+      console.error('Failed to save tiebreakers:', err);
+      alert('Failed to save tiebreakers: ' + (err as Error).message);
+    } finally {
+      setSavingTiebreakers(false);
+    }
+  };
+
+  const handleCancelTiebreakerEdit = () => {
+    setLocalTiebreakers(league?.settings?.tiebreakers || []);
+    setEditingTiebreakers(false);
+  };
+
+  // V07.37: Save promotion/relegation settings
+  // For rotating doubles box, save to settings.rotatingDoublesBox.settings
+  const handleSaveMovement = async () => {
+    if (!league) return;
+    setSavingMovement(true);
+    try {
+      const leagueRef = doc(db, 'leagues', leagueId);
+      await updateDoc(leagueRef, {
+        'settings.rotatingDoublesBox.settings.promotionCount': localPromotionCount,
+        'settings.rotatingDoublesBox.settings.relegationCount': localRelegationCount,
+      });
+      setEditingMovement(false);
+    } catch (err) {
+      console.error('Failed to save movement settings:', err);
+      alert('Failed to save movement settings: ' + (err as Error).message);
+    } finally {
+      setSavingMovement(false);
+    }
+  };
+
+  const handleCancelMovementEdit = () => {
+    setLocalPromotionCount((league?.settings?.promotionCount as 1 | 2) || 1);
+    setLocalRelegationCount((league?.settings?.relegationCount as 1 | 2) || 1);
+    setEditingMovement(false);
+  };
+
+  // V07.35: Add 'organizer' tab for non-DUPR leagues (match management without DUPR submission)
   const availableTabs: TabType[] = isOrganizer
     ? isBoxLeagueFormat
       ? isDuprEnabled
         ? ['standings', 'matches', 'players', 'courts', 'schedule', 'dupr', 'info', 'comms']
-        : ['standings', 'matches', 'players', 'courts', 'schedule', 'info', 'comms']
+        : ['standings', 'matches', 'players', 'courts', 'schedule', 'organizer', 'info', 'comms']
       : isDuprEnabled
         ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info', 'comms']
-        : ['standings', 'matches', 'players', 'schedule', 'info', 'comms']
+        : ['standings', 'matches', 'players', 'schedule', 'organizer', 'info', 'comms']
     : ['standings', 'matches', 'info'];
 
   return (
@@ -2166,16 +2409,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </div>
           )}
 
-          {/* V07.28: Box League Absence Panel */}
-          {(league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box') && currentUser && (
-            <BoxLeagueAbsencePanel
-              leagueId={leagueId}
-              league={league}
-              currentUserId={currentUser.uid}
-              isOrganizer={isOrganizer}
-              members={members}
-            />
-          )}
+          {/* V07.37: Box League Absence Panel moved to Organizer tab */}
         </div>
       )}
 
@@ -2386,6 +2620,66 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         />
       )}
 
+      {/* V07.35: ORGANIZER TAB - For non-DUPR leagues match management */}
+      {activeTab === 'organizer' && isOrganizer && (
+        <div className="space-y-4">
+          {/* V07.37: Organizer Sub-tabs */}
+          {isBoxLeagueFormat && (
+            <div className="flex gap-2 border-b border-gray-700 pb-3">
+              <button
+                onClick={() => setOrganizerSubTab('matches')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  organizerSubTab === 'matches'
+                    ? 'bg-lime-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                Matches
+              </button>
+              <button
+                onClick={() => setOrganizerSubTab('absentees')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  organizerSubTab === 'absentees'
+                    ? 'bg-lime-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                Absentees
+              </button>
+            </div>
+          )}
+
+          {/* Matches Sub-tab (default) */}
+          {(organizerSubTab === 'matches' || !isBoxLeagueFormat) && (
+            <OrganizerMatchPanel
+              leagueId={leagueId}
+              leagueName={league.name}
+              matches={filteredMatches as any[]}
+              isOrganizer={isOrganizer}
+              currentUserId={currentUser?.uid || ''}
+              onMatchClick={(match) => {
+                setSelectedMatch(match);
+                setShowScoreEntryModal(true);
+              }}
+              onMatchUpdate={() => {
+                // Matches will auto-update via subscription
+              }}
+            />
+          )}
+
+          {/* V07.37: Absentees Sub-tab (Box League only) */}
+          {organizerSubTab === 'absentees' && isBoxLeagueFormat && currentUser && (
+            <BoxLeagueAbsencePanel
+              leagueId={leagueId}
+              league={league}
+              currentUserId={currentUser.uid}
+              isOrganizer={isOrganizer}
+              members={members}
+            />
+          )}
+        </div>
+      )}
+
       {/* INFO TAB */}
       {activeTab === 'info' && (
         <div className="space-y-4">
@@ -2419,6 +2713,193 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               </div>
             </div>
           </div>
+
+          {/* V07.35: Score Verification Settings */}
+          <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+            <h3 className="text-lg font-bold text-white mb-4">Score Verification</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-gray-500">Who Can Enter Scores:</span>
+                <span className="text-white ml-2">
+                  {league.settings?.scoreVerification?.entryMode === 'winner_only' ? 'Winner only' :
+                   league.settings?.scoreVerification?.entryMode === 'organizer_only' ? 'Organizer only' :
+                   'Any player in the match'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-500">Verification Method:</span>
+                <span className="text-white ml-2">
+                  {league.settings?.scoreVerification?.verificationMethod === 'auto_confirm' ? 'Auto-confirm (no verification needed)' :
+                   league.settings?.scoreVerification?.verificationMethod === 'majority' ? 'Majority of players confirm' :
+                   league.settings?.scoreVerification?.verificationMethod === 'organizer_only' ? 'Organizer approval required' :
+                   'One opponent confirms'}
+                </span>
+              </div>
+              {(league.settings?.scoreVerification?.autoFinalizeHours ?? 24) > 0 && (
+                <div>
+                  <span className="text-gray-500">Auto-finalize:</span>
+                  <span className="text-white ml-2">
+                    After {league.settings?.scoreVerification?.autoFinalizeHours || 24} hours if no disputes
+                  </span>
+                </div>
+              )}
+              <div>
+                <span className="text-gray-500">Disputes Allowed:</span>
+                <span className="text-white ml-2">
+                  {league.settings?.scoreVerification?.allowDisputes !== false ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-3">
+              {league.settings?.scoreVerification?.verificationMethod === 'one_opponent'
+                ? 'After entering a score, an opponent must confirm it before it becomes official.'
+                : league.settings?.scoreVerification?.verificationMethod === 'auto_confirm'
+                ? 'Scores are immediately accepted without confirmation from opponents.'
+                : league.settings?.scoreVerification?.verificationMethod === 'organizer_only'
+                ? 'All scores must be approved by the league organizer.'
+                : 'Scores require confirmation from the majority of players in the match.'}
+            </p>
+          </div>
+
+          {/* V07.35: Tiebreaker Rules (V07.36: Now with drag-drop for organizers) */}
+          {(league.settings?.tiebreakers && league.settings.tiebreakers.length > 0) || isOrganizer ? (
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-white">Tiebreaker Rules</h3>
+                {isOrganizer && !editingTiebreakers && (
+                  <button
+                    onClick={() => setEditingTiebreakers(true)}
+                    className="text-sm text-lime-400 hover:text-lime-300"
+                  >
+                    Edit Order
+                  </button>
+                )}
+                {isOrganizer && editingTiebreakers && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleCancelTiebreakerEdit}
+                      className="text-sm text-gray-400 hover:text-white px-3 py-1 border border-gray-600 rounded-lg"
+                      disabled={savingTiebreakers}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveTiebreakers}
+                      disabled={savingTiebreakers}
+                      className="text-sm text-black bg-lime-500 hover:bg-lime-400 px-3 py-1 rounded-lg disabled:opacity-50"
+                    >
+                      {savingTiebreakers ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <p className="text-sm text-gray-400 mb-3">
+                When players have equal standings, ties are broken in this order:
+                {editingTiebreakers && <span className="text-lime-400 ml-2">(Drag to reorder)</span>}
+              </p>
+              {editingTiebreakers ? (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleTiebreakerDragEnd}
+                >
+                  <SortableContext items={localTiebreakers} strategy={verticalListSortingStrategy}>
+                    <ol className="text-sm space-y-2">
+                      {localTiebreakers.map((tb, idx) => (
+                        <SortableTiebreakerItem key={tb} id={tb} index={idx} isEditing={true} />
+                      ))}
+                    </ol>
+                  </SortableContext>
+                </DndContext>
+              ) : (
+                <ol className="text-sm space-y-2">
+                  {(league.settings?.tiebreakers || []).map((tb, idx) => (
+                    <SortableTiebreakerItem key={tb} id={tb} index={idx} isEditing={false} />
+                  ))}
+                </ol>
+              )}
+            </div>
+          ) : null}
+
+          {/* V07.37: Promotion/Relegation Settings (Box League only) */}
+          {isBoxLeagueFormat && isOrganizer && (
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-white">Promotion & Relegation</h3>
+                {!editingMovement ? (
+                  <button
+                    onClick={() => setEditingMovement(true)}
+                    className="text-sm text-lime-400 hover:text-lime-300"
+                  >
+                    Edit
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleCancelMovementEdit}
+                      className="text-sm text-gray-400 hover:text-white px-3 py-1 border border-gray-600 rounded-lg"
+                      disabled={savingMovement}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveMovement}
+                      disabled={savingMovement}
+                      className="text-sm text-black bg-lime-500 hover:bg-lime-400 px-3 py-1 rounded-lg disabled:opacity-50"
+                    >
+                      {savingMovement ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <p className="text-sm text-gray-400 mb-4">
+                Number of players moving between boxes each week
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-gray-400 block mb-2">
+                    <span className="text-green-400">▲</span> Promotions per box
+                  </label>
+                  {editingMovement ? (
+                    <select
+                      value={localPromotionCount}
+                      onChange={(e) => setLocalPromotionCount(parseInt(e.target.value) as 1 | 2)}
+                      className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
+                    >
+                      <option value={1}>1 player</option>
+                      <option value={2}>2 players</option>
+                    </select>
+                  ) : (
+                    <div className="text-white font-medium">
+                      {localPromotionCount} player{localPromotionCount > 1 ? 's' : ''}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="text-sm text-gray-400 block mb-2">
+                    <span className="text-red-400">▼</span> Relegations per box
+                  </label>
+                  {editingMovement ? (
+                    <select
+                      value={localRelegationCount}
+                      onChange={(e) => setLocalRelegationCount(parseInt(e.target.value) as 1 | 2)}
+                      className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
+                    >
+                      <option value={1}>1 player</option>
+                      <option value={2}>2 players</option>
+                    </select>
+                  ) : (
+                    <div className="text-white font-medium">
+                      {localRelegationCount} player{localRelegationCount > 1 ? 's' : ''}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-3">
+                Top {localPromotionCount} player{localPromotionCount > 1 ? 's' : ''} in each box move up, bottom {localRelegationCount} player{localRelegationCount > 1 ? 's' : ''} move down
+              </p>
+            </div>
+          )}
 
           {/* Partner Settings (for doubles) */}
           {isDoublesOrMixed && league.settings?.partnerSettings && (
@@ -2475,6 +2956,36 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             <p className="text-white">{league.organizerName}</p>
             {league.clubName && (
               <p className="text-sm text-gray-400 mt-1">Hosted by {league.clubName}</p>
+            )}
+            {/* V07.36: Contact info from organizer profile */}
+            {organizerProfile && (organizerProfile.email || organizerProfile.phone) && (
+              <div className="mt-4 pt-4 border-t border-gray-700">
+                <p className="text-sm text-gray-400 mb-2">Contact</p>
+                <div className="space-y-2">
+                  {organizerProfile.email && (
+                    <a
+                      href={`mailto:${organizerProfile.email}`}
+                      className="flex items-center gap-2 text-lime-400 hover:text-lime-300 text-sm"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                      {organizerProfile.email}
+                    </a>
+                  )}
+                  {organizerProfile.phone && organizerProfile.phoneVerified && (
+                    <a
+                      href={`tel:${organizerProfile.phone}`}
+                      className="flex items-center gap-2 text-lime-400 hover:text-lime-300 text-sm"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                      </svg>
+                      {organizerProfile.phone}
+                    </a>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 
@@ -3439,6 +3950,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           winBy={(league.settings.matchFormat?.winBy as 1 | 2) || 2}
           verificationSettings={league.settings.scoreVerification || undefined}
           isOrganizer={isOrganizer}
+          isDuprLeague={isDuprLeague}
           onClose={() => {
             setShowScoreEntryModal(false);
             setSelectedMatch(null);

@@ -297,15 +297,23 @@ service cloud.firestore {
            request.auth.uid in get(/databases/$(database)/documents/tournaments/$(tournamentId)).data.staffIds);
 
         // V06.33 Results Table Architecture - Pool Results subcollection
+        // V07.29: Added isAppAdmin() and staff access for consistency with divisions
         match /poolResults/{poolKey} {
           allow read: if isAuthenticated();
-          allow write: if isTournamentOrganizer(tournamentId);
+          allow write: if isTournamentOrganizer(tournamentId) ||
+            isAppAdmin() ||
+            (isAuthenticated() &&
+             request.auth.uid in get(/databases/$(database)/documents/tournaments/$(tournamentId)).data.staffIds);
         }
 
         // V06.33 Results Table Architecture - Bracket Seeds subcollection
+        // V07.29: Added isAppAdmin() and staff access for consistency with divisions
         match /bracketSeeds/{bracketType} {
           allow read: if isAuthenticated();
-          allow write: if isTournamentOrganizer(tournamentId);
+          allow write: if isTournamentOrganizer(tournamentId) ||
+            isAppAdmin() ||
+            (isAuthenticated() &&
+             request.auth.uid in get(/databases/$(database)/documents/tournaments/$(tournamentId)).data.staffIds);
         }
       }
       match /teams/{teamId} {
@@ -451,6 +459,7 @@ service cloud.firestore {
         allow create, delete: if isLeagueAdmin(leagueId);
         // League admin OR match participants can update (for score entry)
         // V07.10: Players cannot write to restricted DUPR fields or when scoreLocked
+        // V07.39: Players cannot modify structural fields (sideA, sideB, weekNumber, boxNumber, eventId)
         // Use get() with default to safely check fields that may not exist
         allow update: if isLeagueAdmin(leagueId) ||
           (isAuthenticated() &&
@@ -461,7 +470,12 @@ service cloud.firestore {
             resource.data.get('partnerBId', '') == request.auth.uid ||
             (request.auth.uid in resource.data.get('sideA', {}).get('playerIds', [])) ||
             (request.auth.uid in resource.data.get('sideB', {}).get('playerIds', []))) &&
-           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['officialResult', 'dupr', 'scoreLocked', 'scoreLockedAt', 'scoreLockedByUserId', 'migratedAt', 'migratedFromLegacy']));
+           !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+             'officialResult', 'dupr', 'scoreLocked', 'scoreLockedAt', 'scoreLockedByUserId',
+             'migratedAt', 'migratedFromLegacy',
+             'sideA', 'sideB', 'weekNumber', 'boxNumber', 'eventId', 'eventType', 'format',
+             'roundNumber', 'matchNumberInBox', 'createdAt', 'rotationVersion', 'idempotencyKey'
+           ]));
       }
       match /challenges/{challengeId} {
         allow read: if isAuthenticated();
@@ -498,6 +512,41 @@ service cloud.firestore {
         // League organizer can delete pending or failed messages
         allow delete: if isLeagueAdmin(leagueId) &&
           (resource.data.status == 'pending' || resource.data.status == 'failed');
+      }
+
+      // V07.25: Box League Weeks - Weekly state for rotating doubles box leagues
+      // Stores box assignments, attendance, match IDs, and standings snapshots
+      match /boxWeeks/{weekNumber} {
+        // Anyone can read weekly assignments/standings (like standings)
+        allow read: if true;
+        // Only league admin can create/update/delete weeks
+        allow create, update, delete: if isLeagueAdmin(leagueId);
+      }
+
+      // V07.25: Box League Seasons - Season configuration for box leagues
+      // Stores season dates, week schedule, rules snapshot
+      match /boxSeasons/{seasonId} {
+        // Anyone can read season info (like league info)
+        allow read: if true;
+        // Only league admin can manage seasons
+        allow create, update, delete: if isLeagueAdmin(leagueId);
+
+        // Season player stats subcollection
+        match /playerStats/{odUserId} {
+          // Anyone can read stats (leaderboard is public)
+          allow read: if true;
+          // Only league admin can update stats
+          allow write: if isLeagueAdmin(leagueId);
+        }
+      }
+
+      // V07.25: Box Players - Legacy box league player management
+      // Note: rotating_doubles_box uses members subcollection instead
+      match /boxPlayers/{playerId} {
+        // Anyone can read box players (like standings)
+        allow read: if true;
+        // Only league admin can manage box players
+        allow create, update, delete: if isLeagueAdmin(leagueId);
       }
     }
 

@@ -21,6 +21,8 @@ interface AddDivisionModalProps {
   onClose: () => void;
   /** Payment mode - controls visibility of fee field */
   paymentMode?: TournamentPaymentMode;
+  /** If true, show "Coming Soon" formats (app admin only) */
+  isAppAdmin?: boolean;
 }
 
 const FORMATS: { value: CompetitionFormat; label: string; icon: string; description: string; comingSoon?: boolean }[] = [
@@ -53,8 +55,14 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
   onAdd,
   onClose,
   paymentMode,
+  isAppAdmin = false,
 }) => {
   const isEditing = !!division;
+
+  // Filter out "Coming Soon" formats for non-admins
+  const availableFormats = isAppAdmin
+    ? FORMATS
+    : FORMATS.filter(f => !f.comingSoon);
 
   // Form state
   const [name, setName] = useState(division?.name || '');
@@ -391,7 +399,7 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
               FORMAT
             </label>
             <div className="grid grid-cols-3 gap-3">
-              {FORMATS.map((f) => (
+              {availableFormats.map((f) => (
                 <button
                   key={f.value}
                   onClick={() => !f.comingSoon && setFormat(f.value)}
@@ -417,7 +425,7 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
               ))}
             </div>
             <p className="text-xs text-gray-500 mt-2 text-center">
-              {FORMATS.find((f) => f.value === format)?.description}
+              {availableFormats.find((f) => f.value === format)?.description}
             </p>
           </div>
 

@@ -56,7 +56,7 @@ export const createLeague = async (
 ): Promise<string> => {
   const leagueRef = doc(collection(db, 'leagues'));
   const now = Date.now();
-  
+
   const newLeague: League = {
     ...league,
     id: leagueRef.id,
@@ -65,8 +65,13 @@ export const createLeague = async (
     createdAt: now,
     updatedAt: now,
   };
-  
-  await setDoc(leagueRef, newLeague);
+
+  // Filter out undefined values (Firestore doesn't accept them)
+  const cleanedLeague = Object.fromEntries(
+    Object.entries(newLeague).filter(([_, v]) => v !== undefined)
+  ) as League;
+
+  await setDoc(leagueRef, cleanedLeague);
   return leagueRef.id;
 };
 

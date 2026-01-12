@@ -1,11 +1,13 @@
 /**
- * LeagueMatchCard Component V06.15
+ * LeagueMatchCard Component V07.35
  *
  * Displays a league match with status, scores, and action buttons.
  * Now includes verification badges, confirm/dispute actions, and DUPR submission.
  *
+ * V07.35: Compact view shows inline "Enter Score" / "Acknowledge" buttons
+ *
  * FILE LOCATION: components/leagues/LeagueMatchCard.tsx
- * VERSION: V06.15 - Added DUPR submit button integration
+ * VERSION: V07.35
  */
 
 import React from 'react';
@@ -59,6 +61,12 @@ const calculateGameScores = (scores: GameScore[]): { gamesA: number; gamesB: num
   }
 
   return { gamesA, gamesB };
+};
+
+// V07.26: Format actual game scores for display (e.g., "13-15" or "11-9, 9-11, 11-7")
+const formatActualScores = (scores: GameScore[]): string => {
+  if (!scores || scores.length === 0) return '';
+  return scores.map(s => `${s.scoreA ?? 0}-${s.scoreB ?? 0}`).join(', ');
 };
 
 const formatDate = (timestamp: number | null | undefined): string => {
@@ -137,12 +145,22 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
     : { gamesA: 0, gamesB: 0 };
 
   // V07.30: Get team names - prefer sideA/sideB.name (full team name) over memberAName/memberBName
-  const teamAName = match.sideA?.name || teamAName;
-  const teamBName = match.sideB?.name || teamBName;
+  // V07.26: Fixed self-referential bug, added box league support with playerNames fallback
+  const teamAName = match.sideA?.name ||
+    (match.sideA?.playerNames?.length ? match.sideA.playerNames.join(' & ') : null) ||
+    match.memberAName || 'Unknown';
+  const teamBName = match.sideB?.name ||
+    (match.sideB?.playerNames?.length ? match.sideB.playerNames.join(' & ') : null) ||
+    match.memberBName || 'Unknown';
 
   // Determine if current user is a participant (check both primary and partner)
-  const isPlayerA = currentUserId === match.userAId || currentUserId === match.partnerAId;
-  const isPlayerB = currentUserId === match.userBId || currentUserId === match.partnerBId;
+  // V07.35: Also check sideA/sideB.playerIds for box leagues
+  const isPlayerA = currentUserId === match.userAId ||
+    currentUserId === match.partnerAId ||
+    (match.sideA?.playerIds?.includes(currentUserId || '') ?? false);
+  const isPlayerB = currentUserId === match.userBId ||
+    currentUserId === match.partnerBId ||
+    (match.sideB?.playerIds?.includes(currentUserId || '') ?? false);
   const isParticipant = isPlayerA || isPlayerB;
 
   // Get verification status from match
@@ -173,6 +191,20 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   const isWaitingOnYou = isPendingConfirmation &&
     match.submittedByUserId !== currentUserId &&
     isParticipant;
+
+  // V07.35: Check scoreState for more precise status messages
+  const scoreState = match.scoreState;
+  const isProposed = scoreState === 'proposed';
+  const isSigned = scoreState === 'signed';
+  const isOfficial = scoreState === 'official' || scoreState === 'submittedToDupr';
+
+  // V07.35: Determine if current user needs to confirm (opponent entered score, user hasn't confirmed)
+  const hasScorePending = isProposed || match.status === 'pending_confirmation' || verificationStatus === 'pending';
+  const userNeedsToConfirm = hasScorePending &&
+    isParticipant &&
+    match.submittedByUserId !== currentUserId &&
+    !hasAlreadyConfirmed &&
+    (!weekLocked || isOrganizer);
 
   // Can enter/edit score (participants and organizers)
   // V07.29: Players cannot score when week is locked (organizers can still score)
@@ -206,14 +238,53 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
             {playerAWon && ' ✓'}
           </div>
 
-          {/* Score or Status */}
-          <div className="text-center min-w-[60px] flex items-center justify-center gap-1">
-            {match.status === 'completed' || match.status === 'pending_confirmation' || hasVerification ? (
+          {/* Score or Action - V07.35: Show Enter Score / Acknowledge buttons for participants */}
+          <div className="text-center min-w-[100px] flex flex-col items-center justify-center gap-0.5">
+            {match.status === 'completed' && verificationStatus !== 'pending' ? (
+              // Completed match - show score
               <>
-                <span className="font-bold text-white">{gamesA} - {gamesB}</span>
+                <span className="font-bold text-white text-sm">{formatActualScores(match.scores || [])}</span>
                 {hasVerification && <ScoreVerificationIcon status={verificationStatus!} size="sm" />}
               </>
+            ) : userNeedsToConfirm ? (
+              // Opponent proposed, user needs to confirm - show score AND button
+              <>
+                <span className="font-bold text-white text-sm">{formatActualScores(match.scores || [])}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEnterScore?.(match);
+                  }}
+                  className="px-2 py-1 bg-yellow-600 hover:bg-yellow-500 text-white text-[10px] font-semibold rounded transition-colors"
+                >
+                  Confirm
+                </button>
+              </>
+            ) : isSigned ? (
+              // Score signed by opponent - waiting for organizer to finalize
+              <>
+                <span className="font-bold text-white text-sm">{formatActualScores(match.scores || [])}</span>
+                <span className="text-[10px] text-blue-400">Awaiting organizer</span>
+              </>
+            ) : match.status === 'pending_confirmation' || verificationStatus === 'pending' || isProposed ? (
+              // Has score but pending confirmation - show score with "Waiting" text
+              <>
+                <span className="font-bold text-white text-sm">{formatActualScores(match.scores || [])}</span>
+                <span className="text-[10px] text-yellow-400">Awaiting confirmation</span>
+              </>
+            ) : isParticipant && match.status === 'scheduled' && !weekLocked ? (
+              // Participant can enter score
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEnterScore?.(match);
+                }}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition-colors"
+              >
+                Enter Score
+              </button>
             ) : (
+              // Default - show vs
               <span className="text-xs text-gray-500">vs</span>
             )}
           </div>
@@ -228,12 +299,6 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
           </div>
         </div>
 
-        {/* Action indicator */}
-        {isWaitingOnYou && (
-          <div className="mt-2 text-xs text-yellow-400 text-center">
-            ⚠️ Action required
-          </div>
-        )}
       </div>
     );
   }
@@ -302,23 +367,39 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
             )}
           </div>
 
-          {/* Score Display */}
+          {/* Score Display - V07.26: Show actual game scores as main display */}
           <div className="px-6 text-center">
             {match.status === 'completed' || match.status === 'pending_confirmation' ? (
               <div>
-                <div className="text-3xl font-bold text-white">
-                  <span className={playerAWon ? 'text-green-400' : ''}>{gamesA}</span>
-                  <span className="text-gray-500 mx-2">-</span>
-                  <span className={playerBWon ? 'text-green-400' : ''}>{gamesB}</span>
-                </div>
-                {/* Individual game scores */}
-                {match.scores && match.scores.length > 0 && (
-                  <div className="mt-1 text-xs text-gray-500">
-                    {match.scores.map((s, i) => (
-                      <span key={i} className="mr-2">
-                        {s.scoreA}-{s.scoreB}
+                {/* V07.26: Show actual scores (e.g., "13-15") instead of game wins */}
+                <div className="text-2xl font-bold text-white">
+                  {match.scores && match.scores.length > 0 ? (
+                    match.scores.map((s, i) => (
+                      <span key={i} className="inline-block">
+                        <span className={(s.scoreA ?? 0) > (s.scoreB ?? 0) ? 'text-green-400' : ''}>
+                          {s.scoreA ?? 0}
+                        </span>
+                        <span className="text-gray-500">-</span>
+                        <span className={(s.scoreB ?? 0) > (s.scoreA ?? 0) ? 'text-green-400' : ''}>
+                          {s.scoreB ?? 0}
+                        </span>
+                        {i < (match.scores?.length || 0) - 1 && (
+                          <span className="text-gray-600 mx-2">,</span>
+                        )}
                       </span>
-                    ))}
+                    ))
+                  ) : (
+                    <>
+                      <span className={playerAWon ? 'text-green-400' : ''}>{gamesA}</span>
+                      <span className="text-gray-500 mx-2">-</span>
+                      <span className={playerBWon ? 'text-green-400' : ''}>{gamesB}</span>
+                    </>
+                  )}
+                </div>
+                {/* Show game win count for best of 3/5 */}
+                {match.scores && match.scores.length > 1 && (
+                  <div className="mt-1 text-xs text-gray-500">
+                    Games: {gamesA} - {gamesB}
                   </div>
                 )}
               </div>

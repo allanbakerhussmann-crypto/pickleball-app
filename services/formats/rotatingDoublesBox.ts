@@ -15,7 +15,6 @@
 
 import type { Match } from '../../types/game/match';
 import type { GameSettings } from '../../types/game/gameSettings';
-import type { BoxSettings } from '../../types/formats/formatTypes';
 
 // ============================================
 // TYPES

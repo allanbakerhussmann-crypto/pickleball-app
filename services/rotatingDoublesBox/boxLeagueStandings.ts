@@ -16,6 +16,7 @@ import type {
   BoxAssignment,
 } from '../../types/rotatingDoublesBox';
 import { getMatchesForBox } from './boxLeagueMatchFactory';
+import { getLeagueMembers } from '../firebase/leagues';
 
 // ============================================
 // PLAYER STATS (INTERMEDIATE)
@@ -75,6 +76,19 @@ export async function calculateBoxStandings(
 ): Promise<BoxStanding[]> {
   const { boxNumber, playerIds } = boxAssignment;
 
+  // Fetch league members to get player names
+  const members = await getLeagueMembers(leagueId);
+  const memberMap = new Map(members.map(m => [m.userId, m]));
+
+  // Debug: Check if playerIds match memberMap keys
+  console.log('[calculateBoxStandings] Box', boxNumber, '- Members found:', members.length);
+  console.log('[calculateBoxStandings] Member userIds:', Array.from(memberMap.keys()));
+  console.log('[calculateBoxStandings] Box playerIds:', playerIds);
+  for (const pid of playerIds) {
+    const found = memberMap.get(pid);
+    console.log(`[calculateBoxStandings] Player ${pid} -> ${found ? found.displayName : 'NOT FOUND'}`);
+  }
+
   // Fetch all completed matches for this box
   const matches = await getMatchesForBox(leagueId, week.weekNumber, boxNumber);
   const completedMatches = matches.filter((m) => m.status === 'completed');
@@ -82,9 +96,13 @@ export async function calculateBoxStandings(
   // Initialize stats for each player
   const playerStats = new Map<string, PlayerStats>();
   for (const playerId of playerIds) {
+    // Get player name from league members
+    const member = memberMap.get(playerId);
+    const playerName = member?.displayName || '';
+
     playerStats.set(playerId, {
       playerId,
-      playerName: '', // Will be filled from match data
+      playerName,
       boxNumber,
       matchesPlayed: 0,
       wins: 0,
@@ -117,9 +135,23 @@ export async function calculateBoxStandings(
   }
 
   // Sort players by tiebreakers
+  // V07.36: Default tiebreakers if rulesSnapshot is missing
+  const tiebreakers = week.rulesSnapshot?.tiebreakers || ['wins', 'head_to_head', 'points_diff', 'points_for'];
+
+  // Debug: Log tiebreakers and player stats before sorting
+  console.log('[calculateBoxStandings] Box', boxNumber, '- Tiebreakers:', tiebreakers);
+  console.log('[calculateBoxStandings] Box', boxNumber, '- Before sort:',
+    Array.from(playerStats.values()).map(p => ({ name: p.playerName, wins: p.wins, losses: p.losses, diff: p.pointsDiff }))
+  );
+
   const sortedPlayers = sortByTiebreakers(
     Array.from(playerStats.values()),
-    week.rulesSnapshot.tiebreakers
+    tiebreakers
+  );
+
+  // Debug: Log after sorting
+  console.log('[calculateBoxStandings] Box', boxNumber, '- After sort:',
+    sortedPlayers.map(p => ({ name: p.playerName, wins: p.wins, losses: p.losses, diff: p.pointsDiff }))
   );
 
   // Determine movement based on position
@@ -127,21 +159,26 @@ export async function calculateBoxStandings(
     const position = index + 1; // 1-based
 
     // Check if movement is frozen for this box
-    const boxStatus = week.boxCompletionStatus.find(
+    const boxStatus = week.boxCompletionStatus?.find(
       (s) => s.boxNumber === boxNumber
     );
+    // V07.36: Safely handle missing boxStatus or rulesSnapshot
+    const minRoundsForMovement = week.rulesSnapshot?.minCompletedRoundsForMovement ?? 0;
+    const completedRounds = boxStatus?.completedRounds ?? 0;
     const movementFrozen =
-      boxStatus?.movementFrozen ||
-      boxStatus!.completedRounds < week.rulesSnapshot.minCompletedRoundsForMovement;
+      boxStatus?.movementFrozen || completedRounds < minRoundsForMovement;
 
     // Determine movement
     let movement: BoxStanding['movement'];
+    const promotionCount = week.rulesSnapshot?.promotionCount ?? 1;
+    const relegationCount = week.rulesSnapshot?.relegationCount ?? 1;
+
     if (movementFrozen) {
       movement = 'frozen';
-    } else if (position <= week.rulesSnapshot.promotionCount && boxNumber > 1) {
+    } else if (position <= promotionCount && boxNumber > 1) {
       movement = 'promotion';
     } else if (
-      position > playerIds.length - week.rulesSnapshot.relegationCount &&
+      position > playerIds.length - relegationCount &&
       boxNumber < week.boxAssignments.length
     ) {
       movement = 'relegation';
@@ -149,9 +186,11 @@ export async function calculateBoxStandings(
       movement = 'stayed';
     }
 
-    return {
+    // V07.36: Build standing object, only include defined optional fields
+    // Firestore doesn't accept undefined values
+    const standing: BoxStanding = {
       playerId: stats.playerId,
-      playerName: stats.playerName,
+      playerName: stats.playerName || 'Unknown',
       boxNumber,
       positionInBox: position,
       matchesPlayed: stats.matchesPlayed,
@@ -162,8 +201,14 @@ export async function calculateBoxStandings(
       pointsDiff: stats.pointsDiff,
       movement,
       wasAbsent: stats.wasAbsent,
-      substituteId: stats.substituteId,
     };
+
+    // Only add optional fields if defined
+    if (stats.substituteId) {
+      standing.substituteId = stats.substituteId;
+    }
+
+    return standing;
   });
 
   return standings;
@@ -203,7 +248,10 @@ function processMatchForStats(
       } else {
         stats.losses++;
       }
-      stats.playerName = match.sideA.playerNames?.[i] || stats.playerName || 'Unknown';
+      // Only use match playerNames as fallback if we don't have a valid name from member lookup
+      if (!stats.playerName || stats.playerName === 'Unknown') {
+        stats.playerName = match.sideA.playerNames?.[i] || stats.playerName || 'Unknown';
+      }
 
       // Track head-to-head
       for (const opponentId of match.sideB.playerIds) {
@@ -225,7 +273,10 @@ function processMatchForStats(
       } else {
         stats.losses++;
       }
-      stats.playerName = match.sideB.playerNames?.[i] || stats.playerName || 'Unknown';
+      // Only use match playerNames as fallback if we don't have a valid name from member lookup
+      if (!stats.playerName || stats.playerName === 'Unknown') {
+        stats.playerName = match.sideB.playerNames?.[i] || stats.playerName || 'Unknown';
+      }
 
       // Track head-to-head
       for (const opponentId of match.sideA.playerIds) {
@@ -270,20 +321,28 @@ function compareTiebreaker(
   _allPlayers: PlayerStats[]
 ): number {
   switch (tiebreaker) {
+    // Support both naming conventions: 'wins' and 'games_won'
     case 'wins':
+    case 'games_won':
       return b.wins - a.wins; // More wins = better
 
     case 'head_to_head':
       // Only applies to exactly 2-way ties
       return compareHeadToHead(a, b);
 
+    // Support both naming conventions: 'points_diff' and 'game_diff'
     case 'points_diff':
+    case 'game_diff':
       return b.pointsDiff - a.pointsDiff; // Higher diff = better
 
+    // Support both naming conventions: 'points_for' and 'games_for'
     case 'points_for':
+    case 'games_for':
       return b.pointsFor - a.pointsFor; // More points = better
 
+    // Support both naming conventions
     case 'points_against':
+    case 'games_against':
       return a.pointsAgainst - b.pointsAgainst; // Fewer points against = better
 
     default:

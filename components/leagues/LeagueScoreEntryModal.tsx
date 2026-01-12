@@ -1,9 +1,11 @@
 /**
- * LeagueScoreEntryModal Component V07.33
+ * LeagueScoreEntryModal Component V07.35
  *
  * Modal for entering league match scores with game-by-game entry.
  * Supports best of 1, 3, or 5 games with validation.
  *
+ * V07.35: DUPR compliance rules only apply to DUPR-enabled leagues, +/- stepper buttons
+ * V07.34: Replaced picker wheel with +/- stepper buttons for easier score entry
  * V07.33: Added vertical score picker wheel for touch-friendly input
  * V07.04: DUPR-Compliant Scoring
  * - Players "Propose Score" → opponents "Sign to Acknowledge" → organizers finalize
@@ -11,10 +13,10 @@
  * - Updated UI labels per DUPR compliance requirements
  *
  * FILE LOCATION: components/leagues/LeagueScoreEntryModal.tsx
- * VERSION: V07.33
+ * VERSION: V07.35
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   notifyScoreConfirmation,
@@ -26,13 +28,12 @@ import {
   signScore,
   finaliseResult,
 } from '../../services/firebase/duprScoring';
+import { rebuildAllStandingsById } from '../../services/firebase';
 import type { LeagueMatch, GameScore, ScoreVerificationSettings } from '../../types';
 import {
   ScoreVerificationBadge,
   DisputeScoreModal,
 } from './verification';
-// V07.33: Score picker wheel
-import { VerticalScorePicker } from '../shared/VerticalScorePicker';
 
 // ============================================
 // TYPES
@@ -47,6 +48,7 @@ interface LeagueScoreEntryModalProps {
   winBy: 1 | 2;
   verificationSettings?: ScoreVerificationSettings;
   isOrganizer?: boolean;
+  isDuprLeague?: boolean;  // V07.35: Only apply DUPR compliance rules for DUPR leagues
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -69,6 +71,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   winBy,
   verificationSettings = DEFAULT_VERIFICATION_SETTINGS,
   isOrganizer = false,
+  isDuprLeague = false,
   onClose,
   onSuccess,
 }) => {
@@ -79,25 +82,38 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDisputeModal, setShowDisputeModal] = useState(false);
+  // V07.35: Edit mode for organizers to modify finalized scores
+  const [isEditMode, setIsEditMode] = useState(false);
 
-  // V07.33: Score picker state
-  const [activePicker, setActivePicker] = useState<{
-    gameIndex: number;
-    field: 'scoreA' | 'scoreB';
-    anchorRect: DOMRect | null;
-  } | null>(null);
+
+  // V07.26: Box league support - get names and IDs from sideA/sideB if memberAName/memberBName are empty
+  const sideA = (match as any).sideA;
+  const sideB = (match as any).sideB;
+  const teamAName = match.memberAName || sideA?.name || 'Team A';
+  const teamBName = match.memberBName || sideB?.name || 'Team B';
+  const teamAId = match.memberAId || sideA?.id || match.userAId;
+  const teamBId = match.memberBId || sideB?.id || match.userBId;
+
+  // V07.26: For box leagues, check if user is in sideA.playerIds or sideB.playerIds
+  const isInSideA = sideA?.playerIds?.includes(currentUser?.uid);
+  const isInSideB = sideB?.playerIds?.includes(currentUser?.uid);
 
   // Determine user's role in this match
   // V07.32: Check both primary players AND partners for doubles matches
-  const isPlayerA = currentUser?.uid === match.userAId || currentUser?.uid === match.partnerAId;
-  const isPlayerB = currentUser?.uid === match.userBId || currentUser?.uid === match.partnerBId;
+  // V07.26: Also check sideA/sideB.playerIds for box leagues
+  const isPlayerA = currentUser?.uid === match.userAId || currentUser?.uid === match.partnerAId || isInSideA;
+  const isPlayerB = currentUser?.uid === match.userBId || currentUser?.uid === match.partnerBId || isInSideB;
   const isParticipant = isPlayerA || isPlayerB;
 
-  // V07.32: For DUPR compliance, when organizer is a participant:
+  // V07.35: DUPR compliance rules only apply to DUPR leagues
+  // For non-DUPR leagues, organizer-as-participant CAN propose and finalize their own matches
+  // For DUPR leagues, when organizer is a participant:
   // - They cannot finalize their own match (effectiveIsOrganizer = false)
   // - They cannot propose their own match score (only opponent can propose)
-  const effectiveIsOrganizer = isOrganizer && !isParticipant;
-  const isOrganizerParticipant = isOrganizer && isParticipant;
+  const effectiveIsOrganizer = isDuprLeague
+    ? (isOrganizer && !isParticipant)  // DUPR: organizer can't finalize own match
+    : isOrganizer;                      // Non-DUPR: organizer can always finalize
+  const isOrganizerParticipant = isDuprLeague && isOrganizer && isParticipant;
 
   // Get all player IDs
   const matchPlayerIds = [match.userAId, match.userBId];
@@ -142,8 +158,8 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     verificationSettings.allowDisputes;
 
   // Check if user can submit scores
-  // V07.32: DUPR compliance - organizer-as-participant CANNOT propose their own match
-  // Only opponent can propose, then organizer-participant can sign/confirm
+  // V07.35: For DUPR leagues, organizer-as-participant CANNOT propose their own match
+  // For non-DUPR leagues, anyone can propose (isOrganizerParticipant will be false)
   const canSubmitScore = (isParticipant && !isOrganizerParticipant) || effectiveIsOrganizer;
 
   // Initialize games from existing scores or empty
@@ -236,12 +252,13 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     }
 
     const winThreshold = Math.ceil(bestOf / 2);
-    
+
+    // V07.26: Use resolved teamAId/teamBId for box league support
     if (gamesA >= winThreshold) {
-      return { winnerId: match.memberAId, gamesA, gamesB };
+      return { winnerId: teamAId, gamesA, gamesB };
     }
     if (gamesB >= winThreshold) {
-      return { winnerId: match.memberBId, gamesA, gamesB };
+      return { winnerId: teamBId, gamesA, gamesB };
     }
 
     return { winnerId: null, gamesA, gamesB };
@@ -285,28 +302,6 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     newGames[index] = { ...newGames[index], [field]: value };
     setGames(newGames);
     setError(null);
-  };
-
-  // V07.33: Open score picker on input click
-  const handleScoreInputClick = (
-    e: React.MouseEvent<HTMLDivElement>,
-    gameIndex: number,
-    field: 'scoreA' | 'scoreB'
-  ) => {
-    if (hasScore) return; // Don't open picker if score already submitted
-    const rect = e.currentTarget.getBoundingClientRect();
-    setActivePicker({ gameIndex, field, anchorRect: rect });
-  };
-
-  // V07.33: Handle score selection from picker
-  const handlePickerSelect = (value: number) => {
-    if (!activePicker) return;
-    const { gameIndex, field } = activePicker;
-    const newGames = [...games];
-    newGames[gameIndex] = { ...newGames[gameIndex], [field]: String(value) };
-    setGames(newGames);
-    setError(null);
-    setActivePicker(null);
   };
 
   // V07.03: Quick score button handler - sets winner to clicked score, loser to score - 2
@@ -409,7 +404,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
         );
 
         // Send notification to opponent to confirm the score
-        const submitterName = isPlayerA ? match.memberAName : match.memberBName;
+        const submitterName = isPlayerA ? teamAName : teamBName;
         const opponentUserId = isPlayerA ? match.userBId : match.userAId;
         const scoreDisplay = `${gamesA}-${gamesB}`;
 
@@ -471,6 +466,110 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
     }
   };
 
+  // V07.35: Handle organizer finalization of a signed match
+  const handleOrganizerFinalize = async () => {
+    if (!currentUser) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Use existing scores from the match (already signed by players)
+      const scores = match.scores || match.scoreProposal?.scores || [];
+
+      if (scores.length === 0) {
+        setError('No scores to finalize');
+        return;
+      }
+
+      // Calculate winner from scores
+      let gamesA = 0, gamesB = 0;
+      for (const score of scores) {
+        if ((score.scoreA ?? 0) > (score.scoreB ?? 0)) gamesA++;
+        else if ((score.scoreB ?? 0) > (score.scoreA ?? 0)) gamesB++;
+      }
+
+      const winnerId = gamesA > gamesB ? teamAId : teamBId;
+
+      // Finalize the result
+      await finaliseResult(
+        'league',
+        leagueId,
+        match.id,
+        scores,
+        winnerId,
+        currentUser.uid,
+        isDuprLeague  // duprEligible based on league type
+      );
+
+      onSuccess();
+    } catch (e: any) {
+      console.error('Failed to finalize score:', e);
+      setError(e.message || 'Failed to finalize score');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // V07.35: Handle saving edited scores (for organizer corrections)
+  const handleSaveEditedScore = async () => {
+    if (!currentUser) return;
+
+    // Validate all games
+    const validation = validateAllGames();
+    if (!validation.valid) {
+      setError(validation.error || 'Invalid scores');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Convert games to GameScore format
+      const scores: GameScore[] = games.map((g, idx) => ({
+        gameNumber: idx + 1,
+        scoreA: parseInt(g.scoreA) || 0,
+        scoreB: parseInt(g.scoreB) || 0,
+      }));
+
+      // Calculate winner from updated scores
+      let gamesWonA = 0, gamesWonB = 0;
+      for (const score of scores) {
+        if (score.scoreA > score.scoreB) gamesWonA++;
+        else if (score.scoreB > score.scoreA) gamesWonB++;
+      }
+
+      const winnerId = gamesWonA > gamesWonB ? teamAId : teamBId;
+
+      // Finalize the updated result
+      await finaliseResult(
+        'league',
+        leagueId,
+        match.id,
+        scores,
+        winnerId,
+        currentUser.uid,
+        isDuprLeague
+      );
+
+      // Recalculate standings
+      try {
+        await rebuildAllStandingsById(leagueId);
+      } catch (standingsError) {
+        console.error('Failed to recalculate standings:', standingsError);
+      }
+
+      setIsEditMode(false);
+      onSuccess();
+    } catch (e: any) {
+      console.error('Failed to save edited score:', e);
+      setError(e.message || 'Failed to save changes');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ============================================
   // RENDER
   // ============================================
@@ -487,7 +586,9 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             <div>
               <h2 className="text-lg font-bold text-white">
                 {/* V07.04: DUPR-compliant header titles */}
-                {isSigned ? 'Awaiting Organiser' :
+                {/* V07.35: Show "Edit Score" when in edit mode */}
+                {isEditMode ? 'Edit Score' :
+                  isSigned ? 'Awaiting Organiser' :
                   hasScore && userCanConfirm ? 'Sign to Acknowledge' :
                   hasScore && !isFinal ? 'Score Proposed' :
                   hasScore ? 'Match Score' :
@@ -518,14 +619,14 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
           <div className="flex items-center justify-between text-center">
             <div className="flex-1">
               <div className={`font-semibold ${isPlayerA ? 'text-blue-400' : 'text-white'}`}>
-                {match.memberAName}
+                {teamAName}
               </div>
               {isPlayerA && <div className="text-xs text-blue-400">(You)</div>}
             </div>
             <div className="px-4 text-gray-500 text-sm">vs</div>
             <div className="flex-1">
               <div className={`font-semibold ${isPlayerB ? 'text-blue-400' : 'text-white'}`}>
-                {match.memberBName}
+                {teamBName}
               </div>
               {isPlayerB && <div className="text-xs text-blue-400">(You)</div>}
             </div>
@@ -566,31 +667,67 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                     <div key={index} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/50">
                       <div className="flex items-center gap-3 mb-2">
                         <div className="text-xs text-gray-500 font-medium">Game {index + 1}</div>
-                        <div className="flex-1 flex items-center gap-2 justify-center">
-                          {/* V07.33: Clickable score boxes that open the picker */}
-                          <div
-                            onClick={(e) => handleScoreInputClick(e, index, 'scoreA')}
-                            className={`w-16 h-11 bg-gray-900 border border-gray-700 text-white text-center flex items-center justify-center rounded-lg font-bold text-lg cursor-pointer transition-all ${
-                              hasScore
-                                ? 'opacity-50 cursor-not-allowed'
-                                : 'hover:border-lime-500 hover:bg-gray-800 active:scale-95'
-                            }`}
-                          >
-                            {game.scoreA || <span className="text-gray-600">0</span>}
+                        <div className="flex-1 flex items-center gap-4 justify-center">
+                          {/* V07.34: +/- Stepper for Score A */}
+                          {/* V07.35: Allow editing when isEditMode is true */}
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const current = parseInt(game.scoreA) || 0;
+                                if (current > 0) handleGameChange(index, 'scoreA', String(current - 1));
+                              }}
+                              disabled={(hasScore && !isEditMode) || (parseInt(game.scoreA) || 0) <= 0}
+                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                            >
+                              −
+                            </button>
+                            <div className="w-12 h-11 bg-gray-900 border border-gray-700 text-white text-center flex items-center justify-center rounded-lg font-bold text-xl">
+                              {game.scoreA || '0'}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const current = parseInt(game.scoreA) || 0;
+                                handleGameChange(index, 'scoreA', String(current + 1));
+                              }}
+                              disabled={hasScore && !isEditMode}
+                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-lime-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                            >
+                              +
+                            </button>
                           </div>
-                          <span className="text-gray-500 font-bold">-</span>
-                          <div
-                            onClick={(e) => handleScoreInputClick(e, index, 'scoreB')}
-                            className={`w-16 h-11 bg-gray-900 border border-gray-700 text-white text-center flex items-center justify-center rounded-lg font-bold text-lg cursor-pointer transition-all ${
-                              hasScore
-                                ? 'opacity-50 cursor-not-allowed'
-                                : 'hover:border-lime-500 hover:bg-gray-800 active:scale-95'
-                            }`}
-                          >
-                            {game.scoreB || <span className="text-gray-600">0</span>}
+                          <span className="text-gray-500 font-bold text-lg">-</span>
+                          {/* V07.34: +/- Stepper for Score B */}
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const current = parseInt(game.scoreB) || 0;
+                                if (current > 0) handleGameChange(index, 'scoreB', String(current - 1));
+                              }}
+                              disabled={(hasScore && !isEditMode) || (parseInt(game.scoreB) || 0) <= 0}
+                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                            >
+                              −
+                            </button>
+                            <div className="w-12 h-11 bg-gray-900 border border-gray-700 text-white text-center flex items-center justify-center rounded-lg font-bold text-xl">
+                              {game.scoreB || '0'}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const current = parseInt(game.scoreB) || 0;
+                                handleGameChange(index, 'scoreB', String(current + 1));
+                              }}
+                              disabled={hasScore && !isEditMode}
+                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-lime-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                            >
+                              +
+                            </button>
                           </div>
                         </div>
-                        {games.length > 1 && !hasScore && (
+                        {games.length > 1 && (!hasScore || isEditMode) && (
                           <button
                             onClick={() => removeGame(index)}
                             className="text-gray-500 hover:text-red-400"
@@ -605,7 +742,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                       {/* V07.03: Quick score buttons */}
                       {!hasScore && !hasGameScore && (
                         <div className="flex items-center justify-center gap-2 pt-2 border-t border-gray-700/30">
-                          <span className="text-xs text-gray-500 mr-1">{match.memberAName?.split(' ')[0]}:</span>
+                          <span className="text-xs text-gray-500 mr-1">{teamAName?.split(' ')[0]}:</span>
                           {[11, 15, 21].map(score => (
                             <button
                               key={`A-${score}`}
@@ -617,7 +754,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                             </button>
                           ))}
                           <span className="mx-2 text-gray-600">|</span>
-                          <span className="text-xs text-gray-500 mr-1">{match.memberBName?.split(' ')[0]}:</span>
+                          <span className="text-xs text-gray-500 mr-1">{teamBName?.split(' ')[0]}:</span>
                           {[11, 15, 21].map(score => (
                             <button
                               key={`B-${score}`}
@@ -641,16 +778,34 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
               {/* Current Score Summary */}
               <div className="bg-gray-900 rounded-lg p-3 text-center">
                 <div className="text-sm text-gray-400 mb-1">Match Score</div>
-                <div className="text-2xl font-bold">
-                  <span className={gamesA > gamesB ? 'text-green-400' : 'text-white'}>{gamesA}</span>
-                  <span className="text-gray-500 mx-2">-</span>
-                  <span className={gamesB > gamesA ? 'text-green-400' : 'text-white'}>{gamesB}</span>
+                {/* V07.26: Show actual game scores instead of just game wins */}
+                <div className="text-xl font-bold space-x-3">
+                  {games.filter(g => g.scoreA !== '' || g.scoreB !== '').map((game, idx) => (
+                    <span key={idx} className="inline-block">
+                      <span className={parseInt(game.scoreA) > parseInt(game.scoreB) ? 'text-green-400' : 'text-white'}>
+                        {game.scoreA || '0'}
+                      </span>
+                      <span className="text-gray-500">-</span>
+                      <span className={parseInt(game.scoreB) > parseInt(game.scoreA) ? 'text-green-400' : 'text-white'}>
+                        {game.scoreB || '0'}
+                      </span>
+                      {idx < games.filter(g => g.scoreA !== '' || g.scoreB !== '').length - 1 && (
+                        <span className="text-gray-600 ml-3">,</span>
+                      )}
+                    </span>
+                  ))}
                 </div>
+                {/* Game win count for best of 3/5 */}
+                {bestOf > 1 && (
+                  <div className="text-sm text-gray-400 mt-1">
+                    Games: {gamesA} - {gamesB}
+                  </div>
+                )}
                 {gamesA >= winThreshold && (
-                  <div className="text-sm text-green-400 mt-1">{match.memberAName} wins!</div>
+                  <div className="text-sm text-green-400 mt-1">{teamAName} wins!</div>
                 )}
                 {gamesB >= winThreshold && (
-                  <div className="text-sm text-green-400 mt-1">{match.memberBName} wins!</div>
+                  <div className="text-sm text-green-400 mt-1">{teamBName} wins!</div>
                 )}
               </div>
             </>
@@ -691,15 +846,28 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
           <div className="flex gap-3">
             {/* Cancel/Close button */}
             <button
-              onClick={onClose}
+              onClick={() => {
+                if (isEditMode) {
+                  setIsEditMode(false);
+                  // Reset games to original scores
+                  if (match.scores && match.scores.length > 0) {
+                    setGames(match.scores.map(s => ({
+                      scoreA: (s.scoreA ?? 0).toString(),
+                      scoreB: (s.scoreB ?? 0).toString(),
+                    })));
+                  }
+                } else {
+                  onClose();
+                }
+              }}
               disabled={loading || confirming}
               className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg disabled:opacity-50"
             >
-              {isFinal || isDisputed ? 'Close' : 'Cancel'}
+              {isEditMode ? 'Cancel Edit' : (isFinal || isDisputed ? 'Close' : 'Cancel')}
             </button>
 
             {/* Dispute button - only show when user can dispute */}
-            {userCanDispute && !isFinal && (
+            {userCanDispute && !isFinal && !isEditMode && (
               <button
                 onClick={() => setShowDisputeModal(true)}
                 className="flex-1 py-2 bg-red-600/20 border border-red-600 text-red-400 rounded-lg font-semibold hover:bg-red-600/30"
@@ -709,7 +877,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             )}
 
             {/* V07.04: Sign to Acknowledge button - DUPR-compliant wording */}
-            {userCanConfirm && (
+            {userCanConfirm && !isEditMode && (
               <button
                 onClick={handleConfirm}
                 disabled={confirming}
@@ -719,8 +887,40 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
               </button>
             )}
 
+            {/* V07.35: Organizer Finalize button - for signed matches awaiting organizer approval */}
+            {hasScore && isSigned && effectiveIsOrganizer && !isFinal && !isEditMode && (
+              <button
+                onClick={handleOrganizerFinalize}
+                disabled={loading}
+                className="flex-1 py-2 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+              >
+                {loading ? 'Finalizing...' : 'Finalize Score'}
+              </button>
+            )}
+
+            {/* V07.35: Edit Score button - for organizers to correct finalized scores */}
+            {isFinal && effectiveIsOrganizer && !isEditMode && (
+              <button
+                onClick={() => setIsEditMode(true)}
+                className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg font-semibold"
+              >
+                Edit Score
+              </button>
+            )}
+
+            {/* V07.35: Save Changes button - when editing */}
+            {isEditMode && (
+              <button
+                onClick={handleSaveEditedScore}
+                disabled={loading}
+                className="flex-1 py-2 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+              >
+                {loading ? 'Saving...' : 'Save Changes'}
+              </button>
+            )}
+
             {/* V07.04: Propose/Finalise button - DUPR-compliant wording */}
-            {!hasScore && (
+            {!hasScore && !isEditMode && (
               <button
                 onClick={handleSubmit}
                 disabled={loading || !canSubmitScore}
@@ -742,7 +942,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
         eventId={leagueId}
         matchId={match.id}
         userId={currentUser?.uid || ''}
-        matchDescription={`${match.memberAName} vs ${match.memberBName}`}
+        matchDescription={`${teamAName} vs ${teamBName}`}
         currentScore={match.scores?.length
           ? match.scores.map(s => `${s.scoreA}-${s.scoreB}`).join(', ')
           : undefined
@@ -753,16 +953,6 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
         }}
       />
 
-      {/* V07.33: Score Picker Wheel */}
-      {activePicker && (
-        <VerticalScorePicker
-          value={parseInt(games[activePicker.gameIndex]?.[activePicker.field] || '0') || 0}
-          onChange={handlePickerSelect}
-          onClose={() => setActivePicker(null)}
-          maxScore={pointsPerGame + 10} // Allow for deuce scenarios
-          anchorRect={activePicker.anchorRect}
-        />
-      )}
     </div>
   );
 };

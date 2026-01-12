@@ -70,9 +70,13 @@ const HomePage: React.FC = () => {
     // Subscribe to tournaments
     const userId = currentUser?.uid || '';
     const unsubTournaments = subscribeToTournaments(userId, (data) => {
-      // Show all tournaments, or filter to upcoming if preferred
+      // Filter out completed, cancelled, and draft tournaments (unless user is the organizer)
       const upcoming = data
-        .filter(t => t.status !== 'completed' && t.status !== 'cancelled')
+        .filter(t =>
+          t.status !== 'completed' &&
+          t.status !== 'cancelled' &&
+          (t.status !== 'draft' || t.createdByUserId === userId)
+        )
         .slice(0, 4);
       setTournaments(upcoming);
     });

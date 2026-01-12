@@ -7,6 +7,7 @@ import {
   getUsersByIds,
   ensureRegistrationForUser,
 } from '../services/firebase';
+import { LeagueInvitesSection } from './leagues/LeagueInvitesSection';
 import type { PartnerInvite, Tournament, UserProfile } from '../types';
 
 interface PartnerInvitesProps {
@@ -307,6 +308,16 @@ export const PartnerInvites: React.FC<PartnerInvitesProps> = ({
             })}
         </div>
       )}
+
+      {/* League Partner Invites Section */}
+      <div className="mt-8">
+        <LeagueInvitesSection
+          onInviteAccepted={(leagueId) => {
+            console.log('League invite accepted for league:', leagueId);
+            // Optionally refresh or navigate
+          }}
+        />
+      </div>
 
       {/* Sticky footer guidance + primary action */}
       <div className="fixed inset-x-0 bottom-0 z-20 bg-gradient-to-t from-gray-950 via-gray-950/98 to-gray-950/90 border-t border-gray-800/80">

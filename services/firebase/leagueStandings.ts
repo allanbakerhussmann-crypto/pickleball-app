@@ -530,3 +530,32 @@ export async function rebuildAllStandings(
 
   return { overall, weeks };
 }
+
+/**
+ * V07.36: Convenience function to rebuild standings by leagueId only
+ *
+ * Fetches members, matches, and settings internally then calls rebuildAllStandings.
+ * Use this when you don't have direct access to the data.
+ */
+export async function rebuildAllStandingsById(
+  leagueId: string
+): Promise<{ overall: LeagueStandingsDoc; weeks: LeagueStandingsDoc[] }> {
+  // Dynamic imports to avoid circular dependencies
+  const { getLeagueMembers } = await import('./leagues');
+  const { getLeagueMatches, getLeague } = await import('./leagues');
+
+  console.log(`[rebuildAllStandingsById] Fetching data for league ${leagueId}`);
+
+  // Fetch required data
+  const [members, matches, league] = await Promise.all([
+    getLeagueMembers(leagueId),
+    getLeagueMatches(leagueId),
+    getLeague(leagueId),
+  ]);
+
+  const settings = league?.settings || null;
+
+  console.log(`[rebuildAllStandingsById] Found ${members.length} members, ${matches.length} matches`);
+
+  return rebuildAllStandings(leagueId, members, matches, settings);
+}

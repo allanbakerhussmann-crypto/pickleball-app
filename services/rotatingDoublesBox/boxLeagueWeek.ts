@@ -5,7 +5,7 @@
  * Draft → Active → Closing → Finalized
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueWeek.ts
- * VERSION: V07.25
+ * VERSION: V07.40
  */
 
 import {
@@ -18,6 +18,7 @@ import {
   where,
   getDocs,
   orderBy,
+  runTransaction,
 } from '@firebase/firestore';
 import { db } from '../firebase/config';
 import type {
@@ -29,9 +30,49 @@ import type {
   WeekRulesSnapshot,
   BoxCompletionStatus,
   RotatingDoublesBoxSettings,
+  PlayerMovement,
 } from '../../types/rotatingDoublesBox';
 import { getRoundCount, getMatchesPerPlayer } from '../../types/rotatingDoublesBox';
 import { getSeason, markWeekActive, markWeekCompleted } from './boxLeagueSeason';
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * V07.40: Deep equality check for box assignments without mutating arrays
+ *
+ * Compares two BoxAssignment arrays by box number and player IDs.
+ * Uses slice().sort() to avoid mutating original arrays.
+ */
+export function deepEqualBoxAssignments(
+  a: BoxAssignment[],
+  b: BoxAssignment[]
+): boolean {
+  if (a.length !== b.length) return false;
+
+  // Create sorted copies by boxNumber (don't mutate originals)
+  const sortedA = [...a].sort((x, y) => x.boxNumber - y.boxNumber);
+  const sortedB = [...b].sort((x, y) => x.boxNumber - y.boxNumber);
+
+  for (let i = 0; i < sortedA.length; i++) {
+    const boxA = sortedA[i];
+    const boxB = sortedB[i];
+
+    if (boxA.boxNumber !== boxB.boxNumber) return false;
+    if (boxA.playerIds.length !== boxB.playerIds.length) return false;
+
+    // Sort player IDs for comparison (don't mutate originals)
+    const idsA = [...boxA.playerIds].sort();
+    const idsB = [...boxB.playerIds].sort();
+
+    for (let j = 0; j < idsA.length; j++) {
+      if (idsA[j] !== idsB[j]) return false;
+    }
+  }
+
+  return true;
+}
 
 // ============================================
 // FIRESTORE PATHS
@@ -269,51 +310,150 @@ export function canTransitionTo(
 }
 
 /**
- * Activate a week (draft → active)
+ * V07.40: Activate a week (draft → active) with PROMOTION FIX
  *
- * - Freezes the rules snapshot
- * - Generates matches for all boxes
- * - Updates season week status
+ * PROMOTION BUG FIX:
+ * - For weekNumber > 1, computes assignmentsToUse from prevWeek.finalized standings
+ * - Generates matches from correct assignments (not stale week.boxAssignments)
+ * - If assignments differ, updates week doc inside the SAME TRANSACTION
  *
- * @returns Match IDs generated
+ * IDEMPOTENCY:
+ * - If week is already 'active' with matchIds, returns existing matchIds
+ * - If week has matchIds in 'draft' state (edge case), throws error
+ *
+ * ATOMICITY:
+ * - Uses runTransaction to read prevWeek, compute assignments, write matches,
+ *   and update week doc atomically
+ * - Uses deterministic matchIds to prevent duplicates on retry
+ *
+ * @returns Match IDs generated (or existing if already activated)
  */
 export async function activateWeek(
   leagueId: string,
   weekNumber: number,
   _activatedByUserId: string
 ): Promise<{ matchIds: string[] }> {
-  const week = await getWeek(leagueId, weekNumber);
-
-  if (!week) {
-    throw new Error(`Week ${weekNumber} not found`);
-  }
-
-  const transition = canTransitionTo(week, 'active');
-  if (!transition.allowed) {
-    throw new Error(
-      `Cannot activate week: ${transition.blockers.join(', ')}`
-    );
-  }
-
   // Import match factory dynamically to avoid circular imports
-  const { generateMatchesForWeek } = await import('./boxLeagueMatchFactory');
+  const { generateMatchDocsForWeek } = await import('./boxLeagueMatchFactory');
 
-  // Generate matches for all boxes
-  const matchIds = await generateMatchesForWeek(leagueId, week);
+  // Use transaction for atomic reads + writes
+  const result = await runTransaction(db, async (transaction) => {
+    // Read week doc inside transaction
+    const weekRef = getWeekDoc(leagueId, weekNumber);
+    const weekSnap = await transaction.get(weekRef);
 
-  // Update week state
-  const now = Date.now();
-  await updateDoc(getWeekDoc(leagueId, weekNumber), {
-    state: 'active',
-    activatedAt: now,
-    matchIds,
-    weekStatus: 'active',
+    if (!weekSnap.exists()) {
+      throw new Error(`Week ${weekNumber} not found`);
+    }
+
+    const week = weekSnap.data() as BoxLeagueWeek;
+
+    // IDEMPOTENCY CHECK: If already active with matches, return existing
+    if (week.state !== 'draft') {
+      if (week.state === 'active' && week.matchIds && week.matchIds.length > 0) {
+        console.log(`[activateWeek] Week ${weekNumber} already active, returning existing ${week.matchIds.length} matchIds`);
+        return { matchIds: week.matchIds, alreadyActive: true, seasonId: week.seasonId };
+      }
+      throw new Error(`Week ${weekNumber} is in '${week.state}' state, expected 'draft'`);
+    }
+
+    // Edge case: Draft but has matchIds (shouldn't happen, but handle it)
+    if (week.matchIds && week.matchIds.length > 0) {
+      throw new Error(`Week ${weekNumber} is draft but already has ${week.matchIds.length} matches. Clear matches first or use existing.`);
+    }
+
+    // V07.40: PROMOTION FIX - Compute correct assignments for Week 2+
+    let assignmentsToUse = week.boxAssignments;
+    let assignmentsWereUpdated = false;
+
+    if (weekNumber > 1) {
+      // Read previous week inside the transaction
+      const prevRef = getWeekDoc(leagueId, weekNumber - 1);
+      const prevSnap = await transaction.get(prevRef);
+      const prevWeek = prevSnap.exists() ? (prevSnap.data() as BoxLeagueWeek) : null;
+
+      if (prevWeek?.state === 'finalized' && prevWeek.standingsSnapshot?.boxes?.length) {
+        console.log(`[activateWeek] Week ${weekNumber}: Computing correct assignments from Week ${weekNumber - 1} standings`);
+
+        // Import promotion functions
+        const { applyMovements, generateNextWeekAssignments } = await import('./boxLeaguePromotion');
+
+        // Use current week's rulesSnapshot, falling back to prevWeek's
+        const rules = week.rulesSnapshot ?? prevWeek.rulesSnapshot;
+        const prevForMovements: BoxLeagueWeek = { ...prevWeek, rulesSnapshot: rules };
+
+        // Calculate movements from finalized standings
+        const movements = applyMovements(prevForMovements, prevWeek.standingsSnapshot.boxes);
+
+        // Generate correct next week assignments
+        const correctAssignments = generateNextWeekAssignments(prevWeek.boxAssignments, movements);
+        assignmentsToUse = correctAssignments;
+
+        // Check if assignments differ from what's stored in week doc
+        if (!deepEqualBoxAssignments(week.boxAssignments, correctAssignments)) {
+          console.log(`[activateWeek] Week ${weekNumber}: Assignments differ, updating in transaction`);
+          assignmentsWereUpdated = true;
+        }
+      }
+    }
+
+    // Generate match docs using the CORRECT assignments
+    const rotationVersion = 1;
+    const matchDocs = await generateMatchDocsForWeek(leagueId, week, rotationVersion, assignmentsToUse);
+
+    console.log(`[activateWeek] Generated ${matchDocs.length} match docs for week ${weekNumber}`);
+
+    // Write all match documents
+    const matchIds: string[] = [];
+    for (const matchDoc of matchDocs) {
+      const matchRef = doc(db, 'leagues', leagueId, 'matches', matchDoc.id);
+      transaction.set(matchRef, matchDoc.data);
+      matchIds.push(matchDoc.id);
+    }
+
+    // Build the update object
+    const now = Date.now();
+
+    // If assignments were corrected, include them in the update (atomically)
+    if (assignmentsWereUpdated) {
+      console.log(`[activateWeek] Week ${weekNumber}: Including corrected boxAssignments in update`);
+      transaction.update(weekRef, {
+        state: 'active' as BoxWeekState,
+        activatedAt: now,
+        matchIds,
+        totalMatches: matchIds.length,
+        completedMatches: 0,
+        pendingVerificationCount: 0,
+        disputedCount: 0,
+        weekStatus: 'active',
+        rotationVersion,
+        boxAssignments: assignmentsToUse,
+      });
+    } else {
+      // Update week document atomically (without changing boxAssignments)
+      transaction.update(weekRef, {
+        state: 'active' as BoxWeekState,
+        activatedAt: now,
+        matchIds,
+        totalMatches: matchIds.length,
+        completedMatches: 0,
+        pendingVerificationCount: 0,
+        disputedCount: 0,
+        weekStatus: 'active',
+        rotationVersion,
+      });
+    }
+
+    return { matchIds, alreadyActive: false, seasonId: week.seasonId };
   });
 
-  // Update season week status
-  await markWeekActive(leagueId, week.seasonId, weekNumber);
+  // If we actually activated (not just returned existing), update season
+  if (!result.alreadyActive) {
+    await markWeekActive(leagueId, result.seasonId, weekNumber);
+    console.log(`[activateWeek] Week ${weekNumber} activated with ${result.matchIds.length} matches`);
+  }
 
-  return { matchIds };
+  return { matchIds: result.matchIds };
 }
 
 /**
@@ -463,6 +603,69 @@ export async function finalizeWeek(
   };
 }
 
+/**
+ * V07.36: Recalculate standings for a week without finalizing
+ *
+ * Use this during active weeks to update standings display.
+ * Does NOT apply movements or create next week.
+ *
+ * V07.37: Now refreshes tiebreakers from current league settings
+ */
+export async function recalculateWeekStandings(
+  leagueId: string,
+  weekNumber: number
+): Promise<BoxLeagueWeek['standingsSnapshot']> {
+  const week = await getWeek(leagueId, weekNumber);
+
+  if (!week) {
+    throw new Error(`Week ${weekNumber} not found`);
+  }
+
+  // V07.37: Fetch current league settings to get latest tiebreakers and promotion/relegation counts
+  const { getLeague } = await import('../firebase/leagues');
+  const league = await getLeague(leagueId);
+
+  // Update week's rulesSnapshot with current settings from league
+  if (week.rulesSnapshot) {
+    // Update tiebreakers
+    if (league?.settings?.tiebreakers) {
+      week.rulesSnapshot.tiebreakers = league.settings.tiebreakers;
+      console.log(`[recalculateWeekStandings] Using current league tiebreakers:`, league.settings.tiebreakers);
+    }
+    // V07.38: Update promotion/relegation counts from rotatingDoublesBox settings
+    const boxSettings = league?.settings?.rotatingDoublesBox?.settings;
+    if (boxSettings?.promotionCount !== undefined) {
+      week.rulesSnapshot.promotionCount = boxSettings.promotionCount;
+      console.log(`[recalculateWeekStandings] Using current promotionCount:`, boxSettings.promotionCount);
+    }
+    if (boxSettings?.relegationCount !== undefined) {
+      week.rulesSnapshot.relegationCount = boxSettings.relegationCount;
+      console.log(`[recalculateWeekStandings] Using current relegationCount:`, boxSettings.relegationCount);
+    }
+  }
+
+  // Import services dynamically to avoid circular imports
+  const { calculateWeekStandings, createStandingsSnapshot } = await import(
+    './boxLeagueStandings'
+  );
+
+  // Calculate standings from match results
+  const standings = await calculateWeekStandings(leagueId, week);
+
+  // Create standings snapshot
+  const standingsSnapshot = await createStandingsSnapshot(week, standings);
+
+  // Update week with new standings AND refreshed rulesSnapshot (but don't change state)
+  await updateDoc(getWeekDoc(leagueId, weekNumber), {
+    standingsSnapshot,
+    rulesSnapshot: week.rulesSnapshot, // Save updated tiebreakers
+  });
+
+  console.log(`[recalculateWeekStandings] Week ${weekNumber} standings updated`);
+
+  return standingsSnapshot;
+}
+
 // ============================================
 // UPDATE OPERATIONS
 // ============================================
@@ -512,6 +715,109 @@ export async function updateBoxAssignments(
     boxCompletionStatus,
     totalMatches,
   });
+}
+
+/**
+ * V07.38: Refresh draft week box assignments from previous week standings
+ *
+ * Re-applies promotion/relegation using CURRENT league settings.
+ * Use this when settings changed after finalization.
+ */
+export async function refreshDraftWeekAssignments(
+  leagueId: string,
+  weekNumber: number
+): Promise<{ movements: PlayerMovement[]; boxAssignments: BoxAssignment[] }> {
+  const week = await getWeek(leagueId, weekNumber);
+
+  if (!week) {
+    throw new Error(`Week ${weekNumber} not found`);
+  }
+
+  if (week.state !== 'draft') {
+    throw new Error('Can only refresh box assignments for draft weeks');
+  }
+
+  if (weekNumber < 2) {
+    throw new Error('Cannot refresh Week 1 - no previous week to base assignments on');
+  }
+
+  // Get previous week
+  const previousWeek = await getWeek(leagueId, weekNumber - 1);
+  if (!previousWeek || previousWeek.state !== 'finalized') {
+    throw new Error(`Previous week (${weekNumber - 1}) must be finalized`);
+  }
+
+  if (!previousWeek.standingsSnapshot?.boxes) {
+    throw new Error(`Previous week has no standings snapshot`);
+  }
+
+  // Import services
+  const { getLeague } = await import('../firebase/leagues');
+  const { applyMovements, generateNextWeekAssignments } = await import('./boxLeaguePromotion');
+
+  // Get current league settings for promotion/relegation counts
+  const league = await getLeague(leagueId);
+  const boxSettings = league?.settings?.rotatingDoublesBox?.settings;
+
+  // Create a modified previous week with current settings for movement calculation
+  const promotionCount = boxSettings?.promotionCount ?? previousWeek.rulesSnapshot.promotionCount ?? 1;
+  const relegationCount = boxSettings?.relegationCount ?? previousWeek.rulesSnapshot.relegationCount ?? 1;
+
+  console.log(`[refreshDraftWeekAssignments] Using promotionCount=${promotionCount}, relegationCount=${relegationCount}`);
+  console.log(`[refreshDraftWeekAssignments] Previous week standings:`, previousWeek.standingsSnapshot.boxes.map(s => ({
+    playerId: s.playerId,
+    playerName: s.playerName,
+    box: s.boxNumber,
+    pos: s.positionInBox
+  })));
+
+  const weekWithCurrentSettings: BoxLeagueWeek = {
+    ...previousWeek,
+    rulesSnapshot: {
+      ...previousWeek.rulesSnapshot,
+      promotionCount,
+      relegationCount,
+    },
+  };
+
+  // Re-apply movements with current settings
+  const movements = applyMovements(weekWithCurrentSettings, previousWeek.standingsSnapshot.boxes);
+
+  console.log(`[refreshDraftWeekAssignments] Calculated movements:`, movements.map(m => ({
+    player: m.playerName,
+    from: m.fromBox,
+    to: m.toBox,
+    reason: m.reason
+  })));
+
+  // Generate new box assignments
+  const newAssignments = generateNextWeekAssignments(previousWeek.boxAssignments, movements);
+
+  console.log(`[refreshDraftWeekAssignments] New assignments:`, newAssignments.map(a => ({
+    box: a.boxNumber,
+    players: a.playerIds
+  })));
+
+  // Update the draft week with new assignments
+  await updateBoxAssignments(leagueId, weekNumber, newAssignments);
+
+  // Also update the rulesSnapshot with current settings
+  await updateDoc(getWeekDoc(leagueId, weekNumber), {
+    rulesSnapshot: {
+      ...week.rulesSnapshot,
+      promotionCount: boxSettings?.promotionCount ?? 1,
+      relegationCount: boxSettings?.relegationCount ?? 1,
+      tiebreakers: league?.settings?.tiebreakers ?? week.rulesSnapshot?.tiebreakers,
+    },
+  });
+
+  // Recalculate standings to update the display (the standingsSnapshot)
+  // This will create standings entries for the new box assignments
+  await recalculateWeekStandings(leagueId, weekNumber);
+
+  console.log(`[refreshDraftWeekAssignments] Week ${weekNumber} assignments refreshed with ${movements.filter(m => m.reason !== 'stayed').length} movements`);
+
+  return { movements, boxAssignments: newAssignments };
 }
 
 /**

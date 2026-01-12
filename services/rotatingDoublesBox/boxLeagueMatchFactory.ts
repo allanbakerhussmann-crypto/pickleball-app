@@ -6,7 +6,7 @@
  * (same as singles weekly league for DUPR compatibility).
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueMatchFactory.ts
- * VERSION: V07.25
+ * VERSION: V07.40
  */
 
 import {
@@ -63,6 +63,137 @@ function generateIdempotencyKey(
   roundNumber: number
 ): string {
   return `${leagueId}_week${weekNumber}_box${boxNumber}_round${roundNumber}`;
+}
+
+/**
+ * V07.39: Generate deterministic match ID
+ *
+ * Format: {leagueId}_w{week}_b{box}_r{round}_m{matchIndex}_rotv{version}
+ * This ensures idempotent match creation - same inputs = same matchId
+ */
+export function generateDeterministicMatchId(
+  leagueId: string,
+  weekNumber: number,
+  boxNumber: number,
+  roundNumber: number,
+  matchIndex: number,
+  rotationVersion: number = 1
+): string {
+  return `${leagueId}_w${weekNumber}_b${boxNumber}_r${roundNumber}_m${matchIndex}_rotv${rotationVersion}`;
+}
+
+/**
+ * V07.39: Match document for batch creation
+ */
+export interface MatchDoc {
+  id: string;
+  data: Match;
+}
+
+/**
+ * V07.40: Generate match documents for a week (without writing to Firestore)
+ *
+ * Returns array of {id, data} for use in transactions/batches.
+ * Uses deterministic matchIds for idempotency.
+ *
+ * @param leagueId - League ID
+ * @param week - Week document (for rulesSnapshot, weekNumber, scheduledDate, courtAssignments)
+ * @param rotationVersion - Rotation version for deterministic IDs
+ * @param boxAssignmentsOverride - Optional: use these assignments instead of week.boxAssignments
+ */
+export async function generateMatchDocsForWeek(
+  leagueId: string,
+  week: BoxLeagueWeek,
+  rotationVersion: number = 1,
+  boxAssignmentsOverride?: BoxAssignment[]
+): Promise<MatchDoc[]> {
+  // V07.40: Use override if provided, otherwise use week's assignments
+  const boxAssignments = boxAssignmentsOverride ?? week.boxAssignments;
+
+  // Get player lookup data from league members
+  const playerLookup = await getPlayerLookup(leagueId, boxAssignments);
+
+  const matchDocs: MatchDoc[] = [];
+
+  // Find game settings from rules snapshot
+  const gameSettings: GameSettings = {
+    playType: 'doubles',
+    pointsPerGame: week.rulesSnapshot.pointsTo,
+    winBy: week.rulesSnapshot.winBy,
+    bestOf: week.rulesSnapshot.bestOf,
+  };
+
+  // Get court assignments map
+  const courtMap = new Map<number, string>();
+  for (const ca of week.courtAssignments) {
+    courtMap.set(ca.boxNumber, ca.courtLabel);
+  }
+
+  // Generate matches for each box
+  let globalMatchIndex = 0;
+  for (const boxAssignment of boxAssignments) {
+    const boxSize = boxAssignment.playerIds.length as 4 | 5 | 6;
+
+    // Build player info array for rotation
+    const players: PlayerInfo[] = boxAssignment.playerIds.map((id) => ({
+      id,
+      name: playerLookup[id]?.name || 'Unknown',
+    }));
+
+    // Generate pairings using rotation pattern
+    const pairings = generateBoxPairings(players, boxSize);
+
+    // Create match doc for each pairing
+    for (const pairing of pairings) {
+      globalMatchIndex++;
+
+      // Generate deterministic match ID
+      const matchId = generateDeterministicMatchId(
+        leagueId,
+        week.weekNumber,
+        boxAssignment.boxNumber,
+        pairing.roundNumber,
+        globalMatchIndex,
+        rotationVersion
+      );
+
+      const now = Date.now();
+
+      const matchData = createBoxLeagueMatch({
+        leagueId,
+        weekNumber: week.weekNumber,
+        boxNumber: boxAssignment.boxNumber,
+        roundNumber: pairing.roundNumber,
+        pairing,
+        playerLookup,
+        gameSettings,
+        scheduledDate: week.scheduledDate,
+        court: courtMap.get(boxAssignment.boxNumber),
+      });
+
+      const match: Match = {
+        ...matchData,
+        id: matchId,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      // Add idempotency key for backward compatibility
+      (match as any).idempotencyKey = generateIdempotencyKey(
+        leagueId,
+        week.weekNumber,
+        boxAssignment.boxNumber,
+        pairing.roundNumber
+      );
+
+      // Add rotation version
+      (match as any).rotationVersion = rotationVersion;
+
+      matchDocs.push({ id: matchId, data: match });
+    }
+  }
+
+  return matchDocs;
 }
 
 // ============================================

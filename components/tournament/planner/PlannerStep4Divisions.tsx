@@ -16,6 +16,8 @@ interface PlannerStep4DivisionsProps {
   capacity: PlannerCapacity;
   paymentMode?: TournamentPaymentMode;
   onChange: (divisions: PlannerDivision[]) => void;
+  /** If true, show "Coming Soon" formats (app admin only) */
+  isAppAdmin?: boolean;
 }
 
 export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
@@ -23,6 +25,7 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
   capacity,
   paymentMode,
   onChange,
+  isAppAdmin = false,
 }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingDivision, setEditingDivision] = useState<PlannerDivision | null>(null);
@@ -257,6 +260,7 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
           onAdd={handleAddDivision}
           onClose={() => setShowAddModal(false)}
           paymentMode={paymentMode}
+          isAppAdmin={isAppAdmin}
         />
       )}
 
@@ -267,6 +271,7 @@ export const PlannerStep4Divisions: React.FC<PlannerStep4DivisionsProps> = ({
           onAdd={handleEditDivision}
           onClose={() => setEditingDivision(null)}
           paymentMode={paymentMode}
+          isAppAdmin={isAppAdmin}
         />
       )}
     </div>

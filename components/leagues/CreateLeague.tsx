@@ -193,7 +193,7 @@ const formatTimeDisplay = formatTime;
 // ============================================
 
 export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated }) => {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser, userProfile, isAppAdmin } = useAuth();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -693,6 +693,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 playType={mapLegacyType(basic.type)}
                 eventType="league"
                 theme="dark"
+                isAppAdmin={isAppAdmin}
               />
             </div>
 

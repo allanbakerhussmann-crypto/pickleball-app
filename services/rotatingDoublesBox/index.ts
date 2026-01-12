@@ -2,7 +2,7 @@
  * Rotating Doubles Box League Services - Barrel Exports
  *
  * FILE LOCATION: services/rotatingDoublesBox/index.ts
- * VERSION: V07.28
+ * VERSION: V07.39
  */
 
 // ============================================
@@ -62,6 +62,8 @@ export {
   activateWeek,
   startClosing,
   finalizeWeek,
+  recalculateWeekStandings,
+  refreshDraftWeekAssignments,  // V07.38
   updateBoxAssignments,
   updateCourtAssignments,
   updateSessions,
@@ -77,6 +79,8 @@ export {
 export {
   createBoxLeagueMatch,
   generateMatchesForWeek,
+  generateMatchDocsForWeek,
+  generateDeterministicMatchId,
   getMatchesForWeek,
   getMatchesForBox,
   getMatchCounts,
@@ -87,7 +91,7 @@ export {
   getConfirmEligibleUsers,
 } from './boxLeagueMatchFactory';
 
-export type { PlayerLookup } from './boxLeagueMatchFactory';
+export type { PlayerLookup, MatchDoc } from './boxLeagueMatchFactory';
 
 // ============================================
 // STANDINGS
@@ -174,6 +178,7 @@ export {
   removeSubstitute,
   canBeSubstitute,
   getEligibleSubstitutes,
+  getEligibleSubstitutesWithDetails,
   hasExceededMaxSubs,
   getPlayerAbsenceSummary,
 
@@ -192,7 +197,7 @@ export {
   formatPolicyName,
 } from './boxLeagueAbsence';
 
-export type { AbsentPlayerStanding } from './boxLeagueAbsence';
+export type { AbsentPlayerStanding, EligibleSubstitute } from './boxLeagueAbsence';
 
 // ============================================
 // ELIGIBILITY

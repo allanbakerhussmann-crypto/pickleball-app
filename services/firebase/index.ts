@@ -135,6 +135,8 @@ export {
   poolResultToStandings,
   // V06.35: Automatic pool results on match completion
   updatePoolResultsOnMatchComplete,
+  // V07.30: Safe wrapper (non-fatal) for callers
+  updatePoolResultsOnMatchCompleteSafe,
 } from './poolResults';
 
 export {
@@ -155,6 +157,7 @@ export {
   getStandingsStatus,
   updateStandingsOnMatchComplete,
   rebuildAllStandings,
+  rebuildAllStandingsById,
 } from './leagueStandings';
 
 // Courts

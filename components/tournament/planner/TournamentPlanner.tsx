@@ -48,8 +48,8 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
   onComplete,
   onCancel,
 }) => {
-  // Get user profile for Stripe status
-  const { userProfile } = useAuth();
+  // Get user profile for Stripe status and admin check
+  const { userProfile, isAppAdmin } = useAuth();
   const hasStripeConnected = !!(userProfile?.stripeConnectedAccountId && userProfile?.stripeChargesEnabled);
 
   // Track if we loaded a draft (for showing resume prompt)
@@ -294,6 +294,7 @@ export const TournamentPlanner: React.FC<TournamentPlannerProps> = ({
             capacity={capacity}
             paymentMode={settings.paymentMode}
             onChange={(divisions) => updateSettings({ divisions })}
+            isAppAdmin={isAppAdmin}
           />
         );
       case 5:

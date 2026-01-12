@@ -1,19 +1,30 @@
 /**
- * LeagueScheduleManager Component V05.44
+ * LeagueScheduleManager Component V07.39
  *
  * Organizer tool to generate and manage league match schedules.
+ * V07.39: Added box league weeks management with idempotent activation
  *
  * FILE LOCATION: components/leagues/LeagueScheduleManager.tsx
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   generateLeagueSchedule,
   generateSwissRound,
   clearLeagueMatches,
 } from '../../services/firebase/leagueMatchGeneration';
-import { doc, updateDoc } from '@firebase/firestore';
+import {
+  generateBoxLeagueSchedule,
+  canGenerateSchedule,
+  formatPackingForDisplay,
+  activateWeek,
+  refreshDraftWeekAssignments,
+  getMatchesForWeek,
+} from '../../services/rotatingDoublesBox';
+import type { BoxLeagueWeek } from '../../types/rotatingDoublesBox';
+import { doc, updateDoc, collection, query, orderBy, onSnapshot } from '@firebase/firestore';
 import { db } from '../../services/firebase';
+import { useAuth } from '../../contexts/AuthContext';
 import type { League, LeagueMember, LeagueMatch, LeagueDivision } from '../../types';
 
 // ============================================
@@ -73,6 +84,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   divisions,
   onScheduleGenerated,
 }) => {
+  // Auth context
+  const { currentUser } = useAuth();
+  const currentUserId = currentUser?.uid || '';
+
   // State
   const [generating, setGenerating] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -82,11 +97,15 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [swissRound, setSwissRound] = useState(1);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
-  const [activeTab, setActiveTab] = useState<'generate' | 'courts' | 'weeks'>('generate');
-  
+  const [activeTab, setActiveTab] = useState<'generate' | 'courts' | 'weeks' | 'timeline'>('generate');
+
   // Court assignment state
   const [selectedMatches, setSelectedMatches] = useState<Set<string>>(new Set());
   const [bulkCourt, setBulkCourt] = useState<string>('');
+
+  // V07.39: Box league weeks state
+  const [boxWeeks, setBoxWeeks] = useState<BoxLeagueWeek[]>([]);
+  const [loadingWeekAction, setLoadingWeekAction] = useState<number | null>(null);
 
   // Get venue settings from league
   const venueSettings = (league.settings as any)?.venueSettings as LeagueVenueSettings | null;
@@ -202,8 +221,19 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     return weeks.sort((a, b) => a.weekNumber - b.weekNumber);
   }, [matchesByWeek]);
 
-  // Format info
+  // Format info (V07.25: use competitionFormat for accurate detection of rotating doubles box)
   const formatInfo = useMemo(() => {
+    // Check competitionFormat first for new unified format detection
+    if (league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box') {
+      const rdBoxSize = (league.settings as any)?.rotatingDoublesBox?.settings?.boxSize || 5;
+      return {
+        description: `Boxes of ${rdBoxSize}, rotating partners, promotion/relegation`,
+        expectedMatches: null,
+        isRotatingBox: true,
+      };
+    }
+
+    // Fall back to legacy format
     switch (league.format) {
       case 'round_robin':
         const rounds = (league.settings as any)?.roundRobinSettings?.rounds || 1;
@@ -233,7 +263,125 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       default:
         return { description: 'Unknown format', expectedMatches: null };
     }
-  }, [league.format, league.settings, divisionMembers.length]);
+  }, [league.format, league.competitionFormat, league.settings, divisionMembers.length]);
+
+  // V07.39: Check if rotating doubles box format
+  const isRotatingBox = league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box';
+
+  // ============================================
+  // V07.39: BOX WEEKS SUBSCRIPTION + RECOVERY
+  // ============================================
+
+  useEffect(() => {
+    if (!isRotatingBox) {
+      setBoxWeeks([]);
+      return;
+    }
+
+    // Subscribe to boxWeeks collection with onSnapshot for real-time updates
+    const weeksRef = collection(db, 'leagues', league.id, 'boxWeeks');
+    const q = query(weeksRef, orderBy('weekNumber', 'asc'));
+
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const weeks = snapshot.docs.map(doc => doc.data() as BoxLeagueWeek);
+
+      // Recovery guard: If week is 'active' but matchIds missing, rebuild from query
+      for (const week of weeks) {
+        if (week.state === 'active' && (!week.matchIds || week.matchIds.length === 0)) {
+          console.warn(`[Recovery] Week ${week.weekNumber} active but missing matchIds, attempting rebuild...`);
+          try {
+            const weekMatches = await getMatchesForWeek(league.id, week.weekNumber);
+            const matchIds = weekMatches.map(m => m.id);
+
+            if (matchIds.length > 0 && currentUserId) {
+              // Only patch if user is organizer (silent fail if not)
+              try {
+                const weekRef = doc(db, 'leagues', league.id, 'boxWeeks', week.weekNumber.toString());
+                await updateDoc(weekRef, {
+                  matchIds,
+                  totalMatches: matchIds.length,
+                });
+                week.matchIds = matchIds;
+                week.totalMatches = matchIds.length;
+                console.log(`[Recovery] Week ${week.weekNumber} matchIds patched: ${matchIds.length} matches`);
+              } catch (patchErr) {
+                // Ignore patch failure - don't block UI
+                console.log(`[Recovery] Could not patch week ${week.weekNumber} (likely not organizer)`);
+              }
+            }
+          } catch (err) {
+            console.error(`[Recovery] Failed to query matches for week ${week.weekNumber}:`, err);
+          }
+        }
+      }
+
+      setBoxWeeks(weeks);
+    }, (err) => {
+      console.error('[BoxWeeks] Subscription error:', err);
+    });
+
+    return () => unsubscribe();
+  }, [league.id, isRotatingBox, currentUserId]);
+
+  // ============================================
+  // V07.39: BOX WEEK HANDLERS
+  // ============================================
+
+  const handleActivateWeek = useCallback(async (weekNumber: number) => {
+    if (!currentUserId) {
+      alert('You must be logged in to activate a week');
+      return;
+    }
+
+    setLoadingWeekAction(weekNumber);
+    setError(null);
+    try {
+      const result = await activateWeek(league.id, weekNumber, currentUserId);
+      setResult({
+        success: true,
+        matchesCreated: result.matchIds.length,
+      });
+      // Refresh matches list
+      onScheduleGenerated();
+    } catch (err) {
+      console.error('[handleActivateWeek] Error:', err);
+      setError(`Failed to activate week: ${(err as Error).message}`);
+    } finally {
+      setLoadingWeekAction(null);
+    }
+  }, [league.id, currentUserId, onScheduleGenerated]);
+
+  const handleRecalculateBoxes = useCallback(async (weekNumber: number) => {
+    // Guardrails
+    const week = boxWeeks.find(w => w.weekNumber === weekNumber);
+    const prevWeek = boxWeeks.find(w => w.weekNumber === weekNumber - 1);
+
+    if (!week || week.state !== 'draft') {
+      alert('Can only recalculate boxes for draft weeks');
+      return;
+    }
+    if (!prevWeek || prevWeek.state !== 'finalized') {
+      alert('Previous week must be finalized first');
+      return;
+    }
+
+    setLoadingWeekAction(weekNumber);
+    setError(null);
+    try {
+      const result = await refreshDraftWeekAssignments(league.id, weekNumber);
+      const movedCount = result.movements.filter(m => m.reason !== 'stayed').length;
+      setResult({
+        success: true,
+        matchesCreated: 0,
+        error: `Boxes recalculated from Week ${weekNumber - 1} results. ${movedCount} player(s) moved.`,
+      });
+    } catch (err) {
+      console.error('[handleRecalculateBoxes] Error:', err);
+      setError(`Failed to recalculate boxes: ${(err as Error).message}`);
+    } finally {
+      setLoadingWeekAction(null);
+    }
+  }, [league.id, boxWeeks]);
 
   // ============================================
   // HANDLERS
@@ -245,14 +393,17 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       return;
     }
 
-    if (divisionMembers.length < 2) {
+    // Check for rotating doubles box format (V07.25: use competitionFormat for accurate detection)
+    const isRotatingBox = league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box';
+
+    if (!isRotatingBox && divisionMembers.length < 2) {
       setError('Need at least 2 active members to generate a schedule');
       return;
     }
 
     // V07.15: Block generation if matches already exist (prevent duplicates)
     // For Swiss, allow generating new rounds. For other formats, BLOCK if matches exist.
-    if (league.format !== 'swiss' && matchStats.total > 0) {
+    if (league.format !== 'swiss' && !isRotatingBox && matchStats.total > 0) {
       setError(`Schedule already exists (${matchStats.total} matches). Use "Clear" to delete existing matches before regenerating.`);
       return;
     }
@@ -264,7 +415,72 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
     try {
       let genResult: GenerationResult;
 
-      if (league.format === 'swiss') {
+      if (isRotatingBox) {
+        // Handle rotating doubles box format
+        const validation = await canGenerateSchedule(league.id);
+
+        if (!validation.canGenerate) {
+          setError(validation.blockers.join('. '));
+          setGenerating(false);
+          return;
+        }
+
+        // Get week dates from league schedule config
+        const scheduleConfig = (league.settings as any)?.venueSettings?.scheduleConfig;
+        const weekDates: Date[] = [];
+        const numberOfWeeks = scheduleConfig?.numberOfWeeks || 10;
+        const startDate = new Date(league.seasonStart || Date.now());
+
+        // Generate week dates (one per week)
+        if (scheduleConfig?.matchNights && scheduleConfig.matchNights.length > 0) {
+          // Use configured match nights
+          scheduleConfig.matchNights.forEach((dateStr: string) => {
+            weekDates.push(new Date(dateStr));
+          });
+        } else {
+          // Generate weekly dates
+          for (let i = 0; i < numberOfWeeks; i++) {
+            const weekDate = new Date(startDate);
+            weekDate.setDate(weekDate.getDate() + (i * 7));
+            weekDates.push(weekDate);
+          }
+        }
+
+        const boxResult = await generateBoxLeagueSchedule({
+          leagueId: league.id,
+          seasonName: `Season ${new Date().getFullYear()}`,
+          startDate,
+          numberOfWeeks,
+          weekDates,
+        });
+
+        if (boxResult.success) {
+          // V07.25: Show both box count and matches created
+          const boxInfo = boxResult.packingResult
+            ? `Created ${boxResult.boxAssignments?.length} boxes: ${formatPackingForDisplay(boxResult.packingResult)}`
+            : '';
+          const matchInfo = boxResult.matchesCreated
+            ? `${boxResult.matchesCreated} matches generated for Week 1`
+            : '';
+
+          genResult = {
+            success: true,
+            matchesCreated: boxResult.matchesCreated || 0,
+            error: [boxInfo, matchInfo].filter(Boolean).join('. ') || undefined,
+          };
+        } else {
+          genResult = {
+            success: false,
+            matchesCreated: 0,
+            error: boxResult.error || 'Failed to generate box league schedule',
+          };
+
+          // Add suggestions if available
+          if (boxResult.suggestions && boxResult.suggestions.length > 0) {
+            genResult.error += '\n\nSuggestions:\n• ' + boxResult.suggestions.join('\n• ');
+          }
+        }
+      } else if (league.format === 'swiss') {
         genResult = await generateSwissRound(
           league,
           divisionMembers,
@@ -517,12 +733,24 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
           <button
             onClick={() => setActiveTab('courts')}
             className={`flex-1 py-3 text-sm font-medium transition-colors ${
-              activeTab === 'courts' 
-                ? 'bg-gray-700 text-white border-b-2 border-blue-500' 
+              activeTab === 'courts'
+                ? 'bg-gray-700 text-white border-b-2 border-blue-500'
                 : 'text-gray-400 hover:text-white'
             }`}
           >
             🏟️ Courts
+          </button>
+        )}
+        {hasVenue && (
+          <button
+            onClick={() => setActiveTab('timeline')}
+            className={`flex-1 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'timeline'
+                ? 'bg-gray-700 text-white border-b-2 border-lime-500'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            📊 Timeline
           </button>
         )}
       </div>
@@ -679,77 +907,190 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       {/* WEEKS TAB */}
       {activeTab === 'weeks' && (
         <div className="p-4 space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="font-medium text-white">Week Overview</h4>
-            <span className="text-sm text-gray-400">
-              {weekInfoList.length} week{weekInfoList.length !== 1 ? 's' : ''}
-            </span>
-          </div>
+          {/* V07.39: Box League Weeks - authoritative from boxWeeks collection */}
+          {isRotatingBox ? (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-medium text-white">Box League Weeks</h4>
+                <span className="text-sm text-gray-400">
+                  {boxWeeks.length} week{boxWeeks.length !== 1 ? 's' : ''}
+                </span>
+              </div>
 
-          {weekInfoList.length === 0 ? (
-            <div className="bg-gray-900/50 rounded-lg p-8 text-center text-gray-400">
-              No weeks scheduled yet. Generate a schedule first.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {weekInfoList.map(weekInfo => {
-                const weekMatches = matchesByWeek[weekInfo.weekNumber] || [];
-                const allCompleted = weekInfo.completedMatchCount === weekMatches.length && weekMatches.length > 0;
+              {boxWeeks.length === 0 ? (
+                <div className="bg-gray-900/50 rounded-lg p-8 text-center text-gray-400">
+                  No weeks created yet. Generate a schedule first.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {boxWeeks.map(week => {
+                    const prevWeek = boxWeeks.find(w => w.weekNumber === week.weekNumber - 1);
+                    const canRecalculate = week.state === 'draft' &&
+                                          week.weekNumber > 1 &&
+                                          prevWeek?.state === 'finalized';
 
-                return (
-                  <div
-                    key={weekInfo.weekNumber}
-                    className={`bg-gray-900 rounded-lg p-4 border ${
-                      allCompleted ? 'border-green-500/50' : 'border-gray-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
-                          allCompleted ? 'bg-green-600/20 text-green-400' : 'bg-blue-600/20 text-blue-400'
-                        }`}>
-                          {weekInfo.weekNumber}
-                        </div>
-                        <div>
-                          <div className="font-medium text-white flex items-center gap-2">
-                            Week {weekInfo.weekNumber}
-                            {allCompleted && (
-                              <span className="text-xs bg-green-600/20 text-green-400 px-2 py-0.5 rounded">
-                                ✅ Complete
-                              </span>
-                            )}
+                    // Compute match counts - prefer week doc fields, fallback to query
+                    const weekMatches = matches.filter(m => m.weekNumber === week.weekNumber);
+                    const completedMatches = week.completedMatches ?? weekMatches.filter(m => m.status === 'completed').length;
+                    const totalMatches = week.totalMatches ?? weekMatches.length;
+
+                    return (
+                      <div key={week.weekNumber} className="bg-gray-800 rounded-lg p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            {/* Week Number Badge */}
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                              week.state === 'draft' ? 'bg-yellow-500/20 text-yellow-400' :
+                              week.state === 'active' ? 'bg-blue-600/20 text-blue-400' :
+                              week.state === 'closing' ? 'bg-orange-500/20 text-orange-400' :
+                              'bg-green-600/20 text-green-400'
+                            }`}>
+                              {week.weekNumber}
+                            </div>
+                            <div>
+                              <div className="font-medium text-white">Week {week.weekNumber}</div>
+                              <div className="text-sm text-gray-400">
+                                {week.state === 'draft' && 'Draft - Not yet scheduled'}
+                                {week.state === 'active' && `Active - ${completedMatches}/${totalMatches} matches`}
+                                {week.state === 'closing' && 'Closing - Ready to finalize'}
+                                {week.state === 'finalized' && `Finalized - ${completedMatches} matches completed`}
+                              </div>
+                            </div>
                           </div>
-                          <div className="text-sm text-gray-400 flex items-center gap-3">
-                            <span>Round {weekInfo.roundNumber}</span>
-                            <span>•</span>
-                            <span>{weekMatches.length} matches</span>
-                            {weekInfo.weekDate && (
+
+                          <div className="flex items-center gap-2">
+                            {/* Status Badge */}
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              week.state === 'draft' ? 'bg-yellow-500/20 text-yellow-400' :
+                              week.state === 'active' ? 'bg-blue-500/20 text-blue-400' :
+                              week.state === 'closing' ? 'bg-orange-500/20 text-orange-400' :
+                              'bg-green-500/20 text-green-400'
+                            }`}>
+                              {week.state.charAt(0).toUpperCase() + week.state.slice(1)}
+                            </span>
+
+                            {/* Action Buttons - Draft State Only */}
+                            {week.state === 'draft' && (
                               <>
-                                <span>•</span>
-                                <span>{formatDate(weekInfo.weekDate)}</span>
+                                {/* Recalculate Boxes - only when previous week finalized */}
+                                {canRecalculate && (
+                                  <button
+                                    onClick={() => handleRecalculateBoxes(week.weekNumber)}
+                                    disabled={loadingWeekAction === week.weekNumber}
+                                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                                    title={`Recalculate box assignments based on Week ${week.weekNumber - 1} final standings`}
+                                  >
+                                    {loadingWeekAction === week.weekNumber ? '...' : 'Recalculate Boxes'}
+                                  </button>
+                                )}
+                                {/* Activate Week */}
+                                <button
+                                  onClick={() => handleActivateWeek(week.weekNumber)}
+                                  disabled={loadingWeekAction === week.weekNumber}
+                                  className="px-3 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                                >
+                                  {loadingWeekAction === week.weekNumber ? 'Activating...' : 'Activate Week'}
+                                </button>
                               </>
                             )}
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center gap-1 text-xs">
-                        {weekInfo.completedMatchCount > 0 && (
-                          <span className="bg-green-600/20 text-green-400 px-2 py-1 rounded">
-                            {weekInfo.completedMatchCount} done
-                          </span>
-                        )}
-                        {weekInfo.scheduledMatchCount > 0 && (
-                          <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded">
-                            {weekInfo.scheduledMatchCount} pending
-                          </span>
+                        {/* Box Assignments Preview for Draft Weeks */}
+                        {week.state === 'draft' && week.boxAssignments && week.boxAssignments.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-gray-700">
+                            <div className="text-sm text-gray-400 mb-2">Box Assignments:</div>
+                            <div className="flex flex-wrap gap-2">
+                              {week.boxAssignments.map(box => (
+                                <span key={box.boxNumber} className="px-2 py-1 bg-gray-700 rounded text-xs">
+                                  Box {box.boxNumber}: {box.playerIds.length} players
+                                </span>
+                              ))}
+                            </div>
+                          </div>
                         )}
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          ) : (
+            /* Non-box league weeks (original view) */
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-medium text-white">Week Overview</h4>
+                <span className="text-sm text-gray-400">
+                  {weekInfoList.length} week{weekInfoList.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+
+              {weekInfoList.length === 0 ? (
+                <div className="bg-gray-900/50 rounded-lg p-8 text-center text-gray-400">
+                  No weeks scheduled yet. Generate a schedule first.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {weekInfoList.map(weekInfo => {
+                    const weekMatches = matchesByWeek[weekInfo.weekNumber] || [];
+                    const allCompleted = weekInfo.completedMatchCount === weekMatches.length && weekMatches.length > 0;
+
+                    return (
+                      <div
+                        key={weekInfo.weekNumber}
+                        className={`bg-gray-900 rounded-lg p-4 border ${
+                          allCompleted ? 'border-green-500/50' : 'border-gray-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                              allCompleted ? 'bg-green-600/20 text-green-400' : 'bg-blue-600/20 text-blue-400'
+                            }`}>
+                              {weekInfo.weekNumber}
+                            </div>
+                            <div>
+                              <div className="font-medium text-white flex items-center gap-2">
+                                Week {weekInfo.weekNumber}
+                                {allCompleted && (
+                                  <span className="text-xs bg-green-600/20 text-green-400 px-2 py-0.5 rounded">
+                                    ✅ Complete
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-sm text-gray-400 flex items-center gap-3">
+                                <span>Round {weekInfo.roundNumber}</span>
+                                <span>•</span>
+                                <span>{weekMatches.length} matches</span>
+                                {weekInfo.weekDate && (
+                                  <>
+                                    <span>•</span>
+                                    <span>{formatDate(weekInfo.weekDate)}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 text-xs">
+                            {weekInfo.completedMatchCount > 0 && (
+                              <span className="bg-green-600/20 text-green-400 px-2 py-1 rounded">
+                                {weekInfo.completedMatchCount} done
+                              </span>
+                            )}
+                            {weekInfo.scheduledMatchCount > 0 && (
+                              <span className="bg-blue-600/20 text-blue-400 px-2 py-1 rounded">
+                                {weekInfo.scheduledMatchCount} pending
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -892,6 +1233,156 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
               Clear All Court Assignments ({matchStats.withCourt})
             </button>
           )}
+        </div>
+      )}
+
+      {/* TIMELINE TAB - V07.27: Grid view of Court × Time */}
+      {activeTab === 'timeline' && hasVenue && (
+        <div className="p-4 space-y-4">
+          {/* Session Info */}
+          <div className="bg-lime-500/10 border border-lime-500/30 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-lime-400 text-lg">📊</span>
+              <span className="font-semibold text-lime-300">Session Timeline</span>
+            </div>
+            <p className="text-sm text-gray-400">
+              View matches organized by court and time slot. Each row is a time slot, each column is a court.
+            </p>
+          </div>
+
+          {/* Timeline Grid */}
+          {(() => {
+            // Get scheduled matches with time slots
+            const scheduledMatches = divisionMatches.filter(m => m.startTime && m.court);
+
+            if (scheduledMatches.length === 0) {
+              return (
+                <div className="bg-gray-800 rounded-lg p-8 text-center">
+                  <div className="text-gray-500 text-4xl mb-3">📋</div>
+                  <p className="text-gray-400">No matches scheduled yet</p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Generate matches and they'll be auto-scheduled to courts and time slots
+                  </p>
+                </div>
+              );
+            }
+
+            // Get unique time slots and courts
+            const timeSlots = [...new Set(scheduledMatches.map(m => m.startTime))].filter(Boolean).sort() as string[];
+            const activeCourts = courts.filter(c => c.active).sort((a, b) => a.order - b.order);
+
+            // Build grid data: grid[timeSlot][courtName] = match
+            const grid: Record<string, Record<string, LeagueMatch | null>> = {};
+            timeSlots.forEach(slot => {
+              grid[slot] = {};
+              activeCourts.forEach(court => {
+                grid[slot][court.name] = null;
+              });
+            });
+
+            scheduledMatches.forEach(match => {
+              if (match.startTime && match.court && grid[match.startTime]) {
+                grid[match.startTime][match.court] = match;
+              }
+            });
+
+            // Stats
+            const totalSlots = timeSlots.length * activeCourts.length;
+            const filledSlots = scheduledMatches.length;
+            const unscheduledCount = divisionMatches.filter(m => !m.startTime || !m.court).length;
+
+            return (
+              <>
+                {/* Stats Bar */}
+                <div className="flex items-center gap-4 text-sm">
+                  <span className="text-gray-400">
+                    <span className="text-white font-medium">{filledSlots}</span>/{totalSlots} slots used
+                  </span>
+                  {unscheduledCount > 0 && (
+                    <span className="text-amber-400">
+                      ⚠️ {unscheduledCount} unscheduled
+                    </span>
+                  )}
+                </div>
+
+                {/* Grid */}
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[600px] border-collapse">
+                    <thead>
+                      <tr>
+                        <th className="text-left text-xs text-gray-500 font-medium p-2 border-b border-gray-700 w-20">
+                          Time
+                        </th>
+                        {activeCourts.map(court => (
+                          <th
+                            key={court.id}
+                            className="text-center text-xs text-gray-400 font-medium p-2 border-b border-gray-700"
+                          >
+                            {court.name}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {timeSlots.map((slot, slotIdx) => (
+                        <tr key={slot} className={slotIdx % 2 === 0 ? 'bg-gray-800/30' : ''}>
+                          <td className="text-xs text-gray-400 font-mono p-2 border-b border-gray-800 whitespace-nowrap">
+                            {slot}
+                          </td>
+                          {activeCourts.map(court => {
+                            const match = grid[slot][court.name];
+                            return (
+                              <td
+                                key={court.id}
+                                className="p-1 border-b border-gray-800"
+                              >
+                                {match ? (
+                                  <div className={`rounded p-2 text-xs ${
+                                    match.status === 'completed'
+                                      ? 'bg-green-500/20 border border-green-500/30'
+                                      : 'bg-blue-500/20 border border-blue-500/30'
+                                  }`}>
+                                    <div className="font-medium text-white truncate">
+                                      {match.memberAName?.split(' ')[0] || 'A'}
+                                    </div>
+                                    <div className="text-gray-400">vs</div>
+                                    <div className="font-medium text-white truncate">
+                                      {match.memberBName?.split(' ')[0] || 'B'}
+                                    </div>
+                                    {match.status === 'completed' && (
+                                      <div className="text-green-400 text-[10px] mt-1">✓ Done</div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="h-16 rounded bg-gray-800/50 border border-dashed border-gray-700" />
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Legend */}
+                <div className="flex items-center gap-4 text-xs text-gray-500">
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded bg-blue-500/20 border border-blue-500/30" />
+                    <span>Scheduled</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded bg-green-500/20 border border-green-500/30" />
+                    <span>Completed</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded bg-gray-800/50 border border-dashed border-gray-700" />
+                    <span>Empty</span>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 

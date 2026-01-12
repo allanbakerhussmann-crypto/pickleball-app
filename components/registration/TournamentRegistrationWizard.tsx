@@ -17,6 +17,7 @@ import { calculateTournamentEntryPrice } from '../../services/firebase/pricing';
 import { SponsorLogoStrip } from '../shared/SponsorLogoStrip';
 import { createCheckoutSession, redirectToCheckout } from '../../services/stripe';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
+import { DEFAULT_WAIVER_TEXT } from '../../constants';
 
 interface WizardProps {
     tournament: Tournament;
@@ -621,8 +622,19 @@ export const TournamentRegistrationWizard: React.FC<WizardProps> = ({
 
                         {step === 3 && (
                             <div className="space-y-4">
-                                <h3 className="text-white font-bold">Liability Waiver</h3>
-                                <p className="text-gray-300">By registering, I acknowledge the risks blah blah (waiver text omitted for brevity).</p>
+                                {/* Waiver Section - Purple Theme */}
+                                <div className="bg-gray-900/50 rounded-lg border border-violet-500/30 overflow-hidden">
+                                    <div className="px-4 py-3 border-b border-violet-500/30 bg-gradient-to-r from-violet-600/20 to-purple-600/20">
+                                        <h3 className="text-white font-bold flex items-center gap-2">
+                                            📋 Liability Waiver
+                                        </h3>
+                                    </div>
+                                    <div className="p-4 max-h-64 overflow-y-auto">
+                                        <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">
+                                            {tournament.settings?.waiverText || DEFAULT_WAIVER_TEXT}
+                                        </p>
+                                    </div>
+                                </div>
 
                                 {/* Tournament Sponsors */}
                                 {tournament.sponsors && tournament.sponsors.filter(s => s.isActive).length > 0 && (

@@ -22,7 +22,9 @@
       "Bash(git commit:*)",
       "Bash(npx firebase deploy:*)",
       "WebFetch(domain:dupr.gitbook.io)",
-      "WebFetch(domain:uat.mydupr.com)"
+      "WebFetch(domain:uat.mydupr.com)",
+      "Bash(find:*)",
+      "Bash(firebase deploy:*)"
     ]
   }
 }

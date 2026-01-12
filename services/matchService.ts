@@ -10,7 +10,7 @@ import {
   where,
 } from '@firebase/firestore';
 import type { Match, MatchScoreSubmission, GameScore } from '../types';
-import { updatePoolResultsOnMatchComplete } from './firebase/poolResults';
+import { updatePoolResultsOnMatchCompleteSafe } from './firebase/poolResults';
 
 /**
  * Player submits a score for a match.
@@ -106,6 +106,7 @@ export async function submitMatchScore(
     }
 
     // V06.35: Update pool results if this is a pool match
+    // V07.30: Use safe wrapper - pool results are secondary, match scoring should not fail
     const completedMatch: Match = {
       ...match,
       status: 'completed',
@@ -114,7 +115,7 @@ export async function submitMatchScore(
       completedAt: now,
       updatedAt: now,
     };
-    await updatePoolResultsOnMatchComplete(tournamentId, match.divisionId || '', completedMatch);
+    await updatePoolResultsOnMatchCompleteSafe(tournamentId, match.divisionId || '', completedMatch);
 
     return;
   }
@@ -358,13 +359,14 @@ export async function confirmMatchScore(
   }
 
   // V06.35: Update pool results if this is a pool match
+  // V07.30: Use safe wrapper - pool results are secondary, match scoring should not fail
   const completedMatch: Match = {
     ...match,
     status: 'completed',
     completedAt: now,
     updatedAt: now,
   };
-  await updatePoolResultsOnMatchComplete(tournamentId, match.divisionId || '', completedMatch);
+  await updatePoolResultsOnMatchCompleteSafe(tournamentId, match.divisionId || '', completedMatch);
 }
 
 /**

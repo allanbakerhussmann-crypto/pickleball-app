@@ -66,6 +66,9 @@ export interface FormatOption {
 
   /** Disable in specific event types (tournament, league, meetup) */
   disabledIn?: ('tournament' | 'league' | 'meetup')[];
+
+  /** Only visible to app admins (hidden from regular users) */
+  adminOnly?: boolean;
 }
 
 /**
@@ -91,14 +94,17 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '🔄',
+    adminOnly: true,
   },
   {
     value: 'rotating_doubles_box',
     label: 'Rotating Doubles Box',
     description: 'Small groups, partners rotate each match',
-    supportsPlayType: ['doubles', 'mixed', 'open'],
+    // V07.25: Available for singles (individual entry) AND doubles (gameplay is 2v2)
+    supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '📦',
+    adminOnly: true,
   },
   {
     value: 'fixed_doubles_box',

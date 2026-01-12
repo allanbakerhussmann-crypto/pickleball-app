@@ -20,6 +20,10 @@ import type { Match, PoolResultDoc, PoolResultRow } from '../../types';
 import { calculatePoolStandings as calculateStandings } from '../formats/poolPlayMedals';
 import type { Pool, PoolStanding } from '../formats/poolPlayMedals';
 import type { PoolPlayMedalsSettings } from '../../types/formats';
+import {
+  calculatePoolStandings as calculatePoolStandingsShared,
+  type TiebreakerKey,
+} from '../standings/poolStandings';
 
 /**
  * Group matches by their pool (poolGroup field)
@@ -195,17 +199,20 @@ export function poolResultToStandings(poolResult: PoolResultDoc): PoolStanding[]
 }
 
 // ============================================
-// V06.35: Automatic Pool Results on Match Completion
+// V07.30: Robust Pool Results on Match Completion
+// Uses shared calculatePoolStandings from services/standings/poolStandings.ts
+// This ensures UI and database use identical tiebreaker logic
 // ============================================
 
 /**
  * Update pool results when a pool match completes.
  *
- * This function is called automatically from match completion points
- * (submitMatchScore, confirmMatchScore, quickScoreMatch) to keep
- * pool standings up-to-date in real-time.
- *
- * V06.35: Automatic pool results - no need to wait for bracket generation
+ * V07.29 ROBUST VERSION:
+ * - Uses poolKey as canonical identifier (not poolGroup)
+ * - Queries by divisionId + poolKey + matchType to prevent contamination
+ * - Uses lenient standings calculation (matches UI behavior)
+ * - Throws errors instead of swallowing them
+ * - Supports idempotency via matchesUpdatedAtMax check
  *
  * @param tournamentId - Tournament ID
  * @param divisionId - Division ID
@@ -216,133 +223,102 @@ export async function updatePoolResultsOnMatchComplete(
   divisionId: string,
   completedMatch: Match
 ): Promise<void> {
-  // DEBUG: Log entry point FIRST before any checks
   console.log('[updatePoolResultsOnMatchComplete] ENTRY:', {
     tournamentId,
     divisionId,
     matchId: completedMatch.id,
+    poolKey: (completedMatch as any).poolKey,
     poolGroup: completedMatch.poolGroup,
     stage: completedMatch.stage,
+    status: completedMatch.status,
   });
 
-  // Only process pool matches
-  const poolName = completedMatch.poolGroup;
-  const isPoolMatch = poolName || completedMatch.stage === 'pool' || completedMatch.stage === 'Pool Play';
+  // 1. Use poolKey as canonical (prefer poolKey, fallback to derived from poolGroup)
+  const poolKey =
+    (completedMatch as any).poolKey ||
+    (completedMatch.poolGroup ? poolNameToKey(completedMatch.poolGroup) : null);
 
-  if (!isPoolMatch || !poolName) {
-    // Not a pool match, skip
+  if (!poolKey) {
+    throw new Error(
+      `[updatePoolResultsOnMatchComplete] Missing poolKey (and poolGroup) on match ${completedMatch.id}`
+    );
+  }
+
+  // 2. Check if this is a pool match (be lenient)
+  const isPoolMatch =
+    (completedMatch as any).matchType === 'pool' ||
+    completedMatch.stage === 'pool' ||
+    completedMatch.stage === 'Pool Play' ||
+    Boolean((completedMatch as any).poolKey) ||
+    Boolean(completedMatch.poolGroup);
+
+  if (!isPoolMatch) {
     console.log('[updatePoolResultsOnMatchComplete] SKIPPING - not a pool match:', {
-      isPoolMatch,
-      poolName,
+      matchId: completedMatch.id,
+      matchType: (completedMatch as any).matchType,
       stage: completedMatch.stage,
     });
     return;
   }
 
-  console.log(`[updatePoolResultsOnMatchComplete] Processing pool match completion: ${completedMatch.id} in ${poolName}`);
-
   try {
-    // Fetch ALL matches for this pool (fresh from Firestore)
-    const matchesRef = collection(db, 'tournaments', tournamentId, 'matches');
-    const poolMatchesSnap = await getDocs(
-      query(matchesRef, where('poolGroup', '==', poolName))
-    );
-    const poolMatches = poolMatchesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Match));
-
-    // Get division to build Pool object and tiebreaker settings
+    // 3. Fetch division (tiebreakers + pool assignments)
     const divRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
     const divSnap = await getDoc(divRef);
     const division = divSnap.data();
 
     if (!division) {
-      console.warn(`[updatePoolResultsOnMatchComplete] Division not found: ${divisionId}`);
-      return;
+      throw new Error(`[updatePoolResultsOnMatchComplete] Division not found: ${divisionId}`);
     }
 
-    // DEBUG: Log division data
-    console.log('[updatePoolResultsOnMatchComplete] Division data:', {
-      found: !!division,
-      hasPoolAssignments: !!division.poolAssignments,
-      poolAssignmentCount: division.poolAssignments?.length || 0,
-      poolNames: division.poolAssignments?.map((pa: any) => pa.poolName) || [],
-    });
-
-    // Find this pool's assignment
-    const poolAssignment = division.poolAssignments?.find(
-      (pa: any) => pa.poolName === poolName
-    );
+    // 4. Find pool assignment - support poolKey OR derived from poolName
+    const poolAssignment =
+      division.poolAssignments?.find((pa: any) => pa.poolKey === poolKey) ||
+      division.poolAssignments?.find((pa: any) => poolNameToKey(pa.poolName) === poolKey);
 
     if (!poolAssignment) {
-      console.warn(`[updatePoolResultsOnMatchComplete] Pool assignment not found for: ${poolName}. Available pools:`,
-        division.poolAssignments?.map((pa: any) => pa.poolName) || 'none');
-      return;
+      throw new Error(
+        `[updatePoolResultsOnMatchComplete] Pool assignment not found for poolKey=${poolKey} (division=${divisionId}). ` +
+        `Available pools: ${division.poolAssignments?.map((pa: any) => pa.poolName || pa.poolKey).join(', ') || 'none'}`
+      );
     }
 
-    // Build Pool object for calculatePoolStandings
-    const poolIndex = division.poolAssignments?.findIndex((pa: any) => pa.poolName === poolName) || 0;
-    const pool: Pool = {
-      poolNumber: poolIndex + 1,
-      poolName,
-      participants: poolAssignment.teamIds
-        .filter((id: string) => id)
-        .map((teamId: string) => {
-          // Try to find team name from matches
-          const matchWithTeam = poolMatches.find(
-            m => m.sideA?.id === teamId || m.sideB?.id === teamId
-          );
-          const name = matchWithTeam?.sideA?.id === teamId
-            ? matchWithTeam.sideA.name
-            : matchWithTeam?.sideB?.id === teamId
-              ? matchWithTeam.sideB.name
-              : `Team ${teamId.slice(0, 4)}`;
+    // 5. Get poolName from poolAssignment (canonical source)
+    const poolName = poolAssignment.poolName || completedMatch.poolGroup || `Pool ${poolKey}`;
 
-          return {
-            id: teamId,
-            name: name || `Team ${teamId.slice(0, 4)}`,
-            playerIds: [],
-          };
-        }),
-    };
+    // 6. Query matches by divisionId + poolKey (try poolKey first, fallback to poolGroup)
+    const matchesRef = collection(db, 'tournaments', tournamentId, 'matches');
+    let poolMatchesSnap = await getDocs(
+      query(
+        matchesRef,
+        where('divisionId', '==', divisionId),
+        where('poolKey', '==', poolKey)
+      )
+    );
 
-    // Get tiebreaker settings
-    const tiebreakers: PoolPlayMedalsSettings['tiebreakers'] =
-      division.format?.poolPlayMedalsSettings?.tiebreakers ||
-      ['wins', 'head_to_head', 'point_diff', 'points_scored'];
+    // Fallback: if no matches found by poolKey, try poolGroup
+    if (poolMatchesSnap.empty && poolName) {
+      console.log(`[updatePoolResultsOnMatchComplete] No matches found by poolKey=${poolKey}, trying poolGroup=${poolName}`);
+      poolMatchesSnap = await getDocs(
+        query(
+          matchesRef,
+          where('divisionId', '==', divisionId),
+          where('poolGroup', '==', poolName)
+        )
+      );
+    }
 
-    // Calculate standings for this pool
-    const standings = calculateStandings(pool, poolMatches as any, tiebreakers);
+    const poolMatches = poolMatchesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Match));
 
-    // Find max updatedAt for watermark
-    const matchesUpdatedAtMax = poolMatches.length > 0
-      ? Math.max(...poolMatches.map(m => m.updatedAt || m.completedAt || 0))
-      : 0;
+    console.log(`[updatePoolResultsOnMatchComplete] Found ${poolMatches.length} matches for pool ${poolName} (${poolKey})`);
 
-    // Build rows
-    const rows: PoolResultRow[] = standings.map(s => ({
-      rank: s.rank,
-      teamId: s.participant.id,
-      name: s.participant.name,
-      wins: s.wins,
-      losses: s.losses,
-      pf: s.pointsFor,
-      pa: s.pointsAgainst,
-      diff: s.pointDifferential,
-    }));
+    // 7. Compute matchesUpdatedAtMax for idempotency check
+    const matchesUpdatedAtMax = poolMatches.reduce((max, m: any) => {
+      const v = typeof m.updatedAt === 'number' ? m.updatedAt : 0;
+      return Math.max(max, v);
+    }, 0);
 
-    const poolKey = poolNameToKey(poolName);
-    const poolResult: PoolResultDoc = {
-      poolKey,
-      poolName,
-      divisionId,
-      tournamentId,
-      generatedAt: Date.now(),
-      calculationVersion: 'v06.35',
-      testData: false,  // Real match data
-      matchesUpdatedAtMax,
-      rows,
-    };
-
-    // Write to Firestore
+    // 8. Prepare docRef for idempotency check and final write
     const docRef = doc(
       db,
       'tournaments',
@@ -353,20 +329,112 @@ export async function updatePoolResultsOnMatchComplete(
       poolKey
     );
 
+    // 9. Idempotency: skip if nothing changed
+    const existingDoc = await getDoc(docRef);
+    if (existingDoc.exists()) {
+      const existing = existingDoc.data();
+      if (existing.matchesUpdatedAtMax >= matchesUpdatedAtMax) {
+        console.log(
+          `[updatePoolResultsOnMatchComplete] SKIP - no changes (existing=${existing.matchesUpdatedAtMax}, new=${matchesUpdatedAtMax})`
+        );
+        return;
+      }
+    }
+
+    // 10. Build participants list from assignment
+    const participants = (poolAssignment.teamIds || [])
+      .filter((id: string) => id)
+      .map((teamId: string) => {
+        const matchWithTeam = poolMatches.find(
+          m => m.sideA?.id === teamId || m.sideB?.id === teamId
+        );
+        const name =
+          matchWithTeam?.sideA?.id === teamId
+            ? matchWithTeam.sideA?.name
+            : matchWithTeam?.sideB?.id === teamId
+              ? matchWithTeam.sideB?.name
+              : `Team ${teamId.slice(0, 4)}`;
+
+        return { id: teamId, name: name || `Team ${teamId.slice(0, 4)}` };
+      });
+
+    // 11. Get tiebreaker settings (cast to TiebreakerKey[])
+    const tiebreakers: TiebreakerKey[] =
+      (division.format?.poolPlayMedalsSettings?.tiebreakers as TiebreakerKey[]) ||
+      ['wins', 'head_to_head', 'point_diff', 'points_scored'];
+
+    // 12. V07.30: Use shared standings calculation (matches UI behavior)
+    // This uses proper multi-way H2H via mini-standings
+    const standings = calculatePoolStandingsShared(participants, poolMatches, tiebreakers);
+
+    // 13. Build rows (shared function already calculates rank and diff)
+    const rows: PoolResultRow[] = standings.map((s) => ({
+      rank: s.rank || 0,
+      teamId: s.teamId,
+      name: s.name,
+      wins: s.wins,
+      losses: s.losses,
+      pf: s.pf,
+      pa: s.pa,
+      diff: s.diff,
+    }));
+
+    // 14. Count completed matches for debugging
+    const completedMatchCount = poolMatches.filter(m => m.status === 'completed').length;
+
+    const poolResult: PoolResultDoc = {
+      poolKey,
+      poolName,
+      divisionId,
+      tournamentId,
+      generatedAt: Date.now(),
+      calculationVersion: 'v07.30',
+      testData: false,
+      matchesUpdatedAtMax,
+      rows,
+    };
+
+    // 15. Write with merge: true for safety
     console.log('[updatePoolResultsOnMatchComplete] Writing to Firestore:', {
       path: `tournaments/${tournamentId}/divisions/${divisionId}/poolResults/${poolKey}`,
       rowCount: rows.length,
+      completedMatchCount,
+      matchesUpdatedAtMax,
     });
 
-    await setDoc(docRef, poolResult);
+    await setDoc(docRef, poolResult, { merge: true });
 
-    const completedCount = poolMatches.filter(m => m.status === 'completed').length;
     console.log(
-      `[updatePoolResultsOnMatchComplete] SUCCESS - Updated ${poolName}: ${completedCount}/${poolMatches.length} matches complete. ` +
+      `[updatePoolResultsOnMatchComplete] SUCCESS - Updated ${poolName} (${poolKey}): ${completedMatchCount}/${poolMatches.length} matches complete. ` +
       `Standings: ${rows.map(r => `${r.name} (${r.wins}W)`).join(', ')}`
     );
   } catch (err) {
-    // Log error details - this helps debug issues
-    console.error('[updatePoolResultsOnMatchComplete] Failed to update pool results:', err);
+    // Log and RE-THROW - don't swallow errors
+    console.error('[updatePoolResultsOnMatchComplete] Failed:', err);
+    throw err;
+  }
+}
+
+/**
+ * Safe wrapper for updatePoolResultsOnMatchComplete.
+ *
+ * V07.30: Use this wrapper in callers (matchService, useCourtManagement)
+ * to ensure match scoring never fails due to pool results errors.
+ * Pool results are secondary - match should always be scored successfully.
+ *
+ * @param tournamentId - Tournament ID
+ * @param divisionId - Division ID
+ * @param completedMatch - The match that just completed
+ */
+export async function updatePoolResultsOnMatchCompleteSafe(
+  tournamentId: string,
+  divisionId: string,
+  completedMatch: Match
+): Promise<void> {
+  try {
+    await updatePoolResultsOnMatchComplete(tournamentId, divisionId, completedMatch);
+  } catch (err) {
+    console.error('[updatePoolResultsOnMatchCompleteSafe] Pool results failed (non-fatal):', err);
+    // Don't rethrow - match scoring should not fail due to pool results
   }
 }

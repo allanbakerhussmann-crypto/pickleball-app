@@ -37,6 +37,7 @@
 
 import type { CompetitionFormat, PoolPlayMedalsSettings } from './types/formats';
 import type { MatchParticipant, PlayType } from './types/game';
+import type { BoxLeagueVenueSettings, RotatingDoublesBoxSettings } from './types/rotatingDoublesBox';
 
 // ============================================
 // TOURNAMENT FORMAT TYPES (V06.06)
@@ -644,6 +645,9 @@ export interface TournamentSettings {
     winBy: number;
     tiebreaker?: boolean;
   };
+  // V07.25: Waiver settings for tournament registration
+  waiverRequired?: boolean;
+  waiverText?: string | null;
 }
 
 /**
@@ -1098,7 +1102,7 @@ export interface MeetupRSVP {
 // ============================================
 
 export type LeagueType = 'singles' | 'doubles' | 'mixed_doubles';
-export type LeagueFormat = 'ladder' | 'round_robin' | 'swiss' | 'box_league';
+export type LeagueFormat = 'ladder' | 'round_robin' | 'swiss' | 'box_league' | 'rotating_doubles_box' | 'fixed_doubles_box';
 export type LeagueStatus = 'draft' | 'registration' | 'registration_closed' | 'active' | 'completed' | 'cancelled';
 
 /**
@@ -1608,6 +1612,16 @@ export interface LeagueSettings {
 
   // Score verification (NEW V05.44)
   scoreVerification?: ScoreVerificationSettings | null;
+
+  // Rotating Doubles Box settings (V07.25)
+  rotatingDoublesBox?: {
+    venue?: BoxLeagueVenueSettings;
+    settings?: RotatingDoublesBoxSettings;
+  } | null;
+
+  // V07.25: Waiver settings for league registration
+  waiverRequired?: boolean;
+  waiverText?: string | null;
 }
 
 // ============================================
@@ -1645,11 +1659,15 @@ export interface League {
   id: string;
   name: string;
   description: string;
-  
+
   // League classification
   type: LeagueType;
   format: LeagueFormat;
-  
+
+  // V07.25: New unified competition format (stored alongside legacy format)
+  // Use this for detecting rotating_doubles_box vs fixed_doubles_box
+  competitionFormat?: CompetitionFormat;
+
   // Club association (optional)
   clubId?: string | null;
   clubName?: string | null;

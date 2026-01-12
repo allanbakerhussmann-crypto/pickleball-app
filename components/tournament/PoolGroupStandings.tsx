@@ -25,6 +25,10 @@ import React, { useState, useMemo } from 'react';
 import type { Match, Team } from '../../types';
 import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
 import { MatchHistoryIndicator } from './MatchHistoryIndicator';
+import {
+  calculatePoolStandings as calculatePoolStandingsShared,
+  type TiebreakerKey,
+} from '../../services/standings/poolStandings';
 
 // ============================================
 // TYPES
@@ -96,12 +100,11 @@ function getPoolNames(matches: Match[]): string[] {
   return Array.from(poolSet).sort();
 }
 
-type TiebreakerKey = 'wins' | 'head_to_head' | 'point_diff' | 'points_scored';
-
 /**
  * Calculate standings for a single pool
  *
- * V06.37: Now uses configurable tiebreakers from poolSettings
+ * V07.30: Now uses shared calculatePoolStandings from services/standings/poolStandings.ts
+ * This ensures UI and database use identical tiebreaker logic (including proper H2H for multi-way ties).
  */
 function calculatePoolStandings(
   poolMatches: Match[],
@@ -118,147 +121,41 @@ function calculatePoolStandings(
     if (m.sideB?.id) teamIds.add(m.sideB.id);
   });
 
-  // Build standings map
-  const standingsMap = new Map<string, PoolStandingRow>();
+  // Build participants list for shared function
+  const participants: Array<{ id: string; name: string }> = [];
+  const teamLookup = new Map<string, Team>();
 
   teamIds.forEach((teamId) => {
     const team = (teams || []).find((t) => t.id === teamId);
-    // Extract player names from team.players array (which are objects with name property)
+    const name = team?.teamName || team?.name || `Team ${teamId.slice(0, 4)}`;
+    participants.push({ id: teamId, name });
+    if (team) teamLookup.set(teamId, team);
+  });
+
+  // Call shared standings calculation (handles tiebreakers correctly)
+  const sharedStandings = calculatePoolStandingsShared(participants, poolMatches, tiebreakers);
+
+  // Map to UI format (add players, played, etc.)
+  const uiStandings: PoolStandingRow[] = sharedStandings.map((row, index) => {
+    const team = teamLookup.get(row.teamId);
     const playerNames: string[] = team?.players?.map(p => p.name) || [];
-    standingsMap.set(teamId, {
-      teamId,
-      teamName: team?.teamName || team?.name || 'Unknown Team',
+
+    return {
+      teamId: row.teamId,
+      teamName: row.name,
       players: playerNames,
-      played: 0,
-      wins: 0,
-      losses: 0,
-      pointsFor: 0,
-      pointsAgainst: 0,
-      pointDifference: 0,
-      rank: 0,
-      isAdvancing: false,
-    });
+      played: row.gamesPlayed || row.wins + row.losses,
+      wins: row.wins,
+      losses: row.losses,
+      pointsFor: row.pf,
+      pointsAgainst: row.pa,
+      pointDifference: row.diff,
+      rank: row.rank || index + 1,
+      isAdvancing: index < advancementCount,
+    };
   });
 
-  // Process completed matches
-  (poolMatches || [])
-    .filter((m) => m.status === 'completed')
-    .forEach((match) => {
-      const teamAId = match.teamAId || match.sideA?.id;
-      const teamBId = match.teamBId || match.sideB?.id;
-      if (!teamAId || !teamBId) return;
-
-      const rowA = standingsMap.get(teamAId);
-      const rowB = standingsMap.get(teamBId);
-      if (!rowA || !rowB) return;
-
-      // Calculate total points from scores - use modern format OR legacy, not both
-      let pointsA = 0;
-      let pointsB = 0;
-
-      if (match.scores && Array.isArray(match.scores) && match.scores.length > 0) {
-        // Use modern scores array
-        match.scores.forEach((game) => {
-          pointsA += game.scoreA || 0;
-          pointsB += game.scoreB || 0;
-        });
-      } else if (match.scoreTeamAGames?.length && match.scoreTeamBGames?.length) {
-        // Fallback to legacy format ONLY if modern is empty
-        pointsA = match.scoreTeamAGames.reduce((sum: number, s: number) => sum + s, 0);
-        pointsB = match.scoreTeamBGames.reduce((sum: number, s: number) => sum + s, 0);
-      }
-
-      // Update played
-      rowA.played += 1;
-      rowB.played += 1;
-
-      // Update points
-      rowA.pointsFor += pointsA;
-      rowA.pointsAgainst += pointsB;
-      rowB.pointsFor += pointsB;
-      rowB.pointsAgainst += pointsA;
-
-      // Determine winner - use winnerId if set, otherwise calculate from scores
-      let winnerId = match.winnerTeamId || match.winnerId;
-
-      // If winnerId is not set, determine winner from scores
-      if (!winnerId && (pointsA !== 0 || pointsB !== 0)) {
-        if (pointsA > pointsB) {
-          winnerId = teamAId;
-        } else if (pointsB > pointsA) {
-          winnerId = teamBId;
-        }
-        // If pointsA === pointsB, it's a tie - winnerId stays undefined
-      }
-
-      // Update wins/losses
-      if (winnerId === teamAId) {
-        rowA.wins += 1;
-        rowB.losses += 1;
-      } else if (winnerId === teamBId) {
-        rowB.wins += 1;
-        rowA.losses += 1;
-      }
-      // If winnerId is still undefined, it's a tie - no wins/losses recorded
-    });
-
-  // Calculate point difference and sort
-  const standings = Array.from(standingsMap.values());
-  standings.forEach((row) => {
-    row.pointDifference = row.pointsFor - row.pointsAgainst;
-  });
-
-  // V06.37: Sort using configurable tiebreakers
-  // Completed matches for head-to-head lookup
-  const completedMatches = (poolMatches || []).filter(m => m.status === 'completed');
-
-  standings.sort((a, b) => {
-    for (const tiebreaker of tiebreakers) {
-      let comparison = 0;
-
-      switch (tiebreaker) {
-        case 'wins':
-          comparison = b.wins - a.wins;
-          break;
-
-        case 'head_to_head':
-          // Find direct match between these two teams
-          const directMatch = completedMatches.find(m => {
-            const teamAId = m.teamAId || m.sideA?.id;
-            const teamBId = m.teamBId || m.sideB?.id;
-            return (
-              (teamAId === a.teamId && teamBId === b.teamId) ||
-              (teamAId === b.teamId && teamBId === a.teamId)
-            );
-          });
-          if (directMatch) {
-            const winnerId = directMatch.winnerTeamId || directMatch.winnerId;
-            if (winnerId === a.teamId) comparison = -1;
-            else if (winnerId === b.teamId) comparison = 1;
-          }
-          break;
-
-        case 'point_diff':
-          comparison = b.pointDifference - a.pointDifference;
-          break;
-
-        case 'points_scored':
-          comparison = b.pointsFor - a.pointsFor;
-          break;
-      }
-
-      if (comparison !== 0) return comparison;
-    }
-    return 0;
-  });
-
-  // Assign ranks and advancement
-  standings.forEach((row, index) => {
-    row.rank = index + 1;
-    row.isAdvancing = index < advancementCount;
-  });
-
-  return standings;
+  return uiStandings;
 }
 
 // ============================================

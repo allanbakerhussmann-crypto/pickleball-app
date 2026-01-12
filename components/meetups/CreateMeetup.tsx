@@ -155,7 +155,7 @@ const mapCompetitionFormatToMeetup = (format: CompetitionFormat): MeetupCompetit
 // ============================================
 
 export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated }) => {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser, userProfile, isAppAdmin } = useAuth();
   
   // Step management
   const [step, setStep] = useState(1);
@@ -858,6 +858,7 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                 onChange={handleFormatSelect}
                 eventType="meetup"
                 theme="dark"
+                isAppAdmin={isAppAdmin}
               />
             </div>
 

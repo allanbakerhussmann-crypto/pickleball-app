@@ -38,6 +38,8 @@ interface FormatSelectorProps {
   disabled?: boolean;
   /** Additional CSS classes */
   className?: string;
+  /** If true, show "Coming Soon" formats (app admin only) */
+  isAppAdmin?: boolean;
 }
 
 // ============================================
@@ -54,15 +56,21 @@ export const FormatSelector: React.FC<FormatSelectorProps> = ({
   error,
   disabled = false,
   className = '',
+  isAppAdmin = false,
 }) => {
   // Get available formats based on play type
-  const availableFormats: FormatOption[] = playType
+  const allFormats: FormatOption[] = playType
     ? getFormatsForPlayType(playType)
     : COMPETITION_FORMATS;
 
+  // Filter out "Coming Soon" and "Admin Only" formats for non-admins (hide completely)
+  const availableFormats = isAppAdmin
+    ? allFormats
+    : allFormats.filter(f => !f.comingSoon && !f.adminOnly);
+
   // Helper to check if format is disabled in current context
   const isFormatDisabled = (format: FormatOption): boolean => {
-    if (format.comingSoon) return true;
+    if (format.comingSoon) return true; // Still disabled for admin, but visible
     if (eventType && format.disabledIn?.includes(eventType)) return true;
     return false;
   };
@@ -221,6 +229,8 @@ interface FormatCardsProps {
   className?: string;
   /** Theme variant */
   theme?: 'light' | 'dark';
+  /** If true, show "Coming Soon" formats (app admin only) */
+  isAppAdmin?: boolean;
 }
 
 export const FormatCards: React.FC<FormatCardsProps> = ({
@@ -231,14 +241,20 @@ export const FormatCards: React.FC<FormatCardsProps> = ({
   disabled = false,
   className = '',
   theme = 'light',
+  isAppAdmin = false,
 }) => {
-  const availableFormats = playType
+  const allFormats = playType
     ? getFormatsForPlayType(playType)
     : COMPETITION_FORMATS;
 
+  // Filter out "Coming Soon" and "Admin Only" formats for non-admins (hide completely)
+  const availableFormats = isAppAdmin
+    ? allFormats
+    : allFormats.filter(f => !f.comingSoon && !f.adminOnly);
+
   // Helper to check if format is disabled in current context
   const isFormatDisabled = (format: FormatOption): boolean => {
-    if (format.comingSoon) return true;
+    if (format.comingSoon) return true; // Still disabled for admin, but visible
     if (eventType && format.disabledIn?.includes(eventType)) return true;
     return false;
   };

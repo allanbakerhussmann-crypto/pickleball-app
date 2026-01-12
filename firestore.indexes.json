@@ -24,7 +24,15 @@
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
     },
-    
+    {
+      "collectionGroup": "matches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "divisionId", "order": "ASCENDING" },
+        { "fieldPath": "poolKey", "order": "ASCENDING" }
+      ]
+    },
+
     {
       "collectionGroup": "wallets",
       "queryScope": "COLLECTION",

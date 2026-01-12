@@ -45,13 +45,19 @@ export function applyMovements(
     boxStandings.sort((a, b) => a.positionInBox - b.positionInBox);
   }
 
+  // V07.38: Debug logging
+  const totalBoxes = week.boxAssignments.length;
+  console.log(`[applyMovements] totalBoxes=${totalBoxes}, boxAssignments=`, week.boxAssignments.map(a => a.boxNumber));
+  console.log(`[applyMovements] boxStandingsMap sizes:`, Array.from(boxStandingsMap.entries()).map(([box, players]) => ({ box, count: players.length })));
+
   // Process each player
   for (const standing of standings) {
+    const boxSize = boxStandingsMap.get(standing.boxNumber)!.length;
     const movement = calculatePlayerMovement(
       standing,
       week,
-      boxStandingsMap.get(standing.boxNumber)!.length,
-      week.boxAssignments.length
+      boxSize,
+      totalBoxes
     );
 
     movements.push(movement);
@@ -69,7 +75,12 @@ function calculatePlayerMovement(
   boxSize: number,
   totalBoxes: number
 ): PlayerMovement {
-  const { promotionCount, relegationCount } = week.rulesSnapshot;
+  // V07.26: Add defaults in case rulesSnapshot values are undefined
+  const promotionCount = week.rulesSnapshot?.promotionCount ?? 1;
+  const relegationCount = week.rulesSnapshot?.relegationCount ?? 1;
+
+  // V07.38: Debug logging
+  console.log(`[calculatePlayerMovement] ${standing.playerName}: box=${standing.boxNumber}, pos=${standing.positionInBox}, boxSize=${boxSize}, totalBoxes=${totalBoxes}, promoCount=${promotionCount}, relegCount=${relegationCount}`);
 
   // Check if movement is frozen for this player
   if (standing.movement === 'frozen') {
@@ -86,10 +97,12 @@ function calculatePlayerMovement(
   }
 
   // Check for promotion (top N in box, not in box 1)
-  if (
-    standing.positionInBox <= promotionCount &&
-    standing.boxNumber > 1
-  ) {
+  const isPromotionPosition = standing.positionInBox <= promotionCount;
+  const canPromote = standing.boxNumber > 1;
+  console.log(`[calculatePlayerMovement] ${standing.playerName}: PROMO CHECK - pos(${standing.positionInBox}) <= promoCount(${promotionCount})? ${isPromotionPosition}, box(${standing.boxNumber}) > 1? ${canPromote}`);
+
+  if (isPromotionPosition && canPromote) {
+    console.log(`[calculatePlayerMovement] ${standing.playerName} -> PROMOTED from box ${standing.boxNumber} to box ${standing.boxNumber - 1}`);
     return {
       playerId: standing.playerId,
       playerName: standing.playerName,
@@ -103,11 +116,14 @@ function calculatePlayerMovement(
   }
 
   // Check for relegation (bottom N in box, not in last box)
-  if (
-    standing.positionInBox > boxSize - relegationCount &&
-    standing.boxNumber < totalBoxes
-  ) {
-    const relegationPosition = standing.positionInBox - (boxSize - relegationCount);
+  const relegationThreshold = boxSize - relegationCount;
+  const isRelegationPosition = standing.positionInBox > relegationThreshold;
+  const canRelegate = standing.boxNumber < totalBoxes;
+  console.log(`[calculatePlayerMovement] ${standing.playerName}: RELEG CHECK - pos(${standing.positionInBox}) > threshold(${relegationThreshold})? ${isRelegationPosition}, box(${standing.boxNumber}) < totalBoxes(${totalBoxes})? ${canRelegate}`);
+
+  if (isRelegationPosition && canRelegate) {
+    const relegationPosition = standing.positionInBox - relegationThreshold;
+    console.log(`[calculatePlayerMovement] ${standing.playerName} -> RELEGATED from box ${standing.boxNumber} to box ${standing.boxNumber + 1}`);
     return {
       playerId: standing.playerId,
       playerName: standing.playerName,
@@ -121,6 +137,7 @@ function calculatePlayerMovement(
   }
 
   // No movement - stay in place
+  console.log(`[calculatePlayerMovement] ${standing.playerName} -> STAYED (box ${standing.boxNumber}, pos ${standing.positionInBox})`);
   return {
     playerId: standing.playerId,
     playerName: standing.playerName,

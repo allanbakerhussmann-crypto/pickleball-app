@@ -706,8 +706,6 @@ export const DivisionSettingsTab: React.FC<DivisionSettingsTabProps> = ({
             <StyledInput
               type="text"
               defaultValue={activeDivision.name}
-              value=""
-              onChange={() => {}}
               onBlur={e => {
                 if (e.target.value !== activeDivision.name) {
                   handleUpdateDivisionSettings({ name: e.target.value });

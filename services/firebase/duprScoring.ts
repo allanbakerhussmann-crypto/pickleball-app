@@ -41,6 +41,7 @@ import {
   canCorrectResult,
   validateSignerIsOpposingTeam,
 } from '../../utils/scorePermissions';
+import { updatePoolResultsOnMatchComplete } from './poolResults';
 
 // ============================================
 // ERROR TYPES
@@ -438,7 +439,27 @@ export async function finaliseResult(
     }
 
     transaction.update(matchRef, updates);
+
+    // Return match data for pool results update (can't do async inside transaction)
+    return { match, updates, now };
   });
+
+  // Update pool results after transaction completes (for tournament pool matches)
+  if (eventType === 'tournament') {
+    // Re-fetch the match to get divisionId and poolGroup
+    const matchSnap = await getDoc(matchRef);
+    if (matchSnap.exists()) {
+      const completedMatch = { id: matchSnap.id, ...matchSnap.data() } as Match;
+      if (completedMatch.divisionId && completedMatch.poolGroup) {
+        try {
+          await updatePoolResultsOnMatchComplete(eventId, completedMatch.divisionId, completedMatch);
+        } catch (err) {
+          console.error('Failed to update pool results:', err);
+          // Don't throw - match is already finalized, pool update is secondary
+        }
+      }
+    }
+  }
 }
 
 /**

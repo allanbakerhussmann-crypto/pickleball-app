@@ -253,12 +253,9 @@ export function generatePoolStage(config: PoolPlayConfig): PoolPlayResult {
         if (!pairing.sideA || !pairing.sideB) continue; // Skip byes
 
         // CRITICAL: Validate teams are different (prevent data corruption)
+        // Only check by ID - names can legitimately match (e.g., two "John Smith" teams)
         if (pairing.sideA.id === pairing.sideB.id) {
           console.error(`[Pool Play] Skipping invalid pairing: same team ID on both sides: ${pairing.sideA.id}`);
-          continue;
-        }
-        if (pairing.sideA.name.toLowerCase() === pairing.sideB.name.toLowerCase()) {
-          console.error(`[Pool Play] Skipping invalid pairing: same team name on both sides: ${pairing.sideA.name}`);
           continue;
         }
 

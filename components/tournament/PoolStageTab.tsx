@@ -22,8 +22,6 @@ interface PoolStageTabProps {
   handleGenerateSchedule: () => void;
   deletePoolMatches: (tournamentId: string, divisionId: string) => Promise<number | void>;
   savePoolAssignments: (tournamentId: string, divisionId: string, assignments: any) => Promise<void>;
-  setPendingStandings: (standings: any[]) => void;
-  setShowMedalConfirmModal: (show: boolean) => void;
 }
 
 // Glass card component matching other tabs
@@ -100,26 +98,20 @@ const CheckIcon = () => (
   </svg>
 );
 
-const SparklesIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-  </svg>
-);
-
 export const PoolStageTab: React.FC<PoolStageTabProps> = ({
   tournament,
   activeDivision,
   divisionTeams,
   divisionMatches,
-  standings,
+  standings: _standings,
   getTeamDisplayName,
   getTeamPlayers,
   handleGenerateSchedule,
   deletePoolMatches,
   savePoolAssignments,
-  setPendingStandings,
-  setShowMedalConfirmModal,
 }) => {
+  // _standings passed for potential future use
+  void _standings;
   // Filter pool matches
   const poolMatches = (divisionMatches || []).filter(m =>
     m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
@@ -172,33 +164,15 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
         subtitle={allPoolsComplete ? 'All pools complete' : `${completedPoolMatches.length}/${poolMatches.length} matches played`}
         icon={<TrophyIcon />}
         badge={
-          <button
-            onClick={() => {
-              setPendingStandings(standings);
-              setShowMedalConfirmModal(true);
-            }}
-            disabled={poolMatches.length === 0 || !allPoolsComplete || isBracketGenerated}
-            className={`
-              group relative overflow-hidden
-              inline-flex items-center gap-2 px-4 py-2 rounded-lg
-              text-sm font-semibold
-              transition-all duration-300 ease-out
-              ${isBracketGenerated
-                ? 'bg-gray-700/50 text-gray-400 cursor-not-allowed'
-                : poolMatches.length === 0 || !allPoolsComplete
-                  ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 text-white shadow-lg shadow-purple-500/20'}
-            `}
-            title={isBracketGenerated ? 'Medal bracket already generated' : undefined}
-          >
-            {!isBracketGenerated && poolMatches.length > 0 && allPoolsComplete && (
-              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent transform -skew-x-12 -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
-              </div>
-            )}
-            <SparklesIcon />
-            <span className="relative">{isBracketGenerated ? 'Bracket Generated' : 'Generate Medal Bracket'}</span>
-          </button>
+          allPoolsComplete ? (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-lime-500/20 text-lime-400 border border-lime-500/30">
+              Pool Stage Complete
+            </span>
+          ) : isBracketGenerated ? (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30">
+              Bracket Generated
+            </span>
+          ) : null
         }
       >
         <PoolGroupStandings

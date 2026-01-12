@@ -24,8 +24,9 @@
  * VERSION: V07.28
  */
 
-import { doc, updateDoc, getDoc, getDocs, collection } from '@firebase/firestore';
+import { doc, updateDoc, getDoc, getDocs, collection, query, limit } from '@firebase/firestore';
 import { db } from '../firebase/config';
+import type { UserProfile } from '../../types';
 import type {
   BoxLeagueWeek,
   WeekAbsence,
@@ -228,7 +229,8 @@ export async function assignSubstitute(
   weekNumber: number,
   absentPlayerId: string,
   substitutePlayerId: string,
-  _assignedByUserId: string
+  _assignedByUserId: string,
+  substituteName?: string
 ): Promise<void> {
   const week = await getWeek(leagueId, weekNumber);
 
@@ -249,11 +251,12 @@ export async function assignSubstitute(
     throw new Error('No absence declared for this player');
   }
 
-  // Update absence with substitute
+  // Update absence with substitute (including name for display)
   const updatedAbsences = [...absences];
   updatedAbsences[absenceIndex] = {
     ...updatedAbsences[absenceIndex],
     substituteId: substitutePlayerId,
+    substituteName: substituteName,
   };
 
   await updateDoc(getWeekDoc(leagueId, weekNumber), {
@@ -384,7 +387,17 @@ export async function canBeSubstitute(
 }
 
 /**
- * Get list of eligible substitutes for an absent player
+ * Eligible substitute info with full details
+ */
+export interface EligibleSubstitute {
+  id: string;
+  name: string;
+  duprId?: string;
+  duprDoublesRating?: number;
+}
+
+/**
+ * Get list of eligible substitutes for an absent player (IDs only - legacy)
  */
 export async function getEligibleSubstitutes(
   leagueId: string,
@@ -398,34 +411,109 @@ export async function getEligibleSubstitutes(
     subMustHaveDuprConsent: boolean;
   }
 ): Promise<string[]> {
-  // Find absent player's box
-  const absentPlayerBox = await getPlayerBox(leagueId, absentPlayerId, week);
+  const subs = await getEligibleSubstitutesWithDetails(leagueId, absentPlayerId, week, settings);
+  return subs.map(s => s.id);
+}
 
-  if (!absentPlayerBox) {
-    return [];
+/**
+ * Get list of eligible substitutes with full details (name, DUPR info)
+ *
+ * Searches ALL users in the database (not just league members) who are:
+ * - NOT already playing in this week (not assigned to any box)
+ * - Meet DUPR requirements if league requires it
+ *
+ * @param searchQuery - Optional search query to filter by name (for large databases)
+ */
+export async function getEligibleSubstitutesWithDetails(
+  _leagueId: string,
+  absentPlayerId: string,
+  week: BoxLeagueWeek,
+  settings: {
+    subMustBeMember: boolean;
+    subAllowedFromBoxes: 'same_only' | 'same_or_lower' | 'any';
+    subMaxRatingGap?: number;
+    subMustHaveDuprLinked: boolean;
+    subMustHaveDuprConsent: boolean;
+  },
+  searchQuery?: string
+): Promise<EligibleSubstitute[]> {
+  // Get all player IDs who are already playing this week
+  const playersThisWeek = new Set<string>();
+  for (const box of week.boxAssignments || []) {
+    for (const playerId of box.playerIds) {
+      playersThisWeek.add(playerId);
+    }
   }
 
-  // Get all league members
-  const members = await getAllMembers(leagueId);
-  const eligible: string[] = [];
-
-  for (const member of members) {
-    if (member.odUserId === absentPlayerId) {
-      continue; // Skip the absent player
-    }
-
-    const result = await canBeSubstitute(
-      leagueId,
-      member.odUserId,
-      absentPlayerBox,
-      settings,
-      week
-    );
-
-    if (result.eligible) {
-      eligible.push(member.odUserId);
+  // Also exclude players who are already assigned as substitutes this week
+  for (const absence of week.absences || []) {
+    if (absence.substituteId) {
+      playersThisWeek.add(absence.substituteId);
     }
   }
+
+  // Search all users in the database
+  const usersRef = collection(db, 'users');
+  let usersQuery;
+
+  if (searchQuery && searchQuery.trim()) {
+    // If search query provided, we'll filter client-side since Firestore
+    // doesn't support case-insensitive partial matching
+    usersQuery = query(usersRef, limit(500));
+  } else {
+    // Get first 100 users (for initial load)
+    usersQuery = query(usersRef, limit(100));
+  }
+
+  const snapshot = await getDocs(usersQuery);
+  const eligible: EligibleSubstitute[] = [];
+  const searchLower = searchQuery?.toLowerCase().trim() || '';
+
+  for (const docSnap of snapshot.docs) {
+    const user = docSnap.data() as UserProfile;
+    const userId = docSnap.id;
+
+    // Skip if already playing this week
+    if (playersThisWeek.has(userId)) {
+      continue;
+    }
+
+    // Skip the absent player themselves
+    if (userId === absentPlayerId) {
+      continue;
+    }
+
+    // Apply search filter if provided
+    if (searchLower) {
+      const nameMatch = user.displayName?.toLowerCase().includes(searchLower);
+      const emailMatch = user.email?.toLowerCase().includes(searchLower);
+      const duprMatch = user.duprId?.toLowerCase().includes(searchLower);
+
+      if (!nameMatch && !emailMatch && !duprMatch) {
+        continue;
+      }
+    }
+
+    // Check DUPR requirement
+    if (settings.subMustHaveDuprLinked && !user.duprId) {
+      continue;
+    }
+
+    // Build display name
+    const displayName = user.displayName ||
+                       user.email?.split('@')[0] ||
+                       'Unknown';
+
+    eligible.push({
+      id: userId,
+      name: displayName,
+      duprId: user.duprId,
+      duprDoublesRating: user.duprDoublesRating,
+    });
+  }
+
+  // Sort by name
+  eligible.sort((a, b) => a.name.localeCompare(b.name));
 
   return eligible;
 }
@@ -496,11 +584,6 @@ async function getMember(
   }
 
   return memberDoc.data() as BoxLeagueMember;
-}
-
-async function getAllMembers(leagueId: string): Promise<BoxLeagueMember[]> {
-  const snapshot = await getDocs(collection(db, 'leagues', leagueId, 'members'));
-  return snapshot.docs.map((d) => d.data() as BoxLeagueMember);
 }
 
 async function getPlayerBox(

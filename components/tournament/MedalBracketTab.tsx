@@ -28,6 +28,11 @@ interface MedalBracketTabProps {
   localMedalSettings: any;
   setLocalMedalSettings: (fn: (prev: any) => any) => void;
   handleSaveMedalRules: () => Promise<void>;
+  /** For generate bracket button */
+  standings?: any[];
+  setPendingStandings?: (standings: any[]) => void;
+  setShowMedalConfirmModal?: (show: boolean) => void;
+  allPoolsComplete?: boolean;
 }
 
 // Glass card component matching other tabs
@@ -84,6 +89,12 @@ const SettingsIcon = () => (
   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+  </svg>
+);
+
+const SparklesIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
   </svg>
 );
 
@@ -741,6 +752,10 @@ export const MedalBracketTab: React.FC<MedalBracketTabProps> = ({
   localMedalSettings,
   setLocalMedalSettings,
   handleSaveMedalRules,
+  standings,
+  setPendingStandings,
+  setShowMedalConfirmModal,
+  allPoolsComplete,
 }) => {
   // _tournament and _isVerified are passed for potential future use
   void _tournament;
@@ -841,8 +856,302 @@ export const MedalBracketTab: React.FC<MedalBracketTabProps> = ({
     }
   };
 
+  // Check if we can generate bracket
+  const canGenerateBracket = !isBracketLocked && allPoolsComplete && standings && standings.length > 0;
+
   return (
     <div className="space-y-6">
+      {/* Generate Medal Bracket Section - shown when bracket not generated */}
+      {!isBracketLocked && isOrganizer && (
+        <SettingsCard
+          title="Generate Medal Bracket"
+          subtitle={allPoolsComplete ? 'Pool stage complete - ready to generate' : 'Waiting for pool stage to complete'}
+          icon={<SparklesIcon />}
+          badge={allPoolsComplete ? (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-lime-500/20 text-lime-400 border border-lime-500/30">
+              Ready
+            </span>
+          ) : (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
+              Waiting
+            </span>
+          )}
+        >
+          {/* Helper message */}
+          <div className="mb-4 p-4 rounded-lg bg-blue-500/10 border border-blue-500/20">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-blue-300 font-medium text-sm">Review bracket rules before generating</p>
+                <p className="text-gray-400 text-xs mt-1">
+                  Check the settings below to configure game rules for each bracket round.
+                  These settings will be locked once the bracket is generated.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Generate button */}
+          <button
+            onClick={() => {
+              if (setPendingStandings && setShowMedalConfirmModal && standings) {
+                setPendingStandings(standings);
+                setShowMedalConfirmModal(true);
+              }
+            }}
+            disabled={!canGenerateBracket}
+            className={`
+              group relative overflow-hidden w-full
+              inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl
+              text-base font-bold
+              transition-all duration-300 ease-out
+              ${!canGenerateBracket
+                ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
+                : 'bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 text-white shadow-lg shadow-purple-500/20'}
+            `}
+          >
+            {canGenerateBracket && (
+              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent transform -skew-x-12 -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
+              </div>
+            )}
+            <SparklesIcon />
+            <span className="relative">
+              {!allPoolsComplete
+                ? 'Complete pool stage first'
+                : 'Generate Medal Bracket'}
+            </span>
+          </button>
+        </SettingsCard>
+      )}
+
+      {/* Medal Match Rules - Always visible for organizers, shown BEFORE bracket when not generated */}
+      {isOrganizer && !isBracketLocked && (
+        <SettingsCard
+          title="Medal Match Rules"
+          subtitle="Configure game settings for each bracket round"
+          icon={<SettingsIcon />}
+        >
+          {/* Pool Play reference */}
+          <div className="p-4 rounded-lg bg-gray-800/50 border border-gray-700/30">
+            <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">Pool Play Rules (Reference)</div>
+            <div className="flex gap-6 text-sm">
+              <span className="text-gray-300">Best Of: <span className="text-white font-medium">{poolSettings.bestOf}</span></span>
+              <span className="text-gray-300">Points: <span className="text-white font-medium">{poolSettings.points}</span></span>
+              <span className="text-gray-300">Win By: <span className="text-white font-medium">{poolSettings.winBy}</span></span>
+            </div>
+          </div>
+
+          {/* Round-specific settings - Always visible */}
+          <div className="mt-6 space-y-4">
+            <div className="text-xs text-gray-500 uppercase tracking-wider">Medal Round Rules</div>
+
+            {/* Settings Grid */}
+            <div className="grid gap-3">
+                {/* Quarter-Finals */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-gray-800/30 border border-gray-700/30">
+                  <span className="text-white font-medium">Quarter-Finals</span>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Best Of</span>
+                      <StyledSelect
+                        value={localMedalSettings.quarterFinals?.bestOf || 1}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          quarterFinals: { ...prev.quarterFinals, bestOf: v },
+                        }))}
+                        options={[{ value: 1, label: '1' }, { value: 3, label: '3' }, { value: 5, label: '5' }]}
+                        disabled={false}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Points</span>
+                      <StyledSelect
+                        value={localMedalSettings.quarterFinals?.pointsToWin || 11}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          quarterFinals: { ...prev.quarterFinals, pointsToWin: v },
+                        }))}
+                        options={[{ value: 11, label: '11' }, { value: 15, label: '15' }, { value: 21, label: '21' }]}
+                        disabled={false}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Win By</span>
+                      <StyledSelect
+                        value={localMedalSettings.quarterFinals?.winBy || 2}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          quarterFinals: { ...prev.quarterFinals, winBy: v },
+                        }))}
+                        options={[{ value: 1, label: '1' }, { value: 2, label: '2' }]}
+                        disabled={false}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Semi-Finals */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-gray-800/30 border border-gray-700/30">
+                  <span className="text-white font-medium">Semi-Finals</span>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Best Of</span>
+                      <StyledSelect
+                        value={localMedalSettings.semiFinals?.bestOf || 1}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          semiFinals: { ...prev.semiFinals, bestOf: v },
+                        }))}
+                        options={[{ value: 1, label: '1' }, { value: 3, label: '3' }, { value: 5, label: '5' }]}
+                        disabled={false}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Points</span>
+                      <StyledSelect
+                        value={localMedalSettings.semiFinals?.pointsToWin || 11}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          semiFinals: { ...prev.semiFinals, pointsToWin: v },
+                        }))}
+                        options={[{ value: 11, label: '11' }, { value: 15, label: '15' }, { value: 21, label: '21' }]}
+                        disabled={false}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Win By</span>
+                      <StyledSelect
+                        value={localMedalSettings.semiFinals?.winBy || 2}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          semiFinals: { ...prev.semiFinals, winBy: v },
+                        }))}
+                        options={[{ value: 1, label: '1' }, { value: 2, label: '2' }]}
+                        disabled={false}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Gold Medal Match */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-yellow-900/20 border border-yellow-500/30">
+                  <div className="flex items-center gap-2">
+                    <span className="text-yellow-400 font-bold">🥇</span>
+                    <span className="text-yellow-400 font-medium">Gold Match</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Best Of</span>
+                      <StyledSelect
+                        value={localMedalSettings.finals?.bestOf || 3}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          finals: { ...prev.finals, bestOf: v },
+                        }))}
+                        options={[{ value: 1, label: '1' }, { value: 3, label: '3' }, { value: 5, label: '5' }]}
+                        disabled={false}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Points</span>
+                      <StyledSelect
+                        value={localMedalSettings.finals?.pointsToWin || 11}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          finals: { ...prev.finals, pointsToWin: v },
+                        }))}
+                        options={[{ value: 11, label: '11' }, { value: 15, label: '15' }, { value: 21, label: '21' }]}
+                        disabled={false}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Win By</span>
+                      <StyledSelect
+                        value={localMedalSettings.finals?.winBy || 2}
+                        onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                          ...prev,
+                          finals: { ...prev.finals, winBy: v },
+                        }))}
+                        options={[{ value: 1, label: '1' }, { value: 2, label: '2' }]}
+                        disabled={false}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bronze Medal Match */}
+                {showBronzeRow && (
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-amber-900/20 border border-amber-500/30">
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-400 font-bold">🥉</span>
+                      <span className="text-amber-400 font-medium">Bronze Match</span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500">Best Of</span>
+                        <StyledSelect
+                          value={localMedalSettings.bronze?.bestOf || 3}
+                          onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                            ...prev,
+                            bronze: { ...prev.bronze, bestOf: v },
+                          }))}
+                          options={[{ value: 1, label: '1' }, { value: 3, label: '3' }, { value: 5, label: '5' }]}
+                          disabled={false}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500">Points</span>
+                        <StyledSelect
+                          value={localMedalSettings.bronze?.pointsToWin || 11}
+                          onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                            ...prev,
+                            bronze: { ...prev.bronze, pointsToWin: v },
+                          }))}
+                          options={[{ value: 11, label: '11' }, { value: 15, label: '15' }, { value: 21, label: '21' }]}
+                          disabled={false}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500">Win By</span>
+                        <StyledSelect
+                          value={localMedalSettings.bronze?.winBy || 2}
+                          onChange={(v) => setLocalMedalSettings((prev: any) => ({
+                            ...prev,
+                            bronze: { ...prev.bronze, winBy: v },
+                          }))}
+                          options={[{ value: 1, label: '1' }, { value: 2, label: '2' }]}
+                          disabled={false}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+            {/* Save Button */}
+            <div className="pt-4">
+              <button
+                onClick={handleSaveMedalRules}
+                className="
+                  px-6 py-2.5 rounded-lg font-semibold text-sm
+                  bg-gradient-to-r from-lime-600 to-lime-500
+                  hover:from-lime-500 hover:to-lime-400
+                  text-gray-900 shadow-lg shadow-lime-500/20
+                  transition-all duration-200
+                "
+              >
+                Save Medal Rules
+              </button>
+            </div>
+          </div>
+        </SettingsCard>
+      )}
+
       {/* Main Medal Bracket */}
       <SettingsCard
         title="Medal Bracket"
@@ -894,8 +1203,8 @@ export const MedalBracketTab: React.FC<MedalBracketTabProps> = ({
         </SettingsCard>
       )}
 
-      {/* Medal Match Rules - NOW BELOW THE BRACKET */}
-      {permissions.isFullAdmin && (
+      {/* Medal Match Rules - Shown AFTER bracket when locked (read-only view) */}
+      {isOrganizer && isBracketLocked && (
         <SettingsCard
           title="Medal Match Rules"
           subtitle="Configure game settings for each bracket round"

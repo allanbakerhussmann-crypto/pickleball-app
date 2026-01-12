@@ -1850,13 +1850,18 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               handleGenerateSchedule={handleGenerateSchedule}
               deletePoolMatches={deletePoolMatches}
               savePoolAssignments={savePoolAssignments}
-              setPendingStandings={setPendingStandings}
-              setShowMedalConfirmModal={setShowMedalConfirmModal}
             />
           )}
 
           {/* Medal Bracket Tab - for pool_play_medals format */}
           {adminTab === 'medal-bracket' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (() => {
+            // Calculate allPoolsComplete for generate button
+            const poolMatches = (divisionMatches || []).filter(m =>
+              m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
+            );
+            const completedPoolMatches = poolMatches.filter(m => m.status === 'completed');
+            const allPoolsCompleteLocal = poolMatches.length > 0 && completedPoolMatches.length === poolMatches.length;
+
             // Save medal rules handler
             const handleSaveMedalRulesLocal = async () => {
               if (!activeDivision) return;
@@ -1915,6 +1920,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 localMedalSettings={localMedalSettings}
                 setLocalMedalSettings={setLocalMedalSettings}
                 handleSaveMedalRules={handleSaveMedalRulesLocal}
+                standings={standings}
+                setPendingStandings={setPendingStandings}
+                setShowMedalConfirmModal={setShowMedalConfirmModal}
+                allPoolsComplete={allPoolsCompleteLocal}
               />
             );
           })()}

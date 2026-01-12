@@ -309,6 +309,24 @@ export const completeMatchWithAdvancement = async (
   }
 
   await batch.commit();
+
+  // Update pool results if this is a pool match
+  if (match.divisionId && match.poolGroup) {
+    try {
+      const completedMatch: Match = {
+        ...match,
+        status: 'completed',
+        winnerId,
+        scores: scoresModern,
+        completedAt: now,
+        updatedAt: now,
+      };
+      await updatePoolResultsOnMatchComplete(tournamentId, match.divisionId, completedMatch);
+    } catch (err) {
+      console.error('[completeMatchWithAdvancement] Failed to update pool results:', err);
+      // Don't throw - match is already completed, pool update is secondary
+    }
+  }
 };
 
 /**
@@ -2655,14 +2673,35 @@ export const simulatePoolCompletion = async (
     // V06.30/V06.31: Determine match winner based on games won, using actual team IDs
     const winnerId = gamesWonA >= gamesNeeded ? sideAId : sideBId;
 
+    // V07.29: Get winner name from match data for officialResult
+    const sideAName = match.sideA?.name || match.teamAName || 'Team A';
+    const sideBName = match.sideB?.name || match.teamBName || 'Team B';
+    const winnerName = winnerId === sideAId ? sideAName : sideBName;
+
+    // V07.29: Create officialResult for standings calculation compatibility
+    // Without this, matchCountsForStandings() returns false and standings show zeros
+    const officialResult = {
+      scores,
+      winnerId,
+      winnerName,
+      finalisedByUserId: 'test-simulation',
+      finalisedAt: now,
+      version: 1,
+    };
+
     batch.update(docSnap.ref, {
       scores,
       status: 'completed',
       winnerId,
       winnerTeamId: winnerId,  // Legacy compatibility
+      winnerName,              // Add for consistency
       completedAt: now,
       updatedAt: now,
       testData: true,
+      // V07.29: Add officialResult for standings calculation
+      officialResult,
+      scoreState: 'official',
+      scoreLocked: true,
     });
   });
 
@@ -2684,15 +2723,19 @@ export const simulatePoolCompletion = async (
     const poolMatch = snapshot.docs.find(d => d.data().poolGroup === pool);
     if (poolMatch) {
       const matchData = poolMatch.data();
+      // V07.29: Explicitly include poolKey and divisionId for robust pool results update
       const completedMatch: Match = {
         id: poolMatch.id,
         ...matchData,
+        poolKey: matchData.poolKey,        // EXPLICIT: include poolKey
+        poolGroup: matchData.poolGroup,    // Keep for backwards compat
+        divisionId: divisionId,            // EXPLICIT: include divisionId
         status: 'completed',
         completedAt: now,
         updatedAt: now,
       } as Match;
 
-      console.log(`[simulatePoolCompletion] Updating pool results for ${pool}`);
+      console.log(`[simulatePoolCompletion] Updating pool results for ${pool} (poolKey: ${matchData.poolKey})`);
       await updatePoolResultsOnMatchComplete(tournamentId, divisionId, completedMatch);
     }
   }

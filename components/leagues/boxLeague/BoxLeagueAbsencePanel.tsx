@@ -27,9 +27,10 @@ import {
   recordNoShowAbsence,
   assignSubstitute,
   removeSubstitute,
-  getEligibleSubstitutes,
+  getEligibleSubstitutesWithDetails,
   formatPolicyName,
 } from '../../../services/rotatingDoublesBox';
+import type { EligibleSubstitute } from '../../../services/rotatingDoublesBox';
 
 // ============================================
 // TYPES
@@ -59,8 +60,8 @@ interface SubstituteAssignmentModalProps {
   onClose: () => void;
   week: BoxLeagueWeek;
   leagueId: string;
+  league: League;
   absence: WeekAbsence;
-  eligibleSubstitutes: { id: string; name: string; duprId?: string | null }[];
   isDuprLeague: boolean;
   onSuccess: () => void;
 }
@@ -220,14 +221,54 @@ const SubstituteAssignmentModal: React.FC<SubstituteAssignmentModalProps> = ({
   onClose,
   week,
   leagueId,
+  league,
   absence,
-  eligibleSubstitutes,
   isDuprLeague,
   onSuccess,
 }) => {
   const [selectedSubId, setSelectedSubId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [substitutes, setSubstitutes] = useState<EligibleSubstitute[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  // Fetch substitutes when search changes (with debounce)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const fetchSubs = async () => {
+      setIsLoading(true);
+      try {
+        const settings = league.settings?.rotatingDoublesBox?.settings?.substituteEligibility || {
+          subMustBeMember: false,
+          subAllowedFromBoxes: 'same_or_lower' as const,
+          subMustHaveDuprLinked: isDuprLeague,
+          subMustHaveDuprConsent: isDuprLeague,
+        };
+
+        const subs = await getEligibleSubstitutesWithDetails(
+          leagueId,
+          absence.playerId,
+          week,
+          settings,
+          searchQuery.trim() || undefined
+        );
+        setSubstitutes(subs);
+        setHasSearched(true);
+      } catch (err) {
+        console.error('Failed to fetch substitutes:', err);
+        setSubstitutes([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    // Debounce search
+    const timer = setTimeout(fetchSubs, searchQuery ? 300 : 0);
+    return () => clearTimeout(timer);
+  }, [isOpen, searchQuery, leagueId, absence.playerId, week, league, isDuprLeague]);
 
   if (!isOpen) return null;
 
@@ -238,7 +279,11 @@ const SubstituteAssignmentModal: React.FC<SubstituteAssignmentModalProps> = ({
     setError(null);
 
     try {
-      await assignSubstitute(leagueId, week.weekNumber, absence.playerId, selectedSubId, absence.declaredByUserId);
+      // Find the selected substitute's name
+      const selectedSub = substitutes.find(s => s.id === selectedSubId);
+      const subName = selectedSub?.name || 'Unknown';
+
+      await assignSubstitute(leagueId, week.weekNumber, absence.playerId, selectedSubId, absence.declaredByUserId, subName);
       onSuccess();
       onClose();
     } catch (err) {
@@ -268,18 +313,67 @@ const SubstituteAssignmentModal: React.FC<SubstituteAssignmentModalProps> = ({
           </p>
         </div>
 
+        {/* Search input */}
+        <div className="mb-3">
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search all users by name or DUPR ID..."
+              className="w-full bg-gray-900 border border-gray-700 text-white pl-9 pr-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-lime-500 text-sm"
+            />
+            {isLoading ? (
+              <div className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4">
+                <div className="animate-spin h-4 w-4 border-2 border-lime-500 border-t-transparent rounded-full"></div>
+              </div>
+            ) : (
+              <svg
+                className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+            )}
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-300"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Searching users NOT playing this week
+          </p>
+        </div>
+
         {/* Eligible substitutes list */}
         <div className="mb-4">
           <label className="block text-sm font-medium text-gray-300 mb-2">
-            Eligible Substitutes ({eligibleSubstitutes.length})
+            {isLoading ? 'Searching...' : `Available Substitutes (${substitutes.length})`}
           </label>
-          {eligibleSubstitutes.length === 0 ? (
+          {isLoading ? (
+            <div className="bg-gray-900/50 rounded-lg p-4 flex items-center justify-center">
+              <div className="animate-spin h-6 w-6 border-2 border-lime-500 border-t-transparent rounded-full"></div>
+            </div>
+          ) : substitutes.length === 0 ? (
             <div className="bg-gray-900/50 rounded-lg p-4 text-center text-gray-400 text-sm">
-              No eligible substitutes available
+              {hasSearched && searchQuery
+                ? `No users found matching "${searchQuery}"`
+                : 'Type to search for available substitutes'}
             </div>
           ) : (
             <div className="space-y-2 max-h-60 overflow-y-auto">
-              {eligibleSubstitutes.map((sub) => (
+              {substitutes.map((sub) => (
                 <label
                   key={sub.id}
                   className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${
@@ -297,9 +391,16 @@ const SubstituteAssignmentModal: React.FC<SubstituteAssignmentModalProps> = ({
                       onChange={() => setSelectedSubId(sub.id)}
                       className="accent-lime-500"
                     />
-                    <span className={selectedSubId === sub.id ? 'text-lime-400' : 'text-white'}>
-                      {sub.name}
-                    </span>
+                    <div>
+                      <span className={selectedSubId === sub.id ? 'text-lime-400' : 'text-white'}>
+                        {sub.name}
+                      </span>
+                      {sub.duprDoublesRating && (
+                        <span className="ml-2 text-xs text-gray-400">
+                          ({sub.duprDoublesRating.toFixed(2)})
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {isDuprLeague && (
                     <span className={`text-xs px-2 py-0.5 rounded ${
@@ -448,7 +549,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                 Reason: {myAbsence.reason || 'Not specified'}
                 {myAbsence.substituteId && (
                   <span className="ml-2">
-                    • Ghost: {memberMap.get(myAbsence.substituteId)?.displayName || 'Unknown'}
+                    • Ghost: {myAbsence.substituteName || 'Unknown'}
                   </span>
                 )}
               </p>
@@ -515,7 +616,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                         {absence.isNoShow ? '❌ No-show' : `📋 ${absence.reason || 'Personal'}`}
                         {absence.substituteId && (
                           <span className="ml-2 text-lime-400">
-                            → Ghost: {memberMap.get(absence.substituteId)?.displayName || 'Unknown'}
+                            → Ghost: {absence.substituteName || 'Unknown'}
                           </span>
                         )}
                       </p>
@@ -598,7 +699,6 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
   const [loading, setLoading] = useState(true);
   const [declaringFor, setDeclaringFor] = useState<BoxLeagueWeek | null>(null);
   const [assigningSubFor, setAssigningSubFor] = useState<{ week: BoxLeagueWeek; absence: WeekAbsence } | null>(null);
-  const [eligibleSubs, setEligibleSubs] = useState<{ id: string; name: string; duprId?: string | null }[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Get absence policy from league settings
@@ -655,39 +755,9 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
     }
   };
 
-  const handleAssignSub = async (week: BoxLeagueWeek, absence: WeekAbsence) => {
-    // Check if DUPR league - require DUPR linked for substitutes
-    const isDuprLeague = league.settings?.duprSettings?.mode === 'required';
-
-    // Fetch eligible substitutes with DUPR requirement if needed
-    const settings = league.settings?.rotatingDoublesBox?.settings?.substituteEligibility || {
-      subMustBeMember: false,
-      subAllowedFromBoxes: 'same_or_lower' as const,
-      subMustHaveDuprLinked: isDuprLeague, // Require DUPR in DUPR leagues
-      subMustHaveDuprConsent: isDuprLeague,
-    };
-
-    try {
-      const eligibleIds = await getEligibleSubstitutes(leagueId, absence.playerId, week, settings);
-
-      // Create lookup maps for both userId and id fields
-      const memberByUserId = new Map(members.map(m => [m.userId, m]));
-      const memberById = new Map(members.map(m => [m.id, m]));
-
-      const subs = eligibleIds.map(id => {
-        // Try both userId and id fields for lookup
-        const member = memberByUserId.get(id) || memberById.get(id);
-        return {
-          id,
-          name: member?.displayName || 'Unknown',
-          duprId: member?.duprId,
-        };
-      });
-      setEligibleSubs(subs);
-      setAssigningSubFor({ week, absence });
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to fetch eligible substitutes');
-    }
+  const handleAssignSub = (week: BoxLeagueWeek, absence: WeekAbsence) => {
+    // Just open the modal - it will handle fetching substitutes with search
+    setAssigningSubFor({ week, absence });
   };
 
   const handleRemoveSub = async (week: BoxLeagueWeek, absence: WeekAbsence) => {
@@ -823,8 +893,8 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
           onClose={() => setAssigningSubFor(null)}
           week={assigningSubFor.week}
           leagueId={leagueId}
+          league={league}
           absence={assigningSubFor.absence}
-          eligibleSubstitutes={eligibleSubs}
           isDuprLeague={league.settings?.duprSettings?.mode === 'required'}
           onSuccess={() => setAssigningSubFor(null)}
         />
