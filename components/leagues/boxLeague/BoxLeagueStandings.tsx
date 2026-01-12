@@ -1,12 +1,15 @@
 /**
- * Box League Standings Component V07.42
+ * Box League Standings Component V07.43
  *
  * Complete standings UI for rotating doubles box leagues.
  * Shows Overall season ladder + Weekly tabs with per-box standings.
  * Includes promotion/relegation indicators, movement summaries, and tiebreak explanations.
  *
+ * V07.43: Season Ladder now shows medal icons (🥇 for box wins, 🥈 for 2nd place)
+ *         instead of W/L/Diff/Trend columns.
+ *
  * FILE LOCATION: components/leagues/boxLeague/BoxLeagueStandings.tsx
- * VERSION: V07.42
+ * VERSION: V07.43
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -400,13 +403,33 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
     .filter(w => w.state === 'finalized' || w.state === 'active' || w.state === 'closing')
     .sort((a, b) => b.weekNumber - a.weekNumber)[0];
 
-  // Get previous week for trend calculation
-  const previousWeek = [...weeks]
-    .filter(w => w.state === 'finalized' && w.weekNumber < (latestWeek?.weekNumber || 0))
-    .sort((a, b) => b.weekNumber - a.weekNumber)[0];
-
   // Build player data with current box/position
   const memberMap = new Map(members.map(m => [m.userId, m]));
+
+  // V07.43: Calculate medal counts from all finalized weeks
+  const medalCounts = useMemo(() => {
+    const counts = new Map<string, { gold: number; silver: number }>();
+
+    // Loop through all finalized weeks with standings
+    for (const week of weeks) {
+      if (week.state !== 'finalized' || !week.standingsSnapshot?.boxes) continue;
+
+      for (const standing of week.standingsSnapshot.boxes) {
+        const current = counts.get(standing.playerId) || { gold: 0, silver: 0 };
+
+        // Gold = 1st in box, Silver = 2nd in box
+        if (standing.positionInBox === 1) {
+          current.gold += 1;
+        } else if (standing.positionInBox === 2) {
+          current.silver += 1;
+        }
+
+        counts.set(standing.playerId, current);
+      }
+    }
+
+    return counts;
+  }, [weeks]);
 
   const playerData = useMemo(() => {
     if (!latestWeek?.boxAssignments) return [];
@@ -417,11 +440,8 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
       currentBox: number;
       positionInBox: number;
       duprRating?: number;
-      trend: 'up' | 'down' | 'same';
-      // Season stats would come from aggregated match data
-      seasonWins: number;
-      seasonLosses: number;
-      seasonDiff: number;
+      goldMedals: number;
+      silverMedals: number;
     }[] = [];
 
     // Get current positions from latest week
@@ -429,27 +449,14 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
       box.playerIds.forEach((userId, index) => {
         const member = memberMap.get(userId);
         const rating = userRatings.get(userId);
+        const medals = medalCounts.get(userId) || { gold: 0, silver: 0 };
 
-        // Calculate trend from previous week movements
-        let trend: 'up' | 'down' | 'same' = 'same';
-        if (previousWeek?.movements) {
-          const movement = previousWeek.movements.find(m => m.playerId === userId);
-          if (movement) {
-            if (movement.reason === 'promotion') trend = 'up';
-            else if (movement.reason === 'relegation') trend = 'down';
-          }
-        }
-
-        // Get season stats and position from standings snapshot if available
-        let seasonWins = 0, seasonLosses = 0, seasonDiff = 0;
+        // Get position from standings snapshot if available
         let actualPosition = index + 1; // Fallback to array index
         if (latestWeek.standingsSnapshot?.boxes) {
           const standing = latestWeek.standingsSnapshot.boxes.find(s => s.playerId === userId);
           if (standing) {
-            seasonWins = standing.wins;
-            seasonLosses = standing.losses;
-            seasonDiff = standing.pointsFor - standing.pointsAgainst;
-            actualPosition = standing.positionInBox; // Use actual standings position
+            actualPosition = standing.positionInBox;
           }
         }
 
@@ -459,10 +466,8 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
           currentBox: box.boxNumber,
           positionInBox: actualPosition,
           duprRating: rating,
-          trend,
-          seasonWins,
-          seasonLosses,
-          seasonDiff,
+          goldMedals: medals.gold,
+          silverMedals: medals.silver,
         });
       });
     }
@@ -472,7 +477,10 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
       if (a.currentBox !== b.currentBox) return a.currentBox - b.currentBox;
       return a.positionInBox - b.positionInBox;
     });
-  }, [latestWeek, previousWeek, memberMap, userRatings]);
+  }, [latestWeek, memberMap, userRatings, medalCounts]);
+
+  // Count finalized weeks for context
+  const finalizedWeekCount = weeks.filter(w => w.state === 'finalized').length;
 
   if (playerData.length === 0) {
     return (
@@ -488,6 +496,7 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
         <h3 className="text-lg font-semibold text-white">Season Ladder</h3>
         <p className="text-sm text-gray-400">
           Based on Week {latestWeek?.weekNumber || 1} standings
+          {finalizedWeekCount > 0 && ` • ${finalizedWeekCount} week${finalizedWeekCount > 1 ? 's' : ''} completed`}
         </p>
       </div>
 
@@ -498,15 +507,15 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
             <th className="px-3 py-2 text-left">Player</th>
             <th className="px-3 py-2 text-center">Box • Pos</th>
             <th className="px-3 py-2 text-center w-16">DUPR</th>
-            <th className="px-3 py-2 text-center w-12">W</th>
-            <th className="px-3 py-2 text-center w-12">L</th>
-            <th className="px-3 py-2 text-center w-14">Diff</th>
-            <th className="px-3 py-2 text-center w-16">Trend</th>
+            <th className="px-3 py-2 text-left">Medals</th>
           </tr>
         </thead>
         <tbody>
           {playerData.map((player, index) => {
             const colors = getBoxColors(player.currentBox);
+            // Build medal string with repeated icons
+            const medalDisplay = '🥇'.repeat(player.goldMedals) + '🥈'.repeat(player.silverMedals);
+
             return (
               <tr
                 key={player.odUserId}
@@ -524,17 +533,8 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
                 <td className="px-3 py-2 text-center text-white/70 text-sm">
                   {player.duprRating?.toFixed(2) || '-'}
                 </td>
-                <td className="px-3 py-2 text-center text-green-400 font-medium">{player.seasonWins}</td>
-                <td className="px-3 py-2 text-center text-red-400 font-medium">{player.seasonLosses}</td>
-                <td className="px-3 py-2 text-center">
-                  <span className={player.seasonDiff > 0 ? 'text-green-400' : player.seasonDiff < 0 ? 'text-red-400' : 'text-gray-400'}>
-                    {player.seasonDiff > 0 ? '+' : ''}{player.seasonDiff}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-center">
-                  {player.trend === 'up' && <span className="text-green-400 font-bold">▲</span>}
-                  {player.trend === 'down' && <span className="text-red-400 font-bold">▼</span>}
-                  {player.trend === 'same' && <span className="text-gray-500">—</span>}
+                <td className="px-3 py-2 text-left text-lg">
+                  {medalDisplay || <span className="text-gray-500 text-sm">—</span>}
                 </td>
               </tr>
             );

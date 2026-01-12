@@ -1,9 +1,10 @@
 /**
- * LeagueScheduleManager Component V07.42
+ * LeagueScheduleManager Component V07.43
  *
  * Organizer tool to generate and manage league match schedules.
  * V07.39: Added box league weeks management with idempotent activation
  * V07.42: Added "Create Next Week" button for finalized weeks
+ * V07.43: Added BoxDraftWeekPanel for editing draft week assignments
  *
  * FILE LOCATION: components/leagues/LeagueScheduleManager.tsx
  */
@@ -26,10 +27,11 @@ import {
   finalizeWeek,
 } from '../../services/rotatingDoublesBox';
 import type { BoxLeagueWeek } from '../../types/rotatingDoublesBox';
-import { doc, updateDoc, collection, query, orderBy, onSnapshot } from '@firebase/firestore';
+import { doc, updateDoc, getDoc, collection, query, orderBy, onSnapshot } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
-import type { League, LeagueMember, LeagueMatch, LeagueDivision } from '../../types';
+import type { League, LeagueMember, LeagueMatch, LeagueDivision, UserProfile } from '../../types';
+import { BoxDraftWeekPanel } from './boxLeague';
 
 // ============================================
 // LOCAL TYPES
@@ -110,6 +112,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   // V07.39: Box league weeks state
   const [boxWeeks, setBoxWeeks] = useState<BoxLeagueWeek[]>([]);
   const [loadingWeekAction, setLoadingWeekAction] = useState<number | null>(null);
+
+  // V07.43: Draft week panel state
+  const [expandedDraftWeek, setExpandedDraftWeek] = useState<number | null>(null);
+  const [userRatings, setUserRatings] = useState<Map<string, number | undefined>>(new Map());
 
   // Get venue settings from league
   const venueSettings = (league.settings as any)?.venueSettings as LeagueVenueSettings | null;
@@ -326,6 +332,36 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
     return () => unsubscribe();
   }, [league.id, isRotatingBox, currentUserId]);
+
+  // V07.43: Fetch DUPR ratings for all members (for draft panel)
+  useEffect(() => {
+    if (!isRotatingBox) return;
+
+    const fetchRatings = async () => {
+      const ratings = new Map<string, number | undefined>();
+
+      for (const member of members) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', member.userId));
+          if (userDoc.exists()) {
+            const user = userDoc.data() as UserProfile;
+            if (user.duprId) {
+              const rating = user.duprDoublesRating ?? user.duprSinglesRating ?? undefined;
+              ratings.set(member.userId, rating);
+            }
+          }
+        } catch (err) {
+          // Ignore individual fetch errors
+        }
+      }
+
+      setUserRatings(ratings);
+    };
+
+    if (members.length > 0) {
+      fetchRatings();
+    }
+  }, [members, isRotatingBox]);
 
   // ============================================
   // V07.39: BOX WEEK HANDLERS
@@ -1138,6 +1174,18 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                                     {loadingWeekAction === week.weekNumber ? '...' : 'Recalculate Boxes'}
                                   </button>
                                 )}
+                                {/* V07.43: Edit Assignments */}
+                                <button
+                                  onClick={() => setExpandedDraftWeek(expandedDraftWeek === week.weekNumber ? null : week.weekNumber)}
+                                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                                    expandedDraftWeek === week.weekNumber
+                                      ? 'bg-blue-600 text-white'
+                                      : 'bg-gray-600 hover:bg-gray-500 text-white'
+                                  }`}
+                                  title="Edit box assignments before activation"
+                                >
+                                  {expandedDraftWeek === week.weekNumber ? 'Close Editor' : 'Edit Assignments'}
+                                </button>
                                 {/* Activate Week */}
                                 <button
                                   onClick={() => handleActivateWeek(week.weekNumber)}
@@ -1217,6 +1265,32 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                     );
                   })}
                 </div>
+              )}
+
+              {/* V07.43: Draft Week Panel - shown when a draft week is expanded */}
+              {expandedDraftWeek !== null && (
+                (() => {
+                  const selectedWeek = boxWeeks.find(w => w.weekNumber === expandedDraftWeek);
+                  if (!selectedWeek || selectedWeek.state !== 'draft') return null;
+
+                  return (
+                    <div className="mt-4">
+                      <BoxDraftWeekPanel
+                        leagueId={league.id}
+                        week={selectedWeek}
+                        members={members}
+                        userRatings={userRatings}
+                        isOrganizer={true}
+                        currentUserId={currentUserId}
+                        onClose={() => setExpandedDraftWeek(null)}
+                        onActivated={() => {
+                          setExpandedDraftWeek(null);
+                          onScheduleGenerated();
+                        }}
+                      />
+                    </div>
+                  );
+                })()
               )}
             </>
           ) : (
