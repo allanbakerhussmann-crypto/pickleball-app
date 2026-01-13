@@ -60,6 +60,7 @@ export {
   getCurrentWeek,
   canTransitionTo,
   activateWeek,
+  deactivateWeek,  // V07.40: For testing/fixing
   startClosing,
   finalizeWeek,
   recalculateWeekStandings,

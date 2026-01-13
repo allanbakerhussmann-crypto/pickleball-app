@@ -65,6 +65,11 @@ export type {
   RotationPattern,
   GeneratedPairing,
   PatternValidationResult,
+
+  // Substitute types (V07.44)
+  SubstituteStatus,
+  SubstitutionRecord,
+  LeagueSubstitute,
 } from './boxLeagueTypes';
 
 // ============================================

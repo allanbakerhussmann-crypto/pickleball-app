@@ -1,12 +1,14 @@
 /**
- * Rotating Box Player Manager Component V07.26
+ * Rotating Box Player Manager Component V07.45
  *
  * Displays box league standings in a clean table format with promotion/relegation indicators.
  * Shows players grouped by boxes with colored backgrounds.
  * Allows organizers to manage boxes when week is in draft state.
  *
+ * V07.45: Added substitute name lookup from week absences
+ *
  * FILE LOCATION: components/leagues/boxLeague/RotatingBoxPlayerManager.tsx
- * VERSION: V07.26
+ * VERSION: V07.45
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -129,6 +131,8 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [userRatings, setUserRatings] = useState<Map<string, number | undefined>>(new Map());
+  // V07.45: Fetched user names for players not in member list (substitutes)
+  const [fetchedUserNames, setFetchedUserNames] = useState<Map<string, string>>(new Map());
 
   // Fetch current week from boxWeeks collection
   useEffect(() => {
@@ -160,7 +164,7 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
     return () => unsubscribe();
   }, [leagueId]);
 
-  // Fetch DUPR ratings for all members
+  // Fetch DUPR ratings for all members - only show if they have official duprId
   useEffect(() => {
     const fetchRatings = async () => {
       const ratings = new Map<string, number | undefined>();
@@ -170,10 +174,11 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
           const userDoc = await getDoc(doc(db, 'users', member.userId));
           if (userDoc.exists()) {
             const user = userDoc.data() as UserProfile;
-            // Prefer doubles rating for box leagues
-            const rating = user.duprDoublesRating ?? user.ratingDoubles ??
-                          user.duprSinglesRating ?? user.ratingSingles ?? undefined;
-            ratings.set(member.userId, rating);
+            // Only show rating if user has official DUPR ID linked
+            if (user.duprId) {
+              const rating = user.duprDoublesRating ?? user.duprSinglesRating ?? undefined;
+              ratings.set(member.userId, rating);
+            }
           }
         } catch (err) {
           // Ignore individual fetch errors
@@ -187,6 +192,66 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
       fetchRatings();
     }
   }, [members]);
+
+  // V07.45: Fetch names for players not in member list (substitutes)
+  useEffect(() => {
+    if (!currentWeek?.boxAssignments) return;
+
+    const memberIds = new Set(members.map(m => m.userId));
+    const unknownIds: string[] = [];
+
+    // Find player IDs not in member list
+    for (const box of currentWeek.boxAssignments) {
+      for (const userId of box.playerIds) {
+        if (!memberIds.has(userId) && !fetchedUserNames.has(userId)) {
+          unknownIds.push(userId);
+        }
+      }
+    }
+
+    if (unknownIds.length === 0) return;
+
+    const fetchNames = async () => {
+      const newNames = new Map(fetchedUserNames);
+      for (const odUserId of unknownIds) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', odUserId));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            if (userData.displayName) {
+              newNames.set(odUserId, userData.displayName);
+            }
+          }
+        } catch (err) {
+          console.warn(`Failed to fetch user name for ${odUserId}:`, err);
+        }
+      }
+      if (newNames.size > fetchedUserNames.size) {
+        setFetchedUserNames(newNames);
+      }
+    };
+
+    fetchNames();
+  }, [currentWeek?.boxAssignments, members, fetchedUserNames]);
+
+  // V07.45: Build substitute name lookup from current week absences
+  // Map both: substituteId → substituteName (if box has sub ID)
+  // AND: absentPlayerId → substituteName (if box still has absent player ID)
+  const substituteNames = useMemo(() => {
+    const names = new Map<string, string>();
+    if (currentWeek?.absences) {
+      for (const absence of currentWeek.absences) {
+        if (absence.substituteId && absence.substituteName) {
+          // Map substitute's own ID to their name
+          names.set(absence.substituteId, absence.substituteName);
+          // Also map the absent player's ID to the substitute's name
+          // (in case boxAssignments has the absent player's ID, not the sub's)
+          names.set(absence.playerId, absence.substituteName);
+        }
+      }
+    }
+    return names;
+  }, [currentWeek?.absences]);
 
   // Build all players list with box info
   const allPlayers = useMemo(() => {
@@ -203,9 +268,15 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
         const member = memberMap.get(userId);
         const rating = userRatings.get(userId);
 
+        // V07.45: Check member first, then substitute names, then fetched names
+        const displayName = member?.displayName
+          || substituteNames.get(userId)
+          || fetchedUserNames.get(userId)
+          || 'Unknown Player';
+
         players.push({
           odUserId: userId,
-          displayName: member?.displayName || 'Unknown Player',
+          displayName,
           duprDoublesRating: rating,
           boxNumber: box.boxNumber,
           positionInBox: index + 1,
@@ -215,7 +286,7 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
     }
 
     return players;
-  }, [currentWeek?.boxAssignments, members, userRatings]);
+  }, [currentWeek?.boxAssignments, members, userRatings, substituteNames, fetchedUserNames]);
 
   // Get total box count
   const totalBoxes = currentWeek?.boxAssignments?.length || 0;
@@ -229,15 +300,61 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
     );
   }
 
-  // No week data
+  // No week data - show registered players list instead
   if (!currentWeek) {
+    const activeMembers = members.filter(m => m.status === 'active');
     return (
-      <div className="bg-gray-800/50 rounded-xl p-6 text-center border border-gray-700">
-        <div className="text-4xl mb-3">📦</div>
-        <h3 className="text-lg font-medium text-white mb-2">No Boxes Created Yet</h3>
-        <p className="text-gray-400 text-sm">
-          Go to the Schedule tab and click "Generate Schedule" to create box assignments.
-        </p>
+      <div className="space-y-4">
+        {/* Info banner */}
+        <div className="bg-yellow-900/30 rounded-xl p-4 border border-yellow-700/50">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">📦</span>
+            <div>
+              <h3 className="text-sm font-medium text-yellow-400">Boxes Not Created Yet</h3>
+              <p className="text-gray-400 text-xs">
+                Go to the Schedule tab and click "Generate Schedule" to create box assignments.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Registered players list */}
+        <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+          <h3 className="text-lg font-bold text-white mb-4">
+            Registered Players ({activeMembers.length})
+          </h3>
+          {activeMembers.length === 0 ? (
+            <p className="text-gray-400 text-center py-8">No players registered yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {activeMembers
+                .sort((a, b) => (userRatings.get(b.userId) || 0) - (userRatings.get(a.userId) || 0))
+                .map((member, idx) => {
+                  const rating = userRatings.get(member.userId);
+                  return (
+                  <div
+                    key={member.userId || idx}
+                    className="flex items-center justify-between p-3 rounded-lg bg-gray-700/50"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-sm font-medium">
+                        {idx + 1}
+                      </div>
+                      <span className="text-white font-medium">
+                        {member.displayName || 'Unknown Player'}
+                      </span>
+                    </div>
+                    {rating && (
+                      <span className="text-sm text-gray-400">
+                        DUPR: {rating.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  );
+                })}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -297,9 +414,6 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider w-20">
                 Box
               </th>
-              <th className="px-2 py-3 text-center text-xs font-semibold text-gray-400 uppercase tracking-wider w-10">
-
-              </th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
                 Name
               </th>
@@ -337,11 +451,6 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
                     ) : null}
                   </td>
 
-                  {/* Movement Indicator */}
-                  <td className="px-2 py-2 text-center">
-                    <MovementIndicator type={movementType} />
-                  </td>
-
                   {/* Player Name */}
                   <td className="px-4 py-2">
                     <span className="text-white font-medium">
@@ -364,14 +473,6 @@ export const RotatingBoxPlayerManager: React.FC<RotatingBoxPlayerManagerProps> =
 
       {/* Legend */}
       <div className="flex items-center gap-6 text-xs text-gray-400 bg-gray-800/50 rounded-lg p-3">
-        <div className="flex items-center gap-2">
-          <span className="text-green-400 font-bold">▲</span>
-          <span>Promotes to higher box</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-red-400 font-bold">▼</span>
-          <span>Relegates to lower box</span>
-        </div>
         <div className="flex items-center gap-2">
           <span className="w-3 h-3 bg-blue-800 rounded"></span>
           <span>Top boxes (darker)</span>

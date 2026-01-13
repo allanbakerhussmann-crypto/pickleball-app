@@ -1059,3 +1059,145 @@ export interface PatternValidationResult {
     opponentDistributionBalanced: boolean;
   };
 }
+
+// ============================================
+// LEAGUE SUBSTITUTES TABLE (V07.44)
+// ============================================
+
+/**
+ * Substitute availability status
+ */
+export type SubstituteStatus = 'available' | 'unavailable' | 'banned';
+
+/**
+ * Record of a single substitution instance
+ */
+export interface SubstitutionRecord {
+  /** Week number they substituted */
+  weekNumber: number;
+
+  /** Season ID */
+  seasonId: string;
+
+  /** Player ID they replaced */
+  replacedPlayerId: string;
+
+  /** Player name they replaced (snapshot) */
+  replacedPlayerName?: string;
+
+  /** Box they played in */
+  boxNumber: number;
+
+  /** When they were assigned */
+  assignedAt: number;
+
+  /** Matches played that week */
+  matchesPlayed: number;
+
+  /** Wins that week */
+  wins: number;
+
+  /** Points scored */
+  pointsFor: number;
+
+  /** Points conceded */
+  pointsAgainst: number;
+}
+
+/**
+ * League Substitute
+ *
+ * Tracks substitute (ghost) players who can fill in for absent players.
+ * Stored in leagues/{leagueId}/substitutes/{odUserId}
+ *
+ * V07.44: Separate table for substitute tracking
+ */
+export interface LeagueSubstitute {
+  /** OD User ID */
+  odUserId: string;
+
+  /** Display name (cached for quick display) */
+  displayName: string;
+
+  /** Email (for contact) */
+  email?: string;
+
+  /** Phone (for SMS notifications) */
+  phone?: string;
+
+  // ==========================================
+  // DUPR Info (for eligibility checking)
+  // ==========================================
+
+  /** DUPR ID if linked */
+  duprId?: string;
+
+  /** DUPR doubles rating */
+  duprDoublesRating?: number;
+
+  /** DUPR singles rating */
+  duprSinglesRating?: number;
+
+  /** Has given DUPR consent */
+  duprConsent?: boolean;
+
+  // ==========================================
+  // Availability
+  // ==========================================
+
+  /** Current availability status */
+  status: SubstituteStatus;
+
+  /** Reason if unavailable/banned */
+  statusReason?: string;
+
+  /** Weeks they've indicated they're available */
+  availableWeeks?: number[];
+
+  /** Weeks they've indicated they're NOT available */
+  unavailableWeeks?: number[];
+
+  /** Preferred boxes (1 = top box) */
+  preferredBoxes?: number[];
+
+  // ==========================================
+  // History & Stats
+  // ==========================================
+
+  /** Complete history of substitutions */
+  substitutionHistory: SubstitutionRecord[];
+
+  /** Total times they've substituted */
+  totalSubstitutions: number;
+
+  /** Total matches played as substitute */
+  totalMatchesPlayed: number;
+
+  /** Total wins as substitute */
+  totalWins: number;
+
+  /** Total points scored as substitute */
+  totalPointsFor: number;
+
+  /** Total points conceded as substitute */
+  totalPointsAgainst: number;
+
+  // ==========================================
+  // Administrative
+  // ==========================================
+
+  /** When they were added as potential substitute */
+  addedAt: number;
+
+  /** Who added them (organizer user ID) */
+  addedByUserId: string;
+
+  /** When last used as substitute */
+  lastUsedAt?: number;
+
+  /** Organizer notes */
+  notes?: string;
+
+  /** Is this person also a league member? */
+  isMember?: boolean;
+}

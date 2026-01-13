@@ -1,12 +1,13 @@
 /**
- * Box Draft Week Panel Component V07.44
+ * Box Draft Week Panel Component V07.45
  *
  * Allows organizers to edit box assignments for draft weeks before activation.
  * Features drag-drop reordering within and between boxes.
- * NEW: Visual Absent/Substitutes area for managing absences and subs.
+ * Visual Absent/Substitutes area for managing absences and subs.
+ * V07.45: Integrates with leagueSubstitutes service for substitute tracking.
  *
  * FILE LOCATION: components/leagues/boxLeague/BoxDraftWeekPanel.tsx
- * VERSION: V07.44
+ * VERSION: V07.45
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -16,12 +17,14 @@ import {
   DragOverEvent,
   DragStartEvent,
   DragOverlay,
-  closestCenter,
+  pointerWithin,
+  rectIntersection,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
   useDroppable,
+  CollisionDetection,
 } from '@dnd-kit/core';
 import {
   SortableContext,
@@ -43,6 +46,7 @@ import {
   getEligibleSubstitutesWithDetails,
 } from '../../../services/rotatingDoublesBox';
 import type { EligibleSubstitute } from '../../../services/rotatingDoublesBox';
+import { addSubstituteFromUser } from '../../../services/firebase/leagueSubstitutes';
 
 // ============================================
 // TYPES
@@ -100,6 +104,29 @@ const BOX_COLORS = [
 const getBoxColors = (boxNumber: number) => {
   const index = Math.min(boxNumber - 1, BOX_COLORS.length - 1);
   return BOX_COLORS[index] || BOX_COLORS[BOX_COLORS.length - 1];
+};
+
+// Custom collision detection that prioritizes the absent-area drop zone
+const customCollisionDetection: CollisionDetection = (args) => {
+  // First check if pointer is within any droppable
+  const pointerCollisions = pointerWithin(args);
+
+  // If we're over the absent-area, prioritize it
+  const absentAreaCollision = pointerCollisions.find(c => c.id === 'absent-area');
+  if (absentAreaCollision) {
+    return [absentAreaCollision];
+  }
+
+  // Check for box drop zones
+  const boxCollision = pointerCollisions.find(c =>
+    typeof c.id === 'string' && c.id.startsWith('box-drop-')
+  );
+  if (boxCollision) {
+    return [boxCollision];
+  }
+
+  // Fall back to rect intersection for player-to-player drops
+  return rectIntersection(args);
 };
 
 // ============================================
@@ -759,6 +786,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
   const [localAssignments, setLocalAssignments] = useState<BoxAssignment[]>([]);
   const [absentPlayers, setAbsentPlayers] = useState<AbsentPlayer[]>([]);
   const [availableSubs, setAvailableSubs] = useState<SubstitutePlayer[]>([]);
+  const [subsInBoxes, setSubsInBoxes] = useState<Map<string, SubstitutePlayer>>(new Map()); // Track subs added to boxes
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overDroppableId, setOverDroppableId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -768,33 +796,38 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
   const [hasChanges, setHasChanges] = useState(false);
   const [expandedBoxes, setExpandedBoxes] = useState<Set<number>>(new Set([1]));
   const [showAddSubModal, setShowAddSubModal] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   // Build member lookup
   const memberMap = useMemo(() => new Map(members.map(m => [m.userId, m])), [members]);
 
-  // Initialize from week data
+  // Initialize from week data - ONLY on first load or after reset
   useEffect(() => {
-    if (week.boxAssignments) {
+    // Skip if already initialized (to prevent Firestore updates from overwriting local edits)
+    if (isInitialized) return;
+
+    if (week.boxAssignments && week.boxAssignments.length > 0) {
       setLocalAssignments(week.boxAssignments);
-    }
 
-    // Initialize absent players from week.absences
-    if (week.absences) {
-      const absents: AbsentPlayer[] = week.absences.map(absence => {
-        const member = memberMap.get(absence.playerId);
-        return {
-          odUserId: absence.playerId,
-          displayName: member?.displayName || absence.playerName || 'Unknown',
-          duprRating: userRatings.get(absence.playerId),
-          originalBox: absence.boxNumber,
-          reason: absence.reason,
-        };
-      });
-      setAbsentPlayers(absents);
-    }
+      // Initialize absent players from week.absences
+      if (week.absences && week.absences.length > 0) {
+        const absents: AbsentPlayer[] = week.absences.map(absence => {
+          const member = memberMap.get(absence.playerId);
+          return {
+            odUserId: absence.playerId,
+            displayName: member?.displayName || absence.playerName || 'Unknown',
+            duprRating: userRatings.get(absence.playerId),
+            originalBox: absence.boxNumber,
+            reason: absence.reason,
+          };
+        });
+        setAbsentPlayers(absents);
+      }
 
-    setHasChanges(false);
-  }, [week.boxAssignments, week.absences, memberMap, userRatings]);
+      setIsInitialized(true);
+      setHasChanges(false);
+    }
+  }, [week.boxAssignments, week.absences, memberMap, userRatings, isInitialized]);
 
   // Convert assignments to DraftPlayer arrays grouped by box
   const playersByBox: Map<number, DraftPlayer[]> = useMemo(() => {
@@ -805,10 +838,11 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
         .filter(userId => !absentPlayers.some(a => a.odUserId === userId))
         .map((userId, index) => {
           const member = memberMap.get(userId);
+          const subInBox = subsInBoxes.get(userId);
           return {
             odUserId: userId,
-            displayName: member?.displayName || 'Unknown Player',
-            duprRating: userRatings.get(userId),
+            displayName: subInBox?.displayName || member?.displayName || 'Unknown Player',
+            duprRating: subInBox?.duprRating || userRatings.get(userId),
             boxNumber: box.boxNumber,
             position: index + 1,
             isAbsent: false,
@@ -820,7 +854,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
     }
 
     return result;
-  }, [localAssignments, absentPlayers, memberMap, userRatings]);
+  }, [localAssignments, absentPlayers, memberMap, userRatings, subsInBoxes]);
 
   // Flatten all players for lookup
   const allPlayers = useMemo(() => Array.from(playersByBox.values()).flat(), [playersByBox]);
@@ -950,16 +984,16 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
     // Call service to persist
     try {
-      const member = memberMap.get(player.odUserId);
-      const absencePolicy = league.settings?.rotatingDoublesBox?.settings?.absencePolicy?.policy || 'freeze';
+      // Get absence policy with fallback to 'freeze'
+      const absencePolicy = league.settings?.rotatingDoublesBox?.settings?.absencePolicy?.policy ?? 'freeze';
       await declareAbsence(leagueId, week.weekNumber, player.odUserId, currentUserId, {
         reason: 'personal',
-        playerName: member?.displayName,
-        absencePolicy,
+        playerName: player.displayName ?? 'Unknown',
+        absencePolicy: absencePolicy as 'freeze' | 'ghost_score' | 'average_points' | 'auto_relegate',
       });
     } catch (err) {
       console.error('Failed to declare absence:', err);
-      setError((err as Error).message);
+      // Don't set error - local state is still valid, we'll save on activate
     }
   };
 
@@ -1004,6 +1038,13 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
     // Remove from available subs
     setAvailableSubs(prev => prev.filter(s => s.odUserId !== sub.odUserId));
+
+    // Track substitute info so we can display their name
+    setSubsInBoxes(prev => {
+      const next = new Map(prev);
+      next.set(sub.odUserId, sub);
+      return next;
+    });
 
     // Add to box assignments (replacing the absent player's spot)
     setLocalAssignments(prev => {
@@ -1086,7 +1127,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
   };
 
   // Add substitute from modal
-  const handleAddSub = (sub: EligibleSubstitute) => {
+  const handleAddSub = async (sub: EligibleSubstitute) => {
     const newSub: SubstitutePlayer = {
       odUserId: sub.id,
       displayName: sub.name,
@@ -1094,6 +1135,24 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
       duprId: sub.duprId,
     };
     setAvailableSubs(prev => [...prev, newSub]);
+
+    // Also add to the substitutes collection for tracking
+    try {
+      await addSubstituteFromUser(
+        leagueId,
+        {
+          odUserId: sub.id,
+          displayName: sub.name,
+          duprId: sub.duprId,
+          duprDoublesRating: sub.duprDoublesRating,
+        },
+        currentUserId,
+        { isMember: false }
+      );
+    } catch (err) {
+      // Non-fatal - log but don't block the UI flow
+      console.warn('Failed to add substitute to tracking collection:', err);
+    }
   };
 
   // Remove substitute
@@ -1151,7 +1210,13 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
     try {
       await refreshDraftWeekAssignments(leagueId, week.weekNumber);
+      // Clear ALL local state
+      setAbsentPlayers([]);
+      setAvailableSubs([]);
+      setSubsInBoxes(new Map());
       setHasChanges(false);
+      // Reset initialization flag so useEffect will reload from fresh Firestore data
+      setIsInitialized(false);
     } catch (err) {
       console.error('Failed to reset assignments:', err);
       setError((err as Error).message || 'Failed to reset assignments');
@@ -1292,7 +1357,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={customCollisionDetection}
           onDragStart={handleDragStart}
           onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}

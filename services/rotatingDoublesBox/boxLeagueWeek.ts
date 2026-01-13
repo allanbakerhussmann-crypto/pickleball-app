@@ -4,8 +4,11 @@
  * Manages the weekly state machine:
  * Draft → Active → Closing → Finalized
  *
+ * V07.45: activateWeek now respects saved box assignments (with substitutes)
+ *         instead of always recalculating from previous week standings.
+ *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueWeek.ts
- * VERSION: V07.42
+ * VERSION: V07.45
  */
 
 import {
@@ -362,34 +365,18 @@ export async function activateWeek(
       throw new Error(`Week ${weekNumber} is draft but already has ${week.matchIds.length} matches. Clear matches first or use existing.`);
     }
 
-    // V07.40: PROMOTION FIX - Compute correct assignments for Week 2+
-    let assignmentsToUse = week.boxAssignments;
+    // V07.45: Use saved box assignments - they may have been manually edited
+    // (e.g., substitutes replacing absent players)
+    // The draft week's boxAssignments are set by:
+    // 1. refreshDraftWeekAssignments (initial setup from promotions)
+    // 2. updateBoxAssignments (manual edits by organizer)
+    // We should TRUST what the organizer has saved, not recalculate.
+    const assignmentsToUse = week.boxAssignments;
+    console.log(`[activateWeek] Week ${weekNumber}: Using saved box assignments (may include substitutes)`);
 
-    if (weekNumber > 1) {
-      // Read previous week inside the transaction
-      const prevRef = getWeekDoc(leagueId, weekNumber - 1);
-      const prevSnap = await transaction.get(prevRef);
-      const prevWeek = prevSnap.exists() ? (prevSnap.data() as BoxLeagueWeek) : null;
-
-      if (prevWeek?.state === 'finalized' && prevWeek.standingsSnapshot?.boxes?.length) {
-        console.log(`[activateWeek] Week ${weekNumber}: Computing correct assignments from Week ${weekNumber - 1} standings`);
-
-        // Import promotion functions
-        const { applyMovements, generateNextWeekAssignments } = await import('./boxLeaguePromotion');
-
-        // Use current week's rulesSnapshot, falling back to prevWeek's
-        const rules = week.rulesSnapshot ?? prevWeek.rulesSnapshot;
-        const prevForMovements: BoxLeagueWeek = { ...prevWeek, rulesSnapshot: rules };
-
-        // Calculate movements from finalized standings
-        const movements = applyMovements(prevForMovements, prevWeek.standingsSnapshot.boxes);
-
-        // Generate correct next week assignments
-        const correctAssignments = generateNextWeekAssignments(prevWeek.boxAssignments, movements);
-        assignmentsToUse = correctAssignments;
-
-        console.log(`[activateWeek] Week ${weekNumber}: Computed assignments from finalized standings`);
-      }
+    // Log player counts per box for debugging
+    for (const box of assignmentsToUse) {
+      console.log(`[activateWeek] Box ${box.boxNumber}: ${box.playerIds.length} players`);
     }
 
     // Debug log: show what assignments we're using

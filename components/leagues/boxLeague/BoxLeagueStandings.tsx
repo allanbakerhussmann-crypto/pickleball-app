@@ -1,15 +1,17 @@
 /**
- * Box League Standings Component V07.43
+ * Box League Standings Component V07.45
  *
  * Complete standings UI for rotating doubles box leagues.
  * Shows Overall season ladder + Weekly tabs with per-box standings.
  * Includes promotion/relegation indicators, movement summaries, and tiebreak explanations.
  *
+ * V07.45: Fixed substitute name display - now looks up substitute names from
+ *         week.absences when player is not a league member.
  * V07.43: Season Ladder now shows medal icons (🥇 for box wins, 🥈 for 2nd place)
  *         instead of W/L/Diff/Trend columns.
  *
  * FILE LOCATION: components/leagues/boxLeague/BoxLeagueStandings.tsx
- * VERSION: V07.43
+ * VERSION: V07.45
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -174,6 +176,7 @@ interface BoxStandingsTableProps {
   relegationCount?: number;
   absences?: { playerId: string }[];
   tiebreakExplanations?: string[];
+  fetchedUserNames?: Map<string, string>;  // V07.45: For substitute name lookup
 }
 
 const BoxStandingsTable: React.FC<BoxStandingsTableProps> = ({
@@ -184,6 +187,7 @@ const BoxStandingsTable: React.FC<BoxStandingsTableProps> = ({
   relegationCount = 1,
   absences = [],
   tiebreakExplanations = [],
+  fetchedUserNames,  // V07.45: For substitute name lookup
 }) => {
   const colors = getBoxColors(boxNumber);
   const absentPlayerIds = new Set(absences.map(a => a.playerId));
@@ -269,7 +273,12 @@ const BoxStandingsTable: React.FC<BoxStandingsTableProps> = ({
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-white font-medium">{player.playerName}</span>
+                    {/* V07.45: Override Unknown with fetched name if available */}
+                    <span className="text-white font-medium">
+                      {player.playerName === 'Unknown Player' || player.playerName === 'Unknown'
+                        ? (fetchedUserNames?.get(player.playerId) || player.playerName)
+                        : player.playerName}
+                    </span>
                     {isAbsent && (
                       <span className="px-1.5 py-0.5 bg-gray-600 text-gray-300 rounded text-xs">
                         Absent
@@ -395,9 +404,10 @@ interface SeasonLadderProps {
   weeks: BoxLeagueWeek[];
   members: LeagueMember[];
   userRatings: Map<string, number | undefined>;
+  fetchedUserNames: Map<string, string>;  // V07.45: For substitute names
 }
 
-const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings }) => {
+const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings, fetchedUserNames }) => {
   // Get latest finalized or active week for current positions
   const latestWeek = [...weeks]
     .filter(w => w.state === 'finalized' || w.state === 'active' || w.state === 'closing')
@@ -405,6 +415,19 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
 
   // Build player data with current box/position
   const memberMap = new Map(members.map(m => [m.userId, m]));
+
+  // V07.45: Build substitute name lookup from week absences
+  const substituteNames = useMemo(() => {
+    const names = new Map<string, string>();
+    if (latestWeek?.absences) {
+      for (const absence of latestWeek.absences) {
+        if (absence.substituteId && absence.substituteName) {
+          names.set(absence.substituteId, absence.substituteName);
+        }
+      }
+    }
+    return names;
+  }, [latestWeek?.absences]);
 
   // V07.43: Calculate medal counts from all finalized weeks
   const medalCounts = useMemo(() => {
@@ -460,9 +483,15 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
           }
         }
 
+        // V07.45: Check member first, then substitute names, then fetched names, then fallback
+        const displayName = member?.displayName
+          || substituteNames.get(userId)
+          || fetchedUserNames.get(userId)
+          || 'Unknown Player';
+
         data.push({
           odUserId: userId,
-          displayName: member?.displayName || 'Unknown Player',
+          displayName,
           currentBox: box.boxNumber,
           positionInBox: actualPosition,
           duprRating: rating,
@@ -477,7 +506,7 @@ const SeasonLadder: React.FC<SeasonLadderProps> = ({ weeks, members, userRatings
       if (a.currentBox !== b.currentBox) return a.currentBox - b.currentBox;
       return a.positionInBox - b.positionInBox;
     });
-  }, [latestWeek, memberMap, userRatings, medalCounts]);
+  }, [latestWeek, memberMap, userRatings, medalCounts, substituteNames, fetchedUserNames]);
 
   // Count finalized weeks for context
   const finalizedWeekCount = weeks.filter(w => w.state === 'finalized').length;
@@ -563,6 +592,8 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
   const [selectedBox, setSelectedBox] = useState<number>(1);
   const [userRatings, setUserRatings] = useState<Map<string, number | undefined>>(new Map());
   const [isRecalculating, setIsRecalculating] = useState(false);
+  // V07.45: Track fetched user names for substitutes (not in member list)
+  const [fetchedUserNames, setFetchedUserNames] = useState<Map<string, string>>(new Map());
 
   // Fetch weeks from boxWeeks collection
   useEffect(() => {
@@ -619,6 +650,49 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
     }
   }, [members]);
 
+  // V07.45: Fetch names for unknown players (substitutes not in member list)
+  useEffect(() => {
+    const memberIds = new Set(members.map(m => m.userId));
+
+    // Collect all unknown player IDs from all weeks
+    const unknownIds = new Set<string>();
+    for (const week of weeks) {
+      if (week.boxAssignments) {
+        for (const box of week.boxAssignments) {
+          for (const playerId of box.playerIds) {
+            if (!memberIds.has(playerId) && !fetchedUserNames.has(playerId)) {
+              unknownIds.add(playerId);
+            }
+          }
+        }
+      }
+    }
+
+    if (unknownIds.size === 0) return;
+
+    const fetchNames = async () => {
+      const newNames = new Map(fetchedUserNames);
+      for (const odUserId of unknownIds) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', odUserId));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            if (userData.displayName) {
+              newNames.set(odUserId, userData.displayName);
+            }
+          }
+        } catch (err) {
+          console.warn(`Failed to fetch user name for ${odUserId}:`, err);
+        }
+      }
+      if (newNames.size > fetchedUserNames.size) {
+        setFetchedUserNames(newNames);
+      }
+    };
+
+    fetchNames();
+  }, [weeks, members, fetchedUserNames]);
+
   // Get current week for display
   const currentWeek = useMemo(() => {
     if (activeTab === 'overall') return null;
@@ -651,12 +725,27 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
 
       const memberMap = new Map(members.map(m => [m.userId, m]));
 
+      // V07.45: Build substitute name lookup from week absences
+      const subNames = new Map<string, string>();
+      if (currentWeek.absences) {
+        for (const absence of currentWeek.absences) {
+          if (absence.substituteId && absence.substituteName) {
+            subNames.set(absence.substituteId, absence.substituteName);
+          }
+        }
+      }
+
       for (const box of currentWeek.boxAssignments) {
         const standings: BoxStanding[] = box.playerIds.map((userId, index) => {
           const member = memberMap.get(userId);
+          // V07.45: Check member first, then substitute names, then fetched names
+          const playerName = member?.displayName
+            || subNames.get(userId)
+            || fetchedUserNames.get(userId)
+            || 'Unknown Player';
           return {
             playerId: userId,
-            playerName: member?.displayName || 'Unknown Player',
+            playerName,
             boxNumber: box.boxNumber,
             positionInBox: index + 1,
             matchesPlayed: 0,
@@ -671,7 +760,7 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
     }
 
     return result;
-  }, [currentWeek, members]);
+  }, [currentWeek, members, fetchedUserNames]);
 
   // V07.41: Compute match counts from actual matches (more reliable than cached week values)
   const weekMatchCounts = useMemo(() => {
@@ -788,7 +877,7 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
 
       {/* Overall View */}
       {activeTab === 'overall' && (
-        <SeasonLadder weeks={weeks} members={members} userRatings={userRatings} />
+        <SeasonLadder weeks={weeks} members={members} userRatings={userRatings} fetchedUserNames={fetchedUserNames} />
       )}
 
       {/* Week View */}
@@ -832,6 +921,7 @@ export const BoxLeagueStandings: React.FC<BoxLeagueStandingsProps> = ({
               promotionCount={currentWeek.rulesSnapshot?.promotionCount || 1}
               relegationCount={currentWeek.rulesSnapshot?.relegationCount || 1}
               absences={currentWeek.absences}
+              fetchedUserNames={fetchedUserNames}
             />
           ) : (
             <div className="bg-gray-800/50 rounded-xl p-6 text-center border border-gray-700">

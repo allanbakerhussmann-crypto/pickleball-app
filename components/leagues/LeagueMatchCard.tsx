@@ -1,13 +1,14 @@
 /**
- * LeagueMatchCard Component V07.35
+ * LeagueMatchCard Component V07.45
  *
  * Displays a league match with status, scores, and action buttons.
  * Now includes verification badges, confirm/dispute actions, and DUPR submission.
  *
+ * V07.45: Added playerNameLookup prop to resolve "Unknown" names for substitutes
  * V07.35: Compact view shows inline "Enter Score" / "Acknowledge" buttons
  *
  * FILE LOCATION: components/leagues/LeagueMatchCard.tsx
- * VERSION: V07.35
+ * VERSION: V07.45
  */
 
 import React from 'react';
@@ -43,6 +44,8 @@ interface LeagueMatchCardProps {
   showDuprButton?: boolean;
   // V07.29: Week lock - prevents players from scoring when week is locked
   weekLocked?: boolean;
+  // V07.45: Name lookup for substitutes not in member list
+  playerNameLookup?: Map<string, string>;
 }
 
 // ============================================
@@ -138,6 +141,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
   onDuprSubmit,
   showDuprButton = true,
   weekLocked = false,
+  playerNameLookup,  // V07.45: Name lookup for substitutes
 }) => {
   // Calculate game scores
   const { gamesA, gamesB } = match.scores?.length > 0
@@ -146,12 +150,44 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
 
   // V07.30: Get team names - prefer sideA/sideB.name (full team name) over memberAName/memberBName
   // V07.26: Fixed self-referential bug, added box league support with playerNames fallback
-  const teamAName = match.sideA?.name ||
-    (match.sideA?.playerNames?.length ? match.sideA.playerNames.join(' & ') : null) ||
-    match.memberAName || 'Unknown';
-  const teamBName = match.sideB?.name ||
-    (match.sideB?.playerNames?.length ? match.sideB.playerNames.join(' & ') : null) ||
-    match.memberBName || 'Unknown';
+  // V07.45: Use playerNameLookup to resolve "Unknown" names for substitutes
+  const resolvePlayerNames = (playerIds?: string[], storedNames?: string[]): string[] | null => {
+    if (!playerIds?.length) return storedNames || null;
+    if (!playerNameLookup) return storedNames || null;
+
+    return playerIds.map((id, idx) => {
+      const storedName = storedNames?.[idx];
+      if (storedName && storedName !== 'Unknown' && storedName !== 'Unknown Player') {
+        return storedName;
+      }
+      return playerNameLookup.get(id) || storedName || 'Unknown';
+    });
+  };
+
+  // Note: LeagueMatch type doesn't have playerNames on sideA/sideB, but we use type assertion
+  // to handle the general Match interface which may have them
+  const teamAPlayerNames = resolvePlayerNames(
+    match.sideA?.playerIds,
+    (match.sideA as any)?.playerNames
+  );
+  const teamBPlayerNames = resolvePlayerNames(
+    match.sideB?.playerIds,
+    (match.sideB as any)?.playerNames
+  );
+
+  // V07.45: Check if stored name contains "Unknown" - if so, try to resolve using playerIds
+  const storedNameHasUnknown = (name?: string) => name?.includes('Unknown');
+
+  const teamAName = (match.sideA?.name && !storedNameHasUnknown(match.sideA.name))
+    ? match.sideA.name
+    : (teamAPlayerNames?.length ? teamAPlayerNames.join(' & ') : null) ||
+      match.sideA?.name ||
+      match.memberAName || 'Unknown';
+  const teamBName = (match.sideB?.name && !storedNameHasUnknown(match.sideB.name))
+    ? match.sideB.name
+    : (teamBPlayerNames?.length ? teamBPlayerNames.join(' & ') : null) ||
+      match.sideB?.name ||
+      match.memberBName || 'Unknown';
 
   // Determine if current user is a participant (check both primary and partner)
   // V07.35: Also check sideA/sideB.playerIds for box leagues

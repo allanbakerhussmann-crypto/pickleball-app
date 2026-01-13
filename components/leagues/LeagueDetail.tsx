@@ -1,9 +1,10 @@
 /**
- * LeagueDetail Component V07.14
+ * LeagueDetail Component V07.45
  *
  * Shows league details, standings, matches, and allows joining/playing.
  * Now includes player management with drag-and-drop for organizers.
  * Auto-updates league status based on registration dates.
+ * V07.45: Added matchPlayerNames state for substitute name lookup in matches.
  * V07.13: Added week-based match organization with sub-tabs (Week 1, 2, ..., Overall, Finals).
  * V07.14: League standings as stored snapshots (same pattern as tournament poolResults).
  *         - Standings are derived from match data
@@ -11,7 +12,7 @@
  *         - Recalculate button for organizers
  *
  * FILE LOCATION: components/leagues/LeagueDetail.tsx
- * VERSION: V07.14
+ * VERSION: V07.45
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -185,6 +186,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [userProfiles, setUserProfiles] = useState<Map<string, UserProfile>>(new Map());
   // V07.36: Organizer profile for contact info display
   const [organizerProfile, setOrganizerProfile] = useState<UserProfile | null>(null);
+  // V07.45: Match player name lookup for substitutes not in member list
+  const [matchPlayerNames, setMatchPlayerNames] = useState<Map<string, string>>(new Map());
   // V07.36: Tiebreaker editing state
   const [editingTiebreakers, setEditingTiebreakers] = useState(false);
   const [savingTiebreakers, setSavingTiebreakers] = useState(false);
@@ -517,6 +520,96 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
     return () => unsubscribe();
   }, [leagueId, league?.competitionFormat]);
+
+  // V07.45: Build player name lookup from members + boxWeeks absences
+  // This lookup is used by LeagueMatchCard to resolve player IDs to display names
+  useEffect(() => {
+    const newNames = new Map(matchPlayerNames);
+    let hasNewNames = false;
+
+    // Source 1: Add all league members to the lookup
+    for (const member of members) {
+      if (!newNames.has(member.userId)) {
+        newNames.set(member.userId, member.displayName);
+        hasNewNames = true;
+      }
+    }
+
+    // Source 2: Get substitute names from boxWeeks absences
+    // Key insight: match documents have the ABSENT player's ID, but we want to display the SUBSTITUTE's name
+    for (const week of boxWeeks) {
+      if (week.absences) {
+        for (const absence of week.absences) {
+          // Map the absent player's ID to the substitute's name (OVERRIDE member name for this context)
+          if (absence.playerId && absence.substituteId && absence.substituteName) {
+            // For the absent player's slot, show the substitute's name
+            newNames.set(absence.playerId, absence.substituteName);
+            hasNewNames = true;
+            // Also map substitute ID to their own name (for cases where match was updated with sub ID)
+            if (!newNames.has(absence.substituteId)) {
+              newNames.set(absence.substituteId, absence.substituteName);
+              hasNewNames = true;
+            }
+          }
+        }
+      }
+    }
+
+    // Update state if we found new names
+    if (hasNewNames && newNames.size > matchPlayerNames.size) {
+      setMatchPlayerNames(newNames);
+    }
+  }, [boxWeeks, members, matchPlayerNames]);
+
+  // V07.45: Fetch names for unknown players in matches (substitutes not in member list)
+  useEffect(() => {
+    const memberIds = new Set(members.map(m => m.userId));
+
+    // Collect all unknown player IDs from matches
+    const unknownIds = new Set<string>();
+    for (const match of matches) {
+      // Check sideA player IDs - if not a member, we need to fetch their name
+      if (match.sideA?.playerIds) {
+        match.sideA.playerIds.forEach((id) => {
+          if (!memberIds.has(id) && !matchPlayerNames.has(id)) {
+            unknownIds.add(id);
+          }
+        });
+      }
+      // Check sideB player IDs
+      if (match.sideB?.playerIds) {
+        match.sideB.playerIds.forEach((id) => {
+          if (!memberIds.has(id) && !matchPlayerNames.has(id)) {
+            unknownIds.add(id);
+          }
+        });
+      }
+    }
+
+    if (unknownIds.size === 0) return;
+
+    const fetchNames = async () => {
+      const newNames = new Map(matchPlayerNames);
+      const idsToFetch = Array.from(unknownIds);
+
+      try {
+        const profiles = await getUsersByIds(idsToFetch);
+        for (const profile of profiles) {
+          const key = profile.id || profile.odUserId;
+          if (key && profile.displayName) {
+            newNames.set(key, profile.displayName);
+          }
+        }
+        if (newNames.size > matchPlayerNames.size) {
+          setMatchPlayerNames(newNames);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch substitute player names:', err);
+      }
+    };
+
+    fetchNames();
+  }, [matches, members, matchPlayerNames]);
 
   // Get my membership
   useEffect(() => {
@@ -2083,6 +2176,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                   showWeek={false}
                   showRound={true}
                   verificationSettings={league?.settings?.scoreVerification || undefined}
+                  playerNameLookup={matchPlayerNames}
                   onEnterScore={(m) => {
                     setSelectedMatch(m);
                     setShowScoreEntryModal(true);
@@ -2221,6 +2315,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                                     compact={true}
                                     verificationSettings={league?.settings?.scoreVerification || undefined}
                                     weekLocked={weekLocked}
+                                    playerNameLookup={matchPlayerNames}
                                     onEnterScore={(m) => {
                                       setSelectedMatch(m);
                                       setShowScoreEntryModal(true);
@@ -2260,6 +2355,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                           showRound={league?.format === 'swiss' || league?.format === 'box_league'}
                           verificationSettings={league?.settings?.scoreVerification || undefined}
                           weekLocked={weekLocked}
+                          playerNameLookup={matchPlayerNames}
                           onEnterScore={(m) => {
                             setSelectedMatch(m);
                             setShowScoreEntryModal(true);

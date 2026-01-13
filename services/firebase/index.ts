@@ -633,6 +633,39 @@ export {
 } from './smsCredits';
 
 // ============================================
+// LEAGUE SUBSTITUTES (NEW V07.44)
+// ============================================
+export {
+  // CRUD
+  addSubstitute,
+  getSubstitute,
+  getSubstitutes,
+  getAvailableSubstitutes,
+  updateSubstitute,
+  removeSubstitute,
+  // Status management
+  markSubstituteAvailable,
+  markSubstituteUnavailable,
+  banSubstitute,
+  // Substitution tracking
+  recordSubstitution,
+  getSubstitutionHistory,
+  getWeekSubstitutions,
+  // Availability
+  setWeekAvailability,
+  isAvailableForWeek,
+  getAvailableSubstitutesForWeek,
+  // Subscriptions
+  subscribeToSubstitutes,
+  subscribeToAvailableSubstitutes,
+  // Stats & reporting
+  getTopSubstitutes,
+  getSubstituteStats,
+  // Utility
+  addSubstituteFromUser,
+} from './leagueSubstitutes';
+
+// ============================================
 // COMPETITION STUBS (Placeholder functions for CompetitionManager)
 // ============================================
 
