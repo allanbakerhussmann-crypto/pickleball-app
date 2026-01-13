@@ -1309,6 +1309,7 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                         userRatings={userRatings}
                         isOrganizer={true}
                         currentUserId={currentUserId}
+                        league={league}
                         onClose={() => setExpandedDraftWeek(null)}
                         onActivated={() => {
                           setExpandedDraftWeek(null);
