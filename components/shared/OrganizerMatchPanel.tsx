@@ -56,14 +56,14 @@ function getScoreStateLabel(match: LeagueMatch): string {
 function getScoreStateBadgeClass(match: LeagueMatch): string {
   const state = match.scoreState;
   if (state === 'official' || state === 'submittedToDupr' || match.status === 'completed') {
-    return 'bg-gray-700 text-gray-300';
+    return 'bg-green-500/20 text-green-400';
   }
-  if (state === 'signed') return 'bg-green-900/50 text-green-400 border border-green-700';
+  if (state === 'signed') return 'bg-cyan-500/20 text-cyan-400';
   if (state === 'proposed' || match.status === 'pending_confirmation') {
-    return 'bg-yellow-900/50 text-yellow-400 border border-yellow-700';
+    return 'bg-yellow-500/20 text-yellow-400';
   }
-  if (state === 'disputed') return 'bg-red-900/50 text-red-400 border border-red-700';
-  return 'bg-gray-800 text-gray-400';
+  if (state === 'disputed') return 'bg-red-500/20 text-red-400';
+  return 'bg-gray-700/50 text-gray-400';
 }
 
 function categorizeMatch(match: LeagueMatch): MatchCategory {
@@ -302,102 +302,61 @@ export function OrganizerMatchPanel({
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {/* Total */}
+      {/* Stats Row - Colored Left Border Style */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <button
           onClick={() => setActiveFilter('all')}
-          className={`p-4 rounded-xl border-2 transition-all text-left ${
-            activeFilter === 'all'
-              ? 'border-lime-500 bg-lime-900/20'
-              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+          className={`bg-gray-800/50 rounded-lg p-4 border-l-4 border-blue-500 text-left transition-all hover:bg-gray-800 ${
+            activeFilter === 'all' ? 'ring-1 ring-blue-500/50' : ''
           }`}
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-lime-400 uppercase tracking-wide">Total</span>
-            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
-          </div>
-          <span className="text-2xl font-bold text-white">{stats.total}</span>
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Total</div>
+          <div className="text-2xl font-bold text-blue-400">{stats.total}</div>
         </button>
 
-        {/* Needs Review */}
         <button
           onClick={() => setActiveFilter('needs_review')}
-          className={`p-4 rounded-xl border-2 transition-all text-left ${
-            activeFilter === 'needs_review'
-              ? 'border-yellow-500 bg-yellow-900/20'
-              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+          className={`bg-gray-800/50 rounded-lg p-4 border-l-4 border-yellow-500 text-left transition-all hover:bg-gray-800 ${
+            activeFilter === 'needs_review' ? 'ring-1 ring-yellow-500/50' : ''
           }`}
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-yellow-400 uppercase tracking-wide">Needs Review</span>
-            <svg className="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
-          </div>
-          <span className="text-2xl font-bold text-white">{stats.needsReview}</span>
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Needs Review</div>
+          <div className="text-2xl font-bold text-yellow-400">{stats.needsReview}</div>
         </button>
 
-        {/* Ready */}
         <button
           onClick={() => setActiveFilter('ready')}
-          className={`p-4 rounded-xl border-2 transition-all text-left ${
-            activeFilter === 'ready'
-              ? 'border-green-500 bg-green-900/20'
-              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+          className={`bg-gray-800/50 rounded-lg p-4 border-l-4 border-cyan-500 text-left transition-all hover:bg-gray-800 ${
+            activeFilter === 'ready' ? 'ring-1 ring-cyan-500/50' : ''
           }`}
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-green-400 uppercase tracking-wide">Ready</span>
-            <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <span className="text-2xl font-bold text-white">{stats.ready}</span>
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Ready</div>
+          <div className="text-2xl font-bold text-cyan-400">{stats.ready}</div>
         </button>
 
-        {/* Finalized */}
         <button
           onClick={() => setActiveFilter('finalized')}
-          className={`p-4 rounded-xl border-2 transition-all text-left ${
-            activeFilter === 'finalized'
-              ? 'border-gray-500 bg-gray-700/50'
-              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+          className={`bg-gray-800/50 rounded-lg p-4 border-l-4 border-green-500 text-left transition-all hover:bg-gray-800 ${
+            activeFilter === 'finalized' ? 'ring-1 ring-green-500/50' : ''
           }`}
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Finalized</span>
-            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <span className="text-2xl font-bold text-white">{stats.finalized}</span>
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Finalized</div>
+          <div className="text-2xl font-bold text-green-400">{stats.finalized}</div>
         </button>
 
-        {/* Disputed */}
         <button
           onClick={() => setActiveFilter('disputed')}
-          className={`p-4 rounded-xl border-2 transition-all text-left ${
-            activeFilter === 'disputed'
-              ? 'border-red-500 bg-red-900/20'
-              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+          className={`bg-gray-800/50 rounded-lg p-4 border-l-4 border-red-500 text-left transition-all hover:bg-gray-800 ${
+            activeFilter === 'disputed' ? 'ring-1 ring-red-500/50' : ''
           }`}
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-red-400 uppercase tracking-wide">Disputed</span>
-            <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <span className="text-2xl font-bold text-white">{stats.disputed}</span>
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Disputed</div>
+          <div className="text-2xl font-bold text-red-400">{stats.disputed}</div>
         </button>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-gray-700 pb-2 overflow-x-auto">
+      {/* Filter Tabs - Underline Style */}
+      <div className="flex gap-6 border-b border-gray-700">
         {[
           { key: 'all', label: 'All' },
           { key: 'needs_review', label: 'Needs Review' },
@@ -408,21 +367,24 @@ export function OrganizerMatchPanel({
           <button
             key={key}
             onClick={() => setActiveFilter(key as MatchCategory)}
-            className={`px-3 py-1.5 text-sm font-medium rounded-lg whitespace-nowrap transition-colors ${
+            className={`pb-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
               activeFilter === key
-                ? 'bg-gray-700 text-white'
-                : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                ? 'text-white'
+                : 'text-gray-400 hover:text-gray-300'
             }`}
           >
             {label}
+            {activeFilter === key && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+            )}
           </button>
         ))}
       </div>
 
       {/* Match Table */}
-      <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+      <div className="bg-gray-800/30 rounded-lg border border-gray-700/50 overflow-hidden">
         {/* Table Header */}
-        <div className="grid grid-cols-12 gap-2 px-4 py-3 bg-gray-900/50 border-b border-gray-700 text-xs font-medium text-gray-400 uppercase tracking-wider">
+        <div className="grid grid-cols-12 gap-2 px-4 py-3 bg-gray-900/50 border-b border-gray-700/50 text-xs text-gray-500 uppercase tracking-wide">
           <div className="col-span-5">Match</div>
           <div className="col-span-3">Score State</div>
           <div className="col-span-2 text-center">Score</div>
@@ -430,7 +392,7 @@ export function OrganizerMatchPanel({
         </div>
 
         {/* Table Body */}
-        <div className="divide-y divide-gray-700">
+        <div className="divide-y divide-gray-700/50">
           {filteredRows.length === 0 ? (
             <div className="px-4 py-8 text-center text-gray-500">
               No matches in this category
@@ -440,7 +402,7 @@ export function OrganizerMatchPanel({
               <div
                 key={row.match.id}
                 onClick={() => onMatchClick(row.match)}
-                className="grid grid-cols-12 gap-2 px-4 py-3 hover:bg-gray-700/50 cursor-pointer transition-colors items-center"
+                className="grid grid-cols-12 gap-2 px-4 py-4 hover:bg-gray-800/30 cursor-pointer transition-colors items-center"
               >
                 {/* Match */}
                 <div className="col-span-5">
@@ -455,7 +417,7 @@ export function OrganizerMatchPanel({
 
                 {/* Score State */}
                 <div className="col-span-3">
-                  <span className={`inline-block px-2 py-1 text-xs font-medium rounded ${getScoreStateBadgeClass(row.match)}`}>
+                  <span className={`inline-flex px-2.5 py-1 text-xs font-medium rounded ${getScoreStateBadgeClass(row.match)}`}>
                     {row.scoreState}
                   </span>
                 </div>
@@ -466,12 +428,12 @@ export function OrganizerMatchPanel({
                 </div>
 
                 {/* Actions */}
-                <div className="col-span-2 text-right flex items-center justify-end gap-1">
+                <div className="col-span-2 text-right flex items-center justify-end gap-2">
                   {canFinalize(row.match) && (
                     <button
                       onClick={(e) => handleSingleFinalize(row.match, e)}
                       disabled={isFinalizing}
-                      className="px-2 py-1 text-xs font-medium text-lime-400 hover:text-white hover:bg-lime-600 border border-lime-600 rounded transition-colors disabled:opacity-50"
+                      className="px-2.5 py-1 text-xs font-medium bg-lime-500/20 text-lime-400 hover:bg-lime-500/30 rounded transition-colors disabled:opacity-50"
                     >
                       Finalize
                     </button>
@@ -481,7 +443,7 @@ export function OrganizerMatchPanel({
                       e.stopPropagation();
                       onMatchClick(row.match);
                     }}
-                    className="px-2 py-1 text-xs font-medium text-gray-300 hover:text-white hover:bg-gray-700 rounded transition-colors"
+                    className="text-sm text-lime-400 hover:text-lime-300 transition-colors"
                   >
                     Review
                   </button>

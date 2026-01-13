@@ -884,155 +884,191 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   // ============================================
 
   return (
-    <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-700 bg-gray-900">
-        <h3 className="text-lg font-bold text-white flex items-center gap-2">
-          📅 Schedule Manager
-        </h3>
-        <p className="text-sm text-gray-400 mt-1">
-          Generate and manage match schedules
-        </p>
+    <div className="space-y-6">
+      {/* Header - Match Management Style */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-white">Schedule Manager</h2>
+          <p className="text-sm text-gray-400 mt-1">
+            Generate and manage match schedules
+          </p>
+        </div>
       </div>
 
-      {/* Tabs - V07.41: Updated styling to match main tabs */}
-      <div className="flex gap-1 border-b border-gray-700 overflow-x-auto">
+      {/* Stats Row - Colored Left Border Style */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="bg-gray-800/50 rounded-lg p-4 border-l-4 border-blue-500">
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Total</div>
+          <div className="text-2xl font-bold text-blue-400">{matchStats.total}</div>
+        </div>
+        <div className="bg-gray-800/50 rounded-lg p-4 border-l-4 border-yellow-500">
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Scheduled</div>
+          <div className="text-2xl font-bold text-yellow-400">{matchStats.scheduled}</div>
+        </div>
+        <div className="bg-gray-800/50 rounded-lg p-4 border-l-4 border-green-500">
+          <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Completed</div>
+          <div className="text-2xl font-bold text-green-400">{matchStats.completed}</div>
+        </div>
+        {isRotatingBox && (
+          <>
+            <div className="bg-gray-800/50 rounded-lg p-4 border-l-4 border-purple-500">
+              <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Weeks</div>
+              <div className="text-2xl font-bold text-purple-400">{boxWeeks.length}</div>
+            </div>
+            <div className="bg-gray-800/50 rounded-lg p-4 border-l-4 border-lime-500">
+              <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">Active</div>
+              <div className="text-2xl font-bold text-lime-400">
+                {boxWeeks.filter(w => w.state === 'active').length}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Filter Tabs - Underline Style */}
+      <div className="flex gap-6 border-b border-gray-700">
         <button
           onClick={() => setActiveTab('generate')}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
+          className={`pb-3 text-sm font-medium transition-colors relative ${
             activeTab === 'generate'
-              ? 'border-blue-500 text-blue-400'
-              : 'border-transparent text-gray-400 hover:text-white'
+              ? 'text-white'
+              : 'text-gray-400 hover:text-gray-300'
           }`}
         >
-          🎲 Generate
+          Generate
+          {activeTab === 'generate' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+          )}
         </button>
         <button
           onClick={() => setActiveTab('weeks')}
-          className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
+          className={`pb-3 text-sm font-medium transition-colors relative ${
             activeTab === 'weeks'
-              ? 'border-blue-500 text-blue-400'
-              : 'border-transparent text-gray-400 hover:text-white'
+              ? 'text-white'
+              : 'text-gray-400 hover:text-gray-300'
           }`}
         >
-          📆 Weeks
+          Weeks
+          {activeTab === 'weeks' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+          )}
         </button>
         {hasVenue && (
           <button
             onClick={() => setActiveTab('courts')}
-            className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
+            className={`pb-3 text-sm font-medium transition-colors relative ${
               activeTab === 'courts'
-                ? 'border-blue-500 text-blue-400'
-                : 'border-transparent text-gray-400 hover:text-white'
+                ? 'text-white'
+                : 'text-gray-400 hover:text-gray-300'
             }`}
           >
-            🏟️ Courts
+            Courts
+            {activeTab === 'courts' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+            )}
           </button>
         )}
         {hasVenue && (
           <button
             onClick={() => setActiveTab('timeline')}
-            className={`pb-3 px-4 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
+            className={`pb-3 text-sm font-medium transition-colors relative ${
               activeTab === 'timeline'
-                ? 'border-blue-500 text-blue-400'
-                : 'border-transparent text-gray-400 hover:text-white'
+                ? 'text-white'
+                : 'text-gray-400 hover:text-gray-300'
             }`}
           >
-            📊 Timeline
+            Timeline
+            {activeTab === 'timeline' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+            )}
           </button>
         )}
       </div>
 
       {/* Division Selector */}
       {divisions.length > 0 && (
-        <div className="p-4 border-b border-gray-700">
-          <div className="flex items-center gap-2 overflow-x-auto">
+        <div className="flex items-center gap-2 overflow-x-auto pb-2">
+          <span className="text-xs text-gray-500 uppercase tracking-wide">Division:</span>
+          <button
+            onClick={() => setSelectedDivisionId(null)}
+            className={`px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap transition-colors ${
+              !selectedDivisionId
+                ? 'bg-lime-600 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+          >
+            All
+          </button>
+          {divisions.map(div => (
             <button
-              onClick={() => setSelectedDivisionId(null)}
-              className={`px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap ${
-                !selectedDivisionId ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
+              key={div.id}
+              onClick={() => setSelectedDivisionId(div.id)}
+              className={`px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap transition-colors ${
+                selectedDivisionId === div.id
+                  ? 'bg-lime-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:text-white'
               }`}
             >
-              All
+              {div.name}
             </button>
-            {divisions.map(div => (
-              <button
-                key={div.id}
-                onClick={() => setSelectedDivisionId(div.id)}
-                className={`px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap ${
-                  selectedDivisionId === div.id ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'
-                }`}
-              >
-                {div.name}
-              </button>
-            ))}
-          </div>
+          ))}
         </div>
       )}
 
       {/* Error/Result Display */}
       {error && (
-        <div className="mx-4 mt-4 p-3 bg-red-900/30 border border-red-600 rounded-lg text-red-400 text-sm">
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
           {error}
         </div>
       )}
       {result && (
-        <div className={`mx-4 mt-4 p-3 rounded-lg text-sm ${
-          result.success 
-            ? 'bg-green-900/30 border border-green-600 text-green-400'
-            : 'bg-red-900/30 border border-red-600 text-red-400'
+        <div className={`p-3 rounded-lg text-sm ${
+          result.success
+            ? 'bg-green-500/10 border border-green-500/30 text-green-400'
+            : 'bg-red-500/10 border border-red-500/30 text-red-400'
         }`}>
-          {result.success 
-            ? result.matchesCreated > 0 
-              ? `✅ Generated ${result.matchesCreated} matches!`
+          {result.success
+            ? result.matchesCreated > 0
+              ? `✓ Generated ${result.matchesCreated} matches`
               : result.error
-            : `❌ ${result.error}`
+            : result.error
           }
         </div>
       )}
 
       {/* GENERATE TAB */}
       {activeTab === 'generate' && (
-        <div className="p-4 space-y-4">
-          {/* Format Info */}
-          <div className="bg-gray-900/50 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-medium text-white">{league.format.replace('_', ' ').toUpperCase()}</span>
-              <span className="text-sm text-gray-400">{divisionMembers.length} members</span>
+        <div className="space-y-4">
+          {/* Format Info Card */}
+          <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-gray-400 uppercase tracking-wide">Format</div>
+                <div className="text-lg font-semibold text-white mt-1">
+                  {league.format.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm text-gray-400">{divisionMembers.length} members</div>
+                {formatInfo.expectedMatches && (
+                  <div className="text-xs text-gray-500 mt-1">
+                    ~{formatInfo.expectedMatches} expected
+                  </div>
+                )}
+              </div>
             </div>
-            <p className="text-sm text-gray-400">{formatInfo.description}</p>
-            {formatInfo.expectedMatches && (
-              <p className="text-xs text-gray-500 mt-1">
-                Expected: ~{formatInfo.expectedMatches} matches
-              </p>
-            )}
-          </div>
-
-          {/* Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="bg-gray-900 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-white">{matchStats.total}</div>
-              <div className="text-xs text-gray-500">Total</div>
-            </div>
-            <div className="bg-gray-900 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-blue-400">{matchStats.scheduled}</div>
-              <div className="text-xs text-gray-500">Scheduled</div>
-            </div>
-            <div className="bg-gray-900 rounded-lg p-3 text-center">
-              <div className="text-2xl font-bold text-green-400">{matchStats.completed}</div>
-              <div className="text-xs text-gray-500">Completed</div>
-            </div>
+            <p className="text-sm text-gray-500 mt-2">{formatInfo.description}</p>
           </div>
 
           {/* Swiss Round Selector */}
           {league.format === 'swiss' && (
-            <div className="bg-gray-900/50 rounded-lg p-4">
+            <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
               <label className="block text-sm text-gray-400 mb-2">Generate Round:</label>
               <div className="flex items-center gap-3">
                 <select
                   value={swissRound}
                   onChange={(e) => setSwissRound(parseInt(e.target.value))}
-                  className="bg-gray-900 border border-gray-700 text-white p-2 rounded"
+                  className="bg-gray-900 border border-gray-700 text-white p-2 rounded focus:border-lime-500 focus:outline-none"
                 >
                   {Array.from({ length: 10 }, (_, i) => i + 1).map(r => (
                     <option key={r} value={r}>Round {r}</option>
@@ -1045,10 +1081,11 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
             </div>
           )}
 
-          {/* V07.15: Warning when matches already exist */}
+          {/* Warning when matches already exist */}
           {matchStats.total > 0 && league.format !== 'swiss' && (
-            <div className="bg-yellow-900/20 border border-yellow-600 rounded-lg p-3 text-yellow-400 text-sm">
-              ⚠️ {matchStats.total} matches already generated. Use "Clear" first if you want to regenerate.
+            <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-400 text-sm flex items-center gap-2">
+              <span>⚠</span>
+              <span>{matchStats.total} matches already generated. Use "Clear" first if you want to regenerate.</span>
             </div>
           )}
 
@@ -1057,31 +1094,29 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
             <button
               onClick={handleGenerate}
               disabled={generating || divisionMembers.length < 2}
-              className={`flex-1 py-3 ${
+              className={`flex-1 py-3 px-6 rounded-lg font-semibold transition-all ${
                 matchStats.total > 0 && league.format !== 'swiss'
-                  ? 'bg-gray-600 hover:bg-gray-500' // Dimmed when matches exist
-                  : 'bg-blue-600 hover:bg-blue-500'
-              } disabled:bg-gray-600 text-white rounded-lg font-semibold transition-colors`}
+                  ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                  : 'bg-lime-600 hover:bg-lime-500 text-white'
+              } disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed`}
             >
-              {generating ? '⏳ Generating...' : league.format === 'swiss' ? `🎲 Generate Round ${swissRound}` : '🎲 Generate Schedule'}
+              {generating ? 'Generating...' : league.format === 'swiss' ? `Generate Round ${swissRound}` : 'Generate Schedule'}
             </button>
 
             {matchStats.total > 0 && (
               <button
                 onClick={() => setShowConfirmClear(true)}
-                className="px-4 py-3 bg-red-600/20 border border-red-600 text-red-400 hover:bg-red-600/30 rounded-lg font-semibold transition-colors"
+                className="px-6 py-3 bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 rounded-lg font-semibold transition-colors"
               >
-                🗑️ Clear
+                Clear
               </button>
             )}
           </div>
 
           {/* Ladder Note */}
           {league.format === 'ladder' && (
-            <div className="bg-yellow-900/20 border border-yellow-600 rounded-lg p-4">
-              <p className="text-yellow-400 text-sm">
-                ⚠️ Ladder leagues use on-demand challenges. Players challenge each other to create matches.
-              </p>
+            <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-yellow-400 text-sm">
+              Ladder leagues use on-demand challenges. Players challenge each other to create matches.
             </div>
           )}
         </div>
@@ -1094,64 +1129,65 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
       {/* WEEKS TAB */}
       {activeTab === 'weeks' && (
-        <div className="p-4 space-y-4">
+        <div className="space-y-4">
           {/* V07.39: Box League Weeks - authoritative from boxWeeks collection */}
           {isRotatingBox ? (
             <>
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium text-white">Box League Weeks</h4>
-                <span className="text-sm text-gray-400">
-                  {boxWeeks.length} week{boxWeeks.length !== 1 ? 's' : ''}
-                </span>
-              </div>
-
               {boxWeeks.length === 0 ? (
-                <div className="bg-gray-900/50 rounded-lg p-8 text-center text-gray-400">
-                  No weeks created yet. Generate a schedule first.
+                <div className="bg-gray-800/50 rounded-lg p-8 text-center border border-gray-700/50">
+                  <div className="text-gray-500 text-4xl mb-3">📅</div>
+                  <p className="text-gray-400">No weeks created yet</p>
+                  <p className="text-sm text-gray-500 mt-1">Generate a schedule to create Week 1</p>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {boxWeeks.map(week => {
-                    const prevWeek = boxWeeks.find(w => w.weekNumber === week.weekNumber - 1);
-                    const canRecalculate = week.state === 'draft' &&
-                                          week.weekNumber > 1 &&
-                                          prevWeek?.state === 'finalized';
+                <div className="bg-gray-800/30 rounded-lg border border-gray-700/50 overflow-hidden">
+                  {/* Table Header */}
+                  <div className="grid grid-cols-12 gap-4 px-4 py-3 bg-gray-900/50 border-b border-gray-700/50 text-xs text-gray-500 uppercase tracking-wide">
+                    <div className="col-span-4">Week</div>
+                    <div className="col-span-2">Status</div>
+                    <div className="col-span-2">Progress</div>
+                    <div className="col-span-4 text-right">Actions</div>
+                  </div>
 
-                    // Compute match counts from actual matches (more reliable than cached week.completedMatches)
-                    const weekMatches = matches.filter(m => m.weekNumber === week.weekNumber);
-                    // Check both status === 'completed' and scoreState === 'official' for DUPR compliance
-                    const completedMatches = weekMatches.filter(m =>
-                      m.status === 'completed' || m.scoreState === 'official' || m.scoreState === 'submittedToDupr'
-                    ).length;
-                    const totalMatches = week.totalMatches ?? weekMatches.length;
+                  {/* Week Rows */}
+                  <div className="divide-y divide-gray-700/50">
+                    {boxWeeks.map(week => {
+                      const prevWeek = boxWeeks.find(w => w.weekNumber === week.weekNumber - 1);
+                      const canRecalculate = week.state === 'draft' &&
+                                            week.weekNumber > 1 &&
+                                            prevWeek?.state === 'finalized';
 
-                    return (
-                      <div key={week.weekNumber} className="bg-gray-800 rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            {/* Week Number Badge */}
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
-                              week.state === 'draft' ? 'bg-yellow-500/20 text-yellow-400' :
-                              week.state === 'active' ? 'bg-blue-600/20 text-blue-400' :
-                              week.state === 'closing' ? 'bg-orange-500/20 text-orange-400' :
-                              'bg-green-600/20 text-green-400'
-                            }`}>
-                              {week.weekNumber}
-                            </div>
-                            <div>
-                              <div className="font-medium text-white">Week {week.weekNumber}</div>
-                              <div className="text-sm text-gray-400">
-                                {week.state === 'draft' && 'Draft - Not yet scheduled'}
-                                {week.state === 'active' && `Active - ${completedMatches}/${totalMatches} matches`}
-                                {week.state === 'closing' && 'Closing - Ready to finalize'}
-                                {week.state === 'finalized' && `Finalized - ${completedMatches} matches completed`}
+                      const weekMatches = matches.filter(m => m.weekNumber === week.weekNumber);
+                      const completedMatches = weekMatches.filter(m =>
+                        m.status === 'completed' || m.scoreState === 'official' || m.scoreState === 'submittedToDupr'
+                      ).length;
+                      const totalMatches = week.totalMatches ?? weekMatches.length;
+
+                      return (
+                        <div key={week.weekNumber} className="grid grid-cols-12 gap-4 px-4 py-4 items-center hover:bg-gray-800/30 transition-colors">
+                          {/* Week Info */}
+                          <div className="col-span-4">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                                week.state === 'draft' ? 'bg-yellow-500/20 text-yellow-400' :
+                                week.state === 'active' ? 'bg-blue-500/20 text-blue-400' :
+                                week.state === 'closing' ? 'bg-orange-500/20 text-orange-400' :
+                                'bg-green-500/20 text-green-400'
+                              }`}>
+                                {week.weekNumber}
+                              </div>
+                              <div>
+                                <div className="font-medium text-white">Week {week.weekNumber}</div>
+                                <div className="text-xs text-gray-500">
+                                  {week.scheduledDate && formatDate(week.scheduledDate)}
+                                </div>
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
-                            {/* Status Badge */}
-                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          {/* Status */}
+                          <div className="col-span-2">
+                            <span className={`inline-flex px-2.5 py-1 rounded text-xs font-medium ${
                               week.state === 'draft' ? 'bg-yellow-500/20 text-yellow-400' :
                               week.state === 'active' ? 'bg-blue-500/20 text-blue-400' :
                               week.state === 'closing' ? 'bg-orange-500/20 text-orange-400' :
@@ -1159,111 +1195,102 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                             }`}>
                               {week.state.charAt(0).toUpperCase() + week.state.slice(1)}
                             </span>
+                          </div>
 
-                            {/* Action Buttons - Draft State Only */}
+                          {/* Progress */}
+                          <div className="col-span-2">
+                            {week.state !== 'draft' && totalMatches > 0 ? (
+                              <div className="text-sm">
+                                <span className="text-lime-400 font-medium">{completedMatches}</span>
+                                <span className="text-gray-500">/{totalMatches}</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-gray-500">—</span>
+                            )}
+                          </div>
+
+                          {/* Actions */}
+                          <div className="col-span-4 flex items-center justify-end gap-2 flex-wrap">
+                            {/* Draft State Actions */}
                             {week.state === 'draft' && (
                               <>
-                                {/* Recalculate Boxes - only when previous week finalized */}
                                 {canRecalculate && (
                                   <button
                                     onClick={() => handleRecalculateBoxes(week.weekNumber)}
                                     disabled={loadingWeekAction === week.weekNumber}
-                                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
-                                    title={`Recalculate box assignments based on Week ${week.weekNumber - 1} final standings`}
+                                    className="px-2.5 py-1.5 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
                                   >
-                                    {loadingWeekAction === week.weekNumber ? '...' : 'Recalculate Boxes'}
+                                    {loadingWeekAction === week.weekNumber ? '...' : 'Recalculate'}
                                   </button>
                                 )}
-                                {/* V07.43: Edit Assignments */}
                                 <button
                                   onClick={() => setExpandedDraftWeek(expandedDraftWeek === week.weekNumber ? null : week.weekNumber)}
-                                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                                  className={`px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
                                     expandedDraftWeek === week.weekNumber
-                                      ? 'bg-blue-600 text-white'
-                                      : 'bg-gray-600 hover:bg-gray-500 text-white'
+                                      ? 'bg-blue-500 text-white'
+                                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                                   }`}
-                                  title="Edit box assignments before activation"
                                 >
-                                  {expandedDraftWeek === week.weekNumber ? 'Close Editor' : 'Edit Assignments'}
+                                  {expandedDraftWeek === week.weekNumber ? 'Close' : 'Edit'}
                                 </button>
-                                {/* Activate Week */}
                                 <button
                                   onClick={() => handleActivateWeek(week.weekNumber)}
                                   disabled={loadingWeekAction === week.weekNumber}
-                                  className="px-3 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
+                                  className="px-2.5 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 rounded text-xs font-medium text-white transition-colors"
                                 >
-                                  {loadingWeekAction === week.weekNumber ? 'Activating...' : 'Activate Week'}
+                                  {loadingWeekAction === week.weekNumber ? '...' : 'Activate'}
                                 </button>
                               </>
                             )}
 
-                            {/* Action Buttons - Active State */}
+                            {/* Active State Actions */}
                             {week.state === 'active' && (
                               <>
-                                {/* V07.41: Renamed to "Close Week" for consistency with Standings tab */}
                                 {completedMatches === totalMatches && totalMatches > 0 && (
                                   <button
                                     onClick={() => handleLockWeek(week.weekNumber)}
                                     disabled={loadingWeekAction === week.weekNumber}
-                                    className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
-                                    title="Close week and prepare for finalization"
+                                    className="px-2.5 py-1.5 bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
                                   >
-                                    {loadingWeekAction === week.weekNumber ? 'Closing...' : 'Close Week'}
+                                    {loadingWeekAction === week.weekNumber ? '...' : 'Close Week'}
                                   </button>
                                 )}
                                 <button
                                   onClick={() => handleDeactivateWeek(week.weekNumber)}
                                   disabled={loadingWeekAction === week.weekNumber}
-                                  className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
-                                  title="Reset to draft and delete all matches (for testing)"
+                                  className="px-2.5 py-1.5 bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
                                 >
-                                  {loadingWeekAction === week.weekNumber ? 'Deactivating...' : 'Deactivate'}
+                                  {loadingWeekAction === week.weekNumber ? '...' : 'Deactivate'}
                                 </button>
                               </>
                             )}
 
-                            {/* Action Buttons - Closing State */}
+                            {/* Closing State Actions */}
                             {week.state === 'closing' && (
                               <button
                                 onClick={() => handleFinalizeWeek(week.weekNumber)}
                                 disabled={loadingWeekAction === week.weekNumber}
-                                className="px-3 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
-                                title="Finalize week, apply promotion/relegation, and create next week draft"
+                                className="px-2.5 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 rounded text-xs font-medium text-white transition-colors"
                               >
-                                {loadingWeekAction === week.weekNumber ? 'Finalizing...' : 'Finalize Week'}
+                                {loadingWeekAction === week.weekNumber ? '...' : 'Finalize'}
                               </button>
                             )}
 
-                            {/* Action Buttons - Finalized State: Create Next Week if missing */}
+                            {/* Finalized State Actions */}
                             {week.state === 'finalized' && !boxWeeks.some(w => w.weekNumber === week.weekNumber + 1) && (
                               <button
                                 onClick={() => handleCreateNextWeek(week.weekNumber)}
                                 disabled={loadingWeekAction === week.weekNumber}
-                                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors"
-                                title="Create next week draft from this week's standings"
+                                className="px-2.5 py-1.5 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
                               >
-                                {loadingWeekAction === week.weekNumber ? 'Creating...' : 'Create Next Week'}
+                                {loadingWeekAction === week.weekNumber ? '...' : 'Create Next'}
                               </button>
                             )}
                           </div>
                         </div>
-
-                        {/* Box Assignments Preview for Draft Weeks */}
-                        {week.state === 'draft' && week.boxAssignments && week.boxAssignments.length > 0 && (
-                          <div className="mt-3 pt-3 border-t border-gray-700">
-                            <div className="text-sm text-gray-400 mb-2">Box Assignments:</div>
-                            <div className="flex flex-wrap gap-2">
-                              {week.boxAssignments.map(box => (
-                                <span key={box.boxNumber} className="px-2 py-1 bg-gray-700 rounded text-xs">
-                                  Box {box.boxNumber}: {box.playerIds.length} players
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
@@ -1666,29 +1693,29 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
       {/* Clear Confirmation Modal */}
       {showConfirmClear && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-          <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full border border-gray-700">
-            <h3 className="text-lg font-bold text-white mb-3">
-              🗑️ Clear Scheduled Matches?
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 rounded-xl p-6 max-w-md w-full border border-gray-700/50 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-3">
+              Clear Scheduled Matches?
             </h3>
             <p className="text-gray-400 text-sm mb-2">
-              This will delete {matchStats.scheduled} scheduled matches.
+              This will delete <span className="text-white font-medium">{matchStats.scheduled}</span> scheduled matches.
               Completed matches will not be affected.
             </p>
-            <p className="text-gray-500 text-sm mb-4">
+            <p className="text-gray-500 text-sm mb-5">
               You can regenerate the schedule after clearing.
             </p>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowConfirmClear(false)}
-                className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
+                className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleClearMatches}
                 disabled={clearing}
-                className="flex-1 py-2 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
               >
                 {clearing ? 'Clearing...' : 'Clear Matches'}
               </button>

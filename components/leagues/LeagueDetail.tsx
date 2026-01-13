@@ -102,7 +102,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'players' | 'courts' | 'schedule' | 'dupr' | 'organizer' | 'info' | 'comms';
+type TabType = 'standings' | 'matches' | 'players' | 'courts' | 'dupr' | 'organizer' | 'info';
 
 // ============================================
 // SORTABLE TIEBREAKER ITEM (V07.36)
@@ -205,7 +205,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [activeTab, setActiveTab] = useState<TabType>('standings');
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [activeWeekTab, setActiveWeekTab] = useState<string>(''); // For matches sub-tabs
-  const [organizerSubTab, setOrganizerSubTab] = useState<'matches' | 'absentees'>('matches'); // V07.37: Organizer sub-tabs
+  const [organizerSubTab, setOrganizerSubTab] = useState<'schedule' | 'matches' | 'absentees' | 'comms'>('schedule'); // V07.43: Organizer sub-tabs
   const [activeStandingsTab, setActiveStandingsTab] = useState<string>('overall'); // V07.16: For standings sub-tabs
   const [joining, setJoining] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -1222,15 +1222,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     setEditingMovement(false);
   };
 
-  // V07.35: Add 'organizer' tab for non-DUPR leagues (match management without DUPR submission)
+  // V07.43: Consolidated organizer tab - schedule and comms moved inside organizer sub-tabs
   const availableTabs: TabType[] = isOrganizer
     ? isBoxLeagueFormat
       ? isDuprEnabled
-        ? ['standings', 'matches', 'players', 'courts', 'schedule', 'dupr', 'info', 'comms']
-        : ['standings', 'matches', 'players', 'courts', 'schedule', 'organizer', 'info', 'comms']
+        ? ['standings', 'matches', 'players', 'courts', 'organizer', 'dupr', 'info']
+        : ['standings', 'matches', 'players', 'courts', 'organizer', 'info']
       : isDuprEnabled
-        ? ['standings', 'matches', 'players', 'schedule', 'dupr', 'info', 'comms']
-        : ['standings', 'matches', 'players', 'schedule', 'organizer', 'info', 'comms']
+        ? ['standings', 'matches', 'players', 'organizer', 'dupr', 'info']
+        : ['standings', 'matches', 'players', 'organizer', 'info']
     : ['standings', 'matches', 'players', 'info'];
 
   return (
@@ -1725,11 +1725,11 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {tab === 'standings' && '🏆 '}
             {tab === 'matches' && '🎾 '}
             {tab === 'players' && '👥 '}
-            {tab === 'schedule' && '📅 '}
+            {tab === 'courts' && '🏟️ '}
+            {tab === 'organizer' && '⚙️ '}
             {tab === 'dupr' && '📊 '}
             {tab === 'info' && 'ℹ️ '}
-            {tab === 'comms' && '📨 '}
-            {tab === 'dupr' ? 'DUPR' : tab === 'schedule' ? 'Weekly Schedule' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            {tab === 'dupr' ? 'DUPR' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
       </div>
@@ -2399,17 +2399,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         </div>
       )}
 
-      {/* SCHEDULE TAB - Organizer Only */}
-      {activeTab === 'schedule' && isOrganizer && (
-        <LeagueScheduleManager
-          league={league}
-          members={members}
-          matches={matches}
-          divisions={divisions}
-          onScheduleGenerated={handleScheduleGenerated}
-        />
-      )}
-
       {/* COURTS TAB - Box League Organizer Only */}
       {activeTab === 'courts' && isOrganizer && isBoxLeagueFormat && (
         <div className="space-y-6">
@@ -2556,25 +2545,35 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         />
       )}
 
-      {/* V07.35: ORGANIZER TAB - For non-DUPR leagues match management */}
+      {/* V07.43: ORGANIZER TAB - Consolidated with Schedule, Matches, Absentees sub-tabs */}
       {activeTab === 'organizer' && isOrganizer && (
         <div className="space-y-4">
-          {/* V07.37: Organizer Sub-tabs */}
-          {isBoxLeagueFormat && (
-            <div className="flex gap-2 border-b border-gray-700 pb-3">
-              <button
-                onClick={() => setOrganizerSubTab('matches')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  organizerSubTab === 'matches'
-                    ? 'bg-lime-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                }`}
-              >
-                Matches
-              </button>
+          {/* Organizer Sub-tabs */}
+          <div className="flex gap-2 border-b border-gray-700 pb-3 overflow-x-auto">
+            <button
+              onClick={() => setOrganizerSubTab('schedule')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                organizerSubTab === 'schedule'
+                  ? 'bg-lime-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Schedule
+            </button>
+            <button
+              onClick={() => setOrganizerSubTab('matches')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                organizerSubTab === 'matches'
+                  ? 'bg-lime-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Matches
+            </button>
+            {isBoxLeagueFormat && (
               <button
                 onClick={() => setOrganizerSubTab('absentees')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                   organizerSubTab === 'absentees'
                     ? 'bg-lime-600 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
@@ -2582,11 +2581,32 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               >
                 Absentees
               </button>
-            </div>
+            )}
+            <button
+              onClick={() => setOrganizerSubTab('comms')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                organizerSubTab === 'comms'
+                  ? 'bg-lime-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Comms
+            </button>
+          </div>
+
+          {/* Schedule Sub-tab */}
+          {organizerSubTab === 'schedule' && (
+            <LeagueScheduleManager
+              league={league}
+              members={members}
+              matches={matches}
+              divisions={divisions}
+              onScheduleGenerated={handleScheduleGenerated}
+            />
           )}
 
-          {/* Matches Sub-tab (default) */}
-          {(organizerSubTab === 'matches' || !isBoxLeagueFormat) && (
+          {/* Matches Sub-tab */}
+          {organizerSubTab === 'matches' && (
             <OrganizerMatchPanel
               leagueId={leagueId}
               leagueName={league.name}
@@ -2603,7 +2623,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             />
           )}
 
-          {/* V07.37: Absentees Sub-tab (Box League only) */}
+          {/* Absentees Sub-tab (Box League only) */}
           {organizerSubTab === 'absentees' && isBoxLeagueFormat && currentUser && (
             <BoxLeagueAbsencePanel
               leagueId={leagueId}
@@ -2611,6 +2631,16 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               currentUserId={currentUser.uid}
               isOrganizer={isOrganizer}
               members={members}
+            />
+          )}
+
+          {/* Comms Sub-tab */}
+          {organizerSubTab === 'comms' && (
+            <LeagueCommsTab
+              league={league}
+              divisions={divisions}
+              members={members}
+              currentUserId={currentUser?.uid || ''}
             />
           )}
         </div>
@@ -2937,7 +2967,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               <div className="mb-6">
                 <h4 className="font-semibold text-lime-400 mb-2">1. Starting the League</h4>
                 <ul className="text-sm text-gray-300 space-y-1 ml-4">
-                  <li>• Go to <span className="text-white font-medium">Schedule tab</span></li>
+                  <li>• Go to <span className="text-white font-medium">Organizer tab → Schedule</span></li>
                   <li>• Click <span className="text-white font-medium">"Generate Schedule"</span></li>
                   <li>• Week 1 is created with players sorted by DUPR rating into boxes</li>
                   <li>• Matches are automatically generated for all boxes</li>
@@ -3002,7 +3032,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               <div className="mb-6">
                 <h4 className="font-semibold text-lime-400 mb-2">5. Moving to Next Week</h4>
                 <ul className="text-sm text-gray-300 space-y-1 ml-4">
-                  <li>• Go to <span className="text-white font-medium">Schedule tab</span></li>
+                  <li>• Go to <span className="text-white font-medium">Organizer tab → Schedule</span></li>
                   <li>• Click <span className="text-white font-medium">"Generate Next Week"</span></li>
                   <li>• Promotions/relegations are applied automatically</li>
                   <li>• New matches generated with updated box assignments</li>
@@ -3029,15 +3059,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         </div>
       )}
 
-      {/* COMMS TAB - V07.17: League Communications */}
-      {activeTab === 'comms' && isOrganizer && (
-        <LeagueCommsTab
-          league={league}
-          divisions={divisions}
-          members={members}
-          currentUserId={currentUser?.uid || ''}
-        />
-      )}
 
 {/* ================================================
     END OF PART 1 - PASTE PART 2 DIRECTLY BELOW THIS

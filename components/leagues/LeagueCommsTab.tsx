@@ -77,100 +77,56 @@ const normalizePhone = (phone: string | null | undefined): string | null => {
   return phone;
 };
 
-// ============================================
-// ICONS
-// ============================================
-
-const ComposeIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-  </svg>
-);
-
-const TemplateIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
-  </svg>
-);
-
-const HistoryIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-  </svg>
-);
-
-const MessageIcon = () => (
-  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-  </svg>
-);
 
 // ============================================
-// STAT CARD COMPONENT
+// STAT CARD COMPONENT - Left Border Style
 // ============================================
 
 interface StatCardProps {
   label: string;
   value: number;
   color: 'yellow' | 'green' | 'red' | 'blue';
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ label, value, color, icon }) => {
+const StatCard: React.FC<StatCardProps> = ({ label, value, color }) => {
   const colorClasses = {
-    yellow: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400',
-    green: 'bg-green-500/10 border-green-500/30 text-green-400',
-    red: 'bg-red-500/10 border-red-500/30 text-red-400',
-    blue: 'bg-blue-500/10 border-blue-500/30 text-blue-400',
-  };
-
-  const iconBgClasses = {
-    yellow: 'bg-yellow-500/20',
-    green: 'bg-green-500/20',
-    red: 'bg-red-500/20',
-    blue: 'bg-blue-500/20',
+    yellow: 'border-yellow-500 text-yellow-400',
+    green: 'border-green-500 text-green-400',
+    red: 'border-red-500 text-red-400',
+    blue: 'border-blue-500 text-blue-400',
   };
 
   return (
-    <div className={`rounded-xl border px-4 py-3 ${colorClasses[color]}`}>
-      <div className="flex items-center gap-3">
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${iconBgClasses[color]}`}>
-          {icon}
-        </div>
-        <div>
-          <div className="text-2xl font-bold">{value}</div>
-          <div className="text-xs opacity-70">{label}</div>
-        </div>
-      </div>
+    <div className={`bg-gray-800/50 rounded-lg p-4 border-l-4 ${colorClasses[color]}`}>
+      <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</div>
+      <div className={`text-2xl font-bold ${colorClasses[color].split(' ')[1]}`}>{value}</div>
     </div>
   );
 };
 
 // ============================================
-// SECTION TAB BUTTON
+// SECTION TAB BUTTON - Underline Style
 // ============================================
 
 interface TabButtonProps {
   active: boolean;
   onClick: () => void;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   children: React.ReactNode;
 }
 
-const TabButton: React.FC<TabButtonProps> = ({ active, onClick, icon, children }) => (
+const TabButton: React.FC<TabButtonProps> = ({ active, onClick, children }) => (
   <button
     onClick={onClick}
-    className={`
-      flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm
-      transition-all duration-200
-      ${active
-        ? 'bg-lime-500/20 text-lime-400 border border-lime-500/30'
-        : 'bg-gray-800/50 text-gray-400 border border-gray-700/50 hover:bg-gray-700/50 hover:text-gray-300'
-      }
-    `}
+    className={`pb-3 text-sm font-medium transition-colors relative ${
+      active ? 'text-white' : 'text-gray-400 hover:text-gray-300'
+    }`}
   >
-    {icon}
     {children}
+    {active && (
+      <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+    )}
   </button>
 );
 
@@ -982,18 +938,12 @@ export const LeagueCommsTab: React.FC<LeagueCommsTabProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Header with SMS Credits */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lime-500/20 to-green-500/10 border border-lime-500/30 flex items-center justify-center">
-            <MessageIcon />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-white">Communications</h2>
-            <p className="text-sm text-gray-400">Send SMS and email to league players</p>
-          </div>
+      {/* Header - Clean Style */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-white">Communications</h2>
+          <p className="text-sm text-gray-400 mt-1">Send SMS and email to league players</p>
         </div>
-
         {/* SMS Credits Card (compact) */}
         <SMSCreditsCard
           userId={currentUserId}
@@ -1011,66 +961,31 @@ export const LeagueCommsTab: React.FC<LeagueCommsTabProps> = ({
         />
       )}
 
-      {/* Stats Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard
-          label="Total Messages"
-          value={stats.total}
-          color="blue"
-          icon={<MessageIcon />}
-        />
-        <StatCard
-          label="Pending"
-          value={stats.pending}
-          color="yellow"
-          icon={
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Sent"
-          value={stats.sent}
-          color="green"
-          icon={
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Failed"
-          value={stats.failed}
-          color="red"
-          icon={
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          }
-        />
+      {/* Stats Row - Left Border Style */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Total" value={stats.total} color="blue" />
+        <StatCard label="Pending" value={stats.pending} color="yellow" />
+        <StatCard label="Sent" value={stats.sent} color="green" />
+        <StatCard label="Failed" value={stats.failed} color="red" />
       </div>
 
-      {/* Section Tabs */}
-      <div className="flex gap-2 flex-wrap">
+      {/* Section Tabs - Underline Style */}
+      <div className="flex gap-6 border-b border-gray-700">
         <TabButton
           active={activeSection === 'compose'}
           onClick={() => setActiveSection('compose')}
-          icon={<ComposeIcon />}
         >
           Compose
         </TabButton>
         <TabButton
           active={activeSection === 'templates'}
           onClick={() => setActiveSection('templates')}
-          icon={<TemplateIcon />}
         >
           Templates
         </TabButton>
         <TabButton
           active={activeSection === 'history'}
           onClick={() => setActiveSection('history')}
-          icon={<HistoryIcon />}
         >
           History
         </TabButton>

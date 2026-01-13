@@ -526,16 +526,17 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
   const boxNumbers = localAssignments.map(b => b.boxNumber).sort((a, b) => a - b);
 
   return (
-    <div className="bg-gray-900 rounded-xl border border-gray-700 overflow-hidden">
-      {/* Header */}
-      <div className="bg-gray-800 px-4 py-3 flex items-center justify-between border-b border-gray-700">
+    <div className="bg-gray-800/30 rounded-lg border border-gray-700/50 overflow-hidden">
+      {/* Header - Clean Style */}
+      <div className="px-4 py-4 flex items-start justify-between border-b border-gray-700/50">
         <div>
-          <h3 className="text-lg font-bold text-white">Week {week.weekNumber} Draft</h3>
-          <p className="text-sm text-gray-400">Drag players to reorder or move between boxes</p>
+          <h3 className="text-lg font-semibold text-white">Week {week.weekNumber} Draft</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Drag players to reorder or move between boxes</p>
         </div>
         <button
           onClick={onClose}
-          className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+          className="p-1.5 text-gray-500 hover:text-white transition-colors"
+          aria-label="Close"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -543,14 +544,14 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
         </button>
       </div>
 
-      {/* Action Buttons */}
-      <div className="px-4 py-3 bg-gray-800/50 border-b border-gray-700 flex items-center justify-between gap-3 flex-wrap">
+      {/* Action Bar - Subtle Style */}
+      <div className="px-4 py-3 bg-gray-900/30 border-b border-gray-700/50 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           {week.weekNumber >= 2 && (
             <button
               onClick={handleReset}
               disabled={resetting || saving || activating}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+              className="px-3 py-1.5 bg-gray-700/50 hover:bg-gray-700 disabled:opacity-50 text-gray-300 rounded text-sm font-medium transition-colors"
             >
               {resetting ? 'Resetting...' : 'Reset to Auto'}
             </button>
@@ -559,7 +560,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
             <button
               onClick={handleSave}
               disabled={saving || activating}
-              className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+              className="px-3 py-1.5 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-50 rounded text-sm font-medium transition-colors"
             >
               {saving ? 'Saving...' : 'Save Changes'}
             </button>
@@ -571,43 +572,43 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
           <button
             onClick={handleActivate}
             disabled={activating || saving || resetting}
-            className="px-4 py-2 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+            className="px-4 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 text-white rounded text-sm font-medium transition-colors"
           >
             {activating ? 'Activating...' : 'Activate Week'}
           </button>
         )}
       </div>
 
-      {/* Error Message */}
-      {error && (
-        <div className="mx-4 mt-3 bg-red-900/30 border border-red-600 rounded-lg p-3 text-sm text-red-300">
-          {error}
-        </div>
-      )}
-
-      {/* Unsaved Changes Indicator */}
-      {hasChanges && (
-        <div className="mx-4 mt-3 bg-yellow-900/30 border border-yellow-600 rounded-lg p-3 text-sm text-yellow-300">
-          You have unsaved changes
-        </div>
-      )}
+      {/* Status Messages */}
+      <div className="px-4 pt-3 space-y-2">
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+        {hasChanges && (
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-sm text-yellow-400 flex items-center gap-2">
+            <span>●</span>
+            <span>You have unsaved changes</span>
+          </div>
+        )}
+      </div>
 
       {/* Boxes Grid */}
       <div className="p-4">
         {/* Expand/Collapse Controls */}
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm text-gray-400">{totalBoxes} boxes</span>
-          <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">{totalBoxes} boxes</span>
+          <div className="flex items-center gap-3 text-xs">
             <button
               onClick={() => setExpandedBoxes(new Set(boxNumbers))}
-              className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+              className="text-gray-400 hover:text-lime-400 transition-colors"
             >
               Expand All
             </button>
-            <span className="text-gray-600">|</span>
             <button
               onClick={() => setExpandedBoxes(new Set())}
-              className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+              className="text-gray-400 hover:text-lime-400 transition-colors"
             >
               Collapse All
             </button>
@@ -656,25 +657,28 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
       {/* Absences Summary */}
       {week.absences && week.absences.length > 0 && (
         <div className="px-4 pb-4">
-          <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-            <h4 className="text-sm font-medium text-white mb-2">
-              Declared Absences ({week.absences.length})
-            </h4>
-            <div className="space-y-1">
+          <div className="bg-orange-500/5 rounded-lg border border-orange-500/20 overflow-hidden">
+            <div className="px-3 py-2 bg-orange-500/10 border-b border-orange-500/20">
+              <span className="text-sm font-medium text-orange-400">
+                Declared Absences ({week.absences.length})
+              </span>
+            </div>
+            <div className="divide-y divide-gray-700/30">
               {week.absences.map(absence => {
                 const member = memberMap.get(absence.playerId);
                 return (
-                  <div key={absence.playerId} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-300">
-                      {member?.displayName || 'Unknown'} (Box {absence.boxNumber})
+                  <div key={absence.playerId} className="px-3 py-2 flex items-center justify-between text-sm">
+                    <div className="text-gray-300">
+                      <span className="font-medium">{member?.displayName || 'Unknown'}</span>
+                      <span className="text-gray-500 ml-2">Box {absence.boxNumber}</span>
                       {absence.reason && (
-                        <span className="text-gray-500 ml-2">- {absence.reason}</span>
+                        <span className="text-gray-600 ml-2">• {absence.reason}</span>
                       )}
-                    </span>
+                    </div>
                     {absence.substituteName ? (
-                      <span className="text-cyan-400">Sub: {absence.substituteName}</span>
+                      <span className="text-cyan-400 text-xs">Sub: {absence.substituteName}</span>
                     ) : (
-                      <span className="text-orange-400">No substitute</span>
+                      <span className="text-orange-400/70 text-xs">No sub</span>
                     )}
                   </div>
                 );

@@ -517,21 +517,31 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
     : 'TBD';
 
   return (
-    <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-      {/* Header */}
-      <div className="px-4 py-3 bg-gray-900/50 border-b border-gray-700 flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h4 className="text-lg font-semibold text-white">Week {week.weekNumber}</h4>
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${stateColors[week.state]}`}>
-              {week.state.charAt(0).toUpperCase() + week.state.slice(1)}
-            </span>
+    <div className="bg-gray-800/30 rounded-lg border border-gray-700/50 overflow-hidden">
+      {/* Header - Clean Table Row Style */}
+      <div className="px-4 py-3 bg-gray-900/30 border-b border-gray-700/50 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm ${
+            week.state === 'draft' ? 'bg-yellow-500/20 text-yellow-400' :
+            week.state === 'active' ? 'bg-green-500/20 text-green-400' :
+            week.state === 'closing' ? 'bg-orange-500/20 text-orange-400' :
+            'bg-gray-500/20 text-gray-400'
+          }`}>
+            {week.weekNumber}
           </div>
-          <p className="text-sm text-gray-400">{scheduledDate}</p>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="font-semibold text-white">Week {week.weekNumber}</h4>
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${stateColors[week.state].replace('border', '').replace(' border-', '')}`}>
+                {week.state.charAt(0).toUpperCase() + week.state.slice(1)}
+              </span>
+            </div>
+            <p className="text-sm text-gray-500">{scheduledDate}</p>
+          </div>
         </div>
         {myBox && (
           <div className="text-right">
-            <p className="text-xs text-gray-400">Your Box</p>
+            <span className="text-xs text-gray-500">Your Box</span>
             <p className="text-lg font-bold text-lime-400">Box {myBox}</p>
           </div>
         )}
@@ -592,31 +602,35 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
       {/* Organizer View: All Absences */}
       {isOrganizer && (
         <div className="px-4 py-3">
-          <h5 className="text-sm font-medium text-gray-300 mb-2">
+          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">
             Absences ({absences.length})
-          </h5>
+          </div>
 
           {absences.length === 0 ? (
-            <p className="text-sm text-gray-500">No absences declared</p>
+            <p className="text-sm text-gray-500 py-2">No absences declared</p>
           ) : (
-            <div className="space-y-2">
+            <div className="divide-y divide-gray-700/30">
               {absences.map((absence) => {
                 const member = memberMap.get(absence.playerId);
                 return (
                   <div
                     key={absence.playerId}
-                    className="flex items-center justify-between bg-gray-900/50 rounded-lg p-3"
+                    className="flex items-center justify-between py-3"
                   >
                     <div>
-                      <p className="text-white font-medium">
+                      <p className="text-white font-medium text-sm">
                         {absence.playerName || member?.displayName || 'Unknown'}
-                        <span className="ml-2 text-xs text-gray-400">Box {absence.boxNumber}</span>
+                        <span className="ml-2 text-xs text-gray-500">Box {absence.boxNumber}</span>
                       </p>
-                      <p className="text-xs text-gray-400">
-                        {absence.isNoShow ? '❌ No-show' : `📋 ${absence.reason || 'Personal'}`}
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {absence.isNoShow ? (
+                          <span className="text-orange-400">No-show</span>
+                        ) : (
+                          <span>{absence.reason || 'Personal'}</span>
+                        )}
                         {absence.substituteId && (
                           <span className="ml-2 text-lime-400">
-                            → Ghost: {absence.substituteName || 'Unknown'}
+                            → Sub: {absence.substituteName || 'Unknown'}
                           </span>
                         )}
                       </p>
@@ -625,7 +639,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                       {!absence.substituteId && week.state !== 'finalized' && (
                         <button
                           onClick={() => onAssignSub(week, absence)}
-                          className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-colors"
+                          className="px-2.5 py-1 bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 rounded text-xs font-medium transition-colors"
                         >
                           Assign Sub
                         </button>
@@ -633,7 +647,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                       {absence.substituteId && week.state === 'draft' && (
                         <button
                           onClick={() => onRemoveSub(week, absence)}
-                          className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium transition-colors"
+                          className="px-2.5 py-1 bg-gray-700/50 text-gray-300 hover:bg-gray-700 rounded text-xs font-medium transition-colors"
                         >
                           Remove Sub
                         </button>
@@ -641,7 +655,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                       {week.state !== 'finalized' && (
                         <button
                           onClick={() => onMakeActive(week, absence.playerId)}
-                          className="px-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-medium transition-colors"
+                          className="px-2.5 py-1 bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded text-xs font-medium transition-colors"
                         >
                           Make Active
                         </button>
@@ -655,8 +669,8 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
 
           {/* Mark No-Show (only during active state) */}
           {week.state === 'active' && (
-            <div className="mt-3 pt-3 border-t border-gray-700">
-              <p className="text-xs text-gray-400 mb-2">Mark player as no-show:</p>
+            <div className="mt-3 pt-3 border-t border-gray-700/50">
+              <p className="text-xs text-gray-500 mb-2">Mark player as no-show:</p>
               <div className="flex flex-wrap gap-2">
                 {(week.boxAssignments || []).flatMap(box =>
                   box.playerIds
@@ -667,7 +681,7 @@ const WeekAbsenceCard: React.FC<WeekAbsenceCardProps> = ({
                         <button
                           key={pid}
                           onClick={() => onMarkNoShow(week, pid, m?.displayName || 'Unknown')}
-                          className="px-2 py-1 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 border border-orange-600/50 rounded text-xs font-medium transition-colors"
+                          className="px-2 py-1 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/30 rounded text-xs font-medium transition-colors"
                         >
                           {m?.displayName || pid.slice(0, 8)}
                         </button>
@@ -811,30 +825,26 @@ export const BoxLeagueAbsencePanel: React.FC<BoxLeagueAbsencePanelProps> = ({
   }
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-              <span>📋</span> Absence Management
-            </h3>
-            <p className="text-sm text-gray-400 mt-1">
-              {isOrganizer
-                ? 'View and manage player absences and substitutes'
-                : 'Declare your absence for upcoming weeks'}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-xs text-gray-400">Absence Policy</p>
-            <p className="text-sm font-medium text-lime-400">{formatPolicyName(absencePolicy)}</p>
-          </div>
+    <div className="space-y-6">
+      {/* Header - Match Management Style */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-white">Absence Management</h2>
+          <p className="text-sm text-gray-400 mt-1">
+            {isOrganizer
+              ? 'View and manage player absences and substitutes'
+              : 'Declare your absence for upcoming weeks'}
+          </p>
+        </div>
+        <div className="text-right">
+          <span className="text-xs text-gray-500 uppercase tracking-wide">Absence Policy</span>
+          <p className="text-sm font-medium text-lime-400">{formatPolicyName(absencePolicy)}</p>
         </div>
       </div>
 
       {/* Error banner */}
       {actionError && (
-        <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 flex items-center justify-between">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 flex items-center justify-between">
           <p className="text-red-400 text-sm">{actionError}</p>
           <button
             onClick={() => setActionError(null)}
