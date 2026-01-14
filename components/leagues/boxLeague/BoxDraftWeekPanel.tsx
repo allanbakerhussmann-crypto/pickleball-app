@@ -766,8 +766,15 @@ const CourtAssignmentArea: React.FC<CourtAssignmentAreaProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
 
+  // Filter active courts and sessions first (needed for unassigned calculation)
+  const activeCourts = courts.filter(c => c.active).sort((a, b) => a.order - b.order);
+  const activeSessions = sessions.filter(s => s.active).sort((a, b) => a.order - b.order);
+  const activeCourtIds = new Set(activeCourts.map(c => c.id));
+
   // Derive unassigned boxes (Holding area)
-  const assignedBoxNumbers = new Set(courtAssignments.map(a => a.boxNumber));
+  // A box is unassigned if it has no assignment OR its assigned court is no longer active
+  const validAssignments = courtAssignments.filter(a => activeCourtIds.has(a.courtId));
+  const assignedBoxNumbers = new Set(validAssignments.map(a => a.boxNumber));
   const unassignedBoxes = boxNumbers.filter(b => !assignedBoxNumbers.has(b));
 
   // Get box assigned to a specific cell
@@ -782,10 +789,6 @@ const CourtAssignmentArea: React.FC<CourtAssignmentAreaProps> = ({
   const isCellOver = (courtId: string, sessionIndex: number): boolean => {
     return overDroppableId === `court-cell-${courtId}-${sessionIndex}`;
   };
-
-  // Filter active courts and sessions
-  const activeCourts = courts.filter(c => c.active).sort((a, b) => a.order - b.order);
-  const activeSessions = sessions.filter(s => s.active).sort((a, b) => a.order - b.order);
 
   // Check if Holding area is being hovered
   const isHoldingOver = overDroppableId === 'court-holding';
@@ -818,7 +821,7 @@ const CourtAssignmentArea: React.FC<CourtAssignmentAreaProps> = ({
           </svg>
           Court Assignments
           <span className="text-xs text-gray-500 font-normal">
-            ({courtAssignments.length}/{boxNumbers.length} assigned)
+            ({validAssignments.length}/{boxNumbers.length} assigned)
           </span>
         </h4>
         <svg
@@ -1156,20 +1159,34 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
       // Initialize court assignments from week data
       if (week.courtAssignments && week.courtAssignments.length > 0) {
-        // Ensure all assignments have proper schema (courtId + sessionIndex)
-        const normalized = week.courtAssignments.map(ca => ({
-          boxNumber: ca.boxNumber,
-          courtId: (ca as any).courtId || `court_${ca.courtLabel?.replace(/\s+/g, '_').toLowerCase() || 'unknown'}`,
-          courtLabel: ca.courtLabel || 'Unknown Court',
-          sessionIndex: (ca as any).sessionIndex ?? 0,
-        }));
-        setLocalCourtAssignments(normalized);
+        const venueCourts = league.settings?.rotatingDoublesBox?.venue?.courts || [];
+
+        // Normalize assignments - match courts by ID first, then by label
+        const normalized = week.courtAssignments.map(ca => {
+          // Try to find matching venue court by ID first, then by label
+          let matchedCourt = venueCourts.find(c => c.id === (ca as any).courtId);
+          if (!matchedCourt && ca.courtLabel) {
+            matchedCourt = venueCourts.find(c =>
+              c.name.toLowerCase() === ca.courtLabel.toLowerCase()
+            );
+          }
+
+          return {
+            boxNumber: ca.boxNumber,
+            courtId: matchedCourt?.id || (ca as any).courtId || '',
+            courtLabel: ca.courtLabel || matchedCourt?.name || 'Unknown Court',
+            sessionIndex: (ca as any).sessionIndex ?? 0,
+          };
+        });
+
+        // Filter out assignments with no valid court match
+        setLocalCourtAssignments(normalized.filter(a => a.courtId));
       }
 
       setIsInitialized(true);
       setHasChanges(false);
     }
-  }, [week.boxAssignments, week.absences, week.courtAssignments, memberMap, userRatings, isInitialized]);
+  }, [week.boxAssignments, week.absences, week.courtAssignments, memberMap, userRatings, isInitialized, league]);
 
   // Convert assignments to DraftPlayer arrays grouped by box
   const playersByBox: Map<number, DraftPlayer[]> = useMemo(() => {

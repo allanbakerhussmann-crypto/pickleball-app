@@ -65,7 +65,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { LeagueScheduleManager } from './LeagueScheduleManager';
-import { BoxPlayerDragDrop, RotatingBoxPlayerManager, BoxLeagueAbsencePanel } from './boxLeague';
+import { BoxPlayerDragDrop, RotatingBoxPlayerManager } from './boxLeague';
 import { BoxLeagueStandings } from './boxLeague/BoxLeagueStandings';
 import { PlayerSeedingList } from './PlayerSeedingList';
 import { LeagueMatchCard } from './LeagueMatchCard';
@@ -86,6 +86,8 @@ import { collection, onSnapshot, query, orderBy } from '@firebase/firestore';
 import { LeagueStandings } from './LeagueStandings';
 import { LeagueCommsTab } from './LeagueCommsTab';
 import { LeagueRegistrationWizard } from './LeagueRegistrationWizard';
+import { BoxLeagueVenueConfig } from './BoxLeagueVenueConfig';
+import type { BoxLeagueVenueSettings } from '../../types/rotatingDoublesBox';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
 import { OrganizerMatchPanel } from '../shared/OrganizerMatchPanel';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
@@ -103,7 +105,7 @@ interface LeagueDetailProps {
   onBack: () => void;
 }
 
-type TabType = 'standings' | 'matches' | 'players' | 'courts' | 'dupr' | 'organizer' | 'info';
+type TabType = 'standings' | 'matches' | 'players' | 'dupr' | 'organizer' | 'info'; // V07.50: Removed 'courts' (moved to organizer sub-tab)
 
 // ============================================
 // SORTABLE TIEBREAKER ITEM (V07.36)
@@ -208,7 +210,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [activeTab, setActiveTab] = useState<TabType>('standings');
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [activeWeekTab, setActiveWeekTab] = useState<string>(''); // For matches sub-tabs
-  const [organizerSubTab, setOrganizerSubTab] = useState<'schedule' | 'matches' | 'absentees' | 'comms'>('schedule'); // V07.43: Organizer sub-tabs
+  const [organizerSubTab, setOrganizerSubTab] = useState<'schedule' | 'matches' | 'comms' | 'venue' | 'rules'>('schedule'); // V07.43: Organizer sub-tabs, V07.50: Removed absentees (now in weeks), added venue, rules
   const [activeStandingsTab, setActiveStandingsTab] = useState<string>('overall'); // V07.16: For standings sub-tabs
   const [joining, setJoining] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -231,6 +233,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [inviteAcknowledged, setInviteAcknowledged] = useState(false); // V07.27: User acknowledged league rules
   // V07.27: Join requests now use direct join (no approval needed) - subscription kept for cleanup
   const [pendingJoinRequests, setPendingJoinRequests] = useState<LeagueJoinRequest[]>([]);
+  // V07.50: Venue settings editing
+  const [venueSettings, setVenueSettings] = useState<BoxLeagueVenueSettings | null>(null);
+  const [savingVenue, setSavingVenue] = useState(false);
+  const [venueHasChanges, setVenueHasChanges] = useState(false);
   const [editForm, setEditForm] = useState({
     // Basic Info
     name: '',
@@ -364,6 +370,11 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           roundRobinRounds: data.settings?.roundRobinSettings?.rounds || 1,
           swissRounds: data.settings?.swissSettings?.rounds || 4,
         });
+
+        // V07.50: Initialize venue settings for box leagues
+        if (data.settings?.rotatingDoublesBox?.venue) {
+          setVenueSettings(data.settings.rotatingDoublesBox.venue);
+        }
       }
       setLoading(false);
     });
@@ -1252,9 +1263,9 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   // pendingJoinRequests subscription kept for potential cleanup of old data
 
   // Determine which tabs to show - Schedule, Players, DUPR, and Comms tabs only for organizers
-  // V07.25: Courts tab only for box league organizers (check both competitionFormat and legacy format)
   // V07.26: DUPR tab only if league has DUPR enabled (mode is 'optional' or 'required')
   // V07.40: Use isDuprLeague (defined above) - only true if mode is explicitly 'optional' or 'required'
+  // V07.50: Courts moved to Organizer > Venue sub-tab
   const isBoxLeagueFormat = league?.competitionFormat === 'rotating_doubles_box' || league?.competitionFormat === 'fixed_doubles_box' || league?.format === 'box_league';
   const isDuprEnabled = isDuprLeague; // Reuse existing check from line 1193
 
@@ -1315,12 +1326,47 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     setEditingMovement(false);
   };
 
+  // V07.50: Venue settings handlers
+  const handleVenueChange = (newSettings: BoxLeagueVenueSettings) => {
+    setVenueSettings(newSettings);
+    setVenueHasChanges(true);
+  };
+
+  const handleSaveVenue = async () => {
+    if (!league || !venueSettings) return;
+    setSavingVenue(true);
+    try {
+      const leagueRef = doc(db, 'leagues', leagueId);
+      await updateDoc(leagueRef, {
+        'settings.rotatingDoublesBox.venue': venueSettings,
+      });
+      setVenueHasChanges(false);
+      // Refresh league data
+      const updatedLeague = await getLeague(leagueId);
+      setLeague(updatedLeague);
+    } catch (err) {
+      console.error('Failed to save venue settings:', err);
+      alert('Failed to save venue settings: ' + (err as Error).message);
+    } finally {
+      setSavingVenue(false);
+    }
+  };
+
+  const handleCancelVenueEdit = () => {
+    // Reset to original settings from league
+    if (league?.settings?.rotatingDoublesBox?.venue) {
+      setVenueSettings(league.settings.rotatingDoublesBox.venue);
+    }
+    setVenueHasChanges(false);
+  };
+
   // V07.43: Consolidated organizer tab - schedule and comms moved inside organizer sub-tabs
+  // V07.50: Courts moved into organizer sub-tabs as 'venue'
   const availableTabs: TabType[] = isOrganizer
     ? isBoxLeagueFormat
       ? isDuprEnabled
-        ? ['standings', 'matches', 'players', 'courts', 'organizer', 'dupr', 'info']
-        : ['standings', 'matches', 'players', 'courts', 'organizer', 'info']
+        ? ['standings', 'matches', 'players', 'organizer', 'dupr', 'info']
+        : ['standings', 'matches', 'players', 'organizer', 'info']
       : isDuprEnabled
         ? ['standings', 'matches', 'players', 'organizer', 'dupr', 'info']
         : ['standings', 'matches', 'players', 'organizer', 'info']
@@ -1818,7 +1864,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             {tab === 'standings' && '🏆 '}
             {tab === 'matches' && '🎾 '}
             {tab === 'players' && '👥 '}
-            {tab === 'courts' && '🏟️ '}
             {tab === 'organizer' && '⚙️ '}
             {tab === 'dupr' && '📊 '}
             {tab === 'info' && 'ℹ️ '}
@@ -2288,6 +2333,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                                   <span className="text-sm text-gray-400">
                                     {boxMatches.length} matches
                                   </span>
+                                  {/* V07.50: Show venue from first match */}
+                                  {boxMatches[0]?.venue && (
+                                    <span className="text-sm text-gray-500">
+                                      📍 {boxMatches[0].venue}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-2">
                                   {completedCount === boxMatches.length ? (
@@ -2495,137 +2546,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
         </div>
       )}
 
-      {/* COURTS TAB - Box League Organizer Only */}
-      {activeTab === 'courts' && isOrganizer && isBoxLeagueFormat && (
-        <div className="space-y-6">
-          {/* Header */}
-          <div className="bg-lime-900/20 p-4 rounded-xl border border-lime-700/50">
-            <h3 className="font-semibold text-lime-400 flex items-center gap-2">
-              <span>🏟️</span> Courts & Sessions Management
-            </h3>
-            <p className="text-sm text-gray-400 mt-1">
-              Manage courts and session time slots for your box league.
-            </p>
-          </div>
-
-          {/* Current Configuration */}
-          <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-            <h4 className="text-lg font-bold text-white mb-4">Current Configuration</h4>
-
-            {league.settings?.rotatingDoublesBox?.venue?.courts && league.settings.rotatingDoublesBox.venue.courts.length > 0 ? (
-              <div className="space-y-4">
-                {/* Courts List */}
-                <div>
-                  <h5 className="text-sm font-medium text-gray-400 mb-2">Courts ({league.settings.rotatingDoublesBox.venue.courts.length})</h5>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {league.settings.rotatingDoublesBox.venue.courts.map((court, idx: number) => (
-                      <div
-                        key={court.id || idx}
-                        className={`
-                          p-3 rounded-lg border
-                          ${court.active !== false
-                            ? 'bg-lime-900/20 border-lime-700/50 text-lime-400'
-                            : 'bg-gray-900 border-gray-700 text-gray-500'
-                          }
-                        `}
-                      >
-                        <div className="font-medium">{court.name || `Court ${idx + 1}`}</div>
-                        <div className="text-xs opacity-75">
-                          {court.active !== false ? 'Active' : 'Inactive'}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Sessions (if box league has them) */}
-                {league.settings?.rotatingDoublesBox?.venue?.sessions && league.settings.rotatingDoublesBox.venue.sessions.length > 0 && (
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-400 mb-2">
-                      Sessions ({league.settings.rotatingDoublesBox.venue.sessions.length})
-                    </h5>
-                    <div className="space-y-2">
-                      {league.settings.rotatingDoublesBox.venue.sessions.map((session, idx: number) => (
-                        <div
-                          key={session.id || idx}
-                          className={`
-                            p-3 rounded-lg border flex items-center justify-between
-                            ${session.active !== false
-                              ? 'bg-cyan-900/20 border-cyan-700/50'
-                              : 'bg-gray-900 border-gray-700 opacity-50'
-                            }
-                          `}
-                        >
-                          <div>
-                            <div className="font-medium text-white">{session.name || `Session ${idx + 1}`}</div>
-                            <div className="text-xs text-gray-400">
-                              {session.startTime} - {session.endTime}
-                            </div>
-                          </div>
-                          <span className={`text-xs px-2 py-1 rounded ${session.active !== false ? 'bg-cyan-500/20 text-cyan-400' : 'bg-gray-700 text-gray-500'}`}>
-                            {session.active !== false ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Capacity Summary */}
-                <div className="bg-gray-900 rounded-lg p-4 border border-gray-700">
-                  <h5 className="text-sm font-medium text-gray-400 mb-3">Capacity Summary</h5>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-                    <div>
-                      <div className="text-2xl font-bold text-white">
-                        {league.settings.rotatingDoublesBox.venue.courts.filter((c) => c.active !== false).length}
-                      </div>
-                      <div className="text-xs text-gray-500">Courts</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-white">
-                        {league.settings?.rotatingDoublesBox?.venue?.sessions?.filter((s) => s.active !== false).length || 1}
-                      </div>
-                      <div className="text-xs text-gray-500">Sessions</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-lime-400">
-                        {(league.settings.rotatingDoublesBox.venue.courts.filter((c) => c.active !== false).length) *
-                         (league.settings?.rotatingDoublesBox?.venue?.sessions?.filter((s) => s.active !== false).length || 1)}
-                      </div>
-                      <div className="text-xs text-gray-500">Boxes</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-lime-400">
-                        {(league.settings.rotatingDoublesBox.venue.courts.filter((c) => c.active !== false).length) *
-                         (league.settings?.rotatingDoublesBox?.venue?.sessions?.filter((s) => s.active !== false).length || 1) *
-                         (league.settings?.rotatingDoublesBox?.settings?.boxSize || 5)}
-                      </div>
-                      <div className="text-xs text-gray-500">Max Players</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <div className="text-4xl mb-3">🏟️</div>
-                <p className="text-gray-400">No venue configured for this league.</p>
-                <p className="text-sm text-gray-500 mt-1">
-                  Courts and sessions were not set up during league creation.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Edit Notice */}
-          <div className="bg-gray-700/30 p-4 rounded-lg border border-gray-600">
-            <p className="text-gray-400 text-sm">
-              <strong className="text-white">Note:</strong> To modify courts or sessions,
-              edit the league settings. Changes will affect future weeks only.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* DUPR TAB - Organizer Only */}
       {activeTab === 'dupr' && isOrganizer && (
         <DuprControlPanel
@@ -2666,18 +2586,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             >
               Matches
             </button>
-            {isBoxLeagueFormat && (
-              <button
-                onClick={() => setOrganizerSubTab('absentees')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                  organizerSubTab === 'absentees'
-                    ? 'bg-lime-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                }`}
-              >
-                Absentees
-              </button>
-            )}
             <button
               onClick={() => setOrganizerSubTab('comms')}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
@@ -2687,6 +2595,30 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               }`}
             >
               Comms
+            </button>
+            {/* V07.50: Venue sub-tab for box leagues */}
+            {isBoxLeagueFormat && (
+              <button
+                onClick={() => setOrganizerSubTab('venue')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                  organizerSubTab === 'venue'
+                    ? 'bg-lime-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                Venue
+              </button>
+            )}
+            {/* V07.50: Rules sub-tab for tiebreakers and promotion/relegation */}
+            <button
+              onClick={() => setOrganizerSubTab('rules')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                organizerSubTab === 'rules'
+                  ? 'bg-lime-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Rules
             </button>
           </div>
 
@@ -2719,17 +2651,6 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             />
           )}
 
-          {/* Absentees Sub-tab (Box League only) */}
-          {organizerSubTab === 'absentees' && isBoxLeagueFormat && currentUser && (
-            <BoxLeagueAbsencePanel
-              leagueId={leagueId}
-              league={league}
-              currentUserId={currentUser.uid}
-              isOrganizer={isOrganizer}
-              members={members}
-            />
-          )}
-
           {/* Comms Sub-tab */}
           {organizerSubTab === 'comms' && (
             <LeagueCommsTab
@@ -2738,6 +2659,206 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               members={members}
               currentUserId={currentUser?.uid || ''}
             />
+          )}
+
+          {/* V07.50: Venue Sub-tab (Box League only) */}
+          {organizerSubTab === 'venue' && isBoxLeagueFormat && venueSettings && (
+            <div className="space-y-4">
+              {/* Header with Save/Cancel buttons */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-white">Venue Settings</h3>
+                  <p className="text-sm text-gray-400">Configure courts and sessions for your league</p>
+                </div>
+                {venueHasChanges && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleCancelVenueEdit}
+                      className="px-4 py-2 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 transition-colors"
+                      disabled={savingVenue}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveVenue}
+                      className="px-4 py-2 bg-lime-600 text-white rounded-lg hover:bg-lime-500 transition-colors flex items-center gap-2"
+                      disabled={savingVenue}
+                    >
+                      {savingVenue ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          Saving...
+                        </>
+                      ) : (
+                        'Save Changes'
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Venue Config */}
+              <BoxLeagueVenueConfig
+                value={venueSettings}
+                onChange={handleVenueChange}
+                boxSize={league.settings?.rotatingDoublesBox?.settings?.boxSize || 5}
+                disabled={false}
+              />
+
+              {/* Note about changes */}
+              <div className="bg-gray-700/30 p-4 rounded-lg border border-gray-600">
+                <p className="text-gray-400 text-sm">
+                  <strong className="text-white">Note:</strong> Changes to courts and sessions will affect
+                  future weeks. Existing draft assignments may need to be updated after changes.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* V07.50: Rules Sub-tab - Tiebreakers and Promotion/Relegation */}
+          {organizerSubTab === 'rules' && (
+            <div className="space-y-4">
+              {/* Tiebreaker Rules */}
+              <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold text-white">Tiebreaker Rules</h3>
+                  {!editingTiebreakers && (
+                    <button
+                      onClick={() => setEditingTiebreakers(true)}
+                      className="text-sm text-lime-400 hover:text-lime-300"
+                    >
+                      Edit Order
+                    </button>
+                  )}
+                  {editingTiebreakers && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleCancelTiebreakerEdit}
+                        className="text-sm text-gray-400 hover:text-white px-3 py-1 border border-gray-600 rounded-lg"
+                        disabled={savingTiebreakers}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveTiebreakers}
+                        disabled={savingTiebreakers}
+                        className="text-sm text-black bg-lime-500 hover:bg-lime-400 px-3 py-1 rounded-lg disabled:opacity-50"
+                      >
+                        {savingTiebreakers ? 'Saving...' : 'Save'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <p className="text-sm text-gray-400 mb-3">
+                  When players have equal standings, ties are broken in this order:
+                  {editingTiebreakers && <span className="text-lime-400 ml-2">(Drag to reorder)</span>}
+                </p>
+                {editingTiebreakers ? (
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleTiebreakerDragEnd}
+                  >
+                    <SortableContext items={localTiebreakers} strategy={verticalListSortingStrategy}>
+                      <ol className="text-sm space-y-2">
+                        {localTiebreakers.map((tb, idx) => (
+                          <SortableTiebreakerItem key={tb} id={tb} index={idx} isEditing={true} />
+                        ))}
+                      </ol>
+                    </SortableContext>
+                  </DndContext>
+                ) : (
+                  <ol className="text-sm space-y-2">
+                    {(league.settings?.tiebreakers || []).map((tb, idx) => (
+                      <SortableTiebreakerItem key={tb} id={tb} index={idx} isEditing={false} />
+                    ))}
+                  </ol>
+                )}
+              </div>
+
+              {/* Promotion/Relegation Settings (Box League only) */}
+              {isBoxLeagueFormat && (
+                <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-white">Promotion & Relegation</h3>
+                    {!editingMovement ? (
+                      <button
+                        onClick={() => setEditingMovement(true)}
+                        className="text-sm text-lime-400 hover:text-lime-300"
+                      >
+                        Edit
+                      </button>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleCancelMovementEdit}
+                          className="text-sm text-gray-400 hover:text-white px-3 py-1 border border-gray-600 rounded-lg"
+                          disabled={savingMovement}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveMovement}
+                          disabled={savingMovement}
+                          className="text-sm text-black bg-lime-500 hover:bg-lime-400 px-3 py-1 rounded-lg disabled:opacity-50"
+                        >
+                          {savingMovement ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-400 mb-4">
+                    Number of players moving between boxes each week
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm text-gray-400 block mb-2">
+                        <span className="text-green-400">▲</span> Promotions per box
+                      </label>
+                      {editingMovement ? (
+                        <select
+                          value={localPromotionCount}
+                          onChange={(e) => setLocalPromotionCount(parseInt(e.target.value) as 1 | 2)}
+                          className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
+                        >
+                          <option value={1}>1 player</option>
+                          <option value={2}>2 players</option>
+                        </select>
+                      ) : (
+                        <div className="text-white font-medium">
+                          {localPromotionCount} player{localPromotionCount > 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-sm text-gray-400 block mb-2">
+                        <span className="text-red-400">▼</span> Relegations per box
+                      </label>
+                      {editingMovement ? (
+                        <select
+                          value={localRelegationCount}
+                          onChange={(e) => setLocalRelegationCount(parseInt(e.target.value) as 1 | 2)}
+                          className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
+                        >
+                          <option value={1}>1 player</option>
+                          <option value={2}>2 players</option>
+                        </select>
+                      ) : (
+                        <div className="text-white font-medium">
+                          {localRelegationCount} player{localRelegationCount > 1 ? 's' : ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-3">
+                    Top {localPromotionCount} player{localPromotionCount > 1 ? 's' : ''} in each box move up, bottom {localRelegationCount} player{localRelegationCount > 1 ? 's' : ''} move down
+                  </p>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -2823,145 +2944,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </p>
           </div>
 
-          {/* V07.35: Tiebreaker Rules (V07.36: Now with drag-drop for organizers) */}
-          {(league.settings?.tiebreakers && league.settings.tiebreakers.length > 0) || isOrganizer ? (
-            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-white">Tiebreaker Rules</h3>
-                {isOrganizer && !editingTiebreakers && (
-                  <button
-                    onClick={() => setEditingTiebreakers(true)}
-                    className="text-sm text-lime-400 hover:text-lime-300"
-                  >
-                    Edit Order
-                  </button>
-                )}
-                {isOrganizer && editingTiebreakers && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleCancelTiebreakerEdit}
-                      className="text-sm text-gray-400 hover:text-white px-3 py-1 border border-gray-600 rounded-lg"
-                      disabled={savingTiebreakers}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSaveTiebreakers}
-                      disabled={savingTiebreakers}
-                      className="text-sm text-black bg-lime-500 hover:bg-lime-400 px-3 py-1 rounded-lg disabled:opacity-50"
-                    >
-                      {savingTiebreakers ? 'Saving...' : 'Save'}
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-sm text-gray-400 mb-3">
-                When players have equal standings, ties are broken in this order:
-                {editingTiebreakers && <span className="text-lime-400 ml-2">(Drag to reorder)</span>}
-              </p>
-              {editingTiebreakers ? (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragEnd={handleTiebreakerDragEnd}
-                >
-                  <SortableContext items={localTiebreakers} strategy={verticalListSortingStrategy}>
-                    <ol className="text-sm space-y-2">
-                      {localTiebreakers.map((tb, idx) => (
-                        <SortableTiebreakerItem key={tb} id={tb} index={idx} isEditing={true} />
-                      ))}
-                    </ol>
-                  </SortableContext>
-                </DndContext>
-              ) : (
-                <ol className="text-sm space-y-2">
-                  {(league.settings?.tiebreakers || []).map((tb, idx) => (
-                    <SortableTiebreakerItem key={tb} id={tb} index={idx} isEditing={false} />
-                  ))}
-                </ol>
-              )}
-            </div>
-          ) : null}
-
-          {/* V07.37: Promotion/Relegation Settings (Box League only) */}
-          {isBoxLeagueFormat && isOrganizer && (
-            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-white">Promotion & Relegation</h3>
-                {!editingMovement ? (
-                  <button
-                    onClick={() => setEditingMovement(true)}
-                    className="text-sm text-lime-400 hover:text-lime-300"
-                  >
-                    Edit
-                  </button>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleCancelMovementEdit}
-                      className="text-sm text-gray-400 hover:text-white px-3 py-1 border border-gray-600 rounded-lg"
-                      disabled={savingMovement}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSaveMovement}
-                      disabled={savingMovement}
-                      className="text-sm text-black bg-lime-500 hover:bg-lime-400 px-3 py-1 rounded-lg disabled:opacity-50"
-                    >
-                      {savingMovement ? 'Saving...' : 'Save'}
-                    </button>
-                  </div>
-                )}
-              </div>
-              <p className="text-sm text-gray-400 mb-4">
-                Number of players moving between boxes each week
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm text-gray-400 block mb-2">
-                    <span className="text-green-400">▲</span> Promotions per box
-                  </label>
-                  {editingMovement ? (
-                    <select
-                      value={localPromotionCount}
-                      onChange={(e) => setLocalPromotionCount(parseInt(e.target.value) as 1 | 2)}
-                      className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
-                    >
-                      <option value={1}>1 player</option>
-                      <option value={2}>2 players</option>
-                    </select>
-                  ) : (
-                    <div className="text-white font-medium">
-                      {localPromotionCount} player{localPromotionCount > 1 ? 's' : ''}
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="text-sm text-gray-400 block mb-2">
-                    <span className="text-red-400">▼</span> Relegations per box
-                  </label>
-                  {editingMovement ? (
-                    <select
-                      value={localRelegationCount}
-                      onChange={(e) => setLocalRelegationCount(parseInt(e.target.value) as 1 | 2)}
-                      className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
-                    >
-                      <option value={1}>1 player</option>
-                      <option value={2}>2 players</option>
-                    </select>
-                  ) : (
-                    <div className="text-white font-medium">
-                      {localRelegationCount} player{localRelegationCount > 1 ? 's' : ''}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <p className="text-xs text-gray-500 mt-3">
-                Top {localPromotionCount} player{localPromotionCount > 1 ? 's' : ''} in each box move up, bottom {localRelegationCount} player{localRelegationCount > 1 ? 's' : ''} move down
-              </p>
-            </div>
-          )}
+          {/* V07.50: Tiebreaker and Promotion/Relegation moved to Organizer > Rules tab */}
 
           {/* Partner Settings (for doubles) */}
           {isDoublesOrMixed && league.settings?.partnerSettings && (

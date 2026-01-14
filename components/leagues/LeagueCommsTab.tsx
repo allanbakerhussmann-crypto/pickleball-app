@@ -6,13 +6,13 @@
  * - Templates: Manage reusable message templates
  * - History: View sent/pending/failed messages
  *
- * V07.19: Added SMS credits display and purchase flow
+ * V07.50: Updated to use token system for Insert Field dropdown
  *
  * @file components/leagues/LeagueCommsTab.tsx
- * @version 07.19
+ * @version 07.50
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   League,
   LeagueDivision,
@@ -33,6 +33,8 @@ import {
 import { getUsersByIds } from '../../services/firebase/users';
 import { CommsTemplateSection } from '../tournament/comms/CommsTemplateSection';
 import { SMSCreditsCard, SMSBundleSelector } from '../sms';
+import { displayToStorage, storageToDisplay } from '../../services/comms/tokens';
+import { InsertFieldDropdown } from '../shared/InsertFieldDropdown';
 
 // ============================================
 // TYPES
@@ -299,14 +301,19 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
 
-  // Load templates
+  // Refs for cursor positioning
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const subjectRef = useRef<HTMLInputElement>(null);
+
+  // Load templates for current user
   useEffect(() => {
     const loadTemplates = async () => {
-      const tpls = await getActiveTemplates();
+      if (!currentUserId) return;
+      const tpls = await getActiveTemplates(currentUserId);
       setTemplates(tpls.filter(t => t.type === messageType));
     };
     loadTemplates();
-  }, [messageType]);
+  }, [messageType, currentUserId]);
 
   // Filter players by division for group selection
   const filteredPlayers = useMemo(() => {
@@ -358,16 +365,56 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
     if (templateId) {
       const template = templates.find(t => t.id === templateId);
       if (template) {
+        // Render event-level tokens
         const data = {
+          eventName: league.name,
           leagueName: league.name,
-          playerName: '{{playerName}}',
+          venueName: league.venue || league.location || '',
         };
-        setBody(renderTemplate(template.body, data));
+        const renderedBody = renderTemplate(template.body, data);
+        const renderedSubject = template.subject ? renderTemplate(template.subject, data) : '';
+
+        // Convert to display format
+        setBody(storageToDisplay(renderedBody, 'league'));
         if (template.subject) {
-          setSubject(renderTemplate(template.subject, data));
+          setSubject(storageToDisplay(renderedSubject, 'league'));
         }
       }
     }
+  };
+
+  // Insert token at cursor position in body textarea
+  const handleInsertBodyToken = (displayText: string) => {
+    const textarea = bodyRef.current;
+    if (!textarea) {
+      setBody(body + displayText);
+      return;
+    }
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const newBody = body.substring(0, start) + displayText + body.substring(end);
+    setBody(newBody);
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + displayText.length, start + displayText.length);
+    }, 0);
+  };
+
+  // Insert token at cursor position in subject input
+  const handleInsertSubjectToken = (displayText: string) => {
+    const input = subjectRef.current;
+    if (!input) {
+      setSubject(subject + displayText);
+      return;
+    }
+    const start = input.selectionStart || 0;
+    const end = input.selectionEnd || 0;
+    const newSubject = subject.substring(0, start) + displayText + subject.substring(end);
+    setSubject(newSubject);
+    setTimeout(() => {
+      input.focus();
+      input.setSelectionRange(start + displayText.length, start + displayText.length);
+    }, 0);
   };
 
   // Handle send
@@ -382,11 +429,15 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
         recipients = selectedRecipients;
       }
 
+      // Convert display format back to storage format for sending
+      const storageBody = displayToStorage(body, 'league');
+      const storageSubject = messageType === 'email' ? displayToStorage(subject, 'league') : null;
+
       await queueBulkLeagueMessages(league.id, recipients, {
         type: messageType,
         templateId: selectedTemplateId || null,
-        subject: messageType === 'email' ? subject : null,
-        body,
+        subject: storageSubject,
+        body: storageBody,
         createdBy: currentUserId,
       });
 
@@ -541,8 +592,15 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
       {/* Subject (email only) */}
       {messageType === 'email' && (
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">SUBJECT</label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-gray-300">SUBJECT</label>
+            <InsertFieldDropdown
+              context="league"
+              onInsert={handleInsertSubjectToken}
+            />
+          </div>
           <input
+            ref={subjectRef}
             type="text"
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
@@ -555,12 +613,19 @@ const LeagueComposeSection: React.FC<LeagueComposeSectionProps> = ({
       {/* Message Body */}
       <div>
         <div className="flex justify-between items-center mb-2">
-          <label className="block text-sm font-medium text-gray-300">MESSAGE</label>
-          {messageType === 'sms' && (
-            <CharCounter current={body.length} limit={SMS_CHAR_LIMIT} warning={SMS_CHAR_WARNING} />
-          )}
+          <label className="text-sm font-medium text-gray-300">MESSAGE</label>
+          <div className="flex items-center gap-3">
+            <InsertFieldDropdown
+              context="league"
+              onInsert={handleInsertBodyToken}
+            />
+            {messageType === 'sms' && (
+              <CharCounter current={body.length} limit={SMS_CHAR_LIMIT} warning={SMS_CHAR_WARNING} />
+            )}
+          </div>
         </div>
         <textarea
+          ref={bodyRef}
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder="Enter SMS message..."
@@ -1008,6 +1073,7 @@ export const LeagueCommsTab: React.FC<LeagueCommsTabProps> = ({
         {activeSection === 'templates' && (
           <CommsTemplateSection
             currentUserId={currentUserId}
+            context="league"
           />
         )}
 

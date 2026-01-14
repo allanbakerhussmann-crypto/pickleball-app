@@ -2,15 +2,18 @@
  * CommsComposeSection - Message Composition Form
  *
  * Allows composing and sending SMS/Email messages to tournament players.
+ * Uses token system for user-friendly field insertion.
  *
  * @file components/tournament/comms/CommsComposeSection.tsx
- * @version 07.08
+ * @version 07.50
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Tournament, Division, Team, UserProfile, CommsMessageType, CommsTemplate } from '../../../types';
 import { queueBulkMessages, getActiveTemplates, renderTemplate } from '../../../services/firebase/comms';
 import { RecipientPicker, Recipient } from './RecipientPicker';
+import { displayToStorage, storageToDisplay } from '../../../services/comms/tokens';
+import { InsertFieldDropdown } from '../../shared/InsertFieldDropdown';
 
 // ============================================
 // TYPES
@@ -118,6 +121,10 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
   const [body, setBody] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
+  // Refs for cursor positioning
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const subjectRef = useRef<HTMLInputElement>(null);
+
   // Templates
   const [templates, setTemplates] = useState<(CommsTemplate & { id: string })[]>([]);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
@@ -127,11 +134,12 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
   const [showConfirm, setShowConfirm] = useState(false);
   const [sendResult, setSendResult] = useState<{ success: boolean; count: number } | null>(null);
 
-  // Load templates
+  // Load templates for current user
   useEffect(() => {
     const loadTemplates = async () => {
+      if (!currentUserId) return;
       try {
-        const allTemplates = await getActiveTemplates();
+        const allTemplates = await getActiveTemplates(currentUserId);
         setTemplates(allTemplates.filter(t => t.type === messageType));
       } catch (error) {
         console.error('Failed to load templates:', error);
@@ -140,7 +148,7 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
       }
     };
     loadTemplates();
-  }, [messageType]);
+  }, [messageType, currentUserId]);
 
   // Filter templates by type
   const filteredTemplates = useMemo(() => {
@@ -153,16 +161,55 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
 
     const template = templates.find(t => t.id === selectedTemplateId);
     if (template) {
-      // Basic template data
+      // Basic template data for event-level tokens
       const templateData: Record<string, string> = {
+        eventName: tournament.name,
         tournamentName: tournament.name,
         venueName: tournament.location || '',
       };
 
-      setSubject(template.subject ? renderTemplate(template.subject, templateData) : '');
-      setBody(renderTemplate(template.body, templateData));
+      // Render event-level tokens and convert to display format
+      const renderedBody = renderTemplate(template.body, templateData);
+      const renderedSubject = template.subject ? renderTemplate(template.subject, templateData) : '';
+
+      setSubject(storageToDisplay(renderedSubject, 'tournament'));
+      setBody(storageToDisplay(renderedBody, 'tournament'));
     }
   }, [selectedTemplateId, templates, tournament]);
+
+  // Insert token at cursor position in body textarea
+  const handleInsertBodyToken = (displayText: string) => {
+    const textarea = bodyRef.current;
+    if (!textarea) {
+      setBody(body + displayText);
+      return;
+    }
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const newBody = body.substring(0, start) + displayText + body.substring(end);
+    setBody(newBody);
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + displayText.length, start + displayText.length);
+    }, 0);
+  };
+
+  // Insert token at cursor position in subject input
+  const handleInsertSubjectToken = (displayText: string) => {
+    const input = subjectRef.current;
+    if (!input) {
+      setSubject(subject + displayText);
+      return;
+    }
+    const start = input.selectionStart || 0;
+    const end = input.selectionEnd || 0;
+    const newSubject = subject.substring(0, start) + displayText + subject.substring(end);
+    setSubject(newSubject);
+    setTimeout(() => {
+      input.focus();
+      input.setSelectionRange(start + displayText.length, start + displayText.length);
+    }, 0);
+  };
 
   // Clear form when type changes
   useEffect(() => {
@@ -190,14 +237,18 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
     setSendResult(null);
 
     try {
+      // Convert display format back to storage format for sending
+      const storageBody = displayToStorage(body, 'tournament');
+      const storageSubject = messageType === 'email' ? displayToStorage(subject, 'tournament') : undefined;
+
       const messageIds = await queueBulkMessages(
         tournament.id,
         recipients,
         {
           type: messageType,
           templateId: selectedTemplateId || undefined,
-          subject: messageType === 'email' ? subject : undefined,
-          body,
+          subject: storageSubject,
+          body: storageBody,
           createdBy: currentUserId,
         }
       );
@@ -253,11 +304,6 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
           Message Type
         </label>
         <TypeToggle type={messageType} onChange={setMessageType} />
-        {messageType === 'email' && (
-          <p className="text-xs text-yellow-400 mt-2">
-            Email sending is not yet implemented. Messages will be queued but not delivered.
-          </p>
-        )}
       </div>
 
       {/* Recipients */}
@@ -300,10 +346,17 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
       {/* Subject (Email only) */}
       {messageType === 'email' && (
         <div>
-          <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
-            Subject
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+              Subject
+            </label>
+            <InsertFieldDropdown
+              context="tournament"
+              onInsert={handleInsertSubjectToken}
+            />
+          </div>
           <input
+            ref={subjectRef}
             type="text"
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
@@ -319,15 +372,22 @@ export const CommsComposeSection: React.FC<CommsComposeSectionProps> = ({
           <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">
             Message
           </label>
-          {messageType === 'sms' && (
-            <CharCounter
-              current={body.length}
-              limit={SMS_CHAR_LIMIT}
-              warning={SMS_CHAR_WARNING}
+          <div className="flex items-center gap-3">
+            <InsertFieldDropdown
+              context="tournament"
+              onInsert={handleInsertBodyToken}
             />
-          )}
+            {messageType === 'sms' && (
+              <CharCounter
+                current={body.length}
+                limit={SMS_CHAR_LIMIT}
+                warning={SMS_CHAR_WARNING}
+              />
+            )}
+          </div>
         </div>
         <textarea
+          ref={bodyRef}
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder={messageType === 'sms' ? 'Enter SMS message...' : 'Enter email body...'}

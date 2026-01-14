@@ -2,7 +2,7 @@
  * Rotating Doubles Box League Types - Barrel Exports
  *
  * FILE LOCATION: types/rotatingDoublesBox/index.ts
- * VERSION: V07.27
+ * VERSION: V07.49
  */
 
 // ============================================
@@ -22,6 +22,7 @@ export type {
   AttendanceStatus,
   PlayerAttendance,
   BoxAssignment,
+  CourtAssignment,
   BoxCompletionStatus,
   WeekRulesSnapshot,
   BoxLeagueWeek,

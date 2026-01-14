@@ -66,11 +66,13 @@ export const getTemplate = async (templateId: string): Promise<CommsTemplate | n
 };
 
 /**
- * Get all active templates
+ * Get all active templates for a specific user
+ * Each organizer only sees their own templates
  */
-export const getActiveTemplates = async (): Promise<(CommsTemplate & { id: string })[]> => {
+export const getActiveTemplates = async (userId: string): Promise<(CommsTemplate & { id: string })[]> => {
   const q = query(
     collection(db, 'comms_templates'),
+    where('createdBy', '==', userId),
     where('isActive', '==', true),
     orderBy('name', 'asc')
   );
@@ -463,16 +465,26 @@ export const queueBulkMessages = async (
     if (messageConfig.type === 'sms' && !recipient.recipientPhone) continue;
     if (messageConfig.type === 'email' && !recipient.recipientEmail) continue;
 
+    // Render template with recipient-specific data (e.g., {{playerName}})
+    const recipientData: Record<string, string> = {
+      ...messageConfig.templateData,
+      playerName: recipient.recipientName,
+    };
+    const renderedBody = renderTemplate(messageConfig.body, recipientData);
+    const renderedSubject = messageConfig.subject
+      ? renderTemplate(messageConfig.subject, recipientData)
+      : undefined;
+
     const messageId = await queueMessage(tournamentId, {
       type: messageConfig.type,
       recipientId: recipient.recipientId,
       recipientName: recipient.recipientName,
       recipientEmail: recipient.recipientEmail,
       recipientPhone: recipient.recipientPhone,
-      body: messageConfig.body,
-      subject: messageConfig.subject,
+      body: renderedBody,
+      subject: renderedSubject,
       templateId: messageConfig.templateId,
-      templateData: messageConfig.templateData,
+      templateData: recipientData,
       tournamentId,
       divisionId: messageConfig.divisionId,
       poolGroup: messageConfig.poolGroup,
@@ -551,16 +563,26 @@ export const queueBulkLeagueMessages = async (
     if (messageConfig.type === 'sms' && !recipient.recipientPhone) continue;
     if (messageConfig.type === 'email' && !recipient.recipientEmail) continue;
 
+    // Render template with recipient-specific data (e.g., {{playerName}})
+    const recipientData: Record<string, string> = {
+      ...messageConfig.templateData,
+      playerName: recipient.recipientName,
+    };
+    const renderedBody = renderTemplate(messageConfig.body, recipientData);
+    const renderedSubject = messageConfig.subject
+      ? renderTemplate(messageConfig.subject, recipientData)
+      : null;
+
     const messageId = await queueLeagueMessage(leagueId, {
       type: messageConfig.type,
       recipientId: recipient.recipientId,
       recipientName: recipient.recipientName,
       recipientEmail: recipient.recipientEmail,
       recipientPhone: recipient.recipientPhone,
-      body: messageConfig.body,
-      subject: messageConfig.subject,
+      body: renderedBody,
+      subject: renderedSubject,
       templateId: messageConfig.templateId,
-      templateData: messageConfig.templateData,
+      templateData: recipientData,
       leagueId,
       divisionId: messageConfig.divisionId,
       matchId: messageConfig.matchId,

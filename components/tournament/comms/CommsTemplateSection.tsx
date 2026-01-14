@@ -2,12 +2,13 @@
  * CommsTemplateSection - Template Management
  *
  * Create, edit, and manage reusable message templates.
+ * Uses token system for user-friendly field insertion.
  *
  * @file components/tournament/comms/CommsTemplateSection.tsx
- * @version 07.08
+ * @version 07.50
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   CommsTemplate,
   CommsTemplateCategory,
@@ -19,6 +20,14 @@ import {
   updateTemplate,
   deactivateTemplate,
 } from '../../../services/firebase/comms';
+import {
+  TokenContext,
+  TokenOptions,
+  displayToStorage,
+  storageToDisplay,
+  extractTokens,
+} from '../../../services/comms/tokens';
+import { InsertFieldDropdown } from '../../shared/InsertFieldDropdown';
 
 // ============================================
 // TYPES
@@ -26,6 +35,10 @@ import {
 
 interface CommsTemplateSectionProps {
   currentUserId: string;
+  /** Token context - determines which tokens are available */
+  context?: TokenContext;
+  /** Token options - e.g. hasMatchContext */
+  tokenOptions?: TokenOptions;
 }
 
 // ============================================
@@ -41,17 +54,6 @@ const CATEGORIES: { value: CommsTemplateCategory; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
-const PLACEHOLDER_HELP = [
-  { placeholder: '{{playerName}}', description: 'Recipient name' },
-  { placeholder: '{{tournamentName}}', description: 'Tournament name' },
-  { placeholder: '{{venueName}}', description: 'Venue/location' },
-  { placeholder: '{{divisionName}}', description: 'Division name' },
-  { placeholder: '{{poolGroup}}', description: 'Pool name (e.g., Pool A)' },
-  { placeholder: '{{courtNumber}}', description: 'Court number/name' },
-  { placeholder: '{{matchTime}}', description: 'Scheduled match time' },
-  { placeholder: '{{teamA}}', description: 'Team A name' },
-  { placeholder: '{{teamB}}', description: 'Team B name' },
-];
 
 // ============================================
 // TEMPLATE CARD
@@ -61,14 +63,22 @@ interface TemplateCardProps {
   template: CommsTemplate & { id: string };
   onEdit: () => void;
   onDeactivate: () => void;
+  context: TokenContext;
+  tokenOptions?: TokenOptions;
 }
 
 const TemplateCard: React.FC<TemplateCardProps> = ({
   template,
   onEdit,
   onDeactivate,
+  context,
+  tokenOptions,
 }) => {
   const categoryLabel = CATEGORIES.find(c => c.value === template.category)?.label || template.category;
+
+  // Convert to display format for preview
+  const displayBody = storageToDisplay(template.body, context, tokenOptions);
+  const displaySubject = template.subject ? storageToDisplay(template.subject, context, tokenOptions) : '';
 
   return (
     <div className="bg-gray-800/50 border border-gray-700/50 rounded-xl overflow-hidden hover:border-gray-600/50 transition-colors">
@@ -113,23 +123,14 @@ const TemplateCard: React.FC<TemplateCardProps> = ({
 
       {/* Preview */}
       <div className="px-4 py-3">
-        {template.type === 'email' && template.subject && (
+        {template.type === 'email' && displaySubject && (
           <div className="text-xs text-gray-500 mb-1">
-            Subject: <span className="text-gray-400">{template.subject}</span>
+            Subject: <span className="text-gray-400">{displaySubject}</span>
           </div>
         )}
         <div className="text-sm text-gray-300 line-clamp-3 whitespace-pre-wrap">
-          {template.body}
+          {displayBody}
         </div>
-        {template.variables.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {template.variables.map(v => (
-              <span key={v} className="text-xs px-1.5 py-0.5 bg-lime-500/10 text-lime-400 rounded">
-                {`{{${v}}}`}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -144,6 +145,8 @@ interface TemplateModalProps {
   onSave: (data: Omit<CommsTemplate, 'createdAt' | 'updatedAt'>) => Promise<void>;
   onClose: () => void;
   currentUserId: string;
+  context: TokenContext;
+  tokenOptions?: TokenOptions;
 }
 
 const TemplateModal: React.FC<TemplateModalProps> = ({
@@ -151,43 +154,93 @@ const TemplateModal: React.FC<TemplateModalProps> = ({
   onSave,
   onClose,
   currentUserId,
+  context,
+  tokenOptions,
 }) => {
   const [name, setName] = useState(template?.name || '');
   const [type, setType] = useState<CommsMessageType>(template?.type || 'sms');
   const [category, setCategory] = useState<CommsTemplateCategory>(template?.category || 'custom');
-  const [subject, setSubject] = useState(template?.subject || '');
-  const [body, setBody] = useState(template?.body || '');
+  // Convert storage format to display format on load
+  const [subject, setSubject] = useState(
+    template?.subject ? storageToDisplay(template.subject, context, tokenOptions) : ''
+  );
+  const [body, setBody] = useState(
+    template?.body ? storageToDisplay(template.body, context, tokenOptions) : ''
+  );
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Extract variables from body and subject
-  const extractVariables = (text: string): string[] => {
-    const matches = text.match(/\{\{(\w+)\}\}/g) || [];
-    return [...new Set(matches.map(m => m.replace(/\{\{|\}\}/g, '')))];
+  // Refs for textarea cursor positioning
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const subjectRef = useRef<HTMLInputElement>(null);
+
+  // Extract variables from storage format (for saved templates)
+  const variables = [...new Set([
+    ...extractTokens(displayToStorage(body, context, tokenOptions)),
+    ...extractTokens(displayToStorage(subject, context, tokenOptions)),
+  ])];
+
+  // Insert token at cursor position in body textarea
+  const handleInsertBodyToken = (displayText: string) => {
+    const textarea = bodyRef.current;
+    if (!textarea) {
+      setBody(body + displayText);
+      return;
+    }
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const newBody = body.substring(0, start) + displayText + body.substring(end);
+    setBody(newBody);
+    // Restore focus and cursor position after token insertion
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + displayText.length, start + displayText.length);
+    }, 0);
   };
 
-  const variables = [...new Set([
-    ...extractVariables(body),
-    ...extractVariables(subject),
-  ])];
+  // Insert token at cursor position in subject input
+  const handleInsertSubjectToken = (displayText: string) => {
+    const input = subjectRef.current;
+    if (!input) {
+      setSubject(subject + displayText);
+      return;
+    }
+    const start = input.selectionStart || 0;
+    const end = input.selectionEnd || 0;
+    const newSubject = subject.substring(0, start) + displayText + subject.substring(end);
+    setSubject(newSubject);
+    setTimeout(() => {
+      input.focus();
+      input.setSelectionRange(start + displayText.length, start + displayText.length);
+    }, 0);
+  };
 
   const handleSave = async () => {
     if (!name.trim() || !body.trim()) return;
 
     setIsSaving(true);
+    setError(null);
     try {
-      await onSave({
+      // Convert display format back to storage format for saving
+      const storageBody = displayToStorage(body.trim(), context, tokenOptions);
+      const storageSubject = type === 'email' ? displayToStorage(subject.trim(), context, tokenOptions) : null;
+
+      const templateData = {
         name: name.trim(),
         type,
         category,
-        subject: type === 'email' ? subject.trim() : null,
-        body: body.trim(),
-        variables,
+        subject: storageSubject,
+        body: storageBody,
+        variables: extractTokens(storageBody + (storageSubject || '')),
         isActive: true,
         createdBy: template?.createdBy || currentUserId,
-      });
+      };
+      console.log('Saving template with data:', templateData);
+      await onSave(templateData);
       onClose();
-    } catch (error) {
-      console.error('Failed to save template:', error);
+    } catch (err: any) {
+      console.error('Failed to save template:', err);
+      setError(err?.message || 'Failed to save template. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -261,14 +314,22 @@ const TemplateModal: React.FC<TemplateModalProps> = ({
           {/* Subject (Email only) */}
           {type === 'email' && (
             <div>
-              <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1.5">
-                Subject
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Subject
+                </label>
+                <InsertFieldDropdown
+                  context={context}
+                  options={tokenOptions}
+                  onInsert={handleInsertSubjectToken}
+                />
+              </div>
               <input
+                ref={subjectRef}
                 type="text"
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                placeholder="e.g., {{tournamentName}} - Day {{dayNumber}} Schedule"
+                placeholder="e.g., [Event Name] - Day 1 Schedule"
                 className="w-full bg-gray-700/50 text-white px-3 py-2.5 rounded-lg border border-gray-600/50 focus:border-lime-500/50 outline-none text-sm"
               />
             </div>
@@ -276,10 +337,18 @@ const TemplateModal: React.FC<TemplateModalProps> = ({
 
           {/* Body */}
           <div>
-            <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-1.5">
-              Message Body
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+                Message Body
+              </label>
+              <InsertFieldDropdown
+                context={context}
+                options={tokenOptions}
+                onInsert={handleInsertBodyToken}
+              />
+            </div>
             <textarea
+              ref={bodyRef}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               placeholder="Enter your message template..."
@@ -304,39 +373,30 @@ const TemplateModal: React.FC<TemplateModalProps> = ({
             </div>
           )}
 
-          {/* Placeholder Help */}
-          <div className="bg-gray-700/30 rounded-lg p-4">
-            <div className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
-              Available Placeholders
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              {PLACEHOLDER_HELP.map(({ placeholder, description }) => (
-                <div key={placeholder} className="flex items-center gap-2">
-                  <code className="text-lime-400 bg-gray-800 px-1.5 py-0.5 rounded">
-                    {placeholder}
-                  </code>
-                  <span className="text-gray-500">{description}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-700 flex justify-end gap-3 sticky bottom-0 bg-gray-800">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={!name.trim() || !body.trim() || isSaving}
-            className="px-4 py-2 bg-lime-500 text-gray-900 rounded-lg font-medium hover:bg-lime-400 transition-colors disabled:opacity-50"
-          >
-            {isSaving ? 'Saving...' : template ? 'Update Template' : 'Create Template'}
-          </button>
+        <div className="px-6 py-4 border-t border-gray-700 sticky bottom-0 bg-gray-800">
+          {error && (
+            <div className="mb-3 p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!name.trim() || !body.trim() || isSaving}
+              className="px-4 py-2 bg-lime-500 text-gray-900 rounded-lg font-medium hover:bg-lime-400 transition-colors disabled:opacity-50"
+            >
+              {isSaving ? 'Saving...' : template ? 'Update Template' : 'Create Template'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -349,6 +409,8 @@ const TemplateModal: React.FC<TemplateModalProps> = ({
 
 export const CommsTemplateSection: React.FC<CommsTemplateSectionProps> = ({
   currentUserId,
+  context = 'tournament',
+  tokenOptions,
 }) => {
   const [templates, setTemplates] = useState<(CommsTemplate & { id: string })[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -356,11 +418,11 @@ export const CommsTemplateSection: React.FC<CommsTemplateSectionProps> = ({
   const [editingTemplate, setEditingTemplate] = useState<(CommsTemplate & { id: string }) | null>(null);
   const [filterType, setFilterType] = useState<CommsMessageType | 'all'>('all');
 
-  // Load templates
+  // Load templates for current user only
   const loadTemplates = async () => {
     setIsLoading(true);
     try {
-      const data = await getActiveTemplates();
+      const data = await getActiveTemplates(currentUserId);
       setTemplates(data);
     } catch (error) {
       console.error('Failed to load templates:', error);
@@ -371,7 +433,7 @@ export const CommsTemplateSection: React.FC<CommsTemplateSectionProps> = ({
 
   useEffect(() => {
     loadTemplates();
-  }, []);
+  }, [currentUserId]);
 
   // Filter templates
   const filteredTemplates = filterType === 'all'
@@ -471,6 +533,8 @@ export const CommsTemplateSection: React.FC<CommsTemplateSectionProps> = ({
                 setShowModal(true);
               }}
               onDeactivate={() => handleDeactivate(template.id)}
+              context={context}
+              tokenOptions={tokenOptions}
             />
           ))}
         </div>
@@ -486,6 +550,8 @@ export const CommsTemplateSection: React.FC<CommsTemplateSectionProps> = ({
             setEditingTemplate(null);
           }}
           currentUserId={currentUserId}
+          context={context}
+          tokenOptions={tokenOptions}
         />
       )}
     </div>

@@ -103,7 +103,7 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [swissRound, setSwissRound] = useState(1);
   const [showConfirmClear, setShowConfirmClear] = useState(false);
-  const [activeTab, setActiveTab] = useState<'generate' | 'courts' | 'weeks' | 'timeline'>('generate');
+  const [activeTab, setActiveTab] = useState<'generate' | 'courts' | 'weeks' | 'timeline'>('weeks'); // V07.50: Default to weeks
 
   // Court assignment state
   const [selectedMatches, setSelectedMatches] = useState<Set<string>>(new Set());

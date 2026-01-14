@@ -29,17 +29,17 @@ export const PickleballDirectorLogo: React.FC<{ className?: string }> = ({ class
     <circle cx="77" cy="86" r="2.5" fill="#111827" />
     <circle cx="93" cy="86" r="2.5" fill="#111827" />
 
-    {/* Text "BD" - Orange, Heavy Font */}
-    <text 
-        x="112" 
-        y="98" 
-        fontFamily="Arial, Helvetica, sans-serif" 
-        fontWeight="900" 
-        fontSize="90" 
+    {/* Text "PD" - Orange, Heavy Font */}
+    <text
+        x="112"
+        y="98"
+        fontFamily="Arial, Helvetica, sans-serif"
+        fontWeight="900"
+        fontSize="90"
         fill="#f97316"
         style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.2)' }}
     >
-        BD
+        PD
     </text>
   </svg>
 );

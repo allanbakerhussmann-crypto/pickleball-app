@@ -7,14 +7,14 @@
  * Uses Firebase Functions v1 with Firestore triggers.
  * SMS provider: SMSGlobal (better NZ coverage than Twilio)
  *
- * SMS CREDITS SYSTEM (V07.19):
- * - Checks organizer's credit balance before sending SMS
- * - Deducts 1 credit per successful SMS sent
- * - Logs usage to sms_credits/{userId}/usage
- * - Fails message with "Insufficient SMS credits" if no credits
+ * SMS CREDITS SYSTEM (V07.50 - FIXED):
+ * - RESERVE credits BEFORE sending (transactional, prevents race conditions)
+ * - Segment-based costing: 1 credit per 160 chars (max 2 segments)
+ * - Throws on insufficient credits (no silent failures)
+ * - Logs smsSegments and smsCreditsUsed on message doc
  *
  * FILE LOCATION: functions/src/comms.ts
- * VERSION: 07.19
+ * VERSION: 07.50
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -54,10 +54,28 @@ exports.comms_processLeagueQueue = exports.comms_processQueue = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const crypto = __importStar(require("crypto"));
+const client_ses_1 = require("@aws-sdk/client-ses");
 // ============================================
 // SMS CREDITS CONSTANTS
 // ============================================
 const FREE_STARTER_SMS_CREDITS = 25;
+const SMS_CHAR_LIMIT = 160;
+const MAX_SMS_SEGMENTS = 2;
+// ============================================
+// CUSTOM ERROR CLASSES
+// ============================================
+class InsufficientCreditsError extends Error {
+    constructor(available, required) {
+        super(`INSUFFICIENT_SMS_CREDITS: ${available} available, ${required} required`);
+        this.name = 'InsufficientCreditsError';
+    }
+}
+class MessageTooLongError extends Error {
+    constructor(segments) {
+        super(`MESSAGE_TOO_LONG: ${segments} segments (max ${MAX_SMS_SEGMENTS})`);
+        this.name = 'MessageTooLongError';
+    }
+}
 // ============================================
 // SMSGLOBAL CONFIG (Functions v1)
 // ============================================
@@ -71,6 +89,22 @@ const getSMSGlobalConfig = () => {
         apiKey: config.smsglobal.apikey,
         apiSecret: config.smsglobal.apisecret,
         origin: config.smsglobal.origin || 'Pickleball',
+    };
+};
+// ============================================
+// AMAZON SES CONFIG (Functions v1)
+// ============================================
+const getSESConfig = () => {
+    var _a, _b, _c;
+    const config = functions.config();
+    if (!((_a = config.ses) === null || _a === void 0 ? void 0 : _a.region) || !((_b = config.ses) === null || _b === void 0 ? void 0 : _b.access_key_id) || !((_c = config.ses) === null || _c === void 0 ? void 0 : _c.secret_access_key)) {
+        throw new Error('SES credentials not configured. Run: firebase functions:config:set ses.region="ap-southeast-2" ses.access_key_id="..." ses.secret_access_key="..." ses.from_email="..."');
+    }
+    return {
+        region: config.ses.region,
+        accessKeyId: config.ses.access_key_id,
+        secretAccessKey: config.ses.secret_access_key,
+        fromEmail: config.ses.from_email || 'noreply@pickleballdirector.co.nz',
     };
 };
 // ============================================
@@ -90,6 +124,27 @@ function generateMACAuth(apiKey, apiSecret, method, path, host, port = '443') {
         .update(baseString)
         .digest('base64');
     return `MAC id="${apiKey}", ts="${timestamp}", nonce="${nonce}", mac="${mac}"`;
+}
+// ============================================
+// SMS COST CALCULATOR
+// ============================================
+/**
+ * Compute SMS cost based on message length (segment-based pricing)
+ * - ≤160 chars = 1 segment = 1 credit
+ * - 161-320 chars = 2 segments = 2 credits
+ * - >320 chars = rejected (UI should prevent this)
+ */
+function computeSmsCost(body) {
+    const length = body.trim().length;
+    if (length === 0) {
+        throw new Error('Message body is empty');
+    }
+    const segments = Math.ceil(length / SMS_CHAR_LIMIT);
+    if (segments > MAX_SMS_SEGMENTS) {
+        throw new MessageTooLongError(segments);
+    }
+    // Cost = 1 credit per segment
+    return { segments, cost: segments };
 }
 // ============================================
 // SMS CREDITS HELPERS
@@ -119,63 +174,57 @@ async function getOrCreateSMSCredits(db, userId) {
     return newCredits;
 }
 /**
- * Check if user has sufficient SMS credits
+ * Reserve SMS credits BEFORE sending (transactional)
+ * THROWS InsufficientCreditsError if balance < cost
+ *
+ * V07.50: This must be called BEFORE sending SMS to prevent race conditions
+ * where multiple concurrent sends could overdraw the balance.
  */
-async function hasSufficientCredits(db, userId, count = 1) {
-    const credits = await getOrCreateSMSCredits(db, userId);
-    return credits.balance >= count;
-}
-/**
- * Deduct SMS credits and log usage (transactional)
- * Only call this AFTER successful SMS send
- */
-async function deductCreditsAndLogUsage(db, userId, count, metadata) {
+async function reserveCredits(db, userId, cost, metadata) {
     const creditsRef = db.collection('sms_credits').doc(userId);
-    try {
-        const result = await db.runTransaction(async (transaction) => {
-            const snap = await transaction.get(creditsRef);
-            if (!snap.exists) {
-                return { success: false, newBalance: 0, error: 'No credits document found' };
-            }
-            const credits = snap.data();
-            if (credits.balance < count) {
-                return {
-                    success: false,
-                    newBalance: credits.balance,
-                    error: `Insufficient credits: ${credits.balance} available, ${count} required`,
-                };
-            }
-            const newBalance = credits.balance - count;
-            const now = Date.now();
-            // Update credits
-            transaction.update(creditsRef, {
-                balance: newBalance,
-                totalUsed: credits.totalUsed + count,
-                lastUsedAt: now,
-                updatedAt: now,
-            });
-            // Log usage
-            const usageRef = db.collection('sms_credits').doc(userId).collection('usage').doc();
-            const usage = {
-                messageId: metadata.messageId,
-                tournamentId: metadata.tournamentId,
-                leagueId: metadata.leagueId,
-                recipientPhone: metadata.recipientPhone,
-                recipientName: metadata.recipientName,
-                status: 'sent',
-                creditsUsed: count,
-                createdAt: now,
-            };
-            transaction.set(usageRef, usage);
-            return { success: true, newBalance };
+    // First ensure the credits doc exists
+    await getOrCreateSMSCredits(db, userId);
+    const result = await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(creditsRef);
+        if (!snap.exists) {
+            // Should not happen after getOrCreateSMSCredits, but be safe
+            throw new Error('SMS credits document not found');
+        }
+        const credits = snap.data();
+        // HARD CHECK: Throw if insufficient credits
+        if (credits.balance < cost) {
+            throw new InsufficientCreditsError(credits.balance, cost);
+        }
+        const newBalance = credits.balance - cost;
+        const now = Date.now();
+        // Deduct credits
+        transaction.update(creditsRef, {
+            balance: newBalance,
+            totalUsed: credits.totalUsed + cost,
+            lastUsedAt: now,
+            updatedAt: now,
         });
-        console.log(`Deducted ${count} SMS credit from user ${userId}. New balance: ${result.newBalance}`);
-        return result;
-    }
-    catch (error) {
-        console.error(`Error deducting credits for user ${userId}:`, error.message);
-        return { success: false, newBalance: 0, error: error.message };
-    }
+        // Log usage - filter out undefined values (Firestore rejects undefined)
+        const usageRef = db.collection('sms_credits').doc(userId).collection('usage').doc();
+        const usage = {
+            messageId: metadata.messageId,
+            recipientPhone: metadata.recipientPhone,
+            segments: metadata.segments,
+            creditsUsed: cost,
+            createdAt: now,
+        };
+        // Only add optional fields if they have values
+        if (metadata.tournamentId)
+            usage.tournamentId = metadata.tournamentId;
+        if (metadata.leagueId)
+            usage.leagueId = metadata.leagueId;
+        if (metadata.recipientName)
+            usage.recipientName = metadata.recipientName;
+        transaction.set(usageRef, usage);
+        return { newBalance, usageId: usageRef.id };
+    });
+    console.log(`Reserved ${cost} SMS credit(s) from user ${userId}. New balance: ${result.newBalance}`);
+    return result;
 }
 // ============================================
 // HELPER: Send SMS via SMSGlobal
@@ -233,15 +282,58 @@ async function sendSMSViaSMSGlobal(to, body, apiKey, apiSecret, origin) {
     }
 }
 // ============================================
-// HELPER: Send Email (STUB)
+// HELPER: Send Email via Amazon SES
 // ============================================
-async function sendEmail(_to, _subject, _body) {
-    // TODO: Implement email sending via SendGrid or other provider
-    console.log('Email sending not implemented yet');
-    return {
-        success: false,
-        error: 'Email sending not implemented. Configure SendGrid integration.',
-    };
+async function sendEmail(to, subject, body) {
+    try {
+        const sesConfig = getSESConfig();
+        const client = new client_ses_1.SESClient({
+            region: sesConfig.region,
+            credentials: {
+                accessKeyId: sesConfig.accessKeyId,
+                secretAccessKey: sesConfig.secretAccessKey,
+            },
+        });
+        console.log(`Sending email to ${to} via Amazon SES (from: ${sesConfig.fromEmail})`);
+        const command = new client_ses_1.SendEmailCommand({
+            Source: sesConfig.fromEmail,
+            Destination: {
+                ToAddresses: [to],
+            },
+            Message: {
+                Subject: {
+                    Data: subject,
+                    Charset: 'UTF-8',
+                },
+                Body: {
+                    Text: {
+                        Data: body,
+                        Charset: 'UTF-8',
+                    },
+                },
+            },
+        });
+        const response = await client.send(command);
+        console.log(`Email sent via SES. Message ID: ${response.MessageId}`);
+        return { success: true, messageId: response.MessageId };
+    }
+    catch (error) {
+        console.error('SES error:', error.message);
+        // Handle specific SES errors
+        if (error.name === 'MessageRejected') {
+            return { success: false, error: 'Email rejected by SES. Check sender verification.' };
+        }
+        if (error.name === 'MailFromDomainNotVerifiedException') {
+            return { success: false, error: 'Sender email/domain not verified in SES.' };
+        }
+        if (error.name === 'ConfigurationSetDoesNotExistException') {
+            return { success: false, error: 'SES configuration set not found.' };
+        }
+        if (error.code === 'InvalidParameterValue') {
+            return { success: false, error: `Invalid email parameter: ${error.message}` };
+        }
+        return { success: false, error: error.message || 'Unknown SES error' };
+    }
 }
 // ============================================
 // SHARED PROCESSING LOGIC
@@ -249,11 +341,15 @@ async function sendEmail(_to, _subject, _body) {
 /**
  * Process a comms queue message (shared logic for tournaments and leagues)
  *
- * For SMS messages:
- * 1. Check if organizer (createdBy) has sufficient SMS credits
- * 2. If no credits, fail the message with "Insufficient SMS credits"
- * 3. If has credits, send SMS
- * 4. On successful send, deduct 1 credit and log usage
+ * V07.50 FLOW (reserve-before-send):
+ * 1. Lock message doc
+ * 2. Validate inputs
+ * 3. Compute SMS cost (segments)
+ * 4. RESERVE credits (transactional) - THROWS if insufficient
+ * 5. Send SMS via SMSGlobal
+ * 6. Update message status with smsSegments and smsCreditsUsed
+ *
+ * Credits are consumed even if send fails (MVP - no refunds)
  */
 async function processCommsMessage(snap, messageId, entityType, entityId, smsConfig) {
     const message = snap.data();
@@ -306,50 +402,75 @@ async function processCommsMessage(snap, messageId, entityType, entityId, smsCon
         return;
     }
     // ========================================
-    // STEP 2: Send the message
+    // STEP 2: Process the message
     // ========================================
     let result;
+    let smsSegments = 0;
+    let smsCreditsUsed = 0;
     if (message.type === 'sms') {
-        // Validate phone number
-        if (!message.recipientPhone) {
-            result = { success: false, error: 'No phone number provided' };
+        try {
+            // ========================================
+            // STEP 2a: Validate inputs
+            // ========================================
+            if (!message.recipientPhone) {
+                throw new Error('No phone number provided');
+            }
+            if (!message.recipientPhone.startsWith('+')) {
+                throw new Error('Invalid phone format. Must be E.164 (+XXXXXXXXXXX)');
+            }
+            if (!message.body || message.body.trim().length === 0) {
+                throw new Error('Message body is empty');
+            }
+            if (!message.createdBy) {
+                throw new Error('No createdBy user ID - cannot check SMS credits');
+            }
+            // ========================================
+            // STEP 2b: Compute cost (segment-based)
+            // ========================================
+            const { segments, cost } = computeSmsCost(message.body);
+            smsSegments = segments;
+            console.log(`Message has ${segments} segment(s), cost: ${cost} credit(s)`);
+            // ========================================
+            // STEP 2c: RESERVE credits BEFORE sending
+            // This is transactional and THROWS if insufficient
+            // ========================================
+            console.log(`Reserving ${cost} credit(s) for user ${message.createdBy}...`);
+            await reserveCredits(db, message.createdBy, cost, {
+                messageId,
+                tournamentId: entityType === 'tournament' ? entityId : undefined,
+                leagueId: entityType === 'league' ? entityId : undefined,
+                recipientPhone: message.recipientPhone,
+                recipientName: message.recipientName,
+                segments,
+            });
+            smsCreditsUsed = cost;
+            console.log(`Credits reserved successfully`);
+            // ========================================
+            // STEP 2d: Send SMS (credits already consumed)
+            // ========================================
+            result = await sendSMSViaSMSGlobal(message.recipientPhone, message.body, smsConfig.apiKey, smsConfig.apiSecret, smsConfig.origin);
+            // Note: Credits are NOT refunded on send failure (MVP)
+            if (!result.success) {
+                console.log(`SMS send failed but ${cost} credit(s) were consumed (no refund)`);
+            }
         }
-        else if (!message.recipientPhone.startsWith('+')) {
-            result = { success: false, error: 'Invalid phone format. Must be E.164 (+XXXXXXXXXXX)' };
-        }
-        else if (!message.body || message.body.trim().length === 0) {
-            result = { success: false, error: 'Message body is empty' };
-        }
-        else if (!message.createdBy) {
-            result = { success: false, error: 'No createdBy user ID - cannot check SMS credits' };
-        }
-        else {
-            // Check SMS credits BEFORE sending
-            const hasCredits = await hasSufficientCredits(db, message.createdBy, 1);
-            if (!hasCredits) {
-                console.log(`User ${message.createdBy} has insufficient SMS credits`);
-                result = {
-                    success: false,
-                    error: 'Insufficient SMS credits. Please purchase more credits to send SMS.',
-                };
+        catch (error) {
+            // Handle specific error types
+            if (error instanceof InsufficientCreditsError) {
+                console.error(`Insufficient credits: ${error.message}`);
+                result = { success: false, error: 'Insufficient SMS credits. Please purchase more credits.' };
+                smsCreditsUsed = 0; // No credits consumed
+            }
+            else if (error instanceof MessageTooLongError) {
+                console.error(`Message too long: ${error.message}`);
+                result = { success: false, error: error.message };
+                smsCreditsUsed = 0;
             }
             else {
-                // Send SMS via SMSGlobal
-                result = await sendSMSViaSMSGlobal(message.recipientPhone, message.body, smsConfig.apiKey, smsConfig.apiSecret, smsConfig.origin);
-                // If SMS sent successfully, deduct credits and log usage
-                if (result.success) {
-                    const deductResult = await deductCreditsAndLogUsage(db, message.createdBy, 1, {
-                        messageId,
-                        tournamentId: entityType === 'tournament' ? entityId : undefined,
-                        leagueId: entityType === 'league' ? entityId : undefined,
-                        recipientPhone: message.recipientPhone,
-                        recipientName: message.recipientName,
-                    });
-                    if (!deductResult.success) {
-                        // Credit deduction failed but SMS was sent - log but don't fail the message
-                        console.error(`Warning: SMS sent but credit deduction failed: ${deductResult.error}`);
-                    }
-                }
+                console.error(`SMS processing error: ${error.message}`);
+                result = { success: false, error: error.message };
+                // If error happened after reservation, credits were consumed
+                // smsCreditsUsed is already set if reservation succeeded
             }
         }
     }
@@ -370,7 +491,7 @@ async function processCommsMessage(snap, messageId, entityType, entityId, smsCon
         result = { success: false, error: `Unknown message type: ${message.type}` };
     }
     // ========================================
-    // STEP 3: Update status
+    // STEP 3: Update status with cost tracking
     // ========================================
     try {
         if (result.success) {
@@ -378,31 +499,40 @@ async function processCommsMessage(snap, messageId, entityType, entityId, smsCon
                 status: 'sent',
                 sentAt: Date.now(),
                 error: null,
+                // V07.50: Track SMS cost
+                smsSegments: smsSegments || null,
+                smsCreditsUsed: smsCreditsUsed || null,
+                providerMessageId: result.messageId || null,
                 // Clear lock
                 lockedAt: null,
                 lockedBy: null,
             });
-            console.log(`Message ${messageId} sent successfully`);
+            console.log(`Message ${messageId} sent successfully (${smsCreditsUsed} credit(s) used)`);
         }
         else {
             await docRef.update({
                 status: 'failed',
                 failedAt: Date.now(),
                 error: result.error || 'Unknown error',
+                // V07.50: Track SMS cost (even on failure)
+                smsSegments: smsSegments || null,
+                smsCreditsUsed: smsCreditsUsed || null, // May be >0 if credits consumed before send failed
+                providerMessageId: null,
                 // Clear lock
                 lockedAt: null,
                 lockedBy: null,
             });
-            console.log(`Message ${messageId} failed: ${result.error}`);
+            console.log(`Message ${messageId} failed: ${result.error} (${smsCreditsUsed} credit(s) consumed)`);
             // Optionally create a retry message if not already retried
-            if (!message.retried) {
+            // BUT only if credits weren't consumed (don't double-charge on retry)
+            if (!message.retried && smsCreditsUsed === 0) {
                 console.log(`Creating retry message for ${messageId}`);
                 // Determine collection path based on entity type
                 const collectionPath = entityType === 'tournament'
                     ? db.collection('tournaments').doc(entityId).collection('comms_queue')
                     : db.collection('leagues').doc(entityId).collection('comms_queue');
                 const retryRef = collectionPath.doc();
-                await retryRef.set(Object.assign(Object.assign({}, message), { status: 'pending', createdAt: Date.now(), sentAt: null, failedAt: null, error: null, lockedAt: null, lockedBy: null, retried: true, retryOf: messageId }));
+                await retryRef.set(Object.assign(Object.assign({}, message), { status: 'pending', createdAt: Date.now(), sentAt: null, failedAt: null, error: null, lockedAt: null, lockedBy: null, smsSegments: null, smsCreditsUsed: null, providerMessageId: null, retried: true, retryOf: messageId }));
                 console.log(`Retry message created: ${retryRef.id}`);
             }
         }

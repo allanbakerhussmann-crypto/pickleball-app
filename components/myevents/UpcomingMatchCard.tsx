@@ -12,6 +12,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getRoute } from '../../router/routes';
+import { formatTime } from '../../utils/timeFormat';
 import type { Match } from '../../types';
 
 interface UpcomingMatchCardProps {
@@ -97,8 +98,18 @@ export const UpcomingMatchCard: React.FC<UpcomingMatchCardProps> = ({
           </div>
         </div>
 
-        {/* Status & Arrow */}
+        {/* Court, Time & Status - V07.50 */}
         <div className="flex items-center gap-2 flex-shrink-0">
+          {match.court && (
+            <span className="px-2 py-0.5 rounded text-xs bg-cyan-500/20 text-cyan-400">
+              {match.court}
+            </span>
+          )}
+          {match.scheduledTime && (
+            <span className="px-2 py-0.5 rounded text-xs bg-purple-500/20 text-purple-400">
+              {formatTime(match.scheduledTime)}
+            </span>
+          )}
           {statusInfo && (
             <span className={`px-2 py-0.5 rounded text-xs ${statusInfo.className}`}>
               {statusInfo.label}
@@ -109,6 +120,13 @@ export const UpcomingMatchCard: React.FC<UpcomingMatchCardProps> = ({
           </svg>
         </div>
       </div>
+
+      {/* Venue - V07.50 */}
+      {match.venue && (
+        <div className="mt-1 text-xs text-gray-500 truncate">
+          📍 {match.venue}
+        </div>
+      )}
 
       {/* Score (if completed) */}
       {match.status === 'completed' && match.scores && match.scores.length > 0 && (

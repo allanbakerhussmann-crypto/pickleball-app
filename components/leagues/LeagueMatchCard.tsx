@@ -351,7 +351,7 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
 
           {/* Player B */}
           <div className={`flex-1 text-sm text-right truncate ${
-            playerBWon ? 'text-green-400 font-semibold' : 
+            playerBWon ? 'text-green-400 font-semibold' :
             isPlayerB ? 'text-blue-400' : 'text-white'
           }`}>
             {playerBWon && '✓ '}
@@ -359,6 +359,24 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
           </div>
         </div>
 
+        {/* Court, time, venue info - V07.50 */}
+        {(match.court || match.scheduledTime || match.venue) && (
+          <div className="mt-2 pt-2 border-t border-gray-700/30 flex flex-wrap items-center gap-2 text-xs">
+            {match.court && (
+              <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400">
+                {match.court}
+              </span>
+            )}
+            {match.scheduledTime && (
+              <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">
+                {formatTime(new Date(`2000-01-01T${match.scheduledTime}`).getTime())}
+              </span>
+            )}
+            {match.venue && (
+              <span className="text-gray-500">{match.venue}</span>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -390,8 +408,22 @@ export const LeagueMatchCard: React.FC<LeagueMatchCardProps> = ({
           {match.boxNumber && (
             <span className="text-xs text-gray-500">Box {match.boxNumber}</span>
           )}
+          {/* V07.50: Court, time, venue info */}
+          {match.court && (
+            <span className="text-xs bg-cyan-500/20 text-cyan-400 px-2 py-0.5 rounded">
+              {match.court}
+            </span>
+          )}
+          {match.scheduledTime && (
+            <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded">
+              {formatTime(new Date(`2000-01-01T${match.scheduledTime}`).getTime())}
+            </span>
+          )}
+          {match.venue && (
+            <span className="text-xs text-gray-500">{match.venue}</span>
+          )}
         </div>
-        
+
         {/* Status Badge - Use verification badge when available */}
         {hasVerification ? (
           <ScoreVerificationBadge

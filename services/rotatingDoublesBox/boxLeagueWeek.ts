@@ -378,6 +378,16 @@ export async function activateWeek(
       throw new Error(`Week ${weekNumber} is draft but already has ${week.matchIds.length} matches. Clear matches first or use existing.`);
     }
 
+    // V07.50: Fetch league to get venue info for matches
+    const leagueRef = doc(db, 'leagues', leagueId);
+    const leagueSnap = await transaction.get(leagueRef);
+    const league = leagueSnap.exists() ? leagueSnap.data() : null;
+    const venueSettings = league?.settings?.rotatingDoublesBox?.venue;
+    const venueInfo = venueSettings ? {
+      sessions: venueSettings.sessions?.filter((s: { active?: boolean }) => s.active !== false),
+      venueName: venueSettings.venueName || league?.venue || league?.location,
+    } : undefined;
+
     // V07.45: Use saved box assignments - they may have been manually edited
     // (e.g., substitutes replacing absent players)
     // The draft week's boxAssignments are set by:
@@ -423,7 +433,8 @@ export async function activateWeek(
     // Even if generator accidentally references week.boxAssignments, it will be correct
     const rotationVersion = 1;
     const weekForMatchGen: BoxLeagueWeek = { ...week, boxAssignments: assignmentsToUse };
-    const matchDocs = await generateMatchDocsForWeek(leagueId, weekForMatchGen, rotationVersion, assignmentsToUse);
+    // V07.50: Pass venue info for scheduledTime and venue on matches
+    const matchDocs = await generateMatchDocsForWeek(leagueId, weekForMatchGen, rotationVersion, assignmentsToUse, venueInfo);
 
 
     // Write all match documents

@@ -489,10 +489,10 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
           settings: {
             boxSize: boxSize,
             gameSettings: { playType: 'doubles', pointsPerGame: 11, winBy: 2, bestOf: 1 },
-            promotionCount: 1,
-            relegationCount: 1,
+            promotionCount: 2,
+            relegationCount: 2,
             initialSeeding: 'dupr',
-            tiebreakers: ['wins', 'head_to_head', 'points_diff', 'points_for'],
+            tiebreakers: ['wins', 'game_diff', 'head_to_head'],
             scoreVerification: verificationSettings,
             absencePolicy: { policy: absencePolicy, allowSubstitutes: allowSubstitutes, subApproval: 'organizer_only', maxSubsPerSeason: 2 },
             newPlayerJoinPolicy: { allowMidSeason: true, entryBox: 'bottom', entryPosition: 'bottom' },

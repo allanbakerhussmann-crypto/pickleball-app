@@ -489,6 +489,14 @@ service cloud.firestore {
           ));
         allow delete: if isLeagueAdmin(leagueId);
       }
+      // V07.48: League substitutes tracking
+      // Stores available substitute players for box leagues
+      match /substitutes/{substituteId} {
+        // Anyone can read substitutes list
+        allow read: if true;
+        // League admin can manage substitutes
+        allow create, update, delete: if isLeagueAdmin(leagueId);
+      }
       // V07.14: League standings subcollection (same pattern as tournament poolResults)
       // Standings are derived snapshots - matches are truth
       match /standings/{standingsKey} {
@@ -749,8 +757,12 @@ service cloud.firestore {
     match /comms_templates/{templateId} {
       // All authenticated users can read templates
       allow read: if isAuthenticated();
-      // Only app admins can create/update/delete templates
-      allow write: if isAppAdmin();
+      // Users can create templates (createdBy must match their uid)
+      allow create: if isAuthenticated() &&
+        request.resource.data.createdBy == request.auth.uid;
+      // Users can update/delete their own templates, app admins can manage all
+      allow update, delete: if isAppAdmin() ||
+        (isAuthenticated() && resource.data.createdBy == request.auth.uid);
     }
 
     // ============================================

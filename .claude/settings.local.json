@@ -24,7 +24,8 @@
       "WebFetch(domain:dupr.gitbook.io)",
       "WebFetch(domain:uat.mydupr.com)",
       "Bash(find:*)",
-      "Bash(firebase deploy:*)"
+      "Bash(firebase deploy:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

@@ -6,7 +6,9 @@
  * (same as singles weekly league for DUPR compatibility).
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueMatchFactory.ts
- * VERSION: V07.40
+ * VERSION: V07.49
+ *
+ * V07.49: Added seasonId, participantIds to match docs for efficient queries
  */
 
 import {
@@ -105,10 +107,16 @@ export async function generateMatchDocsForWeek(
   leagueId: string,
   week: BoxLeagueWeek,
   rotationVersion: number = 1,
-  boxAssignmentsOverride?: BoxAssignment[]
+  boxAssignmentsOverride?: BoxAssignment[],
+  venueInfo?: { sessions?: { startTime: string }[]; venueName?: string } // V07.50
 ): Promise<MatchDoc[]> {
   // V07.40: Use override if provided, otherwise use week's assignments
   const boxAssignments = boxAssignmentsOverride ?? week.boxAssignments;
+
+  // Debug log: confirm which assignments we're using
+  console.log('[generateMatchDocsForWeek] using boxes:',
+    boxAssignments.map(b => `Box ${b.boxNumber}: ${b.playerIds.join(',')}`)
+  );
 
   // Get player lookup data from league members
   const playerLookup = await getPlayerLookup(leagueId, boxAssignments);
@@ -123,10 +131,14 @@ export async function generateMatchDocsForWeek(
     bestOf: week.rulesSnapshot.bestOf,
   };
 
-  // Get court assignments map
-  const courtMap = new Map<number, string>();
+  // Get court assignments map (V07.50: include session time)
+  const courtMap = new Map<number, { court: string; sessionTime?: string }>();
   for (const ca of week.courtAssignments) {
-    courtMap.set(ca.boxNumber, ca.courtLabel);
+    const sessionTime = venueInfo?.sessions?.[ca.sessionIndex]?.startTime;
+    courtMap.set(ca.boxNumber, {
+      court: ca.courtLabel,
+      sessionTime,
+    });
   }
 
   // Generate matches for each box
@@ -159,8 +171,12 @@ export async function generateMatchDocsForWeek(
 
       const now = Date.now();
 
+      // V07.50: Get court and session info
+      const courtInfo = courtMap.get(boxAssignment.boxNumber);
+
       const matchData = createBoxLeagueMatch({
         leagueId,
+        seasonId: week.seasonId,
         weekNumber: week.weekNumber,
         boxNumber: boxAssignment.boxNumber,
         roundNumber: pairing.roundNumber,
@@ -168,7 +184,9 @@ export async function generateMatchDocsForWeek(
         playerLookup,
         gameSettings,
         scheduledDate: week.scheduledDate,
-        court: courtMap.get(boxAssignment.boxNumber),
+        court: courtInfo?.court,
+        scheduledTime: courtInfo?.sessionTime,
+        venue: venueInfo?.venueName,
       });
 
       const match: Match = {
@@ -214,10 +232,13 @@ export interface PlayerLookup {
 /**
  * Create a single box league match
  *
+ * V07.49: Added seasonId and participantIds for efficient queries
+ *
  * @returns Match without id, createdAt, updatedAt (caller provides these)
  */
 export function createBoxLeagueMatch(params: {
   leagueId: string;
+  seasonId: string;
   weekNumber: number;
   boxNumber: number;
   roundNumber: number;
@@ -226,9 +247,12 @@ export function createBoxLeagueMatch(params: {
   gameSettings: GameSettings;
   scheduledDate?: number;
   court?: string;
+  scheduledTime?: string;  // V07.50: Session start time (HH:MM)
+  venue?: string;          // V07.50: Venue name
 }): Omit<Match, 'id' | 'createdAt' | 'updatedAt'> {
   const {
     leagueId,
+    seasonId,
     weekNumber,
     boxNumber,
     roundNumber,
@@ -237,6 +261,8 @@ export function createBoxLeagueMatch(params: {
     gameSettings,
     scheduledDate,
     court,
+    scheduledTime,
+    venue,
   } = params;
 
   // Build sideA participant
@@ -263,6 +289,12 @@ export function createBoxLeagueMatch(params: {
     duprIds: [sideBPlayer1?.duprId, sideBPlayer2?.duprId].filter(Boolean) as string[],
   };
 
+  // V07.49: Build participantIds array for efficient queries
+  const participantIds = [
+    ...pairing.teamAPlayerIds,
+    ...pairing.teamBPlayerIds,
+  ];
+
   // Build match object
   const match: Omit<Match, 'id' | 'createdAt' | 'updatedAt'> = {
     eventType: 'league',
@@ -279,12 +311,23 @@ export function createBoxLeagueMatch(params: {
     matchNumberInBox: roundNumber, // Round = match number for box league
   };
 
+  // V07.49: Add seasonId and participantIds for efficient queries
+  (match as any).seasonId = seasonId;
+  (match as any).participantIds = participantIds;
+
   // Optional fields
   if (scheduledDate) {
     match.scheduledDate = scheduledDate;
   }
   if (court) {
     match.court = court;
+  }
+  // V07.50: Add session time and venue
+  if (scheduledTime) {
+    match.scheduledTime = scheduledTime;
+  }
+  if (venue) {
+    match.venue = venue;
   }
 
   // Track bye player for 5/6 player boxes
@@ -303,7 +346,8 @@ export function createBoxLeagueMatch(params: {
  */
 export async function generateMatchesForWeek(
   leagueId: string,
-  week: BoxLeagueWeek
+  week: BoxLeagueWeek,
+  venueInfo?: { sessions?: { startTime: string }[]; venueName?: string } // V07.50
 ): Promise<string[]> {
   // Get player lookup data from league members
   const playerLookup = await getPlayerLookup(leagueId, week.boxAssignments);
@@ -319,10 +363,14 @@ export async function generateMatchesForWeek(
     bestOf: week.rulesSnapshot.bestOf,
   };
 
-  // Get court assignments map
-  const courtMap = new Map<number, string>();
+  // Get court assignments map (V07.50: include session time)
+  const courtMap = new Map<number, { court: string; sessionTime?: string }>();
   for (const ca of week.courtAssignments) {
-    courtMap.set(ca.boxNumber, ca.courtLabel);
+    const sessionTime = venueInfo?.sessions?.[ca.sessionIndex]?.startTime;
+    courtMap.set(ca.boxNumber, {
+      court: ca.courtLabel,
+      sessionTime,
+    });
   }
 
   // Generate matches for each box
@@ -358,8 +406,12 @@ export async function generateMatchesForWeek(
       const matchRef = doc(getMatchesCollection(leagueId));
       const now = Date.now();
 
+      // V07.50: Get court and session info
+      const courtInfo = courtMap.get(boxAssignment.boxNumber);
+
       const matchData = createBoxLeagueMatch({
         leagueId,
+        seasonId: week.seasonId,
         weekNumber: week.weekNumber,
         boxNumber: boxAssignment.boxNumber,
         roundNumber: pairing.roundNumber,
@@ -367,7 +419,9 @@ export async function generateMatchesForWeek(
         playerLookup,
         gameSettings,
         scheduledDate: week.scheduledDate,
-        court: courtMap.get(boxAssignment.boxNumber),
+        court: courtInfo?.court,
+        scheduledTime: courtInfo?.sessionTime,
+        venue: venueInfo?.venueName,
       });
 
       const match: Match = {

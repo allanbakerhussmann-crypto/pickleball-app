@@ -3,6 +3,13 @@
  *
  * Handles absence declaration and substitute (ghost player) management.
  *
+ * V07.48 ARCHITECTURE:
+ * - All drag/drop handlers use runTransaction() for atomicity
+ * - updatedAt + revision bumped on every write
+ * - positionInBox stored for accurate restoration
+ * - Draft state: flexible (no box size enforcement)
+ * - Activation: strict (4-6 players per box enforced)
+ *
  * Two separate concepts:
  * 1. Substitute = Ghost Player - fills spot so games can happen
  *    - In DUPR leagues: sub MUST have DUPR ID → matches submitted with sub's DUPR ID
@@ -21,10 +28,10 @@
  * - If substitute lacks DUPR ID → match NOT submitted (in DUPR-required leagues)
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueAbsence.ts
- * VERSION: V07.28
+ * VERSION: V07.48
  */
 
-import { doc, updateDoc, getDoc, getDocs, collection, query, limit } from '@firebase/firestore';
+import { doc, updateDoc, getDoc, getDocs, collection, query, limit, runTransaction } from '@firebase/firestore';
 import { db } from '../firebase/config';
 import type { UserProfile } from '../../types';
 import type {
@@ -33,7 +40,7 @@ import type {
   BoxLeagueMember,
   AbsencePolicyType,
 } from '../../types/rotatingDoublesBox';
-import { getWeek } from './boxLeagueWeek';
+// Note: getWeek is not used directly since we read via transaction now
 
 // ============================================
 // ABSENCE DECLARATION
@@ -41,6 +48,11 @@ import { getWeek } from './boxLeagueWeek';
 
 /**
  * Declare absence for a player (pre-declared, before week starts)
+ *
+ * V07.48: Uses runTransaction for atomic read-modify-write.
+ * - Removes player from boxAssignments
+ * - Adds absence record with positionInBox for restoration
+ * - Bumps updatedAt and revision
  *
  * Player can only declare absence before week is activated.
  * Organizers can declare on behalf of players.
@@ -57,64 +69,95 @@ export async function declareAbsence(
     absencePolicy: AbsencePolicyType;
   }
 ): Promise<void> {
-  const week = await getWeek(leagueId, weekNumber);
+  const weekRef = getWeekDoc(leagueId, weekNumber);
 
-  if (!week) {
-    throw new Error(`Week ${weekNumber} not found`);
-  }
-
-  // Can only declare absence before activation
-  if (week.state !== 'draft') {
-    throw new Error(
-      'Absence can only be declared before the week is activated. Contact the organizer.'
-    );
-  }
-
-  // Find player's box
-  let playerBoxNumber = 0;
-  for (const box of week.boxAssignments) {
-    if (box.playerIds.includes(playerId)) {
-      playerBoxNumber = box.boxNumber;
-      break;
+  await runTransaction(db, async (transaction) => {
+    const weekSnap = await transaction.get(weekRef);
+    if (!weekSnap.exists()) {
+      throw new Error(`Week ${weekNumber} not found`);
     }
-  }
 
-  if (playerBoxNumber === 0) {
-    throw new Error('Player is not assigned to this week');
-  }
+    const week = weekSnap.data() as BoxLeagueWeek;
 
-  // Check for existing absence
-  const existingAbsence = (week.absences || []).find(
-    (a) => a.playerId === playerId
-  );
+    // Can only declare absence before activation
+    if (week.state !== 'draft') {
+      throw new Error(
+        'Absence can only be declared before the week is activated. Contact the organizer.'
+      );
+    }
 
-  if (existingAbsence) {
-    throw new Error('Absence already declared for this player');
-  }
+    // Find player's box and position
+    let playerBoxNumber = 0;
+    let positionInBox = 0;
+    for (const box of week.boxAssignments) {
+      const idx = box.playerIds.indexOf(playerId);
+      if (idx !== -1) {
+        playerBoxNumber = box.boxNumber;
+        positionInBox = idx;
+        break;
+      }
+    }
 
-  // Add absence
-  const now = Date.now();
-  const newAbsence: WeekAbsence = {
-    playerId,
-    playerName: options.playerName,
-    boxNumber: playerBoxNumber,
-    reason: options.reason,
-    reasonText: options.reasonText,
-    declaredAt: now,
-    declaredByUserId,
-    policyApplied: options.absencePolicy,
-    isNoShow: false, // Pre-declared, not a no-show
-  };
+    if (playerBoxNumber === 0) {
+      throw new Error('Player is not assigned to this week');
+    }
 
-  const updatedAbsences = [...(week.absences || []), newAbsence];
+    // Check for existing absence
+    const existingAbsence = (week.absences || []).find(
+      (a) => a.playerId === playerId
+    );
 
-  await updateDoc(getWeekDoc(leagueId, weekNumber), {
-    absences: updatedAbsences,
+    if (existingAbsence) {
+      throw new Error('Absence already declared for this player');
+    }
+
+    // Build new absence record with positionInBox
+    // Note: Firestore doesn't accept undefined values, so only include defined fields
+    const now = Date.now();
+    const newAbsence: WeekAbsence = {
+      playerId,
+      boxNumber: playerBoxNumber,
+      positionInBox,
+      declaredAt: now,
+      declaredByUserId,
+      policyApplied: options.absencePolicy,
+      isNoShow: false,
+      // Only include optional fields if they have values
+      ...(options.playerName && { playerName: options.playerName }),
+      ...(options.reason && { reason: options.reason }),
+      ...(options.reasonText && { reasonText: options.reasonText }),
+    };
+
+    // Remove player from boxAssignments
+    const updatedBoxAssignments = week.boxAssignments.map((b) => {
+      if (b.boxNumber === playerBoxNumber) {
+        return {
+          ...b,
+          playerIds: b.playerIds.filter((id) => id !== playerId),
+        };
+      }
+      return b;
+    });
+
+    const updatedAbsences = [...(week.absences || []), newAbsence];
+
+    // Update with audit fields
+    transaction.update(weekRef, {
+      boxAssignments: updatedBoxAssignments,
+      absences: updatedAbsences,
+      updatedAt: now,
+      revision: (week.revision || 0) + 1,
+    });
   });
 }
 
 /**
  * Mark a player as no-show (night-of absence, not pre-declared)
+ *
+ * V07.48: Uses runTransaction for atomic read-modify-write.
+ * - Removes player from boxAssignments
+ * - Adds absence record with positionInBox
+ * - Bumps updatedAt and revision
  *
  * Only organizers can mark no-shows. This is different from pre-declared absences.
  */
@@ -128,60 +171,90 @@ export async function recordNoShowAbsence(
     absencePolicy: AbsencePolicyType;
   }
 ): Promise<void> {
-  const week = await getWeek(leagueId, weekNumber);
+  const weekRef = getWeekDoc(leagueId, weekNumber);
 
-  if (!week) {
-    throw new Error(`Week ${weekNumber} not found`);
-  }
-
-  // Can mark no-show during active state
-  if (week.state !== 'active' && week.state !== 'draft') {
-    throw new Error('Cannot mark no-show after week is closing or finalized');
-  }
-
-  // Find player's box
-  let playerBoxNumber = 0;
-  for (const box of week.boxAssignments) {
-    if (box.playerIds.includes(playerId)) {
-      playerBoxNumber = box.boxNumber;
-      break;
+  await runTransaction(db, async (transaction) => {
+    const weekSnap = await transaction.get(weekRef);
+    if (!weekSnap.exists()) {
+      throw new Error(`Week ${weekNumber} not found`);
     }
-  }
 
-  if (playerBoxNumber === 0) {
-    throw new Error('Player is not assigned to this week');
-  }
+    const week = weekSnap.data() as BoxLeagueWeek;
 
-  // Check for existing absence
-  const existingAbsence = (week.absences || []).find(
-    (a) => a.playerId === playerId
-  );
+    // Can mark no-show during active state
+    if (week.state !== 'active' && week.state !== 'draft') {
+      throw new Error('Cannot mark no-show after week is closing or finalized');
+    }
 
-  if (existingAbsence) {
-    throw new Error('Absence already recorded for this player');
-  }
+    // Find player's box and position
+    let playerBoxNumber = 0;
+    let positionInBox = 0;
+    for (const box of week.boxAssignments) {
+      const idx = box.playerIds.indexOf(playerId);
+      if (idx !== -1) {
+        playerBoxNumber = box.boxNumber;
+        positionInBox = idx;
+        break;
+      }
+    }
 
-  // Add no-show absence
-  const now = Date.now();
-  const newAbsence: WeekAbsence = {
-    playerId,
-    playerName: options.playerName,
-    boxNumber: playerBoxNumber,
-    declaredAt: now,
-    declaredByUserId: markedByUserId,
-    policyApplied: options.absencePolicy,
-    isNoShow: true, // This is a no-show
-  };
+    if (playerBoxNumber === 0) {
+      throw new Error('Player is not assigned to this week');
+    }
 
-  const updatedAbsences = [...(week.absences || []), newAbsence];
+    // Check for existing absence
+    const existingAbsence = (week.absences || []).find(
+      (a) => a.playerId === playerId
+    );
 
-  await updateDoc(getWeekDoc(leagueId, weekNumber), {
-    absences: updatedAbsences,
+    if (existingAbsence) {
+      throw new Error('Absence already recorded for this player');
+    }
+
+    // Add no-show absence with positionInBox
+    // Note: Firestore doesn't accept undefined values, so only include defined fields
+    const now = Date.now();
+    const newAbsence: WeekAbsence = {
+      playerId,
+      boxNumber: playerBoxNumber,
+      positionInBox,
+      declaredAt: now,
+      declaredByUserId: markedByUserId,
+      policyApplied: options.absencePolicy,
+      isNoShow: true,
+      ...(options.playerName && { playerName: options.playerName }),
+    };
+
+    // Remove player from boxAssignments
+    const updatedBoxAssignments = week.boxAssignments.map((b) => {
+      if (b.boxNumber === playerBoxNumber) {
+        return {
+          ...b,
+          playerIds: b.playerIds.filter((id) => id !== playerId),
+        };
+      }
+      return b;
+    });
+
+    const updatedAbsences = [...(week.absences || []), newAbsence];
+
+    // Update with audit fields
+    transaction.update(weekRef, {
+      boxAssignments: updatedBoxAssignments,
+      absences: updatedAbsences,
+      updatedAt: now,
+      revision: (week.revision || 0) + 1,
+    });
   });
 }
 
 /**
  * Cancel an absence declaration (make player active again)
+ *
+ * V07.48: Uses runTransaction for atomic read-modify-write.
+ * - Restores player at their original positionInBox
+ * - Only removes the substitute linked to THIS specific absence
+ * - Bumps updatedAt and revision
  *
  * Players can only cancel during draft state.
  * Organizers can cancel during draft or active state.
@@ -192,28 +265,71 @@ export async function cancelAbsence(
   playerId: string,
   isOrganizer: boolean = false
 ): Promise<void> {
-  const week = await getWeek(leagueId, weekNumber);
+  const weekRef = getWeekDoc(leagueId, weekNumber);
 
-  if (!week) {
-    throw new Error(`Week ${weekNumber} not found`);
-  }
+  await runTransaction(db, async (transaction) => {
+    const weekSnap = await transaction.get(weekRef);
+    if (!weekSnap.exists()) {
+      throw new Error(`Week ${weekNumber} not found`);
+    }
 
-  // Players can only cancel before activation
-  // Organizers can cancel during draft or active state
-  if (week.state === 'finalized' || week.state === 'closing') {
-    throw new Error('Cannot make player active after week is finalized');
-  }
+    const week = weekSnap.data() as BoxLeagueWeek;
 
-  if (week.state === 'active' && !isOrganizer) {
-    throw new Error('Only organizers can make players active during an active week');
-  }
+    // Players can only cancel before activation
+    // Organizers can cancel during draft or active state
+    if (week.state === 'finalized' || week.state === 'closing') {
+      throw new Error('Cannot make player active after week is finalized');
+    }
 
-  const updatedAbsences = (week.absences || []).filter(
-    (a) => a.playerId !== playerId
-  );
+    if (week.state === 'active' && !isOrganizer) {
+      throw new Error('Only organizers can make players active during an active week');
+    }
 
-  await updateDoc(getWeekDoc(leagueId, weekNumber), {
-    absences: updatedAbsences,
+    // Find the SPECIFIC absence record
+    const absenceRecord = (week.absences || []).find((a) => a.playerId === playerId);
+    if (!absenceRecord) {
+      throw new Error(`No absence record found for player ${playerId}`);
+    }
+
+    const substituteId = absenceRecord.substituteId;
+    const originalBox = absenceRecord.boxNumber;
+    const originalPosition = absenceRecord.positionInBox ?? 0;
+
+    // Remove THIS specific absence record
+    const updatedAbsences = (week.absences || []).filter(
+      (a) => a.playerId !== playerId
+    );
+
+    // Update boxAssignments: remove only the linked substitute, restore original at correct position
+    const updatedBoxAssignments = week.boxAssignments.map((b) => {
+      if (b.boxNumber === originalBox) {
+        let playerIds = [...b.playerIds];
+
+        // Remove ONLY the substitute linked to THIS absence
+        if (substituteId) {
+          playerIds = playerIds.filter((id) => id !== substituteId);
+        }
+
+        // Skip if player is already in box (shouldn't happen, but guard)
+        if (!playerIds.includes(playerId)) {
+          // Insert original player at their original position (not push to end)
+          const insertPosition = Math.min(originalPosition, playerIds.length);
+          playerIds.splice(insertPosition, 0, playerId);
+        }
+
+        return { ...b, playerIds };
+      }
+      return b;
+    });
+
+    // Update with audit fields
+    const now = Date.now();
+    transaction.update(weekRef, {
+      absences: updatedAbsences,
+      boxAssignments: updatedBoxAssignments,
+      updatedAt: now,
+      revision: (week.revision || 0) + 1,
+    });
   });
 }
 
@@ -223,6 +339,13 @@ export async function cancelAbsence(
 
 /**
  * Assign a substitute for an absent player
+ *
+ * V07.48: Uses runTransaction for atomic read-modify-write.
+ * - Must explicitly specify absentPlayerId
+ * - Adds substitute to boxAssignments at the absence position
+ * - Updates absence record with substituteId
+ * - Validates no duplicates
+ * - Bumps updatedAt and revision
  */
 export async function assignSubstitute(
   leagueId: string,
@@ -232,72 +355,145 @@ export async function assignSubstitute(
   _assignedByUserId: string,
   substituteName?: string
 ): Promise<void> {
-  const week = await getWeek(leagueId, weekNumber);
+  const weekRef = getWeekDoc(leagueId, weekNumber);
 
-  if (!week) {
-    throw new Error(`Week ${weekNumber} not found`);
-  }
+  await runTransaction(db, async (transaction) => {
+    const weekSnap = await transaction.get(weekRef);
+    if (!weekSnap.exists()) {
+      throw new Error(`Week ${weekNumber} not found`);
+    }
 
-  // Can assign sub during draft or early in active
-  if (week.state === 'finalized' || week.state === 'closing') {
-    throw new Error('Cannot assign substitute after week is closing');
-  }
+    const week = weekSnap.data() as BoxLeagueWeek;
 
-  // Find the absence
-  const absences = week.absences || [];
-  const absenceIndex = absences.findIndex((a) => a.playerId === absentPlayerId);
+    // Can assign sub during draft or early in active
+    if (week.state === 'finalized' || week.state === 'closing') {
+      throw new Error('Cannot assign substitute after week is closing');
+    }
 
-  if (absenceIndex === -1) {
-    throw new Error('No absence declared for this player');
-  }
+    // Find the SPECIFIC absence being filled
+    const absenceToFill = week.absences?.find((a) => a.playerId === absentPlayerId);
+    if (!absenceToFill) {
+      throw new Error(`No absence record found for player ${absentPlayerId}`);
+    }
 
-  // Update absence with substitute (including name for display)
-  const updatedAbsences = [...absences];
-  updatedAbsences[absenceIndex] = {
-    ...updatedAbsences[absenceIndex],
-    substituteId: substitutePlayerId,
-    substituteName: substituteName,
-  };
+    if (absenceToFill.substituteId) {
+      throw new Error('Absence already has a substitute assigned');
+    }
 
-  await updateDoc(getWeekDoc(leagueId, weekNumber), {
-    absences: updatedAbsences,
+    // DRAFT INVARIANT: No duplicates - substitute not already in a box
+    const subAlreadyInBox = week.boxAssignments.some((b) =>
+      b.playerIds.includes(substitutePlayerId)
+    );
+    if (subAlreadyInBox) {
+      throw new Error(`Substitute ${substitutePlayerId} is already assigned to a box`);
+    }
+
+    // Update absence with substitute
+    // Note: Only include substituteName if defined (Firestore rejects undefined)
+    const updatedAbsences = (week.absences || []).map((a) =>
+      a.playerId === absentPlayerId
+        ? {
+            ...a,
+            substituteId: substitutePlayerId,
+            ...(substituteName && { substituteName }),
+          }
+        : a
+    );
+
+    // Add substitute to box at the EXACT position of the absent player
+    const originalPosition = absenceToFill.positionInBox ?? 0;
+    const updatedBoxAssignments = week.boxAssignments.map((b) => {
+      if (b.boxNumber === absenceToFill.boxNumber) {
+        const newPlayerIds = [...b.playerIds];
+        const insertPosition = Math.min(originalPosition, newPlayerIds.length);
+        newPlayerIds.splice(insertPosition, 0, substitutePlayerId);
+        return { ...b, playerIds: newPlayerIds };
+      }
+      return b;
+    });
+
+    // Update with audit fields
+    const now = Date.now();
+    transaction.update(weekRef, {
+      absences: updatedAbsences,
+      boxAssignments: updatedBoxAssignments,
+      updatedAt: now,
+      revision: (week.revision || 0) + 1,
+    });
   });
 
-  // Update member's sub usage count
+  // Update member's sub usage count (outside transaction)
   await incrementSubUsage(leagueId, absentPlayerId);
 }
 
 /**
  * Remove a substitute assignment
+ *
+ * V07.48: Uses runTransaction for atomic read-modify-write.
+ * - Removes substitute from boxAssignments
+ * - Clears substituteId from absence record
+ * - Bumps updatedAt and revision
  */
 export async function removeSubstitute(
   leagueId: string,
   weekNumber: number,
   absentPlayerId: string
 ): Promise<void> {
-  const week = await getWeek(leagueId, weekNumber);
+  const weekRef = getWeekDoc(leagueId, weekNumber);
 
-  if (!week) {
-    throw new Error(`Week ${weekNumber} not found`);
-  }
+  await runTransaction(db, async (transaction) => {
+    const weekSnap = await transaction.get(weekRef);
+    if (!weekSnap.exists()) {
+      throw new Error(`Week ${weekNumber} not found`);
+    }
 
-  // Can only remove during draft
-  if (week.state !== 'draft') {
-    throw new Error('Cannot remove substitute after week is activated');
-  }
+    const week = weekSnap.data() as BoxLeagueWeek;
 
-  const absences = week.absences || [];
-  const absenceIndex = absences.findIndex((a) => a.playerId === absentPlayerId);
+    // Can only remove during draft
+    if (week.state !== 'draft') {
+      throw new Error('Cannot remove substitute after week is activated');
+    }
 
-  if (absenceIndex === -1) {
-    return;
-  }
+    const absence = (week.absences || []).find((a) => a.playerId === absentPlayerId);
+    if (!absence) {
+      return; // No absence record, nothing to do
+    }
 
-  const updatedAbsences = [...absences];
-  delete updatedAbsences[absenceIndex].substituteId;
+    const substituteId = absence.substituteId;
+    if (!substituteId) {
+      return; // No substitute assigned, nothing to do
+    }
 
-  await updateDoc(getWeekDoc(leagueId, weekNumber), {
-    absences: updatedAbsences,
+    // Remove substitute from boxAssignments
+    const updatedBoxAssignments = week.boxAssignments.map((b) => {
+      if (b.boxNumber === absence.boxNumber) {
+        return {
+          ...b,
+          playerIds: b.playerIds.filter((id) => id !== substituteId),
+        };
+      }
+      return b;
+    });
+
+    // Clear substituteId from absence record
+    // Note: We need to remove the fields entirely, not set to undefined (Firestore rejects undefined)
+    const updatedAbsences = (week.absences || []).map((a) => {
+      if (a.playerId === absentPlayerId) {
+        // Create new object without substituteId and substituteName
+        const { substituteId: _subId, substituteName: _subName, ...rest } = a;
+        return rest;
+      }
+      return a;
+    });
+
+    // Update with audit fields
+    const now = Date.now();
+    transaction.update(weekRef, {
+      absences: updatedAbsences,
+      boxAssignments: updatedBoxAssignments,
+      updatedAt: now,
+      revision: (week.revision || 0) + 1,
+    });
   });
 }
 

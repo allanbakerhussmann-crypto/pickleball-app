@@ -68,15 +68,10 @@ export async function addSubstitute(
 ): Promise<LeagueSubstitute> {
   const now = Date.now();
 
+  // Note: Firestore doesn't accept undefined values, so only include defined fields
   const newSub: LeagueSubstitute = {
     odUserId: substitute.odUserId,
     displayName: substitute.displayName,
-    email: substitute.email,
-    phone: substitute.phone,
-    duprId: substitute.duprId,
-    duprDoublesRating: substitute.duprDoublesRating,
-    duprSinglesRating: substitute.duprSinglesRating,
-    duprConsent: substitute.duprConsent,
     status: 'available',
     substitutionHistory: [],
     totalSubstitutions: 0,
@@ -86,8 +81,15 @@ export async function addSubstitute(
     totalPointsAgainst: 0,
     addedAt: now,
     addedByUserId,
-    notes: substitute.notes,
-    isMember: substitute.isMember,
+    // Only include optional fields if they have values
+    ...(substitute.email && { email: substitute.email }),
+    ...(substitute.phone && { phone: substitute.phone }),
+    ...(substitute.duprId && { duprId: substitute.duprId }),
+    ...(substitute.duprDoublesRating !== undefined && { duprDoublesRating: substitute.duprDoublesRating }),
+    ...(substitute.duprSinglesRating !== undefined && { duprSinglesRating: substitute.duprSinglesRating }),
+    ...(substitute.duprConsent !== undefined && { duprConsent: substitute.duprConsent }),
+    ...(substitute.notes && { notes: substitute.notes }),
+    ...(substitute.isMember !== undefined && { isMember: substitute.isMember }),
   };
 
   await setDoc(getSubstituteDoc(leagueId, substitute.odUserId), newSub);
@@ -180,7 +182,17 @@ export async function updateSubstitute(
     | 'isMember'
   >>
 ): Promise<void> {
-  await updateDoc(getSubstituteDoc(leagueId, odUserId), updates);
+  // Filter out undefined values - Firestore rejects undefined
+  const cleanedUpdates: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined) {
+      cleanedUpdates[key] = value;
+    }
+  }
+
+  if (Object.keys(cleanedUpdates).length > 0) {
+    await updateDoc(getSubstituteDoc(leagueId, odUserId), cleanedUpdates);
+  }
 }
 
 /**

@@ -7,9 +7,11 @@
  *
  * V07.27: Added 4 absentee policies (freeze, ghost_score, average_points, auto_relegate)
  *         and separated substitute (ghost player) concept from absence policy.
+ * V07.49: Added CourtAssignment interface with courtId (stable) + courtLabel (snapshot)
+ *         + sessionIndex (required). Holding = derived (not in courtAssignments).
  *
  * FILE LOCATION: types/rotatingDoublesBox/boxLeagueTypes.ts
- * VERSION: V07.27
+ * VERSION: V07.49
  */
 
 import type { GameSettings } from '../game/gameSettings';
@@ -180,6 +182,28 @@ export interface BoxAssignment {
 }
 
 /**
+ * Court assignment for a box (V07.49)
+ *
+ * Maps a box to a specific court and session.
+ * - courtId is stable (survives court renames)
+ * - courtLabel is snapshot for display
+ * - Holding = box not in courtAssignments (derived in UI, not stored)
+ */
+export interface CourtAssignment {
+  /** Box number (1-based) */
+  boxNumber: number;
+
+  /** Stable court ID (from club courts, survives renames) */
+  courtId: string;
+
+  /** Display label snapshot (e.g., "Court 1") */
+  courtLabel: string;
+
+  /** Session index (0-based, required) */
+  sessionIndex: number;
+}
+
+/**
  * Per-box completion tracking
  */
 export interface BoxCompletionStatus {
@@ -248,6 +272,16 @@ export interface BoxLeagueWeek {
   state: BoxWeekState;
 
   // ==========================================
+  // Audit/Sync Fields (V07.48)
+  // ==========================================
+
+  /** Last update timestamp - bumped on every write */
+  updatedAt?: number;
+
+  /** Monotonic revision counter - incremented on every write */
+  revision?: number;
+
+  // ==========================================
   // Calendar
   // ==========================================
 
@@ -267,8 +301,8 @@ export interface BoxLeagueWeek {
   /** Box assignments - AUTHORITATIVE for this week */
   boxAssignments: BoxAssignment[];
 
-  /** Court assignments per box */
-  courtAssignments: { boxNumber: number; courtLabel: string }[];
+  /** Court assignments per box (V07.49: added courtId for stability) */
+  courtAssignments: CourtAssignment[];
 
   // ==========================================
   // Match Configuration
@@ -681,11 +715,14 @@ export interface WeekAbsence {
   /** Player who is absent */
   playerId: string;
 
-  /** Player name (snapshot for display) */
+  /** Player name (snapshot for display - UI should resolve from ID) */
   playerName?: string;
 
   /** Which box the player is in */
   boxNumber: number;
+
+  /** Player's position within their box (for restoration) */
+  positionInBox: number;
 
   /** Assigned substitute/ghost player (if any) */
   substituteId?: string;
