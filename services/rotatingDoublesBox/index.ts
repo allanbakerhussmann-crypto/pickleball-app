@@ -58,6 +58,7 @@ export {
   getWeek,
   getWeeks,
   getCurrentWeek,
+  getCurrentWeek as getActiveOrNextWeek, // Alias for clarity in My Events context
   canTransitionTo,
   activateWeek,
   deactivateWeek,  // V07.40: For testing/fixing

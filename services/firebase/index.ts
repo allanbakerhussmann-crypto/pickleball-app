@@ -124,6 +124,8 @@ export {
   // Data cleanup utilities
   deleteCorruptedSelfMatches,
   clearTestData,
+  // V07.49: League match queries
+  getMyMatchesForWeek,
 } from './matches';
 
 // ============================================

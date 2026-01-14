@@ -1,13 +1,22 @@
 /**
- * Box Draft Week Panel Component V07.45
+ * Box Draft Week Panel Component V07.49
  *
  * Allows organizers to edit box assignments for draft weeks before activation.
  * Features drag-drop reordering within and between boxes.
  * Visual Absent/Substitutes area for managing absences and subs.
+ * Court Assignment area for assigning boxes to courts/sessions.
+ *
  * V07.45: Integrates with leagueSubstitutes service for substitute tracking.
+ * V07.46: Fix returnAbsentToBox to remove substitute when player returns
+ * V07.49: Fix player drag to box header - movePlayerToBox() for cross-box moves
+ * V07.49: Add Court Assignment drag-drop section with:
+ *         - Holding area for unassigned boxes (derived, not stored)
+ *         - Grid with sessions as rows, courts as columns
+ *         - Drop on occupied cell displaces existing box to Holding
+ *         - Read-only when week is not 'draft'
  *
  * FILE LOCATION: components/leagues/boxLeague/BoxDraftWeekPanel.tsx
- * VERSION: V07.45
+ * VERSION: V07.49
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -35,7 +44,14 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { League, LeagueMember } from '../../../types';
-import type { BoxLeagueWeek, BoxAssignment } from '../../../types/rotatingDoublesBox';
+import type {
+  BoxLeagueWeek,
+  BoxAssignment,
+  BoxLeagueCourt,
+  BoxLeagueSession,
+  CourtAssignment,
+} from '../../../types/rotatingDoublesBox';
+import { formatTime } from '../../../utils/timeFormat';
 import {
   updateBoxAssignments,
   refreshDraftWeekAssignments,
@@ -43,7 +59,9 @@ import {
   declareAbsence,
   cancelAbsence,
   assignSubstitute,
+  removeSubstitute,
   getEligibleSubstitutesWithDetails,
+  updateCourtAssignments,
 } from '../../../services/rotatingDoublesBox';
 import type { EligibleSubstitute } from '../../../services/rotatingDoublesBox';
 import { addSubstituteFromUser } from '../../../services/firebase/leagueSubstitutes';
@@ -71,6 +89,7 @@ interface DraftPlayer {
   boxNumber: number;
   position: number;
   isAbsent: boolean;
+  isSubstitute?: boolean;
   substituteName?: string;
 }
 
@@ -89,6 +108,8 @@ interface SubstitutePlayer {
   duprId?: string;
 }
 
+// CourtAssignment imported from types/rotatingDoublesBox
+
 // Box colors - gradient from darker (top box) to lighter (bottom box)
 const BOX_COLORS = [
   { bg: 'bg-blue-900', border: 'border-blue-700', hover: 'hover:bg-blue-800' },
@@ -106,7 +127,7 @@ const getBoxColors = (boxNumber: number) => {
   return BOX_COLORS[index] || BOX_COLORS[BOX_COLORS.length - 1];
 };
 
-// Custom collision detection that prioritizes the absent-area drop zone
+// Custom collision detection that prioritizes specific drop zones
 const customCollisionDetection: CollisionDetection = (args) => {
   // First check if pointer is within any droppable
   const pointerCollisions = pointerWithin(args);
@@ -117,12 +138,26 @@ const customCollisionDetection: CollisionDetection = (args) => {
     return [absentAreaCollision];
   }
 
-  // Check for box drop zones
+  // Check for box drop zones (player assignment)
   const boxCollision = pointerCollisions.find(c =>
     typeof c.id === 'string' && c.id.startsWith('box-drop-')
   );
   if (boxCollision) {
     return [boxCollision];
+  }
+
+  // Check for court cell drop zones (court assignment)
+  const courtCellCollision = pointerCollisions.find(c =>
+    typeof c.id === 'string' && c.id.startsWith('court-cell-')
+  );
+  if (courtCellCollision) {
+    return [courtCellCollision];
+  }
+
+  // Check for court holding drop zone (court unassignment)
+  const courtHoldingCollision = pointerCollisions.find(c => c.id === 'court-holding');
+  if (courtHoldingCollision) {
+    return [courtHoldingCollision];
   }
 
   // Fall back to rect intersection for player-to-player drops
@@ -323,9 +358,28 @@ interface DragOverlayContentProps {
   player: DraftPlayer | null;
   absentPlayer: AbsentPlayer | null;
   substitute: SubstitutePlayer | null;
+  courtBox: { boxNumber: number; totalBoxes: number } | null;
 }
 
-const DragOverlayContent: React.FC<DragOverlayContentProps> = ({ player, absentPlayer, substitute }) => {
+const DragOverlayContent: React.FC<DragOverlayContentProps> = ({ player, absentPlayer, substitute, courtBox }) => {
+  // Box being dragged for court assignment
+  if (courtBox) {
+    const colors = getBoxColors(courtBox.boxNumber);
+    return (
+      <div
+        className={`${colors.bg} ${colors.border} border rounded px-3 py-1.5 shadow-2xl ring-2 ring-lime-500
+          text-white text-sm font-medium flex items-center gap-1.5 whitespace-nowrap`}
+      >
+        <span>Box {courtBox.boxNumber}</span>
+        {courtBox.boxNumber === 1 && (
+          <span className="px-1 py-0.5 bg-yellow-400/30 text-yellow-300 rounded text-[10px]">Top</span>
+        )}
+        {courtBox.boxNumber === courtBox.totalBoxes && (
+          <span className="px-1 py-0.5 bg-gray-600/50 text-gray-300 rounded text-[10px]">Entry</span>
+        )}
+      </div>
+    );
+  }
   if (player) {
     return (
       <div className="bg-gray-700 rounded-lg p-2 flex items-center justify-between shadow-2xl ring-2 ring-lime-500">
@@ -590,6 +644,281 @@ const AbsentSubsArea: React.FC<AbsentSubsAreaProps> = ({
 };
 
 // ============================================
+// DRAGGABLE BOX CHIP (for court assignment)
+// ============================================
+
+interface DraggableBoxChipProps {
+  boxNumber: number;
+  disabled?: boolean;
+  totalBoxes: number;
+}
+
+const DraggableBoxChip: React.FC<DraggableBoxChipProps> = ({ boxNumber, disabled, totalBoxes }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: `court-box-${boxNumber}`, disabled });
+
+  const colors = getBoxColors(boxNumber);
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`${colors.bg} ${colors.border} border rounded px-3 py-1.5 cursor-grab active:cursor-grabbing
+        text-white text-sm font-medium flex items-center gap-1.5 whitespace-nowrap ${
+        isDragging ? 'shadow-lg ring-2 ring-lime-500' : ''
+      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+    >
+      <span>Box {boxNumber}</span>
+      {boxNumber === 1 && (
+        <span className="px-1 py-0.5 bg-yellow-400/30 text-yellow-300 rounded text-[10px]">Top</span>
+      )}
+      {boxNumber === totalBoxes && (
+        <span className="px-1 py-0.5 bg-gray-600/50 text-gray-300 rounded text-[10px]">Entry</span>
+      )}
+    </div>
+  );
+};
+
+// ============================================
+// COURT CELL DROP ZONE
+// ============================================
+
+interface CourtCellProps {
+  courtId: string;
+  courtLabel: string;
+  sessionIndex: number;
+  assignedBox: number | null;
+  isOver: boolean;
+  disabled: boolean;
+  totalBoxes: number;
+}
+
+const CourtCell: React.FC<CourtCellProps> = ({
+  courtId,
+  courtLabel: _courtLabel, // Stored for potential future display use
+  sessionIndex,
+  assignedBox,
+  isOver,
+  disabled,
+  totalBoxes,
+}) => {
+  const { setNodeRef } = useDroppable({
+    id: `court-cell-${courtId}-${sessionIndex}`,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`min-h-[48px] rounded border-2 border-dashed flex items-center justify-center transition-all ${
+        isOver ? 'border-lime-500 bg-lime-500/10' : 'border-gray-700 bg-gray-900/30'
+      } ${disabled ? 'opacity-50' : ''}`}
+    >
+      {assignedBox ? (
+        <DraggableBoxChip
+          boxNumber={assignedBox}
+          disabled={disabled}
+          totalBoxes={totalBoxes}
+        />
+      ) : (
+        <span className="text-xs text-gray-600">Drop box</span>
+      )}
+    </div>
+  );
+};
+
+// ============================================
+// COURT ASSIGNMENT AREA
+// ============================================
+
+interface CourtAssignmentAreaProps {
+  boxNumbers: number[];
+  courts: BoxLeagueCourt[];
+  sessions: BoxLeagueSession[];
+  courtAssignments: CourtAssignment[];
+  onAssignmentChange: (assignments: CourtAssignment[]) => void;
+  disabled: boolean;
+  overDroppableId: string | null;
+  totalBoxes: number;
+}
+
+const CourtAssignmentArea: React.FC<CourtAssignmentAreaProps> = ({
+  boxNumbers,
+  courts,
+  sessions,
+  courtAssignments,
+  onAssignmentChange: _onAssignmentChange, // Kept for potential future direct updates
+  disabled,
+  overDroppableId,
+  totalBoxes,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  // Derive unassigned boxes (Holding area)
+  const assignedBoxNumbers = new Set(courtAssignments.map(a => a.boxNumber));
+  const unassignedBoxes = boxNumbers.filter(b => !assignedBoxNumbers.has(b));
+
+  // Get box assigned to a specific cell
+  const getBoxForCell = (courtId: string, sessionIndex: number): number | null => {
+    const assignment = courtAssignments.find(
+      a => a.courtId === courtId && a.sessionIndex === sessionIndex
+    );
+    return assignment?.boxNumber ?? null;
+  };
+
+  // Check if a cell is being hovered
+  const isCellOver = (courtId: string, sessionIndex: number): boolean => {
+    return overDroppableId === `court-cell-${courtId}-${sessionIndex}`;
+  };
+
+  // Filter active courts and sessions
+  const activeCourts = courts.filter(c => c.active).sort((a, b) => a.order - b.order);
+  const activeSessions = sessions.filter(s => s.active).sort((a, b) => a.order - b.order);
+
+  // Check if Holding area is being hovered
+  const isHoldingOver = overDroppableId === 'court-holding';
+
+  const { setNodeRef: holdingRef } = useDroppable({
+    id: 'court-holding',
+  });
+
+  if (activeCourts.length === 0 || activeSessions.length === 0) {
+    return (
+      <div className="bg-gray-800/30 rounded-xl border border-gray-700/50 p-4">
+        <div className="text-center text-gray-500 py-4">
+          <p className="text-sm">No courts or sessions configured.</p>
+          <p className="text-xs mt-1">Configure venue settings first.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gray-800/30 rounded-xl border border-gray-700/50 overflow-hidden">
+      {/* Header */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full px-4 py-3 bg-gray-800/50 border-b border-gray-700/50 flex items-center justify-between hover:bg-gray-800/70 transition-colors"
+      >
+        <h4 className="font-semibold text-gray-300 flex items-center gap-2">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+          </svg>
+          Court Assignments
+          <span className="text-xs text-gray-500 font-normal">
+            ({courtAssignments.length}/{boxNumbers.length} assigned)
+          </span>
+        </h4>
+        <svg
+          className={`w-4 h-4 text-gray-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {isExpanded && (
+        <div className="p-4 space-y-4">
+          {/* Holding Area - Unassigned Boxes */}
+          <div
+            ref={holdingRef}
+            className={`bg-gray-900/50 rounded-lg border-2 border-dashed p-3 transition-all ${
+              isHoldingOver ? 'border-lime-500 bg-lime-500/5' : 'border-gray-700'
+            }`}
+          >
+            <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">
+              Unassigned ({unassignedBoxes.length})
+            </div>
+            <SortableContext
+              items={unassignedBoxes.map(b => `court-box-${b}`)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="flex flex-wrap gap-2 min-h-[40px]">
+                {unassignedBoxes.length === 0 ? (
+                  <span className="text-sm text-gray-600 py-2">All boxes assigned</span>
+                ) : (
+                  unassignedBoxes.map(boxNumber => (
+                    <DraggableBoxChip
+                      key={boxNumber}
+                      boxNumber={boxNumber}
+                      disabled={disabled}
+                      totalBoxes={totalBoxes}
+                    />
+                  ))
+                )}
+              </div>
+            </SortableContext>
+          </div>
+
+          {/* Grid: Sessions (rows) x Courts (columns) */}
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr>
+                  <th className="text-left text-xs text-gray-500 uppercase tracking-wide p-2 min-w-[80px]">
+                    Session
+                  </th>
+                  {activeCourts.map(court => (
+                    <th key={court.id} className="text-center text-xs text-gray-400 uppercase tracking-wide p-2 min-w-[100px]">
+                      {court.name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {activeSessions.map((session, sessionIndex) => (
+                  <tr key={session.id}>
+                    <td className="p-2 text-sm">
+                      <div className="text-gray-300">{session.name}</div>
+                      <div className="text-xs text-gray-500">
+                        {formatTime(session.startTime)}
+                      </div>
+                    </td>
+                    {activeCourts.map(court => (
+                      <td key={`${court.id}-${sessionIndex}`} className="p-1">
+                        <CourtCell
+                          courtId={court.id}
+                          courtLabel={court.name}
+                          sessionIndex={sessionIndex}
+                          assignedBox={getBoxForCell(court.id, sessionIndex)}
+                          isOver={isCellOver(court.id, sessionIndex)}
+                          disabled={disabled}
+                          totalBoxes={totalBoxes}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {disabled && (
+            <div className="text-xs text-gray-500 text-center py-2">
+              Court assignments can only be edited in draft state
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================
 // ADD SUBSTITUTE MODAL
 // ============================================
 
@@ -797,6 +1126,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
   const [expandedBoxes, setExpandedBoxes] = useState<Set<number>>(new Set([1]));
   const [showAddSubModal, setShowAddSubModal] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [localCourtAssignments, setLocalCourtAssignments] = useState<CourtAssignment[]>([]);
 
   // Build member lookup
   const memberMap = useMemo(() => new Map(members.map(m => [m.userId, m])), [members]);
@@ -824,10 +1154,22 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
         setAbsentPlayers(absents);
       }
 
+      // Initialize court assignments from week data
+      if (week.courtAssignments && week.courtAssignments.length > 0) {
+        // Ensure all assignments have proper schema (courtId + sessionIndex)
+        const normalized = week.courtAssignments.map(ca => ({
+          boxNumber: ca.boxNumber,
+          courtId: (ca as any).courtId || `court_${ca.courtLabel?.replace(/\s+/g, '_').toLowerCase() || 'unknown'}`,
+          courtLabel: ca.courtLabel || 'Unknown Court',
+          sessionIndex: (ca as any).sessionIndex ?? 0,
+        }));
+        setLocalCourtAssignments(normalized);
+      }
+
       setIsInitialized(true);
       setHasChanges(false);
     }
-  }, [week.boxAssignments, week.absences, memberMap, userRatings, isInitialized]);
+  }, [week.boxAssignments, week.absences, week.courtAssignments, memberMap, userRatings, isInitialized]);
 
   // Convert assignments to DraftPlayer arrays grouped by box
   const playersByBox: Map<number, DraftPlayer[]> = useMemo(() => {
@@ -839,6 +1181,8 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
         .map((userId, index) => {
           const member = memberMap.get(userId);
           const subInBox = subsInBoxes.get(userId);
+          // A player is a substitute if they're in subsInBoxes OR if they're not a league member
+          const isSubstitute = !!subInBox || !memberMap.has(userId);
           return {
             odUserId: userId,
             displayName: subInBox?.displayName || member?.displayName || 'Unknown Player',
@@ -846,6 +1190,7 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
             boxNumber: box.boxNumber,
             position: index + 1,
             isAbsent: false,
+            isSubstitute,
             substituteName: undefined,
           };
         });
@@ -930,6 +1275,11 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
     // Case 1: Player dragged to absent area
     if (draggedPlayer && isDropOnAbsentArea) {
+      // Check if this is a substitute (non-member) - they go back to AVAILABLE SUBS, not ABSENT
+      if (draggedPlayer.isSubstitute) {
+        await returnSubToAvailable(draggedPlayer);
+        return;
+      }
       await markPlayerAbsent(draggedPlayer);
       return;
     }
@@ -946,11 +1296,48 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
       return;
     }
 
-    // Case 4: Normal player reordering (drop on another player)
+    // Case 4: Player dragged to a different box (drop on box header)
+    if (draggedPlayer && isDropOnBox && targetBoxNumber !== null) {
+      // Move player to the target box
+      movePlayerToBox(draggedPlayer, targetBoxNumber);
+      return;
+    }
+
+    // Case 5: Normal player reordering (drop on another player)
     if (draggedPlayer && !isDropOnAbsentArea && !isDropOnBox) {
       const overPlayer = findPlayer(overIdStr);
       if (overPlayer && activeIdStr !== overIdStr) {
         reorderPlayers(draggedPlayer, overPlayer);
+      }
+    }
+
+    // ==========================================
+    // COURT ASSIGNMENT DRAG-DROP CASES
+    // ==========================================
+
+    // Case 6: Box dragged to a court cell
+    const isCourtBoxDrag = activeIdStr.startsWith('court-box-');
+    const isDropOnCourtCell = overIdStr.startsWith('court-cell-');
+    const isDropOnHolding = overIdStr === 'court-holding';
+
+    if (isCourtBoxDrag) {
+      const draggedBoxNumber = parseInt(activeIdStr.replace('court-box-', ''));
+
+      // Case 6a: Box dropped on court cell
+      if (isDropOnCourtCell) {
+        // Parse "court-cell-{courtId}-{sessionIndex}"
+        const cellParts = overIdStr.replace('court-cell-', '').split('-');
+        const targetCourtId = cellParts.slice(0, -1).join('-'); // Handle court IDs with hyphens
+        const targetSessionIndex = parseInt(cellParts[cellParts.length - 1]);
+
+        handleCourtAssignmentDrop(draggedBoxNumber, targetCourtId, targetSessionIndex);
+        return;
+      }
+
+      // Case 6b: Box dropped on Holding area
+      if (isDropOnHolding) {
+        handleCourtAssignmentRemove(draggedBoxNumber);
+        return;
       }
     }
   };
@@ -999,25 +1386,44 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
 
   // Return absent player to a box
   const returnAbsentToBox = async (absent: AbsentPlayer, boxNumber: number) => {
+    // Check if this absent player had a substitute assigned
+    const absenceRecord = week.absences?.find(a => a.playerId === absent.odUserId);
+    const substituteId = absenceRecord?.substituteId;
+
     // Remove from absent list
     setAbsentPlayers(prev => prev.filter(p => p.odUserId !== absent.odUserId));
 
-    // Add to box assignments
+    // Update box assignments: add returning player, remove substitute if any
     setLocalAssignments(prev => {
       return prev.map(box => {
         if (box.boxNumber === boxNumber) {
+          // Remove substitute if they were in this box
+          let updatedPlayerIds = box.playerIds;
+          if (substituteId) {
+            updatedPlayerIds = updatedPlayerIds.filter(id => id !== substituteId);
+          }
+          // Add returning player
           return {
             ...box,
-            playerIds: [...box.playerIds, absent.odUserId],
+            playerIds: [...updatedPlayerIds, absent.odUserId],
           };
         }
         return box;
       });
     });
 
+    // Remove substitute from subsInBoxes tracking
+    if (substituteId) {
+      setSubsInBoxes(prev => {
+        const next = new Map(prev);
+        next.delete(substituteId);
+        return next;
+      });
+    }
+
     setHasChanges(true);
 
-    // Call service to cancel absence
+    // Call service to cancel absence (this also clears substituteId from the absence record)
     try {
       await cancelAbsence(leagueId, week.weekNumber, absent.odUserId, true);
     } catch (err) {
@@ -1077,6 +1483,55 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
     }
   };
 
+  // Return a substitute from a box back to available subs
+  const returnSubToAvailable = async (player: DraftPlayer) => {
+    // Find the sub info from subsInBoxes
+    const subInfo = subsInBoxes.get(player.odUserId);
+
+    // Remove from box assignments
+    setLocalAssignments(prev => {
+      return prev.map(box => {
+        if (box.boxNumber === player.boxNumber) {
+          return {
+            ...box,
+            playerIds: box.playerIds.filter(id => id !== player.odUserId),
+          };
+        }
+        return box;
+      });
+    });
+
+    // Remove from subsInBoxes tracking
+    setSubsInBoxes(prev => {
+      const next = new Map(prev);
+      next.delete(player.odUserId);
+      return next;
+    });
+
+    // Add back to available subs
+    const subPlayer: SubstitutePlayer = {
+      odUserId: player.odUserId,
+      displayName: player.displayName || 'Unknown',
+      duprRating: player.duprRating,
+      duprId: subInfo?.duprId,
+    };
+    setAvailableSubs(prev => [...prev, subPlayer]);
+
+    setHasChanges(true);
+
+    // Call service to remove the substitute assignment
+    try {
+      // Find which absent player this sub was assigned to
+      const absenceRecord = week.absences?.find(a => a.substituteId === player.odUserId);
+      if (absenceRecord) {
+        await removeSubstitute(leagueId, week.weekNumber, absenceRecord.playerId);
+      }
+    } catch (err) {
+      console.error('Failed to remove substitute assignment:', err);
+      // Don't block UI - local state is valid
+    }
+  };
+
   // Reorder players within/between boxes
   const reorderPlayers = (active: DraftPlayer, over: DraftPlayer) => {
     const fromBox = active.boxNumber;
@@ -1122,6 +1577,94 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
       return newAssignments;
     });
 
+    setHasChanges(true);
+    setError(null);
+  };
+
+  // Move player to a different box (append to end)
+  const movePlayerToBox = (player: DraftPlayer, targetBoxNumber: number) => {
+    // Don't move to the same box
+    if (player.boxNumber === targetBoxNumber) return;
+
+    setLocalAssignments(prev => {
+      const newAssignments = [...prev];
+
+      const fromBoxIndex = newAssignments.findIndex(b => b.boxNumber === player.boxNumber);
+      const toBoxIndex = newAssignments.findIndex(b => b.boxNumber === targetBoxNumber);
+
+      if (fromBoxIndex === -1 || toBoxIndex === -1) return prev;
+
+      // Remove from source box
+      const fromBoxData = newAssignments[fromBoxIndex];
+      const fromPlayerIds = fromBoxData.playerIds.filter(id => id !== player.odUserId);
+
+      // Add to target box (at the end)
+      const toBoxData = newAssignments[toBoxIndex];
+      const toPlayerIds = [...toBoxData.playerIds, player.odUserId];
+
+      newAssignments[fromBoxIndex] = { ...fromBoxData, playerIds: fromPlayerIds };
+      newAssignments[toBoxIndex] = { ...toBoxData, playerIds: toPlayerIds };
+
+      return newAssignments;
+    });
+
+    setHasChanges(true);
+    setError(null);
+  };
+
+  // ==========================================
+  // COURT ASSIGNMENT HANDLERS
+  // ==========================================
+
+  // Handle dropping a box onto a court cell
+  const handleCourtAssignmentDrop = async (
+    boxNumber: number,
+    targetCourtId: string,
+    targetSessionIndex: number
+  ) => {
+    // Get the court label from venue settings
+    const courts = league.settings?.rotatingDoublesBox?.venue?.courts || [];
+    const targetCourt = courts.find(c => c.id === targetCourtId);
+    const targetCourtLabel = targetCourt?.name || targetCourtId;
+
+    setLocalCourtAssignments(prev => {
+      let updated = [...prev];
+
+      // 1. Remove this box's previous assignment (if any)
+      updated = updated.filter(a => a.boxNumber !== boxNumber);
+
+      // 2. If target cell is occupied, move occupant to Holding (remove it)
+      updated = updated.filter(a =>
+        !(a.courtId === targetCourtId && a.sessionIndex === targetSessionIndex)
+      );
+
+      // 3. Add new assignment
+      updated.push({
+        boxNumber,
+        courtId: targetCourtId,
+        courtLabel: targetCourtLabel,
+        sessionIndex: targetSessionIndex,
+      });
+
+      return updated;
+    });
+
+    setHasChanges(true);
+    setError(null);
+  };
+
+  // Handle removing a box from court assignment (dropping to Holding)
+  const handleCourtAssignmentRemove = (boxNumber: number) => {
+    setLocalCourtAssignments(prev =>
+      prev.filter(a => a.boxNumber !== boxNumber)
+    );
+    setHasChanges(true);
+    setError(null);
+  };
+
+  // Handle court assignment change from the area component
+  const handleCourtAssignmentChange = (assignments: CourtAssignment[]) => {
+    setLocalCourtAssignments(assignments);
     setHasChanges(true);
     setError(null);
   };
@@ -1188,7 +1731,14 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
     setError(null);
 
     try {
+      // Save box assignments
       await updateBoxAssignments(leagueId, week.weekNumber, localAssignments);
+
+      // Save court assignments (if there are any changes)
+      if (localCourtAssignments.length > 0 || (week.courtAssignments && week.courtAssignments.length > 0)) {
+        await updateCourtAssignments(leagueId, week.weekNumber, localCourtAssignments);
+      }
+
       setHasChanges(false);
     } catch (err) {
       console.error('Failed to save assignments:', err);
@@ -1255,10 +1805,20 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
   const boxNumbers = localAssignments.map(b => b.boxNumber).sort((a, b) => a - b);
   const isDisabled = saving || activating || resetting;
 
+  // Get venue settings for court assignments
+  const venue = league.settings?.rotatingDoublesBox?.venue;
+  const venueCourts: BoxLeagueCourt[] = venue?.courts?.filter(c => c.active) || [];
+  const venueSessions: BoxLeagueSession[] = venue?.sessions?.filter(s => s.active) || [];
+
   // Get currently dragged item for overlay
   const activePlayer = activeId ? findPlayer(activeId) : null;
   const activeAbsent = activeId ? findAbsentPlayer(activeId) : null;
   const activeSub = activeId ? findSubstitute(activeId) : null;
+
+  // Get active court box if being dragged for court assignment
+  const activeCourtBox = activeId?.startsWith('court-box-')
+    ? { boxNumber: parseInt(activeId.replace('court-box-', '')), totalBoxes }
+    : null;
 
   // Determine what area is being hovered
   const isOverAbsentArea = overDroppableId === 'absent-area';
@@ -1398,12 +1958,27 @@ export const BoxDraftWeekPanel: React.FC<BoxDraftWeekPanelProps> = ({
             disabled={isDisabled}
           />
 
+          {/* Court Assignment Area */}
+          {venueCourts.length > 0 && venueSessions.length > 0 && (
+            <CourtAssignmentArea
+              boxNumbers={boxNumbers}
+              courts={venueCourts}
+              sessions={venueSessions}
+              courtAssignments={localCourtAssignments}
+              onAssignmentChange={handleCourtAssignmentChange}
+              disabled={isDisabled || week.state !== 'draft'}
+              overDroppableId={overDroppableId}
+              totalBoxes={totalBoxes}
+            />
+          )}
+
           {/* Drag Overlay */}
           <DragOverlay>
             <DragOverlayContent
               player={activePlayer || null}
               absentPlayer={activeAbsent || null}
               substitute={activeSub || null}
+              courtBox={activeCourtBox}
             />
           </DragOverlay>
         </DndContext>

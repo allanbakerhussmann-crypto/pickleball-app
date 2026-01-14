@@ -30,6 +30,7 @@ export const ROUTES = {
   // Leagues
   LEAGUES: '/leagues',
   LEAGUE_DETAIL: '/leagues/:id',
+  LEAGUE_MATCH: '/leagues/:leagueId/matches/:matchId',  // V07.49
   MY_LEAGUES: '/my-leagues',
   TEAM_LEAGUES: '/team-leagues',
   MY_TEAM_LEAGUES: '/my-team-leagues',
@@ -65,6 +66,8 @@ export const getRoute = {
   clubDetail: (id: string) => `/clubs/${id}`,
   meetupDetail: (id: string) => `/meetups/${id}`,
   leagueDetail: (id: string) => `/leagues/${id}`,
+  leagueMatch: (leagueId: string, matchId: string) => `/leagues/${leagueId}/matches/${matchId}`,  // V07.49
+  leaguesList: () => '/leagues',  // V07.49
 };
 
 /**

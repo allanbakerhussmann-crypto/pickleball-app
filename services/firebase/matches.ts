@@ -2743,3 +2743,40 @@ export const simulatePoolCompletion = async (
   console.log(`[simulatePoolCompletion] Completed ${snapshot.size} matches, updated ${affectedPools.size} pool results`);
   return snapshot.size;
 };
+
+// ============================================
+// LEAGUE MATCH QUERIES (V07.49)
+// ============================================
+
+/**
+ * Get matches for a specific user in a league week
+ * V07.49: Uses participantIds array-contains for efficient querying
+ *
+ * @param leagueId - League ID
+ * @param seasonId - Season ID
+ * @param weekNumber - Week number
+ * @param userId - User ID to find matches for
+ * @returns Array of matches where user is a participant
+ */
+export const getMyMatchesForWeek = async (
+  leagueId: string,
+  seasonId: string,
+  weekNumber: number,
+  userId: string
+): Promise<Match[]> => {
+  // Use composite index: seasonId + weekNumber + participantIds
+  const matchesRef = collection(db, 'leagues', leagueId, 'matches');
+  const q = query(
+    matchesRef,
+    where('seasonId', '==', seasonId),
+    where('weekNumber', '==', weekNumber),
+    where('participantIds', 'array-contains', userId)
+  );
+
+  const snapshot = await getDocs(q);
+
+  return snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+  } as Match));
+};

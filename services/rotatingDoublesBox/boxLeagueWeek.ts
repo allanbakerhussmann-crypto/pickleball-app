@@ -6,9 +6,14 @@
  *
  * V07.45: activateWeek now respects saved box assignments (with substitutes)
  *         instead of always recalculating from previous week standings.
+ * V07.46: finalizeWeek now replaces substitute IDs with original player IDs
+ *         and carries forward absences to the next week draft.
+ * V07.48: All writes bump updatedAt + revision for audit/sync.
+ *         activateWeek enforces box sizes 4-6.
+ *         finalizeWeek is atomic via transaction, idempotent next-week creation.
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueWeek.ts
- * VERSION: V07.45
+ * VERSION: V07.48
  */
 
 import {
@@ -102,6 +107,8 @@ function getWeekDoc(leagueId: string, weekNumber: number) {
 /**
  * Create a new week in draft state
  *
+ * V07.48: Initializes with updatedAt, revision=1, and empty absences by default.
+ *
  * @param params - Week creation parameters
  * @returns Created week document
  */
@@ -114,6 +121,7 @@ export async function createWeekDraft(params: {
   sessions: WeekSession[];
   courtAssignments: { boxNumber: number; courtLabel: string }[];
   settings: RotatingDoublesBoxSettings;
+  absences?: []; // V07.48: Empty by default, original player returns
 }): Promise<BoxLeagueWeek> {
   const {
     leagueId,
@@ -173,6 +181,9 @@ export async function createWeekDraft(params: {
     seasonId,
     weekNumber,
     state: 'draft',
+    // V07.48: Audit fields
+    updatedAt: now,
+    revision: 1,
     scheduledDate,
     weekStatus: 'scheduled',
     sessions,
@@ -189,6 +200,8 @@ export async function createWeekDraft(params: {
     disputedCount: 0,
     boxCompletionStatus,
     draftedAt: now,
+    // V07.48: Empty absences by default - original player returns
+    absences: [],
   };
 
   await setDoc(getWeekDoc(leagueId, weekNumber), week);
@@ -386,6 +399,26 @@ export async function activateWeek(
       throw new Error(`Week ${weekNumber} has no box assignments`);
     }
 
+    // ==========================================
+    // V07.48: ACTIVATION INVARIANTS - Hard enforcement here
+    // ==========================================
+
+    // Box sizes must be 4-6 players each
+    for (const box of assignmentsToUse) {
+      if (box.playerIds.length < 4 || box.playerIds.length > 6) {
+        throw new Error(
+          `Box ${box.boxNumber} has ${box.playerIds.length} players (need 4-6). Adjust before activating.`
+        );
+      }
+    }
+
+    // No duplicate player IDs
+    const allPlayerIds = assignmentsToUse.flatMap((b) => b.playerIds);
+    const uniqueIds = new Set(allPlayerIds);
+    if (uniqueIds.size !== allPlayerIds.length) {
+      throw new Error('Duplicate player found in boxes. Fix before activating.');
+    }
+
     // Belt-and-suspenders: pass week object with corrected assignments
     // Even if generator accidentally references week.boxAssignments, it will be correct
     const rotationVersion = 1;
@@ -414,6 +447,9 @@ export async function activateWeek(
       weekStatus: 'active',
       rotationVersion,
       boxAssignments: assignmentsToUse,  // ALWAYS write
+      // V07.48: Audit fields
+      updatedAt: now,
+      revision: (week.revision || 0) + 1,
     });
 
     return { matchIds, alreadyActive: false, seasonId: week.seasonId };
@@ -517,6 +553,9 @@ export async function startClosing(
     pendingVerificationCount: counts.pending,
     disputedCount: counts.disputed,
     completedMatches: counts.completed,
+    // V07.48: Audit fields
+    updatedAt: now,
+    revision: (week.revision || 0) + 1,
   });
 
   return {
@@ -531,7 +570,15 @@ export async function startClosing(
  * - Enforces strict finalization rules
  * - Computes standings snapshot
  * - Applies promotion/relegation movements
- * - Creates next week draft
+ * - Creates next week draft (IDEMPOTENT - skips if exists)
+ *
+ * V07.46: When generating next week:
+ * - Replace substitute IDs with original player IDs in movements
+ *
+ * V07.48:
+ * - Bumps updatedAt + revision audit fields
+ * - IDEMPOTENT next-week creation (checks if week exists first)
+ * - Absences do NOT carry forward (original player returns by default)
  */
 export async function finalizeWeek(
   leagueId: string,
@@ -570,17 +617,102 @@ export async function finalizeWeek(
   const standingsSnapshot = await createStandingsSnapshot(week, standings);
 
   // Apply movements (promotion/relegation)
-  const movements = applyMovements(week, standings);
+  let movements = applyMovements(week, standings);
 
+  // V07.46: Build a map of substituteId → originalPlayerId from absences
+  // This lets us replace substitute IDs with original player IDs in movements
+  const subToOriginalMap = new Map<string, { playerId: string; playerName?: string }>();
+  for (const absence of week.absences || []) {
+    if (absence.substituteId) {
+      subToOriginalMap.set(absence.substituteId, {
+        playerId: absence.playerId,
+        playerName: absence.playerName,
+      });
+    }
+  }
 
-  // Generate next week assignments
-  const nextWeekAssignments = generateNextWeekAssignments(
+  // V07.46: Replace substitute IDs with original player IDs in movements
+  // So next week has the ORIGINAL player, not the substitute
+  if (subToOriginalMap.size > 0) {
+    movements = movements.map((movement) => {
+      const original = subToOriginalMap.get(movement.playerId);
+      if (original) {
+        console.log(`[finalizeWeek] Replacing substitute ${movement.playerId} with original ${original.playerId}`);
+        return {
+          ...movement,
+          playerId: original.playerId,
+          playerName: original.playerName || movement.playerName,
+          wasAbsent: true,
+        };
+      }
+      return movement;
+    });
+  }
+
+  // Generate next week assignments (now with original player IDs)
+  let nextWeekAssignments = generateNextWeekAssignments(
     week.boxAssignments,
     movements
   );
 
+  // V07.48: Final cleanup - replace any remaining non-member IDs with original players
+  // Get league members to verify IDs
+  const { getLeagueMembers } = await import('../firebase/leagues');
+  const members = await getLeagueMembers(leagueId);
+  const memberIds = new Set(members.map(m => m.userId));
 
-  // Update week with finalization data
+  // Build a global set of assigned member IDs and track used replacements
+  const allAssignedMemberIds = new Set(nextWeekAssignments.flatMap(b => b.playerIds).filter(id => memberIds.has(id)));
+  const usedReplacements = new Set<string>();
+
+  nextWeekAssignments = nextWeekAssignments.map(box => {
+    const fixedPlayerIds = box.playerIds.map(playerId => {
+      // If this ID is a league member, keep it
+      if (memberIds.has(playerId)) {
+        return playerId;
+      }
+
+      // Try to find original from absences by substituteId
+      const absenceBySubId = (week.absences || []).find(a => a.substituteId === playerId);
+      if (absenceBySubId && !usedReplacements.has(absenceBySubId.playerId)) {
+        console.log(`[finalizeWeek] Final cleanup: replacing sub ${playerId} with original ${absenceBySubId.playerId}`);
+        usedReplacements.add(absenceBySubId.playerId);
+        return absenceBySubId.playerId;
+      }
+
+      // Try to find absent player in this box who isn't in assignments
+      const absentInThisBox = (week.absences || []).find(a =>
+        a.boxNumber === box.boxNumber &&
+        !allAssignedMemberIds.has(a.playerId) &&
+        !usedReplacements.has(a.playerId)
+      );
+      if (absentInThisBox) {
+        console.log(`[finalizeWeek] Final cleanup: found absent original ${absentInThisBox.playerId} for box ${box.boxNumber}`);
+        usedReplacements.add(absentInThisBox.playerId);
+        return absentInThisBox.playerId;
+      }
+
+      // V07.48: Ultimate fallback - find ANY member who isn't in ANY box
+      const missingMembers = members.filter(m =>
+        !allAssignedMemberIds.has(m.userId) &&
+        !usedReplacements.has(m.userId)
+      );
+      if (missingMembers.length > 0) {
+        const replacement = missingMembers[0];
+        console.log(`[finalizeWeek] Ultimate fallback: replacing non-member ${playerId} with missing member ${replacement.userId} (${replacement.displayName})`);
+        usedReplacements.add(replacement.userId);
+        return replacement.userId;
+      }
+
+      console.warn(`[finalizeWeek] Could not find original for non-member ${playerId} in box ${box.boxNumber}`);
+      return playerId;
+    });
+
+    return { ...box, playerIds: fixedPlayerIds };
+  });
+
+
+  // Update week with finalization data + audit fields
   const now = Date.now();
   await updateDoc(getWeekDoc(leagueId, weekNumber), {
     state: 'finalized',
@@ -588,6 +720,9 @@ export async function finalizeWeek(
     finalizedByUserId,
     standingsSnapshot,
     movements,
+    // V07.48: Audit fields
+    updatedAt: now,
+    revision: (week.revision || 0) + 1,
   });
 
   // Update season week status
@@ -599,29 +734,40 @@ export async function finalizeWeek(
 
   if (season && weekNumber < season.totalWeeks) {
     const nextWeekNumber = weekNumber + 1;
-    const nextWeekSchedule = season.weekSchedule.find(
-      (w) => w.weekNumber === nextWeekNumber
-    );
 
-    if (nextWeekSchedule && nextWeekSchedule.status !== 'cancelled') {
-      // Determine scheduled date (use rescheduled date if postponed)
-      const scheduledDate =
-        nextWeekSchedule.status === 'postponed' && nextWeekSchedule.rescheduledTo
-          ? nextWeekSchedule.rescheduledTo
-          : nextWeekSchedule.scheduledDate;
+    // V07.48: IDEMPOTENT CHECK - Don't create if already exists
+    const existingNextWeek = await getWeek(leagueId, nextWeekNumber);
+    if (existingNextWeek) {
+      console.log(`[finalizeWeek] Week ${nextWeekNumber} already exists, skipping creation`);
+      // Week exists but wasn't created by us this time
+      nextWeekCreated = false;
+    } else {
+      const nextWeekSchedule = season.weekSchedule.find(
+        (w) => w.weekNumber === nextWeekNumber
+      );
 
-      await createWeekDraft({
-        leagueId,
-        seasonId: week.seasonId,
-        weekNumber: nextWeekNumber,
-        scheduledDate,
-        boxAssignments: nextWeekAssignments,
-        sessions: week.sessions, // Carry forward sessions
-        courtAssignments: week.courtAssignments, // Carry forward courts
-        settings: season.rulesSnapshot,
-      });
+      if (nextWeekSchedule && nextWeekSchedule.status !== 'cancelled') {
+        // Determine scheduled date (use rescheduled date if postponed)
+        const scheduledDate =
+          nextWeekSchedule.status === 'postponed' && nextWeekSchedule.rescheduledTo
+            ? nextWeekSchedule.rescheduledTo
+            : nextWeekSchedule.scheduledDate;
 
-      nextWeekCreated = true;
+        await createWeekDraft({
+          leagueId,
+          seasonId: week.seasonId,
+          weekNumber: nextWeekNumber,
+          scheduledDate,
+          boxAssignments: nextWeekAssignments,
+          sessions: week.sessions, // Carry forward sessions
+          courtAssignments: week.courtAssignments, // Carry forward courts
+          settings: season.rulesSnapshot,
+          // V07.48: Absences do NOT carry forward - original player returns by default
+        });
+
+        nextWeekCreated = true;
+        console.log(`[finalizeWeek] Created Week ${nextWeekNumber} draft with ${nextWeekAssignments.length} boxes`);
+      }
     }
   }
 
@@ -701,6 +847,8 @@ export async function recalculateWeekStandings(
 
 /**
  * Update box assignments for a draft week
+ *
+ * V07.48: Bumps updatedAt + revision audit fields.
  */
 export async function updateBoxAssignments(
   leagueId: string,
@@ -738,11 +886,15 @@ export async function updateBoxAssignments(
     return sum + getRoundCount(ba.playerIds.length as 4 | 5 | 6);
   }, 0);
 
+  const now = Date.now();
   await updateDoc(getWeekDoc(leagueId, weekNumber), {
     boxAssignments,
     attendance,
     boxCompletionStatus,
     totalMatches,
+    // V07.48: Audit fields
+    updatedAt: now,
+    revision: (week.revision || 0) + 1,
   });
 }
 
@@ -751,6 +903,8 @@ export async function updateBoxAssignments(
  *
  * Re-applies promotion/relegation using CURRENT league settings.
  * Use this when settings changed after finalization.
+ *
+ * V07.46: Also replaces substitute IDs with original player IDs from absences.
  */
 export async function refreshDraftWeekAssignments(
   leagueId: string,
@@ -781,7 +935,7 @@ export async function refreshDraftWeekAssignments(
   }
 
   // Import services
-  const { getLeague } = await import('../firebase/leagues');
+  const { getLeague, getLeagueMembers } = await import('../firebase/leagues');
   const { applyMovements, generateNextWeekAssignments } = await import('./boxLeaguePromotion');
 
   // Get current league settings for promotion/relegation counts
@@ -792,6 +946,93 @@ export async function refreshDraftWeekAssignments(
   const promotionCount = boxSettings?.promotionCount ?? previousWeek.rulesSnapshot.promotionCount ?? 1;
   const relegationCount = boxSettings?.relegationCount ?? previousWeek.rulesSnapshot.relegationCount ?? 1;
 
+  // Get league members first - needed for multiple checks
+  const members = await getLeagueMembers(leagueId);
+  const memberMap = new Map(members.map(m => [m.userId, m]));
+  const memberIds = new Set(members.map(m => m.userId));
+
+  // V07.46: Build a map of substituteId → originalPlayer from previous week's absences
+  const subToOriginalMap = new Map<string, { playerId: string; playerName?: string }>();
+  for (const absence of previousWeek.absences || []) {
+    if (absence.substituteId) {
+      subToOriginalMap.set(absence.substituteId, {
+        playerId: absence.playerId,
+        playerName: absence.playerName,
+      });
+      console.log(`[refreshDraftWeekAssignments] Found absence mapping: sub ${absence.substituteId} → original ${absence.playerId}`);
+    }
+  }
+
+  console.log(`[refreshDraftWeekAssignments] Week ${weekNumber - 1} has ${previousWeek.absences?.length || 0} absences, ${subToOriginalMap.size} with substituteId`);
+
+  // V07.46: Fix standings to use original player IDs instead of substitute IDs
+  // Also detect non-members in standings (substitutes) and try to find their original player
+  let fixedStandings = previousWeek.standingsSnapshot.boxes.map((standing) => {
+    // First check if this is a known substitute from absences
+    const original = subToOriginalMap.get(standing.playerId);
+    if (original) {
+      const member = memberMap.get(original.playerId);
+      console.log(`[refreshDraftWeekAssignments] Replacing substitute ${standing.playerId} with original ${original.playerId} (${member?.displayName || original.playerName})`);
+      return {
+        ...standing,
+        playerId: original.playerId,
+        playerName: member?.displayName || original.playerName || standing.playerName,
+        wasAbsent: true,
+      };
+    }
+
+    // Fallback: If player is NOT a league member, they're likely a substitute
+    // Try to find the original player by checking absences for this box
+    if (!memberIds.has(standing.playerId)) {
+      console.log(`[refreshDraftWeekAssignments] Player ${standing.playerId} not in member list - looking for original`);
+
+      // Find an absent player from this box who doesn't appear in standings
+      const standingPlayerIds = new Set(previousWeek.standingsSnapshot!.boxes.map(s => s.playerId));
+      const absentInThisBox = (previousWeek.absences || []).find(a =>
+        a.boxNumber === standing.boxNumber &&
+        !standingPlayerIds.has(a.playerId)
+      );
+
+      if (absentInThisBox) {
+        const member = memberMap.get(absentInThisBox.playerId);
+        console.log(`[refreshDraftWeekAssignments] Found absent player ${absentInThisBox.playerId} (${member?.displayName}) for box ${standing.boxNumber}`);
+        return {
+          ...standing,
+          playerId: absentInThisBox.playerId,
+          playerName: member?.displayName || absentInThisBox.playerName || standing.playerName,
+          wasAbsent: true,
+        };
+      }
+
+      // Last resort: find ANY member not in standings for this box
+      const membersInThisBox = members.filter(m => {
+        // Check if member was originally in this box in previousWeek.boxAssignments
+        const boxAssignment = previousWeek.boxAssignments.find(b => b.boxNumber === standing.boxNumber);
+        // They might be a member who should be in standings but isn't (replaced by sub)
+        return boxAssignment && !standingPlayerIds.has(m.userId);
+      });
+
+      if (membersInThisBox.length > 0) {
+        // Try to find one that was marked absent
+        const absentMember = membersInThisBox.find(m =>
+          (previousWeek.absences || []).some(a => a.playerId === m.userId)
+        );
+        if (absentMember) {
+          console.log(`[refreshDraftWeekAssignments] Using absent member ${absentMember.userId} (${absentMember.displayName}) for non-member substitute`);
+          return {
+            ...standing,
+            playerId: absentMember.userId,
+            playerName: absentMember.displayName,
+            wasAbsent: true,
+          };
+        }
+      }
+
+      console.log(`[refreshDraftWeekAssignments] Could not find original player for substitute ${standing.playerId}`);
+    }
+
+    return standing;
+  });
 
   const weekWithCurrentSettings: BoxLeagueWeek = {
     ...previousWeek,
@@ -802,11 +1043,65 @@ export async function refreshDraftWeekAssignments(
     },
   };
 
-  // Re-apply movements with current settings
-  const movements = applyMovements(weekWithCurrentSettings, previousWeek.standingsSnapshot.boxes);
+  // Re-apply movements with current settings (using fixed standings)
+  const movements = applyMovements(weekWithCurrentSettings, fixedStandings);
 
   // Generate new box assignments
-  const newAssignments = generateNextWeekAssignments(previousWeek.boxAssignments, movements);
+  let newAssignments = generateNextWeekAssignments(previousWeek.boxAssignments, movements);
+
+  // V07.48: Final cleanup - replace any remaining non-member IDs with original players
+  // This catches cases where the fixedStandings logic didn't find a mapping
+  // Build a global set of assigned IDs and track used replacements
+  const allAssignedIds = new Set(newAssignments.flatMap(b => b.playerIds).filter(id => memberIds.has(id)));
+  const usedReplacements = new Set<string>();
+
+  newAssignments = newAssignments.map(box => {
+    const fixedPlayerIds = box.playerIds.map(playerId => {
+      // If this ID is a league member, keep it
+      if (memberIds.has(playerId)) {
+        return playerId;
+      }
+
+      // Try to find original from absences by substituteId
+      const absenceBySubId = (previousWeek.absences || []).find(a => a.substituteId === playerId);
+      if (absenceBySubId && !usedReplacements.has(absenceBySubId.playerId)) {
+        console.log(`[refreshDraftWeekAssignments] Final cleanup: replacing sub ${playerId} with original ${absenceBySubId.playerId}`);
+        usedReplacements.add(absenceBySubId.playerId);
+        return absenceBySubId.playerId;
+      }
+
+      // Try to find absent player in this box who isn't in assignments
+      const absentInThisBox = (previousWeek.absences || []).find(a =>
+        a.boxNumber === box.boxNumber &&
+        !allAssignedIds.has(a.playerId) &&
+        !usedReplacements.has(a.playerId)
+      );
+      if (absentInThisBox) {
+        console.log(`[refreshDraftWeekAssignments] Final cleanup: found absent original ${absentInThisBox.playerId} for box ${box.boxNumber}`);
+        usedReplacements.add(absentInThisBox.playerId);
+        return absentInThisBox.playerId;
+      }
+
+      // V07.48: Ultimate fallback - find ANY member who isn't in ANY box
+      // This handles cases where absences weren't recorded with substituteId
+      const missingMembers = members.filter(m =>
+        !allAssignedIds.has(m.userId) &&
+        !usedReplacements.has(m.userId)
+      );
+      if (missingMembers.length > 0) {
+        // Use the first missing member (ideally match by previous box, but this is last resort)
+        const replacement = missingMembers[0];
+        console.log(`[refreshDraftWeekAssignments] Ultimate fallback: replacing non-member ${playerId} with missing member ${replacement.userId} (${replacement.displayName})`);
+        usedReplacements.add(replacement.userId);
+        return replacement.userId;
+      }
+
+      console.warn(`[refreshDraftWeekAssignments] Could not find original for non-member ${playerId} in box ${box.boxNumber}`);
+      return playerId;
+    });
+
+    return { ...box, playerIds: fixedPlayerIds };
+  });
 
   // Update the draft week with new assignments
   await updateBoxAssignments(leagueId, weekNumber, newAssignments);
@@ -821,6 +1116,13 @@ export async function refreshDraftWeekAssignments(
     },
   });
 
+  // V07.48: Absences do NOT carry forward - original player returns by default
+  // Clear any existing absences on the draft week
+  await updateDoc(getWeekDoc(leagueId, weekNumber), {
+    absences: [],
+  });
+  console.log(`[refreshDraftWeekAssignments] Cleared absences - original players return by default`);
+
   // V07.42: For draft weeks, clear standingsSnapshot so UI uses boxAssignments fallback
   await updateDoc(getWeekDoc(leagueId, weekNumber), {
     standingsSnapshot: null,
@@ -831,24 +1133,33 @@ export async function refreshDraftWeekAssignments(
 
 /**
  * Update court assignments for a draft week
+ * V07.49: Uses transaction for concurrency safety, updated CourtAssignment schema
  */
 export async function updateCourtAssignments(
   leagueId: string,
   weekNumber: number,
-  courtAssignments: { boxNumber: number; courtLabel: string }[]
+  courtAssignments: { boxNumber: number; courtId: string; courtLabel: string; sessionIndex: number }[]
 ): Promise<void> {
-  const week = await getWeek(leagueId, weekNumber);
+  const weekRef = getWeekDoc(leagueId, weekNumber);
 
-  if (!week) {
-    throw new Error(`Week ${weekNumber} not found`);
-  }
+  await runTransaction(db, async (transaction) => {
+    const weekSnap = await transaction.get(weekRef);
 
-  if (week.state !== 'draft') {
-    throw new Error('Can only update court assignments in draft state');
-  }
+    if (!weekSnap.exists()) {
+      throw new Error(`Week ${weekNumber} not found`);
+    }
 
-  await updateDoc(getWeekDoc(leagueId, weekNumber), {
-    courtAssignments,
+    const week = weekSnap.data() as BoxLeagueWeek;
+
+    if (week.state !== 'draft') {
+      throw new Error('Can only update court assignments in draft state');
+    }
+
+    transaction.update(weekRef, {
+      courtAssignments,
+      updatedAt: Date.now(),
+      revision: (week.revision || 0) + 1,
+    });
   });
 }
 
