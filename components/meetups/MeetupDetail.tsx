@@ -300,14 +300,17 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
           quantity: 1,
         }],
         customerEmail: currentUser.email || undefined,
+        clubId: meetup.clubId, // Required for V2 account detection
         organizerStripeAccountId: meetup.organizerStripeAccountId,
         successUrl: `${window.location.origin}/#/meetups/${meetupId}?payment=success`,
         cancelUrl: `${window.location.origin}/#/meetups/${meetupId}?payment=cancel`,
         metadata: {
           type: 'meetup',
           meetupId,
+          clubId: meetup.clubId || '',
           odUserId: currentUser.uid,
-          userName: userProfile.displayName || 'Guest',
+          payerName: userProfile.displayName || 'Guest',
+          eventName: meetup.title,
         },
       });
       // Redirect to Stripe Checkout URL

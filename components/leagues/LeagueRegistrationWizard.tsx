@@ -18,9 +18,11 @@ import {
   joinLeagueAsOpenTeam,
   joinOpenTeamDirect,
   cancelPendingRequestsForTeam,
+  checkDuprPlusGate,
 } from '../../services/firebase';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
 import { DoublesPartnerFlow, type PartnerSelection } from './DoublesPartnerFlow';
+import DuprPlusVerificationModal from '../shared/DuprPlusVerificationModal';
 import type { League, UserProfile } from '../../types';
 
 // ============================================
@@ -59,6 +61,9 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   const [showDuprRequiredModal, setShowDuprRequiredModal] = useState(false);
   const [duprLinking, setDuprLinking] = useState(false);
   const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(userProfile);
+
+  // DUPR+ Verification modal state (V07.50)
+  const [showDuprPlusModal, setShowDuprPlusModal] = useState(false);
 
   // Determine league characteristics
   const isDoubles = league.type === 'doubles';
@@ -134,6 +139,26 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
   };
 
   // ============================================
+  // DUPR+ VERIFICATION HANDLER (V07.50)
+  // ============================================
+
+  const handleDuprPlusVerified = (isActive: boolean) => {
+    setShowDuprPlusModal(false);
+    if (isActive) {
+      // User has DUPR+, proceed with registration
+      // Update local profile state to reflect new verification
+      setCurrentUserProfile(prev =>
+        prev ? { ...prev, duprPlusActive: true, duprPlusVerifiedAt: Date.now() } : prev
+      );
+      // Retry submit after successful verification
+      handleSubmit();
+    } else {
+      // User doesn't have active DUPR+
+      setError('This league requires an active DUPR+ subscription. Please subscribe to DUPR+ and try again.');
+    }
+  };
+
+  // ============================================
   // REGISTRATION SUBMIT
   // ============================================
 
@@ -144,6 +169,17 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
     setLoading(true);
 
     try {
+      // V07.50: Check DUPR+ gate before proceeding
+      const gateCheck = await checkDuprPlusGate(league, userProfile);
+      if (!gateCheck.allowed) {
+        if (gateCheck.needsVerification) {
+          setShowDuprPlusModal(true);
+          setLoading(false);
+          return;
+        }
+        throw new Error(gateCheck.reason || 'Cannot join this league');
+      }
+
       if (isDoubles) {
         // Handle doubles registration based on partner selection mode
         if (!partnerSelection) {
@@ -390,6 +426,14 @@ export const LeagueRegistrationWizard: React.FC<LeagueRegistrationWizardProps> =
             </button>
           </div>
         </div>
+      )}
+
+      {/* DUPR+ Verification Modal (V07.50) */}
+      {showDuprPlusModal && (
+        <DuprPlusVerificationModal
+          onClose={() => setShowDuprPlusModal(false)}
+          onVerified={handleDuprPlusVerified}
+        />
       )}
 
       <div className="bg-gray-800 w-full max-w-lg rounded-xl border border-gray-700 overflow-hidden">

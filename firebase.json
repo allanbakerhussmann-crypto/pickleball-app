@@ -12,6 +12,10 @@
         "function": "duprWebhook"
       },
       {
+        "source": "/api/stripe/v2-webhook",
+        "function": "stripe_v2_webhook"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

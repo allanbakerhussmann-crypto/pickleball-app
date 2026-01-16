@@ -1544,6 +1544,28 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                     </div>
                   )}
 
+                  {/* DUPR+ Gate - V07.50 */}
+                  <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                    <div>
+                      <div className="text-white font-medium text-sm">Require DUPR+ Subscription</div>
+                      <div className="text-xs text-gray-500">Only DUPR+ subscribers can join this league</div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={duprSettings.plusGate === 'required'}
+                        onChange={e => setDuprSettings({ ...duprSettings, plusGate: e.target.checked ? 'required' : 'off' })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-lime-500"></div>
+                    </label>
+                  </div>
+                  {duprSettings.plusGate === 'required' && (
+                    <p className="text-xs text-amber-400 mt-2 px-3">
+                      Players must verify their DUPR+ subscription via DUPR's premium login before joining.
+                    </p>
+                  )}
+
                   {/* Info Box - V07.12 Updated */}
                   <div className="p-3 bg-blue-900/20 rounded-lg border border-blue-800/50">
                     <p className="text-xs text-blue-300">
@@ -1882,6 +1904,9 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                     {duprSettings.autoSubmit && <div className="text-gray-400">• Auto-submit enabled</div>}
                     {duprSettings.useDuprForSkillLevel && (
                       <div className="text-gray-400">• Rating range: {duprSettings.minDuprRating || 'Any'} - {duprSettings.maxDuprRating || 'Any'}</div>
+                    )}
+                    {duprSettings.plusGate === 'required' && (
+                      <div className="text-amber-400">• DUPR+ subscription required</div>
                     )}
                   </div>
                 )}

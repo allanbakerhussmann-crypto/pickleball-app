@@ -71,6 +71,7 @@ interface DuprControlPanelProps {
   divisionId?: string;
   divisionName?: string;
   isOrganizer: boolean;
+  isAppAdmin?: boolean; // Show diagnostic tools (Test Match button) only for app admins
   currentUserId: string;
   playersCache?: Record<string, { firstName?: string; lastName?: string; displayName?: string }>;
   onMatchUpdate?: () => void;
@@ -85,6 +86,7 @@ export function DuprControlPanel({
   divisionId,
   divisionName: _divisionName,
   isOrganizer,
+  isAppAdmin = false,
   currentUserId,
   playersCache = {},
   onMatchUpdate,
@@ -406,17 +408,19 @@ export function DuprControlPanel({
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Test Single Match Button */}
-          <button
-            onClick={() => handleOpenTestModal()}
-            className="px-3 py-2 text-sm border border-gray-600 text-gray-300 rounded-lg hover:bg-gray-800 hover:text-white flex items-center gap-2"
-            title="Test a single match submission to debug DUPR issues"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-            Test Match
-          </button>
+          {/* Test Single Match Button - App Admin only */}
+          {isAppAdmin && (
+            <button
+              onClick={() => handleOpenTestModal()}
+              className="px-3 py-2 text-sm border border-gray-600 text-gray-300 rounded-lg hover:bg-gray-800 hover:text-white flex items-center gap-2"
+              title="Test a single match submission to debug DUPR issues"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+              Test Match
+            </button>
+          )}
           <DuprBulkSubmit
             readyCount={stats.readyForDupr}
             failedCount={stats.failed}
@@ -444,7 +448,7 @@ export function DuprControlPanel({
         onFinalise={handleFinalise}
         onSubmit={handleSubmit}
         onToggleEligibility={handleToggleEligibility}
-        onTest={handleOpenTestModal}
+        onTest={isAppAdmin ? handleOpenTestModal : undefined}
       />
 
       {/* Review Modal */}
@@ -454,6 +458,7 @@ export function DuprControlPanel({
         data={reviewModalData}
         onFinalise={handleModalFinalise}
         isSaving={isSaving}
+        isOrganizer={isOrganizer}
       />
 
       {/* Test Single Match Modal */}

@@ -6,9 +6,10 @@
  * (same as singles weekly league for DUPR compatibility).
  *
  * FILE LOCATION: services/rotatingDoublesBox/boxLeagueMatchFactory.ts
- * VERSION: V07.49
+ * VERSION: V07.50
  *
  * V07.49: Added seasonId, participantIds to match docs for efficient queries
+ * V07.50: Fixed substitute name resolution - now checks absences, members, and users
  */
 
 import {
@@ -118,8 +119,8 @@ export async function generateMatchDocsForWeek(
     boxAssignments.map(b => `Box ${b.boxNumber}: ${b.playerIds.join(',')}`)
   );
 
-  // Get player lookup data from league members
-  const playerLookup = await getPlayerLookup(leagueId, boxAssignments);
+  // V07.50: Get player lookup data including substitute names from absences
+  const playerLookup = await getPlayerLookup(leagueId, boxAssignments, week.absences);
 
   const matchDocs: MatchDoc[] = [];
 
@@ -349,8 +350,8 @@ export async function generateMatchesForWeek(
   week: BoxLeagueWeek,
   venueInfo?: { sessions?: { startTime: string }[]; venueName?: string } // V07.50
 ): Promise<string[]> {
-  // Get player lookup data from league members
-  const playerLookup = await getPlayerLookup(leagueId, week.boxAssignments);
+  // V07.50: Get player lookup data including substitute names from absences
+  const playerLookup = await getPlayerLookup(leagueId, week.boxAssignments, week.absences);
 
   const batch = writeBatch(db);
   const matchIds: string[] = [];
@@ -449,21 +450,57 @@ export async function generateMatchesForWeek(
 // ============================================
 
 /**
- * Get player lookup data from league members
+ * Get player lookup data from league members, absences (for substitutes), and users
+ *
+ * V07.50: Enhanced to resolve substitute names from:
+ * 1. Week absences (substituteName stored when sub is assigned)
+ * 2. League members collection
+ * 3. Users collection (fallback for non-member substitutes)
  */
 async function getPlayerLookup(
   leagueId: string,
-  boxAssignments: BoxAssignment[]
+  boxAssignments: BoxAssignment[],
+  absences?: { substituteId?: string; substituteName?: string }[]
 ): Promise<PlayerLookup> {
   const allPlayerIds = boxAssignments.flatMap((ba) => ba.playerIds);
   const uniquePlayerIds = [...new Set(allPlayerIds)];
 
   const lookup: PlayerLookup = {};
 
+  // Build a map of substituteId -> substituteName from absences
+  const substituteNames = new Map<string, string>();
+  if (absences) {
+    for (const absence of absences) {
+      if (absence.substituteId && absence.substituteName) {
+        substituteNames.set(absence.substituteId, absence.substituteName);
+      }
+    }
+  }
+
   // Fetch member data from league members collection
   const membersRef = collection(db, 'leagues', leagueId, 'members');
+  const usersRef = collection(db, 'users');
 
   for (const playerId of uniquePlayerIds) {
+    // 1. Check if this is a substitute with a stored name
+    const subName = substituteNames.get(playerId);
+    if (subName) {
+      // Try to get DUPR info from users collection
+      const userDoc = await getDoc(doc(usersRef, playerId));
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        lookup[playerId] = {
+          name: subName,
+          duprId: userData.duprId,
+          duprRating: userData.duprDoublesRating,
+        };
+      } else {
+        lookup[playerId] = { name: subName };
+      }
+      continue;
+    }
+
+    // 2. Check league members collection
     const memberDoc = await getDoc(doc(membersRef, playerId));
     if (memberDoc.exists()) {
       const data = memberDoc.data();
@@ -472,9 +509,23 @@ async function getPlayerLookup(
         duprId: data.duprId,
         duprRating: data.duprDoublesRating,
       };
-    } else {
-      lookup[playerId] = { name: 'Unknown' };
+      continue;
     }
+
+    // 3. Fallback to users collection (for non-member substitutes without stored name)
+    const userDoc = await getDoc(doc(usersRef, playerId));
+    if (userDoc.exists()) {
+      const userData = userDoc.data();
+      lookup[playerId] = {
+        name: userData.displayName || userData.email?.split('@')[0] || 'Unknown',
+        duprId: userData.duprId,
+        duprRating: userData.duprDoublesRating,
+      };
+      continue;
+    }
+
+    // 4. Final fallback
+    lookup[playerId] = { name: 'Unknown' };
   }
 
   return lookup;

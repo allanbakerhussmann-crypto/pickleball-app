@@ -4,7 +4,10 @@
  * Provides organizer controls for match finalization without DUPR submission.
  * Design mirrors DuprControlPanel but without DUPR-specific features.
  *
- * @version V07.35
+ * V07.50: Added playerNameLookup prop to resolve substitute names that may
+ *         be stored as "Unknown" in older matches.
+ *
+ * @version V07.50
  * @file components/shared/OrganizerMatchPanel.tsx
  */
 
@@ -36,6 +39,7 @@ interface OrganizerMatchPanelProps {
   currentUserId: string;
   onMatchClick: (match: LeagueMatch) => void;
   onMatchUpdate?: () => void;
+  playerNameLookup?: Map<string, string>; // V07.50: For resolving substitute names
 }
 
 // ============================================
@@ -92,22 +96,57 @@ export function OrganizerMatchPanel({
   currentUserId,
   onMatchClick,
   onMatchUpdate,
+  playerNameLookup,
 }: OrganizerMatchPanelProps) {
   const [activeFilter, setActiveFilter] = useState<MatchCategory>('all');
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  // V07.50: Helper to resolve team name, checking playerNameLookup for "Unknown" names
+  const resolveTeamName = useCallback((
+    side: { name?: string; playerIds?: string[]; playerNames?: string[] } | undefined,
+    fallbackName: string | undefined,
+    defaultName: string
+  ): string => {
+    const storedName = side?.name || fallbackName || defaultName;
+
+    // If name doesn't contain "Unknown", use it as-is
+    if (!storedName.includes('Unknown') || !playerNameLookup) {
+      return storedName;
+    }
+
+    // Try to resolve individual player names from lookup
+    const playerIds = side?.playerIds || [];
+    const playerNames = side?.playerNames || [];
+
+    const resolvedNames = playerIds.map((id, idx) => {
+      const storedPlayerName = playerNames[idx];
+      if (storedPlayerName && storedPlayerName !== 'Unknown') {
+        return storedPlayerName;
+      }
+      return playerNameLookup.get(id) || storedPlayerName || 'Unknown';
+    });
+
+    if (resolvedNames.length >= 2) {
+      return `${resolvedNames[0]} & ${resolvedNames[1]}`;
+    } else if (resolvedNames.length === 1) {
+      return resolvedNames[0];
+    }
+
+    return storedName;
+  }, [playerNameLookup]);
+
   // Build row data for all matches
   const rowData: MatchRowData[] = useMemo(() => {
     return matches.map(match => ({
       match,
-      teamAName: match.sideA?.name || match.teamAName || 'Team A',
-      teamBName: match.sideB?.name || match.teamBName || 'Team B',
+      teamAName: resolveTeamName(match.sideA, match.teamAName, 'Team A'),
+      teamBName: resolveTeamName(match.sideB, match.teamBName, 'Team B'),
       scoreDisplay: formatScore(match.scores),
       scoreState: getScoreStateLabel(match),
       category: categorizeMatch(match),
     }));
-  }, [matches]);
+  }, [matches, resolveTeamName]);
 
   // Calculate stats
   const stats = useMemo(() => {

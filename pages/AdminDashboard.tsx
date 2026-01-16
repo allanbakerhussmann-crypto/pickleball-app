@@ -506,6 +506,16 @@ const AdminDashboard: React.FC = () => {
                 </div>
               </button>
               <button
+                onClick={() => navigate('/admin/finance')}
+                className="w-full text-left px-4 py-3 bg-gray-900 hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-3"
+              >
+                <span className="text-2xl">💰</span>
+                <div>
+                  <p className="text-white font-medium">Platform Finance</p>
+                  <p className="text-gray-500 text-xs">Revenue, transactions, reconciliation</p>
+                </div>
+              </button>
+              <button
                 onClick={async () => {
                   setSmsBundleSeed({ seeding: true });
                   try {

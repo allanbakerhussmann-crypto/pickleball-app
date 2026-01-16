@@ -350,9 +350,18 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   };
 
   const validateStep2 = (): boolean => {
-    if (pricingEnabled && totalPerPersonCents > 0 && !canAcceptPayments) {
-      setError('Stripe account required for paid meetups');
-      return false;
+    if (pricingEnabled && totalPerPersonCents > 0) {
+      // Check if host has Stripe connected
+      if (!canAcceptPayments) {
+        setError(`${hostType === 'club' ? 'This club' : 'You'} must connect Stripe before creating paid meetups. Go to ${hostType === 'club' ? 'Club Settings' : 'Profile'} → Payments to set up.`);
+        return false;
+      }
+      // Also verify we actually have a Stripe account ID
+      const stripeAccountId = hostType === 'club' ? clubStripeAccountId : organizerStripeAccountId;
+      if (!stripeAccountId) {
+        setError(`${hostType === 'club' ? 'This club' : 'You'} must connect Stripe before creating paid meetups.`);
+        return false;
+      }
     }
     setError(null);
     return true;
@@ -363,11 +372,16 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   // ============================================
 
   const handleSubmit = async () => {
-    if (!currentUser) return;
+    console.log('handleSubmit called, currentUser:', currentUser?.uid);
+    if (!currentUser) {
+      console.log('No currentUser, returning early');
+      return;
+    }
     setIsSubmitting(true);
     setError(null);
 
     try {
+      console.log('Starting meetup creation...');
       const meetupData: any = {
         title: title.trim(),
         description: description.trim(),
@@ -398,6 +412,12 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
 
       // Pricing
       if (pricingEnabled && totalPerPersonCents > 0) {
+        // Final safety check - must have Stripe account for paid meetups
+        const stripeAccountId = hostType === 'club' ? clubStripeAccountId : organizerStripeAccountId;
+        if (!stripeAccountId) {
+          throw new Error(`Cannot create paid meetup: ${hostType === 'club' ? 'Club' : 'Organizer'} has no Stripe account connected.`);
+        }
+
         meetupData.pricing = {
           enabled: true,
           entryFee: entryFeeCents,
@@ -408,12 +428,8 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
           totalPerPerson: feeCalculation?.playerPays || totalPerPersonCents,
           currency: 'nzd',
         };
-        
-        if (hostType === 'club' && clubStripeAccountId) {
-          meetupData.organizerStripeAccountId = clubStripeAccountId;
-        } else if (organizerStripeAccountId) {
-          meetupData.organizerStripeAccountId = organizerStripeAccountId;
-        }
+
+        meetupData.organizerStripeAccountId = stripeAccountId;
       }
 
       // Competition settings
@@ -444,10 +460,13 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         };
       }
 
-      await createMeetup(meetupData);
+      console.log('Calling createMeetup with data:', meetupData);
+      const meetupId = await createMeetup(meetupData);
+      console.log('Meetup created successfully with ID:', meetupId);
       onCreated();
     } catch (err: any) {
       console.error('Failed to create meetup:', err);
+      console.error('Error details:', JSON.stringify(err, null, 2));
       setError(err.message || 'Failed to create meetup');
     } finally {
       setIsSubmitting(false);
@@ -632,7 +651,20 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">Visibility</label>
+                <label className="block text-sm font-medium text-gray-400 mb-1 flex items-center gap-1">
+                  Visibility
+                  <div className="relative group">
+                    <span className="inline-flex items-center justify-center w-4 h-4 text-xs bg-gray-700 text-gray-400 rounded-full cursor-help hover:bg-gray-600 hover:text-white">?</span>
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-gray-800 border border-gray-600 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                      <div className="text-xs text-gray-300 space-y-2">
+                        <div><span className="text-white font-medium">Public:</span> Appears in meetup listings. Anyone can discover and join.</div>
+                        <div><span className="text-white font-medium">Link Only:</span> Hidden from listings. Only accessible via shared link.</div>
+                        <div><span className="text-white font-medium">Private:</span> Invite only. You must add participants manually.</div>
+                      </div>
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
+                    </div>
+                  </div>
+                </label>
                 <select
                   value={visibility}
                   onChange={(e) => setVisibility(e.target.value as any)}

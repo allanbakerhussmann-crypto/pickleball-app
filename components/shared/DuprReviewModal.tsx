@@ -9,17 +9,19 @@
  * - DUPR eligibility toggle
  * - Finalise button
  *
+ * V07.50: Block score editing after match submitted to DUPR (scores are immutable)
  * V07.33: DUPR Compliance - Block finalization until opponent signs
  * - Opponent acknowledgement is REQUIRED before organizer can finalize
  * - Sequence: Propose → Sign → Finalize
  *
- * @version V07.33
+ * @version V07.50
  * @file components/shared/DuprReviewModal.tsx
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type { GameScore } from '../../types';
 import type { DuprReviewModalData } from '../../types/duprPanel';
+import type { GameSettings } from '../../types/game/gameSettings';
 
 interface DuprReviewModalProps {
   isOpen: boolean;
@@ -32,6 +34,119 @@ interface DuprReviewModalProps {
     duprEligible: boolean
   ) => Promise<void>;
   isSaving: boolean;
+  isOrganizer?: boolean; // V07.50: Permission check
+}
+
+// ============================================
+// SCORE VALIDATION
+// ============================================
+
+interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * V07.50: Validate a single game score against game settings
+ */
+function validateGameScore(
+  scoreA: number,
+  scoreB: number,
+  gameNumber: number,
+  settings: GameSettings
+): { valid: boolean; error?: string; warning?: string } {
+  const { pointsPerGame, winBy, capAt } = settings;
+  const maxScore = Math.max(scoreA, scoreB);
+  const minScore = Math.min(scoreA, scoreB);
+  const margin = maxScore - minScore;
+
+  // Check for tie (not allowed)
+  if (scoreA === scoreB) {
+    return { valid: false, error: `Game ${gameNumber}: Tied scores are not allowed` };
+  }
+
+  // Check if max score is at least pointsPerGame
+  if (maxScore < pointsPerGame) {
+    return {
+      valid: false,
+      error: `Game ${gameNumber}: Winning score must be at least ${pointsPerGame} (current: ${maxScore}-${minScore})`
+    };
+  }
+
+  // Check win-by margin
+  if (winBy === 2 && margin < 2) {
+    // Unless capped
+    if (capAt && maxScore >= capAt) {
+      // Capped game, margin of 1 is OK
+      return { valid: true, warning: `Game ${gameNumber}: Capped at ${capAt}` };
+    }
+    return {
+      valid: false,
+      error: `Game ${gameNumber}: Must win by ${winBy} (current margin: ${margin})`
+    };
+  }
+
+  // Check if score is reasonable (loser shouldn't have more than pointsPerGame - 1 unless deuce)
+  if (maxScore > pointsPerGame && minScore < pointsPerGame - winBy) {
+    return {
+      valid: false,
+      error: `Game ${gameNumber}: Invalid score - if winner has ${maxScore}, loser should have at least ${maxScore - winBy}`
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * V07.50: Validate all scores against game settings
+ */
+function validateScores(scores: GameScore[], settings: GameSettings): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Check number of games
+  const { bestOf } = settings;
+  const gamesNeededToWin = Math.ceil(bestOf / 2);
+
+  // Count games won by each side
+  let gamesWonA = 0;
+  let gamesWonB = 0;
+
+  for (let i = 0; i < scores.length; i++) {
+    const game = scores[i];
+    const result = validateGameScore(game.scoreA || 0, game.scoreB || 0, i + 1, settings);
+
+    if (!result.valid && result.error) {
+      errors.push(result.error);
+    }
+    if (result.warning) {
+      warnings.push(result.warning);
+    }
+
+    if ((game.scoreA || 0) > (game.scoreB || 0)) {
+      gamesWonA++;
+    } else {
+      gamesWonB++;
+    }
+  }
+
+  // Check if match is complete (someone won the required games)
+  const maxGamesWon = Math.max(gamesWonA, gamesWonB);
+  if (maxGamesWon < gamesNeededToWin) {
+    errors.push(`Match incomplete: Need ${gamesNeededToWin} game wins for best-of-${bestOf} (current: ${gamesWonA}-${gamesWonB})`);
+  }
+
+  // Check if too many games
+  if (scores.length > bestOf) {
+    errors.push(`Too many games: Best-of-${bestOf} should have at most ${bestOf} games`);
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings
+  };
 }
 
 export function DuprReviewModal({
@@ -40,6 +155,7 @@ export function DuprReviewModal({
   data,
   onFinalise,
   isSaving,
+  isOrganizer = true, // V07.50: Default true for backward compatibility
 }: DuprReviewModalProps) {
   // Local state for editing
   const [scores, setScores] = useState<GameScore[]>([]);
@@ -59,13 +175,61 @@ export function DuprReviewModal({
     }
   }, [data]);
 
+  // V07.50: Get game settings for validation with defaults
+  const rawGameSettings = data?.match?.gameSettings;
+  const gameSettings: GameSettings | null = rawGameSettings ? {
+    playType: rawGameSettings.playType || 'doubles',
+    pointsPerGame: rawGameSettings.pointsPerGame || 11,
+    winBy: rawGameSettings.winBy || 2,
+    bestOf: rawGameSettings.bestOf || 1,
+    capAt: rawGameSettings.capAt,
+  } : null;
+
+  // V07.50: Validate scores whenever they change
+  const validation = useMemo(() => {
+    if (!gameSettings || scores.length === 0) {
+      return { valid: true, errors: [], warnings: [] };
+    }
+    return validateScores(scores, gameSettings);
+  }, [scores, gameSettings]);
+
   if (!isOpen || !data) return null;
+
+  // V07.50: Permission check - show read-only view for non-organizers
+  if (!isOrganizer) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+        <div className="relative w-full max-w-md bg-gray-900 rounded-2xl border border-gray-700 shadow-xl p-6">
+          <div className="text-center">
+            <svg className="w-12 h-12 mx-auto text-red-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <h3 className="text-lg font-semibold text-white mb-2">Access Denied</h3>
+            <p className="text-gray-400 mb-4">Only organizers can review and finalize match scores.</p>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const { match, proposal, official } = data;
   const sideAName = match.sideA?.name || 'Side A';
   const sideBName = match.sideB?.name || 'Side B';
   const sideAId = match.sideA?.id || '';
   const sideBId = match.sideB?.id || '';
+
+  // V07.50: Check if match has been submitted to DUPR (scores are immutable)
+  const isSubmittedToDupr = Boolean(
+    match.dupr?.submitted ||
+    match.scoreState === 'submittedToDupr'
+  );
 
   // Calculate winner from scores
   const calculateWinner = (gameScores: GameScore[]): string => {
@@ -105,7 +269,9 @@ export function DuprReviewModal({
   // 1. There's no proposal (organizer entering directly), OR
   // 2. The proposal status is 'signed' (opponent acknowledged)
   const isProposalSigned = !proposal || proposal.status === 'signed';
-  const canFinalise = winnerId && isProposalSigned;
+
+  // V07.50: Include validation in canFinalise check
+  const canFinalise = winnerId && isProposalSigned && validation.valid;
 
   // Handle finalise
   const handleFinalise = async () => {
@@ -116,6 +282,11 @@ export function DuprReviewModal({
     // V07.33: Block if opponent hasn't signed
     if (proposal && proposal.status !== 'signed') {
       alert('Cannot finalize: Opponent must acknowledge the score first. This is required for DUPR compliance.');
+      return;
+    }
+    // V07.50: Block if validation fails
+    if (!validation.valid) {
+      alert(`Cannot finalize: ${validation.errors.join(', ')}`);
       return;
     }
     await onFinalise(match.id, scores, winnerId, duprEligible);
@@ -226,19 +397,35 @@ export function DuprReviewModal({
             </div>
           )}
 
+          {/* V07.50: Game Settings Info */}
+          {gameSettings && (
+            <div className="flex items-center gap-4 text-xs text-gray-500 px-3 py-2 bg-gray-800/50 rounded-lg">
+              <span>Game to <strong className="text-gray-400">{gameSettings.pointsPerGame}</strong></span>
+              <span>Win by <strong className="text-gray-400">{gameSettings.winBy}</strong></span>
+              <span>Best of <strong className="text-gray-400">{gameSettings.bestOf}</strong></span>
+              {gameSettings.capAt && <span>Cap at <strong className="text-gray-400">{gameSettings.capAt}</strong></span>}
+            </div>
+          )}
+
           {/* Scores Editor */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium text-gray-400">
                 {isEditing ? 'Edit Scores' : 'Scores'}
               </p>
-              {!official && (
+              {/* V07.50: Hide edit toggle when submitted to DUPR */}
+              {!official && !isSubmittedToDupr && (
                 <button
                   onClick={() => setIsEditing(!isEditing)}
                   className="text-xs text-blue-400 hover:text-blue-300"
                 >
                   {isEditing ? 'Use Proposal' : 'Edit Scores'}
                 </button>
+              )}
+              {isSubmittedToDupr && (
+                <span className="text-xs text-gray-500">
+                  Submitted to DUPR
+                </span>
               )}
             </div>
 
@@ -253,7 +440,7 @@ export function DuprReviewModal({
                       max="99"
                       value={game.scoreA || 0}
                       onChange={(e) => handleScoreChange(index, 'scoreA', parseInt(e.target.value) || 0)}
-                      disabled={!isEditing && !official}
+                      disabled={isSubmittedToDupr || (!isEditing && !official)}
                       className="w-16 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-center text-white disabled:opacity-50"
                     />
                     <span className="text-gray-500">-</span>
@@ -263,7 +450,7 @@ export function DuprReviewModal({
                       max="99"
                       value={game.scoreB || 0}
                       onChange={(e) => handleScoreChange(index, 'scoreB', parseInt(e.target.value) || 0)}
-                      disabled={!isEditing && !official}
+                      disabled={isSubmittedToDupr || (!isEditing && !official)}
                       className="w-16 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-center text-white disabled:opacity-50"
                     />
                   </div>
@@ -288,6 +475,30 @@ export function DuprReviewModal({
               >
                 + Add Game
               </button>
+            )}
+
+            {/* V07.50: Validation Errors */}
+            {validation.errors.length > 0 && (
+              <div className="mt-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+                <p className="text-xs font-medium text-red-400 mb-1">Score Validation Errors:</p>
+                <ul className="text-xs text-red-300 space-y-0.5">
+                  {validation.errors.map((error, i) => (
+                    <li key={i}>• {error}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* V07.50: Validation Warnings */}
+            {validation.warnings.length > 0 && validation.errors.length === 0 && (
+              <div className="mt-3 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+                <p className="text-xs font-medium text-yellow-400 mb-1">Warnings:</p>
+                <ul className="text-xs text-yellow-300 space-y-0.5">
+                  {validation.warnings.map((warning, i) => (
+                    <li key={i}>• {warning}</li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
 

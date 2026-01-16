@@ -33,6 +33,7 @@ interface MeetupCheckoutModalProps {
     when: number;
     locationName: string;
     maxPlayers?: number;
+    clubId?: string; // Required for V2 account detection
     pricing: {
       totalPerPerson: number;
       entryFee: number;
@@ -150,10 +151,15 @@ export const MeetupCheckoutModal: React.FC<MeetupCheckoutModalProps> = ({
           quantity: 1,
         }],
         customerEmail: currentUser.email || undefined,
+        clubId: meetup.clubId, // Required for V2 account detection
         organizerStripeAccountId: meetup.organizerStripeAccountId,
         successUrl,
         cancelUrl,
-        metadata,
+        metadata: {
+          ...metadata,
+          clubId: meetup.clubId || '',
+          eventName: meetup.title,
+        },
       });
 
       onPaymentStarted?.();

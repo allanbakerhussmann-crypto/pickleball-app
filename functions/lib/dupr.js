@@ -47,7 +47,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = void 0;
+exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_updateMySubscriptions = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const crypto = __importStar(require("crypto"));
@@ -1062,6 +1062,52 @@ exports.dupr_refreshMyRating = functions.https.onCall(async (_data, context) => 
         singlesReliability: singlesReliability !== null && singlesReliability !== void 0 ? singlesReliability : null,
         syncedAt: Date.now(),
     };
+});
+exports.dupr_updateMySubscriptions = functions.https.onCall(async (data, context) => {
+    var _a;
+    // Auth check
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const uid = context.auth.uid;
+    const { subscriptions } = data;
+    logger.info('[DUPR+] updateMySubscriptions called', { uid, subscriptionCount: (subscriptions === null || subscriptions === void 0 ? void 0 : subscriptions.length) || 0 });
+    // Strict validation: require status === 'active' OR (expiresAt exists AND is in future)
+    const duprPlusActive = (_a = subscriptions === null || subscriptions === void 0 ? void 0 : subscriptions.some((s) => {
+        // Safe logging for debugging (no secrets)
+        logger.info('[DUPR+] Evaluating subscription:', {
+            hasProductId: !!s.productId,
+            hasStatus: !!s.status,
+            status: s.status,
+            hasExpiresAt: !!s.expiresAt,
+        });
+        // Check status first
+        if (s.status === 'active')
+            return true;
+        // Check expiresAt only if it exists and is in future
+        if (s.expiresAt && s.expiresAt > Date.now())
+            return true;
+        return false;
+    })) !== null && _a !== void 0 ? _a : false;
+    logger.info('[DUPR+] Subscription validation result', { uid, duprPlusActive });
+    // Update user profile
+    try {
+        await db.collection('users').doc(uid).update({
+            duprSubscriptions: subscriptions || [],
+            duprPlusActive,
+            duprPlusVerifiedAt: Date.now(),
+            updatedAt: Date.now(),
+        });
+        logger.info('[DUPR+] User profile updated', { uid, duprPlusActive });
+    }
+    catch (updateError) {
+        logger.error('[DUPR+] Failed to update user profile', {
+            uid,
+            error: updateError instanceof Error ? updateError.message : 'Unknown',
+        });
+        throw new functions.https.HttpsError('internal', 'Failed to update subscription status');
+    }
+    return { success: true, duprPlusActive };
 });
 /**
  * Test submitting a single match to DUPR

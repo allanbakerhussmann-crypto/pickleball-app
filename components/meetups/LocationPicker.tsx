@@ -48,6 +48,12 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
+    // Fix for map only showing partial tiles when container was hidden
+    // Wait for the container to be fully rendered, then invalidate size
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 100);
+
     // Add marker if we have coordinates
     if (lat && lng) {
       markerRef.current = L.marker([lat, lng], {
@@ -81,8 +87,17 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       await reverseGeocode(clickLat, clickLng);
     });
 
+    // Handle window resize
+    const handleResize = () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
     // Cleanup
     return () => {
+      window.removeEventListener('resize', handleResize);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;

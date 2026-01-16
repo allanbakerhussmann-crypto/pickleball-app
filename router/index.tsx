@@ -58,6 +58,9 @@ import TermsOfServicePage from '../pages/TermsOfServicePage';
 import PrivacyRequestPage from '../pages/PrivacyRequestPage';
 import BreachManagementPage from '../pages/admin/BreachManagementPage';
 
+// Platform Finance (V07.50)
+import AdminFinancePage from '../pages/AdminFinancePage';
+
 // ============================================
 // Router Configuration - Using HashRouter
 // URLs will be like: /#/tournaments, /#/clubs/123
@@ -236,6 +239,14 @@ export const router = createHashRouter([
         element: (
           <ProtectedRoute requireAdmin>
             <BreachManagementPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'admin/finance',
+        element: (
+          <ProtectedRoute requireAdmin>
+            <AdminFinancePage />
           </ProtectedRoute>
         ),
       },

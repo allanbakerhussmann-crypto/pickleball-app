@@ -1325,6 +1325,89 @@ export const dupr_refreshMyRating = functions.https.onCall(
 );
 
 // ============================================
+// Callable Function: Update DUPR+ Subscriptions
+// ============================================
+
+/**
+ * Update user's DUPR+ subscription status from Premium Login iframe
+ *
+ * Called after user completes DUPR Premium Login flow.
+ * Persists subscription data and derives duprPlusActive status.
+ *
+ * Validation rules (strict):
+ * - status === 'active' OR
+ * - expiresAt exists AND is in future
+ */
+interface UpdateSubscriptionsRequest {
+  subscriptions: Array<{
+    productId?: string;
+    promotionId?: string;
+    status?: string;
+    expiresAt?: number;
+  }>;
+}
+
+interface UpdateSubscriptionsResponse {
+  success: boolean;
+  duprPlusActive: boolean;
+}
+
+export const dupr_updateMySubscriptions = functions.https.onCall(
+  async (data: UpdateSubscriptionsRequest, context): Promise<UpdateSubscriptionsResponse> => {
+    // Auth check
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const uid = context.auth.uid;
+    const { subscriptions } = data;
+
+    logger.info('[DUPR+] updateMySubscriptions called', { uid, subscriptionCount: subscriptions?.length || 0 });
+
+    // Strict validation: require status === 'active' OR (expiresAt exists AND is in future)
+    const duprPlusActive = subscriptions?.some((s) => {
+      // Safe logging for debugging (no secrets)
+      logger.info('[DUPR+] Evaluating subscription:', {
+        hasProductId: !!s.productId,
+        hasStatus: !!s.status,
+        status: s.status,
+        hasExpiresAt: !!s.expiresAt,
+      });
+
+      // Check status first
+      if (s.status === 'active') return true;
+
+      // Check expiresAt only if it exists and is in future
+      if (s.expiresAt && s.expiresAt > Date.now()) return true;
+
+      return false;
+    }) ?? false;
+
+    logger.info('[DUPR+] Subscription validation result', { uid, duprPlusActive });
+
+    // Update user profile
+    try {
+      await db.collection('users').doc(uid).update({
+        duprSubscriptions: subscriptions || [],
+        duprPlusActive,
+        duprPlusVerifiedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      logger.info('[DUPR+] User profile updated', { uid, duprPlusActive });
+    } catch (updateError) {
+      logger.error('[DUPR+] Failed to update user profile', {
+        uid,
+        error: updateError instanceof Error ? updateError.message : 'Unknown',
+      });
+      throw new functions.https.HttpsError('internal', 'Failed to update subscription status');
+    }
+
+    return { success: true, duprPlusActive };
+  }
+);
+
+// ============================================
 // Callable Function: Test Single Match Submission
 // ============================================
 

@@ -946,7 +946,23 @@ export const MedalBracketTab: React.FC<MedalBracketTabProps> = ({
             </div>
           </div>
 
-          {/* Round-specific settings - Always visible */}
+          {/* Toggle for separate medal settings */}
+          <div className="mt-4 flex items-center justify-between p-3 rounded-lg bg-gray-800/30 border border-gray-700/30">
+            <div>
+              <p className="text-white font-medium">Custom Medal Round Rules</p>
+              <p className="text-xs text-gray-500 mt-0.5">Enable different Best Of settings per round</p>
+            </div>
+            <StyledToggle
+              checked={localMedalSettings.useSeparateMedalSettings}
+              onChange={(checked) => setLocalMedalSettings((prev: any) => ({
+                ...prev,
+                useSeparateMedalSettings: checked,
+              }))}
+            />
+          </div>
+
+          {/* Round-specific settings - Only visible when toggle is enabled */}
+          {localMedalSettings.useSeparateMedalSettings && (
           <div className="mt-6 space-y-4">
             <div className="text-xs text-gray-500 uppercase tracking-wider">Medal Round Rules</div>
 
@@ -1132,9 +1148,11 @@ export const MedalBracketTab: React.FC<MedalBracketTabProps> = ({
                   </div>
                 )}
               </div>
+          </div>
+          )}
 
-            {/* Save Button */}
-            <div className="pt-4">
+          {/* Save Button */}
+          <div className="pt-4">
               <button
                 onClick={handleSaveMedalRules}
                 className="
@@ -1147,7 +1165,6 @@ export const MedalBracketTab: React.FC<MedalBracketTabProps> = ({
               >
                 Save Medal Rules
               </button>
-            </div>
           </div>
         </SettingsCard>
       )}

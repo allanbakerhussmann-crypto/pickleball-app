@@ -327,6 +327,9 @@ export {
   // Auto-Registration (NEW V05.44)
   checkAndUpdateLeagueStatus,
   getExpectedLeagueStatus,
+
+  // DUPR+ Gate (V07.50)
+  checkDuprPlusGate,
 } from './leagues';
 
 // League Scheduling (V07.27)

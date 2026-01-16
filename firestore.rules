@@ -75,12 +75,18 @@ service cloud.firestore {
     // TRANSACTION COLLECTIONS
     // ============================================
     
-    // Transactions - users see their own, clubs see their transactions
+    // Transactions - users see their own, clubs see their transactions, app admins see all
     match /transactions/{transactionId} {
       allow read: if isAuthenticated() && (
+        // App admins can read ALL transactions for Platform Finance dashboard
+        isAppAdmin() ||
+        // Users can see their own transactions
         resource.data.odUserId == request.auth.uid ||
+        // Club admins can see club transactions
         (resource.data.odClubId != null && isClubAdmin(resource.data.odClubId)) ||
+        // Tournament organizers can see tournament transactions
         (resource.data.tournamentId != null && isTournamentOrganizer(resource.data.tournamentId)) ||
+        // League admins can see league transactions
         (resource.data.leagueId != null && isLeagueAdmin(resource.data.leagueId))
       );
       // All writes go through Cloud Functions
@@ -436,8 +442,9 @@ service cloud.firestore {
       match /members/{memberId} {
         // V07.12: Allow public read for viewing league standings
         allow read: if true;
-        // Users can join leagues (create their membership)
-        allow create: if isAuthenticated();
+        // V07.50: BLOCKED - must go through league_join Cloud Function
+        // This prevents bypassing DUPR+ gate enforcement
+        allow create: if false;
         // V07.28: Update rules for direct join flow
         allow update: if isLeagueAdmin(leagueId) ||
           isAppAdmin() ||

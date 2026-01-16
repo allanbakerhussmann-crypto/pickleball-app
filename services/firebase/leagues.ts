@@ -27,7 +27,8 @@ import {
   increment,
   runTransaction,
 } from '@firebase/firestore';
-import { db } from './config';
+import { httpsCallable } from '@firebase/functions';
+import { db, functions } from './config';
 import type {
   League,
   LeagueMember,
@@ -42,6 +43,7 @@ import type {
   LeagueType,
   MemberStats,
   GameScore,
+  UserProfile,
 } from '../../types';
 
 // ============================================
@@ -333,6 +335,56 @@ const countMembersTowardCapacity = async (
   return count;
 };
 
+// ============================================
+// DUPR+ GATE CHECK (V07.50)
+// ============================================
+
+/**
+ * Check if user can join a DUPR+ gated league
+ *
+ * Returns { allowed: true } or { allowed: false, reason: string, needsVerification?: boolean }
+ *
+ * @param league - The league to check
+ * @param userProfile - The user's profile
+ * @returns Gate check result
+ */
+export const checkDuprPlusGate = async (
+  league: League,
+  userProfile: UserProfile
+): Promise<{ allowed: boolean; reason?: string; needsVerification?: boolean }> => {
+  // Check if gate is enabled
+  // Note: duprSettings is nested inside settings in Firestore
+  const duprSettings = (league as any).settings?.duprSettings || league.duprSettings;
+  if (duprSettings?.plusGate !== 'required') {
+    return { allowed: true };
+  }
+
+  // Check if user has DUPR linked
+  if (!userProfile.duprId) {
+    return { allowed: false, reason: 'DUPR account required to join this league' };
+  }
+
+  // Check if recently verified (within 7 days)
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const needsVerification =
+    !userProfile.duprPlusVerifiedAt || userProfile.duprPlusVerifiedAt < sevenDaysAgo;
+
+  if (needsVerification) {
+    return { allowed: false, needsVerification: true, reason: 'DUPR+ verification required' };
+  }
+
+  // Check if active
+  if (!userProfile.duprPlusActive) {
+    return { allowed: false, reason: 'This league requires an active DUPR+ subscription' };
+  }
+
+  return { allowed: true };
+};
+
+// ============================================
+// LEAGUE MEMBERSHIP
+// ============================================
+
 export const joinLeague = async (
   leagueId: string,
   userId: string,
@@ -341,6 +393,18 @@ export const joinLeague = async (
   partnerUserId?: string | null,
   partnerDisplayName?: string | null
 ): Promise<string> => {
+  // V07.50: For singles join (no partner), use Cloud Function for DUPR+ gate enforcement
+  if (!partnerUserId) {
+    const joinFn = httpsCallable<
+      { leagueId: string; divisionId?: string | null; displayName: string },
+      { success: boolean; memberId: string }
+    >(functions, 'league_join');
+
+    const result = await joinFn({ leagueId, divisionId, displayName });
+    return result.data.memberId;
+  }
+
+  // For doubles with partner, keep existing transaction logic
   const memberRef = doc(collection(db, 'leagues', leagueId, 'members'));
   const leagueRef = doc(db, 'leagues', leagueId);
   const now = Date.now();

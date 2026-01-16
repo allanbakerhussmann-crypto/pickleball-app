@@ -289,6 +289,18 @@ export interface DuprLoginEvent {
   };
 }
 
+// Event data received from DUPR Premium Login iframe
+// Note: Field names TBD from actual DUPR payload - safe logging will reveal structure
+export interface DuprPremiumLoginEvent {
+  duprId?: string;
+  subscriptions?: Array<{
+    productId?: string;      // From DUPR API schema (may also be 'product')
+    promotionId?: string;    // From DUPR API schema
+    status?: string;         // e.g., 'active', 'expired'
+    expiresAt?: number;      // Expiry timestamp (if provided)
+  }>;
+}
+
 // ============================================
 // SSO / LOGIN WITH DUPR (IFRAME METHOD)
 // ============================================
@@ -344,6 +356,92 @@ export function parseDuprLoginEvent(event: MessageEvent): DuprLoginEvent | null 
     return null;
   } catch (error) {
     console.error('Error parsing DUPR login event:', error);
+    return null;
+  }
+}
+
+// ============================================
+// DUPR+ PREMIUM LOGIN (IFRAME METHOD)
+// ============================================
+
+/**
+ * Get the DUPR Premium Login iframe URL
+ *
+ * Used to verify DUPR+ subscription status.
+ * The clientKey must be base64 encoded in the URL.
+ *
+ * URLs per DUPR docs:
+ * - UAT: https://uat.dupr.gg/premium-login?clientKey=${base64EncodedClientKey}
+ * - Prod: https://dashboard.dupr.com/premium-login?clientKey=${base64EncodedClientKey}
+ */
+export function getDuprPremiumLoginIframeUrl(): string {
+  const config = getConfig();
+
+  // Base64 encode the clientKey as required by DUPR
+  const encodedClientKey = btoa(config.clientKey);
+
+  // Premium login URL differs from regular login URL
+  const baseUrl = DUPR_CONFIG.environment === 'production'
+    ? 'https://dashboard.dupr.com/premium-login'
+    : 'https://uat.dupr.gg/premium-login';
+
+  return `${baseUrl}?clientKey=${encodedClientKey}`;
+}
+
+/**
+ * Parse DUPR Premium Login event from iframe message
+ *
+ * When user completes premium login, DUPR sends a message event
+ * with user info and subscription data.
+ *
+ * IMPORTANT: Field structure is TBD - this includes safe logging
+ * to discover the actual payload format during UAT testing.
+ */
+export function parseDuprPremiumLoginEvent(event: MessageEvent): DuprPremiumLoginEvent | null {
+  try {
+    // Validate the event origin
+    const validOrigins = [
+      'uat.dupr.gg',
+      'dashboard.dupr.com',
+      'dupr.gg',
+    ];
+
+    if (!validOrigins.some(origin => event.origin.includes(origin))) {
+      console.warn('[DUPR Premium] Login event from unexpected origin:', event.origin);
+      return null;
+    }
+
+    const data = event.data;
+    if (!data || typeof data !== 'object') {
+      return null;
+    }
+
+    // Safe logging - only log top-level keys (no tokens/secrets)
+    console.log('[DUPR Premium] Login event received, keys:', Object.keys(data));
+
+    // Log subscription-related fields for debugging
+    if (data.subscriptions) {
+      console.log('[DUPR Premium] Subscriptions found:',
+        data.subscriptions.map((s: Record<string, unknown>) => ({
+          hasProductId: 'productId' in s,
+          hasProduct: 'product' in s,
+          hasStatus: 'status' in s,
+          hasExpiresAt: 'expiresAt' in s,
+        }))
+      );
+    }
+
+    // Extract subscriptions if present
+    if (data.subscriptions || data.duprId) {
+      return {
+        duprId: data.duprId,
+        subscriptions: data.subscriptions,
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.error('[DUPR Premium] Error parsing login event:', error);
     return null;
   }
 }
@@ -806,6 +904,10 @@ export const duprService = {
   // SSO (iframe method)
   getDuprLoginIframeUrl,
   parseDuprLoginEvent,
+
+  // DUPR+ Premium Login (iframe method)
+  getDuprPremiumLoginIframeUrl,
+  parseDuprPremiumLoginEvent,
 
   // User
   getDuprUserProfile,

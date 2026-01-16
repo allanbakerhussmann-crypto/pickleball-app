@@ -1,9 +1,10 @@
 /**
- * LeagueScoreEntryModal Component V07.35
+ * LeagueScoreEntryModal Component V07.50
  *
  * Modal for entering league match scores with game-by-game entry.
  * Supports best of 1, 3, or 5 games with validation.
  *
+ * V07.50: Block score editing after match submitted to DUPR (scores are immutable)
  * V07.35: DUPR compliance rules only apply to DUPR-enabled leagues, +/- stepper buttons
  * V07.34: Replaced picker wheel with +/- stepper buttons for easier score entry
  * V07.33: Added vertical score picker wheel for touch-friendly input
@@ -13,7 +14,7 @@
  * - Updated UI labels per DUPR compliance requirements
  *
  * FILE LOCATION: components/leagues/LeagueScoreEntryModal.tsx
- * VERSION: V07.35
+ * VERSION: V07.50
  */
 
 import React, { useState, useEffect } from 'react';
@@ -139,6 +140,13 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   const isSigned = match.scoreState === 'signed'; // V07.04: Awaiting organiser
   const isFinal = verificationStatus === 'final';
   const isDisputed = verificationStatus === 'disputed' || match.scoreState === 'disputed';
+
+  // V07.50: Check if match has been submitted to DUPR (scores become immutable)
+  const isSubmittedToDupr = Boolean(
+    match.duprSubmitted ||           // Legacy field
+    match.dupr?.submitted ||         // Modern nested field
+    match.scoreState === 'submittedToDupr'  // Score state
+  );
 
   // V07.04: Check if user can sign to acknowledge
   // User must be opponent of the proposer (not the one who proposed, and not their partner)
@@ -876,7 +884,14 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
           {/* Disputed message */}
           {isDisputed && (
             <div className="text-sm text-red-400 text-center mb-3">
-              ⚠️ This match is disputed and awaiting organizer review.
+              This match is disputed and awaiting organizer review.
+            </div>
+          )}
+
+          {/* V07.50: DUPR submitted message - scores are immutable */}
+          {isFinal && isSubmittedToDupr && (
+            <div className="text-sm text-blue-400 text-center mb-3">
+              Score submitted to DUPR and cannot be edited.
             </div>
           )}
 
@@ -943,7 +958,8 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             )}
 
             {/* V07.35: Edit Score button - for organizers to correct finalized scores */}
-            {isFinal && effectiveIsOrganizer && !isEditMode && (
+            {/* V07.50: Hide when match submitted to DUPR - scores are immutable */}
+            {isFinal && effectiveIsOrganizer && !isEditMode && !isSubmittedToDupr && (
               <button
                 onClick={() => setIsEditMode(true)}
                 className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg font-semibold"

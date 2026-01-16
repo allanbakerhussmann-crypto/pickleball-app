@@ -1890,7 +1890,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   format: {
                     ...activeDivision.format,
                     useSeparateMedalSettings: localMedalSettings.useSeparateMedalSettings,
-                    ...(localMedalSettings.useSeparateMedalSettings && Object.keys(newMedalRoundSettings).length > 0 && {
+                    ...(Object.keys(newMedalRoundSettings).length > 0 && {
                       medalRoundSettings: newMedalRoundSettings,
                     }),
                     ...(Object.keys(newPlateRoundSettings).length > 0 && {

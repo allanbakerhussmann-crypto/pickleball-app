@@ -200,6 +200,15 @@ export interface UserProfile {
     isVerified?: boolean;
     isPremium?: boolean;
   };
+  // DUPR+ Subscription (for plusGate feature)
+  duprSubscriptions?: Array<{
+    productId?: string;      // From DUPR API schema
+    promotionId?: string;    // From DUPR API schema
+    status?: string;         // e.g., 'active', 'expired'
+    expiresAt?: number;      // Expiry timestamp (if provided)
+  }>;
+  duprPlusActive?: boolean;       // Derived: true if active DUPR+ subscription
+  duprPlusVerifiedAt?: number;    // Timestamp of last verification
   // Organizer Request
   organizerRequestStatus?: 'none' | 'pending' | 'approved' | 'rejected';
   organizerRequestDate?: number;
@@ -1303,6 +1312,8 @@ export interface LeagueDuprSettings {
   minDuprRating?: number | null;
   maxDuprRating?: number | null;
   ratingType: 'singles' | 'doubles' | 'both';
+  /** DUPR+ subscription gate: 'off' (default) or 'required' (must have active DUPR+ to join) */
+  plusGate?: 'off' | 'required';
 }
 
 /**

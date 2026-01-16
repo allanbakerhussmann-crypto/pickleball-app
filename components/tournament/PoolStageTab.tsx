@@ -98,6 +98,12 @@ const CheckIcon = () => (
   </svg>
 );
 
+const WarningIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+  </svg>
+);
+
 export const PoolStageTab: React.FC<PoolStageTabProps> = ({
   tournament,
   activeDivision,
@@ -128,6 +134,27 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
   const hasSchedule = poolMatches.length > 0;
   const playHasStarted = poolMatches.some(m => m.status === 'in_progress' || m.status === 'completed');
   const teamsCount = (divisionTeams || []).length;
+
+  // ============================================
+  // BRACKET VALIDATION - Prevent configs with byes
+  // ============================================
+  const isPowerOf2 = (n: number): boolean => n > 0 && (n & (n - 1)) === 0;
+  const nextPowerOf2 = (n: number): number => n <= 1 ? 2 : Math.pow(2, Math.ceil(Math.log2(n)));
+
+  // Get advancement settings from division format
+  const poolSettings = activeDivision.format?.poolPlayMedalsSettings;
+  const advancementRule = poolSettings?.advancementRule || 'top_2';
+  const qualifiersPerPool = advancementRule === 'top_1' ? 1 : 2;
+
+  // Calculate pool count from assignments or teams
+  const poolAssignments = activeDivision.poolAssignments || [];
+  const poolCount = poolAssignments.length || Math.ceil(teamsCount / (activeDivision.format?.teamsPerPool || 4));
+
+  // Calculate bracket sizing
+  const totalQualifiers = poolCount * qualifiersPerPool;
+  const bracketSize = nextPowerOf2(totalQualifiers);
+  const byeCount = bracketSize - totalQualifiers;
+  const isValidBracketConfig = isPowerOf2(totalQualifiers) && totalQualifiers >= 2;
 
   // Helper to derive pool from team assignment
   const getMatchPool = (match: any): string => {
@@ -212,6 +239,26 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
         />
       </SettingsCard>
 
+      {/* Bracket Validation Warning */}
+      {!isValidBracketConfig && poolCount > 0 && !hasSchedule && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-amber-500/20 text-amber-400 flex-shrink-0">
+              <WarningIcon />
+            </div>
+            <div>
+              <p className="text-amber-400 font-semibold">Invalid bracket configuration - {byeCount} bye{byeCount !== 1 ? 's' : ''} required</p>
+              <p className="text-sm text-gray-400 mt-1">
+                {poolCount} pool{poolCount !== 1 ? 's' : ''} × {qualifiersPerPool} qualifier{qualifiersPerPool !== 1 ? 's' : ''} = {totalQualifiers} teams → {bracketSize}-team bracket with {byeCount} bye{byeCount !== 1 ? 's' : ''}
+              </p>
+              <p className="text-sm text-gray-400 mt-2">
+                <span className="text-gray-300">To avoid byes:</span> Use 2, 4, 8, or 16 pools with top-2 advancement, or 4, 8, 16 pools with top-1.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Schedule Generation Card */}
       <SettingsCard
         title="Schedule Generation"
@@ -245,18 +292,22 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
             </p>
             <button
               onClick={handleGenerateSchedule}
-              disabled={teamsCount < 2}
+              disabled={teamsCount < 2 || !isValidBracketConfig}
               className={`
                 w-full py-3 rounded-xl font-bold text-sm
                 transition-all duration-300 ease-out
                 flex items-center justify-center gap-2
-                ${teamsCount < 2
+                ${teamsCount < 2 || !isValidBracketConfig
                   ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/20 transform hover:scale-[1.01]'}
               `}
             >
               <CalendarIcon />
-              {teamsCount < 2 ? `Need at least 2 teams (have ${teamsCount})` : 'Generate Pool Schedule'}
+              {teamsCount < 2
+                ? `Need at least 2 teams (have ${teamsCount})`
+                : !isValidBracketConfig
+                  ? `Invalid: ${totalQualifiers} qualifiers creates ${byeCount} bye${byeCount !== 1 ? 's' : ''}`
+                  : 'Generate Pool Schedule'}
             </button>
           </div>
         )}

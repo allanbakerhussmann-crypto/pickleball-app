@@ -390,10 +390,11 @@ async function sendSMSViaSMSGlobal(
 // HELPER: Send Email via Amazon SES
 // ============================================
 
-async function sendEmail(
+export async function sendEmail(
   to: string,
   subject: string,
-  body: string
+  body: string,
+  htmlBody?: string
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
     const sesConfig = getSESConfig();
@@ -423,6 +424,7 @@ async function sendEmail(
             Data: body,
             Charset: 'UTF-8',
           },
+          ...(htmlBody ? { Html: { Data: htmlBody, Charset: 'UTF-8' } } : {}),
         },
       },
     });

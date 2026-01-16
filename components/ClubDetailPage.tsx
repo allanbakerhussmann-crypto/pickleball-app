@@ -29,6 +29,7 @@ import { ManageCourts } from './clubs/ManageCourts';
 import { ClubStripeConnect } from './clubs/ClubStripeConnect';
 import { MyBookings } from './clubs/MyBookings';
 import { ClubSettingsForm } from './clubs/ClubSettingsForm';
+import { FinanceTab } from './clubs/FinanceTab';
 
 interface ClubDetailPageProps {
     clubId: string;
@@ -50,7 +51,7 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     const [loadingMembers, setLoadingMembers] = useState(false);
     
     // Tab and court booking state
-    const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'courts' | 'settings'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'courts' | 'finance' | 'settings'>('overview');
     const [showCourtCalendar, setShowCourtCalendar] = useState(false);
     const [showManageCourts, setShowManageCourts] = useState(false);
     const [showMyBookings, setShowMyBookings] = useState(false);
@@ -405,6 +406,19 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                     Courts
                     <span className="bg-green-600 text-white text-xs px-1.5 py-0.5 rounded font-bold">NEW</span>
                 </button>
+                {/* Finance Tab - Admin Only, when Stripe connected */}
+                {isAdmin && (club as any).stripeConnectedAccountId && (club as any).stripeChargesEnabled && (
+                    <button
+                        onClick={() => setActiveTab('finance')}
+                        className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap ${
+                            activeTab === 'finance'
+                                ? 'bg-gray-700 text-white'
+                                : 'text-gray-400 hover:text-white'
+                        }`}
+                    >
+                        Finance
+                    </button>
+                )}
                 {/* Settings Tab - Admin Only */}
                 {isAdmin && (
                     <button
@@ -626,6 +640,14 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                         </div>
                     )}
                 </div>
+            )}
+
+            {/* Finance Tab - Admin Only, when Stripe connected */}
+            {activeTab === 'finance' && isAdmin && (club as any).stripeConnectedAccountId && (
+                <FinanceTab
+                    clubId={clubId}
+                    stripeAccountId={(club as any).stripeConnectedAccountId}
+                />
             )}
 
             {/* Settings Tab - Admin Only */}

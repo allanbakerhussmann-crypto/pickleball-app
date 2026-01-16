@@ -14,18 +14,31 @@ admin.initializeApp();
 // ============================================
 
 export {
-  // Club Connect
+  // Club Connect (V1 - Legacy)
   stripe_createConnectAccount,
   stripe_getConnectAccountStatus,
   stripe_createConnectLoginLink,
 
-  // User/Organizer Connect (NEW)
+  // User/Organizer Connect (V1 - Legacy)
   stripe_createUserConnectAccount,
   stripe_createUserConnectLoginLink,
+
+  // V2 Account Functions (Direct Charges)
+  stripe_createAccountV2,
+  stripe_createAccountLinkV2,
+  stripe_getAccountStatusV2,
+  stripe_createUserAccountV2,
+  stripe_createUserAccountLinkV2,
+
+  // V2 Thin Events Webhook
+  stripe_v2_webhook,
 
   // Checkout & Webhook
   stripe_createCheckoutSession,
   stripe_webhook,
+
+  // Refunds
+  stripe_createRefund,
 
   // SMS Bundles
   stripe_purchaseSMSBundle,
@@ -99,7 +112,17 @@ export {
   dupr_subscribeAllUsers,  // Bulk subscribe ALL users with DUPR IDs (admin only)
   dupr_getSubscriptions,   // List current subscriptions
   dupr_onUserDuprLinked,   // Auto-subscribe when user links DUPR account
+  // DUPR+ subscription (V07.50)
+  dupr_updateMySubscriptions, // Update user's DUPR+ subscription status
 } from './dupr';
+
+// ============================================
+// LEAGUE FUNCTIONS (V07.50)
+// ============================================
+
+export {
+  league_join,            // Join league with server-side DUPR+ gate enforcement
+} from './leagues';
 
 // ============================================
 // MIGRATION FUNCTIONS (V07.04)
@@ -127,3 +150,15 @@ export {
   comms_processQueue,
   comms_processLeagueQueue,
 } from './comms';
+
+// ============================================
+// PLATFORM FINANCE FUNCTIONS (V07.50)
+// ============================================
+
+export {
+  platform_getAccountBalances,
+  platform_getAccountPayouts,
+  platform_runReconciliation,
+  platform_addMissingTransaction,
+  platform_exportTransactions,
+} from './platformFinance';

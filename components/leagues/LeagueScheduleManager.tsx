@@ -112,6 +112,8 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
   // V07.39: Box league weeks state
   const [boxWeeks, setBoxWeeks] = useState<BoxLeagueWeek[]>([]);
   const [loadingWeekAction, setLoadingWeekAction] = useState<number | null>(null);
+  // V07.50: Get total weeks from league creation settings (venueSettings.scheduleConfig.numberOfWeeks)
+  const configuredTotalWeeks = (league.settings as any)?.venueSettings?.scheduleConfig?.numberOfWeeks || null;
 
   // V07.43: Draft week panel state
   const [expandedDraftWeek, setExpandedDraftWeek] = useState<number | null>(null);
@@ -294,6 +296,9 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const weeks = snapshot.docs.map(doc => doc.data() as BoxLeagueWeek);
+
+      // V07.50: totalWeeks is now read from league.settings?.venueSettings?.scheduleConfig?.numberOfWeeks
+      // (set during league creation wizard) - no need to load from season
 
       // Recovery guard: If week is 'active' but matchIds missing, rebuild from query
       for (const week of weeks) {
@@ -533,6 +538,12 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
         throw new Error('Season not found');
       }
 
+      // V07.50: Check if we've reached the total weeks limit
+      const nextWeekNumber = weekNumber + 1;
+      if (nextWeekNumber > season.totalWeeks) {
+        throw new Error(`Cannot create Week ${nextWeekNumber} - league is configured for ${season.totalWeeks} weeks only`);
+      }
+
       // Calculate movements from finalized standings
       const movements = applyMovements(finalizedWeek, finalizedWeek.standingsSnapshot.boxes);
 
@@ -540,7 +551,6 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
       const nextWeekAssignments = generateNextWeekAssignments(finalizedWeek.boxAssignments, movements);
 
       // Determine scheduled date
-      const nextWeekNumber = weekNumber + 1;
       const nextWeekSchedule = season.weekSchedule.find(w => w.weekNumber === nextWeekNumber);
       const scheduledDate = nextWeekSchedule?.scheduledDate || Date.now() + 7 * 24 * 60 * 60 * 1000;
 
@@ -1277,7 +1287,10 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                             )}
 
                             {/* Finalized State Actions */}
-                            {week.state === 'finalized' && !boxWeeks.some(w => w.weekNumber === week.weekNumber + 1) && (
+                            {/* V07.50: Only show "Create Next" if not at totalWeeks limit */}
+                            {week.state === 'finalized' &&
+                             !boxWeeks.some(w => w.weekNumber === week.weekNumber + 1) &&
+                             (configuredTotalWeeks === null || week.weekNumber < configuredTotalWeeks) && (
                               <button
                                 onClick={() => handleCreateNextWeek(week.weekNumber)}
                                 disabled={loadingWeekAction === week.weekNumber}

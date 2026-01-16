@@ -754,3 +754,169 @@ export const getCurrencySymbol = (currency: SupportedCurrency): string => {
   };
   return symbols[currency];
 };
+
+// ============================================
+// FINANCE TRANSACTION TYPES (V2 Direct Charges)
+// For the Finance ledger UI - source of truth for payments
+// ============================================
+
+/**
+ * Supported currencies for Finance (UPPERCASE for DB storage)
+ */
+export type FinanceCurrency = 'NZD' | 'AUD' | 'USD' | 'GBP';
+
+/**
+ * Finance transaction type
+ */
+export type FinanceTransactionType = 'payment' | 'refund';
+
+/**
+ * Finance transaction status
+ */
+export type FinanceTransactionStatus =
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'refunded'
+  | 'partially_refunded';
+
+/**
+ * Finance reference type (what this transaction is for)
+ */
+export type FinanceReferenceType =
+  | 'meetup'
+  | 'court_booking'
+  | 'tournament'
+  | 'league'
+  | 'subscription'
+  | 'sms_bundle';
+
+/**
+ * Stripe-specific data stored with Finance transactions
+ * Schema versioned for future migrations
+ */
+export interface FinanceStripeData {
+  schemaVersion: number; // Start at 1, bump on structure changes
+  accountId: string; // acct_xxx (connected account)
+  sessionId?: string; // cs_xxx
+  paymentIntentId?: string; // pi_xxx
+  chargeId?: string; // ch_xxx - KEY IDENTIFIER
+  balanceTransactionId?: string; // txn_xxx - KEY IDENTIFIER
+  applicationFeeAmount?: number; // Actual fee from Stripe
+  applicationFeeId?: string; // fee_xxx
+  refundIds?: string[]; // re_xxx[]
+  webhookEventId?: string;
+  mode?: 'live' | 'test'; // From Stripe event livemode
+  paymentMethodType?: string; // 'card', 'bank_transfer', etc.
+}
+
+/**
+ * Finance Transaction - the source of truth for the Finance UI
+ *
+ * All monetary amounts are in CENTS.
+ * Currency codes are UPPERCASE (NZD, AUD, USD, GBP).
+ *
+ * Uses two-phase recording:
+ * 1. checkout.session.completed → creates 'processing' transaction
+ * 2. charge.succeeded → updates to 'completed' with actual fees
+ */
+export interface FinanceTransaction {
+  id: string; // MUST equal Firestore doc ID
+  schemaVersion: number; // Start at 1, bump on structure changes
+
+  // Parties
+  odClubId: string;
+  odUserId: string; // Payer
+  organizerUserId?: string;
+
+  // Type & Status
+  type: FinanceTransactionType;
+  status: FinanceTransactionStatus;
+
+  // Reference
+  referenceType: FinanceReferenceType;
+  referenceId: string;
+  referenceName: string;
+
+  // Amounts (all in cents)
+  currency: FinanceCurrency; // UPPERCASE
+  amount: number; // Gross (positive for payments, negative for refunds)
+  platformFeeAmount: number; // Platform's cut (from Stripe, not calculated)
+  clubNetAmount: number; // Club receives (from Stripe actuals)
+
+  payerDisplayName: string;
+
+  // Stripe identifiers
+  stripe: FinanceStripeData;
+
+  // For refunds: link to parent transaction
+  parentTransactionId?: string;
+
+  // Refund fee handling
+  platformFeeRefundEstimated?: boolean; // True if we estimated, false if from Stripe
+
+  // Refund initiation tracking
+  initiatedByUserId?: string;
+  reason?: string;
+
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
+/**
+ * Query options for Finance transactions
+ */
+export interface FinanceTransactionQueryOptions {
+  odClubId: string;
+  type?: FinanceTransactionType;
+  status?: FinanceTransactionStatus;
+  referenceType?: FinanceReferenceType;
+  startDate?: number;
+  endDate?: number;
+  limit?: number;
+  offset?: number;
+  orderBy?: 'createdAt' | 'amount';
+  orderDirection?: 'asc' | 'desc';
+}
+
+/**
+ * Finance overview/summary for a club
+ */
+export interface FinanceOverview {
+  // Period
+  periodStart: number;
+  periodEnd: number;
+
+  // Totals (all in cents)
+  grossSales: number;
+  refundsTotal: number;
+  platformFeesTotal: number;
+  netRevenue: number;
+
+  // Counts
+  transactionCount: number;
+  refundCount: number;
+
+  // Currency
+  currency: FinanceCurrency;
+}
+
+// Helper to check if transaction is completed
+export const isFinanceTransactionComplete = (tx: FinanceTransaction): boolean =>
+  tx.status === 'completed';
+
+// Helper to format finance currency
+export const formatFinanceCurrency = (
+  cents: number,
+  currency: FinanceCurrency = 'NZD'
+): string => {
+  const dollars = cents / 100;
+  const symbols: Record<FinanceCurrency, string> = {
+    NZD: 'NZ$',
+    AUD: 'A$',
+    USD: '$',
+    GBP: '£',
+  };
+  return `${symbols[currency]}${dollars.toFixed(2)}`;
+};

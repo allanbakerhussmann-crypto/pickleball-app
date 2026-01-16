@@ -45,6 +45,8 @@ import {
   getUsersByIds,
   // V07.36: Fetch organizer profile for contact info
   getUserProfile,
+  // V07.50: DUPR+ gate check
+  checkDuprPlusGate,
 } from '../../services/firebase';
 // V07.36: Drag-and-drop for tiebreakers
 import {
@@ -90,6 +92,7 @@ import { BoxLeagueVenueConfig } from './BoxLeagueVenueConfig';
 import type { BoxLeagueVenueSettings } from '../../types/rotatingDoublesBox';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
 import { OrganizerMatchPanel } from '../shared/OrganizerMatchPanel';
+import DuprPlusVerificationModal from '../shared/DuprPlusVerificationModal';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
 import { doc, updateDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
@@ -173,7 +176,7 @@ const SortableTiebreakerItem: React.FC<SortableTiebreakerItemProps> = ({ id, ind
 // ============================================
 
 export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) => {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser, userProfile, isAppAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   
   // Data state
@@ -184,6 +187,8 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [myMembership, setMyMembership] = useState<LeagueMember | null>(null);
   const [boxPlayers, setBoxPlayers] = useState<BoxLeaguePlayer[]>([]);
   const [boxWeeks, setBoxWeeks] = useState<BoxLeagueWeek[]>([]);
+  // V07.50: Get total weeks from league creation settings (venueSettings.scheduleConfig.numberOfWeeks)
+  const configuredTotalWeeks = (league?.settings as any)?.venueSettings?.scheduleConfig?.numberOfWeeks || null;
   // V07.26: User profiles for DUPR access token checking
   const [userProfiles, setUserProfiles] = useState<Map<string, UserProfile>>(new Map());
   // V07.36: Organizer profile for contact info display
@@ -198,6 +203,10 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [savingMovement, setSavingMovement] = useState(false);
   const [localPromotionCount, setLocalPromotionCount] = useState<1 | 2>(1);
   const [localRelegationCount, setLocalRelegationCount] = useState<1 | 2>(1);
+  // V07.50: Total weeks editing state
+  const [editingTotalWeeks, setEditingTotalWeeks] = useState(false);
+  const [savingTotalWeeks, setSavingTotalWeeks] = useState(false);
+  const [localTotalWeeks, setLocalTotalWeeks] = useState<number>(10);
 
   // V07.14: Standings snapshots from Firestore
   const [overallStandings, setOverallStandings] = useState<LeagueStandingsDoc | null>(null);
@@ -223,6 +232,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [duprAcknowledged, setDuprAcknowledged] = useState(false); // V07.12
   const [duprCheckboxChecked, setDuprCheckboxChecked] = useState(false); // V07.15: Local state for checkbox
   const [showDuprRequiredModal, setShowDuprRequiredModal] = useState(false); // V07.15: DUPR linking modal
+  const [showDuprPlusModal, setShowDuprPlusModal] = useState(false); // V07.50: DUPR+ verification modal
   const [duprLinking, setDuprLinking] = useState(false); // V07.15: DUPR linking in progress
   const [showWaiverModal, setShowWaiverModal] = useState(false); // V07.25: Waiver acceptance modal
   const [waiverAccepted, setWaiverAccepted] = useState(false); // V07.25: Waiver checkbox state
@@ -524,9 +534,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     const weeksRef = collection(db, 'leagues', leagueId, 'boxWeeks');
     const q = query(weeksRef, orderBy('weekNumber', 'asc'));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
       const weeks = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as BoxLeagueWeek));
       setBoxWeeks(weeks);
+
+      // V07.50: totalWeeks is read from league.settings?.venueSettings?.scheduleConfig?.numberOfWeeks
+      // (set during league creation wizard) - no need to load from season
     });
 
     return () => unsubscribe();
@@ -970,6 +983,17 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       return;
     }
 
+    // V07.50: Check DUPR+ gate if enabled
+    const gateCheck = await checkDuprPlusGate(freshLeague, userProfile);
+    if (!gateCheck.allowed) {
+      if (gateCheck.needsVerification) {
+        setShowDuprPlusModal(true);
+        return;
+      }
+      alert(gateCheck.reason || 'Cannot join this league');
+      return;
+    }
+
     // Debug: Log payment check
     console.log('Join clicked - Payment check:', {
       pricingEnabled: freshLeague.pricing?.enabled,
@@ -1111,6 +1135,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       setLocalRelegationCount((boxSettings?.relegationCount as 1 | 2) || 1);
     }
   }, [league?.settings?.rotatingDoublesBox?.settings?.promotionCount, league?.settings?.rotatingDoublesBox?.settings?.relegationCount, editingMovement]);
+
+  // V07.50: Sync local total weeks with league settings when not editing
+  useEffect(() => {
+    if (!editingTotalWeeks && configuredTotalWeeks) {
+      setLocalTotalWeeks(configuredTotalWeeks);
+    }
+  }, [configuredTotalWeeks, editingTotalWeeks]);
 
   // Handle free registration (after payment or for free leagues)
   const handleFreeJoin = async () => {
@@ -1324,6 +1355,29 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     setLocalPromotionCount((league?.settings?.promotionCount as 1 | 2) || 1);
     setLocalRelegationCount((league?.settings?.relegationCount as 1 | 2) || 1);
     setEditingMovement(false);
+  };
+
+  // V07.50: Save total weeks setting
+  const handleSaveTotalWeeks = async () => {
+    if (!league) return;
+    setSavingTotalWeeks(true);
+    try {
+      const leagueRef = doc(db, 'leagues', leagueId);
+      await updateDoc(leagueRef, {
+        'settings.venueSettings.scheduleConfig.numberOfWeeks': localTotalWeeks,
+      });
+      setEditingTotalWeeks(false);
+    } catch (err) {
+      console.error('Failed to save total weeks:', err);
+      alert('Failed to save total weeks: ' + (err as Error).message);
+    } finally {
+      setSavingTotalWeeks(false);
+    }
+  };
+
+  const handleCancelTotalWeeksEdit = () => {
+    setLocalTotalWeeks(configuredTotalWeeks || 10);
+    setEditingTotalWeeks(false);
   };
 
   // V07.50: Venue settings handlers
@@ -2554,6 +2608,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           eventName={league.name}
           matches={filteredMatches as any[]}
           isOrganizer={isOrganizer}
+          isAppAdmin={isAppAdmin}
           currentUserId={currentUser?.uid || ''}
           onMatchUpdate={() => {
             // Matches will auto-update via subscription
@@ -2641,6 +2696,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
               matches={filteredMatches as any[]}
               isOrganizer={isOrganizer}
               currentUserId={currentUser?.uid || ''}
+              playerNameLookup={matchPlayerNames}
               onMatchClick={(match) => {
                 setSelectedMatch(match);
                 setShowScoreEntryModal(true);
@@ -2721,6 +2777,72 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           {/* V07.50: Rules Sub-tab - Tiebreakers and Promotion/Relegation */}
           {organizerSubTab === 'rules' && (
             <div className="space-y-4">
+              {/* V07.50: Season Length (Total Weeks) - Box Leagues Only */}
+              {isBoxLeagueFormat && (
+                <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-white">Season Length</h3>
+                    {!editingTotalWeeks ? (
+                      <button
+                        onClick={() => setEditingTotalWeeks(true)}
+                        className="text-sm text-lime-400 hover:text-lime-300"
+                      >
+                        Edit
+                      </button>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleCancelTotalWeeksEdit}
+                          className="text-sm text-gray-400 hover:text-white px-3 py-1 border border-gray-600 rounded-lg"
+                          disabled={savingTotalWeeks}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveTotalWeeks}
+                          disabled={savingTotalWeeks}
+                          className="text-sm text-black bg-lime-500 hover:bg-lime-400 px-3 py-1 rounded-lg disabled:opacity-50"
+                        >
+                          {savingTotalWeeks ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-400 mb-4">
+                    Configure the total number of weeks for this season
+                  </p>
+                  <div>
+                    <label className="text-sm text-gray-400 block mb-2">
+                      Total Weeks
+                    </label>
+                    {editingTotalWeeks ? (
+                      <>
+                        <input
+                          type="number"
+                          value={localTotalWeeks}
+                          onChange={(e) => setLocalTotalWeeks(Math.max(
+                            boxWeeks.filter(w => w.state === 'finalized').length || 1,
+                            parseInt(e.target.value) || 1
+                          ))}
+                          min={boxWeeks.filter(w => w.state === 'finalized').length || 1}
+                          max={52}
+                          className="w-24 bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-lime-500 focus:outline-none"
+                        />
+                        {boxWeeks.filter(w => w.state === 'finalized').length > 0 && (
+                          <p className="text-xs text-gray-500 mt-2">
+                            Minimum: {boxWeeks.filter(w => w.state === 'finalized').length} weeks (already completed)
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-white font-medium">
+                        {configuredTotalWeeks || 'Not set'} weeks
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Tiebreaker Rules */}
               <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
                 <div className="flex items-center justify-between mb-4">
@@ -2866,6 +2988,43 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       {/* INFO TAB */}
       {activeTab === 'info' && (
         <div className="space-y-4">
+          {/* V07.50: Season Info for Box Leagues */}
+          {(league.competitionFormat === 'rotating_doubles_box' || league.competitionFormat === 'fixed_doubles_box') && boxWeeks.length > 0 && (
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+              <h3 className="text-lg font-bold text-white mb-4">Season Info</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-500">Total Weeks:</span>
+                  <span className="text-white ml-2">{configuredTotalWeeks || boxWeeks.length}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500">Weeks Completed:</span>
+                  <span className="text-white ml-2">{boxWeeks.filter(w => w.state === 'finalized').length}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500">Current Week:</span>
+                  <span className="text-white ml-2">
+                    {boxWeeks.find(w => w.state === 'active')?.weekNumber ||
+                     boxWeeks.find(w => w.state === 'draft')?.weekNumber ||
+                     boxWeeks.filter(w => w.state === 'finalized').length}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-500">Status:</span>
+                  <span className={`ml-2 ${
+                    configuredTotalWeeks && boxWeeks.filter(w => w.state === 'finalized').length >= configuredTotalWeeks
+                      ? 'text-lime-400'
+                      : 'text-yellow-400'
+                  }`}>
+                    {configuredTotalWeeks && boxWeeks.filter(w => w.state === 'finalized').length >= configuredTotalWeeks
+                      ? 'Season Complete'
+                      : 'In Progress'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Match Rules */}
           <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
             <h3 className="text-lg font-bold text-white mb-4">Match Rules</h3>
@@ -3319,6 +3478,22 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             </div>
           </div>
         </div>
+      )}
+
+      {/* V07.50: DUPR+ Verification Modal */}
+      {showDuprPlusModal && (
+        <DuprPlusVerificationModal
+          onClose={() => setShowDuprPlusModal(false)}
+          onVerified={(isActive) => {
+            setShowDuprPlusModal(false);
+            if (isActive) {
+              // Retry join after successful verification
+              handleJoin(true, true);
+            } else {
+              alert('This league requires an active DUPR+ subscription. Please subscribe to DUPR+ and try again.');
+            }
+          }}
+        />
       )}
 
       {/* V07.25: Waiver Acceptance Modal - Purple Theme */}

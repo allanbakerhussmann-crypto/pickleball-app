@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMeetups } from '../../services/firebase';
 import { MeetupsMap } from './MeetupsMap';
@@ -11,22 +12,26 @@ interface MeetupsListProps {
 
 export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelectMeetup }) => {
   const { currentUser } = useAuth();
+  const location = useLocation();
   const [meetups, setMeetups] = useState<Meetup[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
 
-  useEffect(() => {
-    const load = async () => {
-      const data = await getMeetups();
-      const now = Date.now();
-      // Keep past events for 24 hours
-      const cutoff = now - 86400000;
-      const upcoming = data.filter(m => m.when >= cutoff);
-      setMeetups(upcoming);
-      setLoading(false);
-    };
-    load();
+  const loadMeetups = useCallback(async () => {
+    setLoading(true);
+    const data = await getMeetups();
+    const now = Date.now();
+    // Keep past events for 3 days (72 hours)
+    const cutoff = now - (3 * 24 * 60 * 60 * 1000);
+    const upcoming = data.filter(m => m.when >= cutoff);
+    setMeetups(upcoming);
+    setLoading(false);
   }, []);
+
+  // Reload meetups when navigating to this page (location.key changes on navigation)
+  useEffect(() => {
+    loadMeetups();
+  }, [location.key, loadMeetups]);
 
   if (loading) {
     return (

@@ -42,8 +42,8 @@ export const getStripe = () => {
 // ============================================
 
 export const PLATFORM_FEE_PERCENT = 1.5;
-export const STRIPE_FEE_PERCENT = 2.9;
-export const STRIPE_FEE_FIXED = 30; // 30 cents
+export const STRIPE_FEE_PERCENT = 2.7;  // NZ domestic card rate
+export const STRIPE_FEE_FIXED = 70;     // 70 cents NZD
 
 // ============================================
 // TYPES
@@ -93,6 +93,35 @@ export interface CreateUserConnectAccountInput {
   userEmail?: string;
   returnUrl: string;
   refreshUrl: string;
+}
+
+// V2 Account types (Direct Charges)
+export type StripeCountryCode = 'NZ' | 'AU' | 'US' | 'GB';
+
+export interface CreateAccountV2Input {
+  clubId: string;
+  displayName: string;
+  email?: string;
+  country: StripeCountryCode;
+}
+
+export interface CreateUserAccountV2Input {
+  userId: string;
+  displayName: string;
+  email?: string;
+  country: StripeCountryCode;
+}
+
+export interface StripeAccountStatusV2 {
+  accountId: string;
+  readyToProcessPayments: boolean;
+  onboardingComplete: boolean;
+  cardPaymentsStatus?: string;
+  requirementsStatus?: string;
+  displayName?: string;
+  country?: StripeCountryCode;
+  isConnected?: boolean;
+  error?: string;
 }
 
 // ============================================
@@ -266,7 +295,7 @@ export const createUserConnectLoginLink = async (
       functions,
       'stripe_createUserConnectLoginLink'
     );
-    
+
     const result = await callable({ accountId });
     return result.data;
   } catch (error: any) {
@@ -276,13 +305,139 @@ export const createUserConnectLoginLink = async (
 };
 
 // ============================================
+// V2 ACCOUNT FUNCTIONS (Direct Charges)
+// ============================================
+
+/**
+ * Supported countries for Stripe Connect V2
+ */
+export const SUPPORTED_COUNTRIES: { code: StripeCountryCode; name: string; currency: string }[] = [
+  { code: 'NZ', name: 'New Zealand', currency: 'NZD' },
+  { code: 'AU', name: 'Australia', currency: 'AUD' },
+  { code: 'US', name: 'United States', currency: 'USD' },
+  { code: 'GB', name: 'United Kingdom', currency: 'GBP' },
+];
+
+/**
+ * Create a V2 Stripe account for a club
+ */
+export const createAccountV2 = async (
+  input: CreateAccountV2Input
+): Promise<{ accountId: string; existing: boolean }> => {
+  try {
+    const callable = httpsCallable<CreateAccountV2Input, { accountId: string; existing: boolean }>(
+      functions,
+      'stripe_createAccountV2'
+    );
+
+    const result = await callable(input);
+    return result.data;
+  } catch (error: any) {
+    console.error('createAccountV2 error:', error);
+    throw new Error(error.message || 'Failed to create V2 Stripe account');
+  }
+};
+
+/**
+ * Create a V2 account link for onboarding
+ */
+export const createAccountLinkV2 = async (
+  accountId: string,
+  clubId: string,
+  returnUrl?: string,
+  refreshUrl?: string
+): Promise<{ url: string }> => {
+  try {
+    const callable = httpsCallable<
+      { accountId: string; clubId: string; returnUrl?: string; refreshUrl?: string },
+      { url: string }
+    >(functions, 'stripe_createAccountLinkV2');
+
+    const result = await callable({ accountId, clubId, returnUrl, refreshUrl });
+    return result.data;
+  } catch (error: any) {
+    console.error('createAccountLinkV2 error:', error);
+    throw new Error(error.message || 'Failed to create V2 account link');
+  }
+};
+
+/**
+ * Get V2 account status (always fetches fresh from Stripe)
+ */
+export const getAccountStatusV2 = async (
+  accountId: string
+): Promise<StripeAccountStatusV2> => {
+  try {
+    const callable = httpsCallable<{ accountId: string }, StripeAccountStatusV2>(
+      functions,
+      'stripe_getAccountStatusV2'
+    );
+
+    const result = await callable({ accountId });
+    return result.data;
+  } catch (error: any) {
+    console.error('getAccountStatusV2 error:', error);
+    throw new Error(error.message || 'Failed to get V2 account status');
+  }
+};
+
+/**
+ * Create a V2 Stripe account for a user/organizer
+ */
+export const createUserAccountV2 = async (
+  input: CreateUserAccountV2Input
+): Promise<{ accountId: string; existing: boolean }> => {
+  try {
+    const callable = httpsCallable<CreateUserAccountV2Input, { accountId: string; existing: boolean }>(
+      functions,
+      'stripe_createUserAccountV2'
+    );
+
+    const result = await callable(input);
+    return result.data;
+  } catch (error: any) {
+    console.error('createUserAccountV2 error:', error);
+    throw new Error(error.message || 'Failed to create V2 user Stripe account');
+  }
+};
+
+/**
+ * Create a V2 account link for user onboarding
+ */
+export const createUserAccountLinkV2 = async (
+  accountId: string,
+  returnUrl?: string,
+  refreshUrl?: string
+): Promise<{ url: string }> => {
+  try {
+    const callable = httpsCallable<
+      { accountId: string; returnUrl?: string; refreshUrl?: string },
+      { url: string }
+    >(functions, 'stripe_createUserAccountLinkV2');
+
+    const result = await callable({ accountId, returnUrl, refreshUrl });
+    return result.data;
+  } catch (error: any) {
+    console.error('createUserAccountLinkV2 error:', error);
+    throw new Error(error.message || 'Failed to create V2 user account link');
+  }
+};
+
+/**
+ * Check if a V2 account is ready to process payments
+ */
+export const isAccountV2Ready = (status: StripeAccountStatusV2): boolean => {
+  return status.readyToProcessPayments === true && status.onboardingComplete === true;
+};
+
+// ============================================
 // FEE CALCULATIONS
 // ============================================
 
 export interface FeeCalculation {
   subtotal: number;           // Base price
   platformFee: number;        // Our 1.5%
-  stripeFee: number;          // Stripe's ~2.9% + 30¢
+  stripeFee: number;          // Stripe's 2.7% + 70¢ (NZ rate)
   totalFees: number;          // Platform + Stripe
   organizerReceives: number;  // What organizer gets
   playerPays: number;         // Total player pays (if fees passed on)
@@ -382,16 +537,24 @@ export default {
   redirectToCheckout,
   redirectToCheckoutById,
   createCheckoutSession,
-  // Club connect
+  // Club connect (V1 - Legacy)
   createConnectAccountLink,
   getConnectAccountStatus,
   createConnectLoginLink,
   isClubStripeReady,
-  // User connect
+  // User connect (V1 - Legacy)
   createUserConnectAccountLink,
   getUserConnectAccountStatus,
   createUserConnectLoginLink,
   isUserStripeReady,
+  // V2 Account functions (Direct Charges)
+  createAccountV2,
+  createAccountLinkV2,
+  getAccountStatusV2,
+  createUserAccountV2,
+  createUserAccountLinkV2,
+  isAccountV2Ready,
+  SUPPORTED_COUNTRIES,
   // Calculations
   calculateFees,
   calculatePlatformFee,
