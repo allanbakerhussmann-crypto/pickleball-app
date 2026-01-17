@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type {
   Tournament,
   Division,
@@ -53,6 +53,8 @@ import { useTournamentPermissions } from '../hooks/useTournamentPermissions';
 import { clearTestData, quickScoreMatch, simulatePoolCompletion, deleteCorruptedSelfMatches, deletePoolMatches } from '../services/firebase/matches';
 import { getTournament } from '../services/firebase/tournaments';
 import { DuprControlPanel } from './shared/DuprControlPanel';
+import { finaliseResult } from '../services/firebase/duprScoring';
+import type { GameScore } from '../types/game/match';
 
 interface TournamentManagerProps {
   tournament: Tournament;
@@ -139,6 +141,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     matches,
     courts,
     divisions,
+    teams,  // V07.51: Pass teams for proper display name resolution
+    playersCache,  // V07.51: Pass player cache for name fallbacks
     autoAssignOnRestComplete: autoAllocateCourts,
     options: { testMode: tournament.testMode || false },  // V06.27: 10s rest in test mode
     courtSettings: tournament.courtSettings,  // V07.02: Premier court settings
@@ -158,8 +162,22 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     playersCache,
     currentUserId: currentUser?.uid,
     isOrganizer,
+    duprMode: tournament.duprSettings?.mode,  // V07.52: DUPR anti-self-reporting
   });
 
+  // V07.55: DUPR-compliant score finalization for Live Courts
+  const handleFinaliseResult = useCallback(async (
+    matchId: string,
+    scores: GameScore[],
+    winnerId: string,
+    duprEligible: boolean
+  ) => {
+    if (!currentUser) {
+      alert('You must be logged in to finalize scores');
+      return;
+    }
+    await finaliseResult('tournament', tournament.id, matchId, scores, winnerId, currentUser.uid, duprEligible);
+  }, [tournament.id, currentUser]);
 
   const [viewMode, setViewMode] = useState<'public' | 'admin'>('public');
   const [adminTab, setAdminTab] = useState<
@@ -200,12 +218,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     'details' | 'players' | 'bracket' | 'standings' | 'pool-stage' | 'final-stage'
   >('details');
 
-  // Editable division settings (ratings, age, seeding, day assignment)
+  // Editable division settings (ratings, age, seeding, day assignment, capacity)
   const [divisionSettings, setDivisionSettings] = useState<{
     minRating: string;
     maxRating: string;
     minAge: string;
     maxAge: string;
+    maxTeams: string;
     seedingMethod: SeedingMethod;
     tournamentDayId: string;
   }>({
@@ -213,6 +232,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     maxRating: '',
     minAge: '',
     maxAge: '',
+    maxTeams: '',
     seedingMethod: 'dupr',
     tournamentDayId: '',
   });
@@ -274,6 +294,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
         activeDivision.ageMin != null ? activeDivision.ageMin.toString() : '',
       maxAge:
         activeDivision.ageMax != null ? activeDivision.ageMax.toString() : '',
+      maxTeams:
+        activeDivision.maxTeams != null ? activeDivision.maxTeams.toString() : '',
       seedingMethod: (activeDivision.format.seedingMethod ||
         'dupr') as SeedingMethod,
       tournamentDayId: activeDivision.tournamentDayId || '',
@@ -282,7 +304,11 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
     // Set default tab based on format
     const isPoolPlayMedals = activeDivision.format?.competitionFormat === 'pool_play_medals' ||
       activeDivision.format?.stageMode === 'two_stage';
-    if (isPoolPlayMedals && activeTab !== 'pool-stage' && activeTab !== 'final-stage' && activeTab !== 'details' && activeTab !== 'players') {
+    const isRoundRobin = activeDivision.format?.competitionFormat === 'round_robin' ||
+      (activeDivision.format?.stageMode === 'single_stage' && activeDivision.format?.mainFormat === 'round_robin');
+
+    // V07.51: Both pool_play_medals and round_robin default to pool-stage tab
+    if ((isPoolPlayMedals || isRoundRobin) && activeTab !== 'pool-stage' && activeTab !== 'final-stage' && activeTab !== 'details' && activeTab !== 'players' && activeTab !== 'standings') {
       setActiveTab('pool-stage');
     }
   }, [activeDivision]);
@@ -399,12 +425,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           id: m.id,
           team1: {
             id: teamAId,
-            name: m.sideA?.name || (teamAId ? getTeamDisplayName(teamAId) : 'TBD'),
+            // V07.51: Always use getTeamDisplayName for proper player names (not match.sideA.name fallback)
+            name: teamAId ? getTeamDisplayName(teamAId) : 'TBD',
             players: teamAPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
           },
           team2: {
             id: teamBId,
-            name: m.sideB?.name || (teamBId ? getTeamDisplayName(teamBId) : 'TBD'),
+            // V07.51: Always use getTeamDisplayName for proper player names (not match.sideB.name fallback)
+            name: teamBId ? getTeamDisplayName(teamBId) : 'TBD',
             players: teamBPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
           },
           score1,
@@ -450,12 +478,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
           id: m.id,
           team1: {
             id: teamAId,
-            name: m.sideA?.name || (teamAId ? getTeamDisplayName(teamAId) : 'TBD'),
+            // V07.51: Always use getTeamDisplayName for proper player names
+            name: teamAId ? getTeamDisplayName(teamAId) : 'TBD',
             players: teamAPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
           },
           team2: {
             id: teamBId,
-            name: m.sideB?.name || (teamBId ? getTeamDisplayName(teamBId) : 'TBD'),
+            // V07.51: Always use getTeamDisplayName for proper player names
+            name: teamBId ? getTeamDisplayName(teamBId) : 'TBD',
             players: teamBPlayers.map(p => ({ name: p.displayName || p.email || 'Unknown' })),
           },
           score1,
@@ -776,12 +806,17 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       divisionSettings.maxAge.trim() !== ''
         ? parseInt(divisionSettings.maxAge, 10)
         : undefined;
+    const maxTeams =
+      divisionSettings.maxTeams.trim() !== ''
+        ? Math.max(1, parseInt(divisionSettings.maxTeams, 10))
+        : undefined;
 
     await updateDivision(tournament.id, activeDivision.id, {
       skillMin,
       skillMax,
       ageMin,
       ageMax,
+      maxTeams,
       format: {
         ...activeDivision.format,
         seedingMethod: divisionSettings.seedingMethod,
@@ -1400,7 +1435,10 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 )}
                 {(activeDivision?.format?.competitionFormat === 'round_robin' ||
                   (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) && (
-                  <option value="standings">📊 Standings</option>
+                  <>
+                    <option value="pool-stage">🏊 Pool Stage</option>
+                    <option value="standings">📊 Standings</option>
+                  </>
                 )}
                 {/* Admin-only tabs */}
                 {permissions.isFullAdmin && <option value="comms">💬 Comms</option>}
@@ -1444,9 +1482,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                       </svg>
                     )},
                   ] : []),
-                  // Round Robin format (visible to staff)
+                  // Round Robin format (visible to staff) - V07.51: Added Pool Stage tab
                   ...((activeDivision?.format?.competitionFormat === 'round_robin' ||
                        (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) ? [
+                    { id: 'pool-stage', label: 'Pool Stage', adminOnly: false, icon: (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                      </svg>
+                    )},
                     { id: 'standings', label: 'Standings', adminOnly: false, icon: (
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -1837,8 +1880,13 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             </div>
           )}
 
-          {/* Pool Stage Tab - for pool_play_medals format */}
-          {adminTab === 'pool-stage' && (activeDivision?.format?.competitionFormat === 'pool_play_medals' || activeDivision?.format?.stageMode === 'two_stage') && (
+          {/* Pool Stage Tab - for pool_play_medals and round_robin formats */}
+          {adminTab === 'pool-stage' && (
+            activeDivision?.format?.competitionFormat === 'pool_play_medals' ||
+            activeDivision?.format?.stageMode === 'two_stage' ||
+            activeDivision?.format?.competitionFormat === 'round_robin' ||
+            (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')
+          ) && (
             <PoolStageTab
               tournament={tournament}
               activeDivision={activeDivision}
@@ -1850,6 +1898,20 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               handleGenerateSchedule={handleGenerateSchedule}
               deletePoolMatches={deletePoolMatches}
               savePoolAssignments={savePoolAssignments}
+              // V07.51: Allow changing game settings from Pool Stage tab
+              onUpdateDivisionFormat={async (updates) => {
+                await handleUpdateDivisionSettings({
+                  format: {
+                    ...activeDivision.format,
+                    ...updates,
+                  },
+                });
+              }}
+              // V07.51: Flag for round robin format - shows all matches in single group
+              isRoundRobinFormat={
+                activeDivision?.format?.competitionFormat === 'round_robin' ||
+                (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')
+              }
             />
           )}
 
@@ -1981,7 +2043,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
             </div>
           )}
 
-          {/* Standings Tab - for round robin format */}
+          {/* Standings Tab - for round robin format (V07.51: simplified, pool settings moved to Pool Stage tab) */}
           {adminTab === 'standings' && (activeDivision?.format?.competitionFormat === 'round_robin' ||
             (activeDivision?.format?.stageMode === 'single_stage' && activeDivision?.format?.mainFormat === 'round_robin')) && (
             <div className="space-y-6">
@@ -1997,6 +2059,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                     plateName: (activeDivision?.format as any)?.plateName,
                   }}
                   getTeamPlayers={getTeamPlayers}
+                  getTeamDisplayName={getTeamDisplayName}
                 />
               </div>
 
@@ -2043,7 +2106,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   );
 
                   if ((divisionMatches || []).length === 0) {
-                    return <p className="text-gray-500 text-center py-4">No matches generated yet. Go to Teams tab to generate schedule.</p>;
+                    return <p className="text-gray-500 text-center py-4">No matches generated yet. Use the Generate button above.</p>;
                   }
 
                   return (
@@ -2234,6 +2297,8 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               assignMatchToCourt={assignMatchToCourt}
               startMatchOnCourt={startMatchOnCourt}
               finishMatchOnCourt={finishMatchOnCourt}
+              isOrganizer={isOrganizer}
+              onFinaliseResult={handleFinaliseResult}
             />
           )}
           </div>
@@ -2249,6 +2314,9 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 match={currentUserMatch}
                 tournamentId={tournament.id}
                 currentUserId={currentUser.uid}
+                getTeamDisplayName={getTeamDisplayName}
+                duprMode={tournament.duprSettings?.mode}
+                isOrganizer={isOrganizer}
               />
             )}
 
@@ -2440,6 +2508,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                   plateName: (activeDivision?.format as any)?.plateName,
                 }}
                 getTeamPlayers={getTeamPlayers}
+                getTeamDisplayName={getTeamDisplayName}
               />
             )}
 

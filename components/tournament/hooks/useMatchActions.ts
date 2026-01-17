@@ -65,6 +65,7 @@ import {
   disputeScore,
   finaliseResult,
 } from '../../../services/firebase/duprScoring';
+import type { DuprMode } from '../../../types';
 
 interface UseMatchActionsProps {
   tournamentId: string;
@@ -74,6 +75,8 @@ interface UseMatchActionsProps {
   playersCache: Record<string, UserProfile>;
   currentUserId?: string;
   isOrganizer: boolean;
+  /** V07.52: DUPR mode for anti-self-reporting compliance */
+  duprMode?: DuprMode;
 }
 
 interface UseMatchActionsReturn {
@@ -128,6 +131,7 @@ export const useMatchActions = ({
   playersCache,
   currentUserId,
   isOrganizer,
+  duprMode,
 }: UseMatchActionsProps): UseMatchActionsReturn => {
   // Loading state for schedule generation (V06.21)
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
@@ -251,16 +255,50 @@ export const useMatchActions = ({
       // Fall back to legacy generators for other formats
       if (activeDivision.format.stageMode === 'single_stage') {
         if (activeDivision.format.mainFormat === 'round_robin') {
-          // Single Pool Round Robin
-          await generatePoolsSchedule(
+          // V07.52: Use generatePoolPlaySchedule for Round Robin to populate team names
+          // This ensures sideA.name/sideB.name are populated with resolved player names
+          // Uses same canonical ID scheme as pool_play_medals for consistency
+          const divFormat = activeDivision.format as any;
+
+          // Build GameSettings from DivisionFormat fields
+          const gameSettings: GameSettings | undefined = divFormat?.bestOfGames ? {
+            playType: (divFormat.playType || 'doubles') as 'singles' | 'doubles' | 'mixed' | 'open',
+            bestOf: divFormat.bestOfGames as 1 | 3 | 5,
+            pointsPerGame: (divFormat.pointsPerGame || 11) as 11 | 15 | 21,
+            winBy: (divFormat.winBy || 2) as 1 | 2,
+          } : undefined;
+
+          // Pool size = all teams (single pool for round robin)
+          // Note: poolSize type is 3|4|5|6, but for round robin we want all teams in one pool
+          // Setting poolSize >= teamCount ensures Math.ceil(teams/poolSize) = 1 pool
+          // We cast to any to bypass the type restriction since the actual math works correctly
+          const effectivePoolSize = Math.max(3, divisionTeams.length);
+          const poolSettings: PoolPlayMedalsSettings = {
+            poolSize: effectivePoolSize as 3 | 4 | 5 | 6, // Cast for type safety, actual value can be larger
+            advancementRule: 'top_2',
+            bronzeMatch: 'no',
+            tiebreakers: ['wins', 'head_to_head', 'point_diff', 'points_scored'],
+          };
+
+          console.log('[handleGenerateSchedule] Round Robin detected', {
+            teamsCount: divisionTeams.length,
+            poolSettings,
+            gameSettings,
+          });
+
+          const result = await generatePoolPlaySchedule(
             tournamentId,
-            {
-              ...activeDivision,
-              format: { ...activeDivision.format, numberOfPools: 1 },
-            },
+            activeDivision.id,
             divisionTeams,
-            playersCache
+            poolSettings,
+            gameSettings,
+            undefined, // No manual pool assignments - auto single pool
+            currentUserId
           );
+
+          console.log(`Generated ${result.matchIds.length} round robin matches`);
+          alert(`Schedule Generated! ${result.matchIds.length} round robin matches.`);
+          return;
         } else {
           // Bracket (Single Elim, etc)
           await generateBracketSchedule(
@@ -551,6 +589,8 @@ export const useMatchActions = ({
    * Propose a score (player action)
    * Creates a scoreProposal, sets status to 'pending_confirmation'
    * Opponent must sign or dispute before organizer can finalize
+   *
+   * V07.52: In DUPR tournaments, organizers cannot propose scores (anti-self-reporting)
    */
   const handleProposeScore = useCallback(async (
     matchId: string,
@@ -562,6 +602,11 @@ export const useMatchActions = ({
       return;
     }
 
+    // V07.52: Build DUPR context for anti-self-reporting check
+    const duprContext = duprMode && duprMode !== 'none'
+      ? { mode: duprMode, isOrganizer }
+      : undefined;
+
     try {
       await proposeScore(
         'tournament',
@@ -569,13 +614,14 @@ export const useMatchActions = ({
         matchId,
         scores,
         winnerId,
-        currentUserId
+        currentUserId,
+        duprContext
       );
     } catch (err: any) {
       console.error('Failed to propose score', err);
       alert(err.message || 'Failed to propose score. Please try again.');
     }
-  }, [tournamentId, currentUserId]);
+  }, [tournamentId, currentUserId, duprMode, isOrganizer]);
 
   /**
    * Sign (acknowledge) a score proposal (player action)

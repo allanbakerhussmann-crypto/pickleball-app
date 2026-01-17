@@ -77,6 +77,7 @@ import type { PoolPlayMedalsSettings } from '../../types/formats/formatTypes';
 import { DEFAULT_GAME_SETTINGS } from '../../types/game/gameSettings';
 import { DEFAULT_POOL_PLAY_MEDALS_SETTINGS } from '../../types/formats/formatTypes';
 import { updatePoolResultsOnMatchComplete } from './poolResults';
+import { getUserProfile } from './users';
 import {
   generatePoolStage,
   type PoolParticipant,
@@ -89,6 +90,61 @@ import {
   generateMedalBracket,
   generatePlateBracket,
 } from '../formats/poolPlayMedals';
+
+// ============================================
+// Team Name Resolution Helper (V07.51)
+// ============================================
+
+/**
+ * Resolve a team's display name from team data or player profiles
+ * For singles: returns the player's display name
+ * For doubles: returns "Player1 & Player2"
+ * Falls back to "Team XXXX" if no names can be resolved
+ */
+async function resolveTeamDisplayName(
+  team: Team,
+  fallbackId: string
+): Promise<string> {
+  // If team already has a name, use it
+  if (team.teamName) return team.teamName;
+  if (team.name) return team.name;
+
+  // V07.52: First try to use player names directly from team.players array
+  // This is more reliable than fetching profiles and works for all team types
+  if (team.players && team.players.length > 0) {
+    const playerNames = team.players
+      .map(p => typeof p === 'string' ? null : p.name)
+      .filter((n): n is string => !!n);
+    if (playerNames.length > 0) {
+      return playerNames.join(' & ');
+    }
+  }
+
+  // Fallback: Try to build name from player profiles via getUserProfile
+  const playerIds = team.players?.map(p =>
+    typeof p === 'string' ? p : (p.odUserId || p.id || '')
+  ).filter(Boolean) || team.playerIds || [];
+
+  if (playerIds.length > 0) {
+    try {
+      const names: string[] = [];
+      for (const pid of playerIds) {
+        const profile = await getUserProfile(pid);
+        if (profile?.displayName) {
+          names.push(profile.displayName);
+        }
+      }
+      if (names.length > 0) {
+        return names.join(' & ');
+      }
+    } catch (err) {
+      console.warn('resolveTeamDisplayName: failed to fetch player profiles', err);
+    }
+  }
+
+  // Final fallback
+  return `Team ${fallbackId.slice(0, 4)}`;
+}
 
 // ============================================
 // Match CRUD
@@ -656,15 +712,19 @@ export const generatePoolPlaySchedule = async (
 
     console.log(`[generatePoolPlaySchedule] Unique teams: ${uniqueTeams.length} (from ${teams.length} input)`);
 
-    const participants: PoolParticipant[] = uniqueTeams.map(t => {
-      const teamId = t.id || t.odTeamId || '';
-      return {
-        id: teamId,
-        name: t.teamName || t.name || `Team ${teamId.slice(0, 4)}`,
-        playerIds: t.players?.map(p => typeof p === 'string' ? p : p.odUserId || p.id || '') || t.playerIds || [],
-        duprRating: t.seed,
-      };
-    });
+    // V07.51: Resolve team display names from player profiles (async)
+    const participants: PoolParticipant[] = await Promise.all(
+      uniqueTeams.map(async (t) => {
+        const teamId = t.id || t.odTeamId || '';
+        const resolvedName = await resolveTeamDisplayName(t, teamId);
+        return {
+          id: teamId,
+          name: resolvedName,
+          playerIds: t.players?.map(p => typeof p === 'string' ? p : p.odUserId || p.id || '') || t.playerIds || [],
+          duprRating: t.seed,
+        };
+      })
+    );
 
     console.log('[generatePoolPlaySchedule] Participants:', participants.length);
 
@@ -2345,10 +2405,13 @@ export const deletePoolMatches = async (
   const matchesRef = collection(db, 'tournaments', tournamentId, 'matches');
   const snapshot = await getDocs(query(matchesRef, where('divisionId', '==', divisionId)));
 
-  if (snapshot.empty) return 0;
+  if (snapshot.empty) {
+    console.log(`[deletePoolMatches] No matches found for division ${divisionId}`);
+    return 0;
+  }
 
   let deletedCount = 0;
-  const batch = writeBatch(db);
+  let batch = writeBatch(db);
   const batchSize = 450; // Firestore batch limit is 500
   let batchCount = 0;
 
@@ -2356,9 +2419,13 @@ export const deletePoolMatches = async (
     const match = docSnap.data() as Match;
 
     // Only delete pool matches (not bracket matches)
+    // V07.52: Handle both legacy ('Pool Play') and modern ('pool') stage values
+    const stageStr = String(match.stage || '').toLowerCase();
     const isPoolMatch =
-      match.stage === 'pool' ||
+      stageStr === 'pool' ||
+      stageStr === 'pool play' ||
       match.poolGroup ||
+      match.poolKey ||
       (!match.stage && !match.bracketType); // Legacy matches without stage
 
     if (isPoolMatch) {
@@ -2366,9 +2433,10 @@ export const deletePoolMatches = async (
       deletedCount++;
       batchCount++;
 
-      // Commit if batch is full
+      // Commit if batch is full and create new batch
       if (batchCount >= batchSize) {
         await batch.commit();
+        batch = writeBatch(db); // V07.52: Create NEW batch after commit (batches can only commit once)
         batchCount = 0;
       }
     }

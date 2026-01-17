@@ -14,7 +14,11 @@
  * - Opponent acknowledgement is REQUIRED before organizer can finalize
  * - Sequence: Propose → Sign → Finalize
  *
- * @version V07.50
+ * V07.53: Allow organizers NOT in match to finalize directly
+ * - If organizer is NOT a participant: Can finalize without opponent signing (not self-reporting)
+ * - If organizer IS a participant: Must wait for opponent to sign (anti-self-reporting)
+ *
+ * @version V07.53
  * @file components/shared/DuprReviewModal.tsx
  */
 
@@ -35,6 +39,7 @@ interface DuprReviewModalProps {
   ) => Promise<void>;
   isSaving: boolean;
   isOrganizer?: boolean; // V07.50: Permission check
+  currentUserId?: string; // V07.53: For checking if organizer is participant
 }
 
 // ============================================
@@ -156,6 +161,7 @@ export function DuprReviewModal({
   onFinalise,
   isSaving,
   isOrganizer = true, // V07.50: Default true for backward compatibility
+  currentUserId, // V07.53: For checking if organizer is participant
 }: DuprReviewModalProps) {
   // Local state for editing
   const [scores, setScores] = useState<GameScore[]>([]);
@@ -192,6 +198,15 @@ export function DuprReviewModal({
     }
     return validateScores(scores, gameSettings);
   }, [scores, gameSettings]);
+
+  // V07.53: Check if the organizer is a participant in this match
+  // IMPORTANT: This hook must be BEFORE any early returns to comply with React hooks rules
+  const isOrganizerParticipant = useMemo(() => {
+    if (!currentUserId || !data?.match) return false;
+    const sideAPlayerIds = data.match.sideA?.playerIds || [];
+    const sideBPlayerIds = data.match.sideB?.playerIds || [];
+    return sideAPlayerIds.includes(currentUserId) || sideBPlayerIds.includes(currentUserId);
+  }, [currentUserId, data?.match]);
 
   if (!isOpen || !data) return null;
 
@@ -264,11 +279,12 @@ export function DuprReviewModal({
     }
   };
 
-  // V07.33: DUPR Compliance - Check if opponent has signed
+  // V07.33/V07.53: DUPR Compliance - Check if opponent has signed
   // Finalization is ONLY allowed if:
   // 1. There's no proposal (organizer entering directly), OR
-  // 2. The proposal status is 'signed' (opponent acknowledged)
-  const isProposalSigned = !proposal || proposal.status === 'signed';
+  // 2. The proposal status is 'signed' (opponent acknowledged), OR
+  // 3. V07.53: Organizer is NOT a participant (not self-reporting, can finalize directly)
+  const isProposalSigned = !proposal || proposal.status === 'signed' || !isOrganizerParticipant;
 
   // V07.50: Include validation in canFinalise check
   const canFinalise = winnerId && isProposalSigned && validation.valid;
@@ -279,9 +295,10 @@ export function DuprReviewModal({
       alert('Cannot finalize: No winner determined');
       return;
     }
-    // V07.33: Block if opponent hasn't signed
-    if (proposal && proposal.status !== 'signed') {
-      alert('Cannot finalize: Opponent must acknowledge the score first. This is required for DUPR compliance.');
+    // V07.33/V07.53: Block if opponent hasn't signed AND organizer is a participant
+    // If organizer is NOT a participant, they can finalize directly (not self-reporting)
+    if (proposal && proposal.status !== 'signed' && isOrganizerParticipant) {
+      alert('Cannot finalize: Opponent must acknowledge the score first. This is required for DUPR compliance (anti-self-reporting).');
       return;
     }
     // V07.50: Block if validation fails
@@ -529,8 +546,9 @@ export function DuprReviewModal({
 
         {/* Footer */}
         <div className="border-t border-gray-700 bg-gray-800/50">
-          {/* V07.33: DUPR Compliance Warning - Show when proposal exists but not signed */}
-          {proposal && proposal.status === 'proposed' && (
+          {/* V07.33/V07.53: DUPR Compliance Warning - Only show when organizer IS a participant */}
+          {/* If organizer is NOT a participant, they can finalize directly (not self-reporting) */}
+          {proposal && proposal.status === 'proposed' && isOrganizerParticipant && (
             <div className="px-6 py-3 bg-amber-900/30 border-b border-amber-600/30">
               <div className="flex items-start gap-2">
                 <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

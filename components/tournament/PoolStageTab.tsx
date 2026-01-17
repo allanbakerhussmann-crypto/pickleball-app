@@ -1,12 +1,15 @@
 /**
- * PoolStageTab - V07.02
+ * PoolStageTab - V07.51
  *
  * Redesigned Pool Stage interface with "Sports Command Center" aesthetic.
  * Features glass-morphism cards, enhanced standings display, and polished match lists.
  *
+ * V07.51: Added Pool Match Settings card to change game format (Best Of, Points, Win By)
+ * for divisions - useful for small tournaments that want longer matches.
+ *
  * @file components/tournament/PoolStageTab.tsx
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { Tournament, Division, Team, Match } from '../../types';
 import { PoolGroupStandings } from './PoolGroupStandings';
 import { PoolEditor } from './PoolEditor';
@@ -22,6 +25,10 @@ interface PoolStageTabProps {
   handleGenerateSchedule: () => void;
   deletePoolMatches: (tournamentId: string, divisionId: string) => Promise<number | void>;
   savePoolAssignments: (tournamentId: string, divisionId: string, assignments: any) => Promise<void>;
+  // V07.51: Optional callback to update division format settings
+  onUpdateDivisionFormat?: (updates: { bestOfGames?: 1 | 3 | 5; pointsPerGame?: 11 | 15 | 21; winBy?: 1 | 2 }) => Promise<void>;
+  // V07.51: Flag to indicate this is a single-pool format (round robin) - hides pool editor and simplifies display
+  isRoundRobinFormat?: boolean;
 }
 
 // Glass card component matching other tabs
@@ -104,6 +111,13 @@ const WarningIcon = () => (
   </svg>
 );
 
+const SettingsIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+  </svg>
+);
+
 export const PoolStageTab: React.FC<PoolStageTabProps> = ({
   tournament,
   activeDivision,
@@ -115,9 +129,14 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
   handleGenerateSchedule,
   deletePoolMatches,
   savePoolAssignments,
+  onUpdateDivisionFormat,
+  isRoundRobinFormat = false,
 }) => {
   // _standings passed for potential future use
   void _standings;
+
+  // V07.51: Local state for match settings
+  const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
   // Filter pool matches
   const poolMatches = (divisionMatches || []).filter(m =>
     m.poolGroup || m.stage === 'pool' || m.stage === 'Pool Play'
@@ -157,7 +176,12 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
   const isValidBracketConfig = isPowerOf2(totalQualifiers) && totalQualifiers >= 2;
 
   // Helper to derive pool from team assignment
+  // V07.51: For round robin format, always return 'Round Robin' to show all matches in single group
   const getMatchPool = (match: any): string => {
+    if (isRoundRobinFormat) {
+      return 'Round Robin';
+    }
+
     if (match.poolGroup) return match.poolGroup;
 
     const assignments = activeDivision?.poolAssignments || [];
@@ -212,35 +236,166 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
             plateName: (activeDivision?.format as any)?.plateName,
           }}
           getTeamPlayers={getTeamPlayers}
+          getTeamDisplayName={getTeamDisplayName}
         />
+      </SettingsCard>
+
+      {/* V07.51: Pool Match Settings Card */}
+      <SettingsCard
+        title="Pool Match Settings"
+        subtitle="Adjust game format for pool matches"
+        icon={<SettingsIcon />}
+      >
+        <div className="space-y-4">
+          <p className="text-gray-400 text-sm">
+            {teamsCount <= 6
+              ? '💡 Small tournament? Consider Best of 3 for longer, more competitive matches.'
+              : 'Configure scoring settings for all pool play matches.'}
+          </p>
+
+          <div className="grid grid-cols-3 gap-4">
+            {/* Best Of */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                Best Of
+              </label>
+              <select
+                value={activeDivision.format?.bestOfGames || 1}
+                onChange={async (e) => {
+                  if (!onUpdateDivisionFormat) return;
+                  setIsUpdatingSettings(true);
+                  try {
+                    await onUpdateDivisionFormat({ bestOfGames: parseInt(e.target.value) as 1 | 3 | 5 });
+                  } finally {
+                    setIsUpdatingSettings(false);
+                  }
+                }}
+                disabled={isUpdatingSettings || !onUpdateDivisionFormat || playHasStarted}
+                className="w-full bg-gray-800/70 text-white px-4 py-2.5 rounded-lg border border-gray-600/50 focus:border-lime-500/50 focus:ring-2 focus:ring-lime-500/20 hover:border-gray-500/70 transition-all duration-200 outline-none disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                <option value={1}>1 Game</option>
+                <option value={3}>Best of 3</option>
+                <option value={5}>Best of 5</option>
+              </select>
+            </div>
+
+            {/* Points to Win */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                Points
+              </label>
+              <select
+                value={activeDivision.format?.pointsPerGame || 11}
+                onChange={async (e) => {
+                  if (!onUpdateDivisionFormat) return;
+                  setIsUpdatingSettings(true);
+                  try {
+                    await onUpdateDivisionFormat({ pointsPerGame: parseInt(e.target.value) as 11 | 15 | 21 });
+                  } finally {
+                    setIsUpdatingSettings(false);
+                  }
+                }}
+                disabled={isUpdatingSettings || !onUpdateDivisionFormat || playHasStarted}
+                className="w-full bg-gray-800/70 text-white px-4 py-2.5 rounded-lg border border-gray-600/50 focus:border-lime-500/50 focus:ring-2 focus:ring-lime-500/20 hover:border-gray-500/70 transition-all duration-200 outline-none disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                <option value={11}>11 points</option>
+                <option value={15}>15 points</option>
+                <option value={21}>21 points</option>
+              </select>
+            </div>
+
+            {/* Win By */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                Win By
+              </label>
+              <select
+                value={activeDivision.format?.winBy || 2}
+                onChange={async (e) => {
+                  if (!onUpdateDivisionFormat) return;
+                  setIsUpdatingSettings(true);
+                  try {
+                    await onUpdateDivisionFormat({ winBy: parseInt(e.target.value) as 1 | 2 });
+                  } finally {
+                    setIsUpdatingSettings(false);
+                  }
+                }}
+                disabled={isUpdatingSettings || !onUpdateDivisionFormat || playHasStarted}
+                className="w-full bg-gray-800/70 text-white px-4 py-2.5 rounded-lg border border-gray-600/50 focus:border-lime-500/50 focus:ring-2 focus:ring-lime-500/20 hover:border-gray-500/70 transition-all duration-200 outline-none disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                <option value={1}>Win by 1</option>
+                <option value={2}>Win by 2</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Current Settings Display */}
+          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-800/50 border border-gray-700/50">
+            <div className="text-sm">
+              <span className="text-gray-400">Current: </span>
+              <span className="text-white font-medium">
+                {activeDivision.format?.bestOfGames === 1 ? '1 game' : `Best of ${activeDivision.format?.bestOfGames || 1}`}
+                {' to '}
+                {activeDivision.format?.pointsPerGame || 11}
+                {', win by '}
+                {activeDivision.format?.winBy || 2}
+              </span>
+            </div>
+            {isUpdatingSettings && (
+              <span className="text-xs text-lime-400 flex items-center gap-1">
+                <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Saving...
+              </span>
+            )}
+          </div>
+
+          {playHasStarted && (
+            <p className="text-amber-400 text-xs flex items-center gap-2">
+              <WarningIcon />
+              Settings locked - play has already started. Delete the schedule to change settings.
+            </p>
+          )}
+
+          {!onUpdateDivisionFormat && (
+            <p className="text-gray-500 text-xs">
+              Settings cannot be changed from this view.
+            </p>
+          )}
+        </div>
       </SettingsCard>
 
       {/* Pool Editor Card - allowOverflow for drag-and-drop */}
-      <SettingsCard
-        title="Edit Pool Assignments"
-        subtitle="Drag teams between pools to reassign"
-        icon={<GridIcon />}
-        allowOverflow={true}
-      >
-        <PoolEditor
-          tournamentId={tournament.id}
-          divisionId={activeDivision.id}
-          teams={divisionTeams || []}
-          matches={divisionMatches || []}
-          initialAssignments={activeDivision.poolAssignments}
-          poolSize={activeDivision.format?.teamsPerPool || 4}
-          getTeamDisplayName={getTeamDisplayName}
-          onDeleteScheduleAndSave={async (newAssignments) => {
-            await deletePoolMatches(tournament.id, activeDivision.id);
-            await savePoolAssignments(tournament.id, activeDivision.id, newAssignments);
-            console.log('[PoolEditor] Schedule deleted and pools saved');
-          }}
-          onSave={() => console.log('[PoolEditor] Pools saved')}
-        />
-      </SettingsCard>
+      {/* V07.51: Hide pool editor for round robin format (single pool) */}
+      {!isRoundRobinFormat && (
+        <SettingsCard
+          title="Edit Pool Assignments"
+          subtitle="Drag teams between pools to reassign"
+          icon={<GridIcon />}
+          allowOverflow={true}
+        >
+          <PoolEditor
+            tournamentId={tournament.id}
+            divisionId={activeDivision.id}
+            teams={divisionTeams || []}
+            matches={divisionMatches || []}
+            initialAssignments={activeDivision.poolAssignments}
+            poolSize={activeDivision.format?.teamsPerPool || 4}
+            getTeamDisplayName={getTeamDisplayName}
+            onDeleteScheduleAndSave={async (newAssignments) => {
+              await deletePoolMatches(tournament.id, activeDivision.id);
+              await savePoolAssignments(tournament.id, activeDivision.id, newAssignments);
+              console.log('[PoolEditor] Schedule deleted and pools saved');
+            }}
+            onSave={() => console.log('[PoolEditor] Pools saved')}
+          />
+        </SettingsCard>
+      )}
 
-      {/* Bracket Validation Warning */}
-      {!isValidBracketConfig && poolCount > 0 && !hasSchedule && (
+      {/* Bracket Validation Warning - V07.51: Not shown for round robin (no bracket stage) */}
+      {!isRoundRobinFormat && !isValidBracketConfig && poolCount > 0 && !hasSchedule && (
         <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-amber-500/20 text-amber-400 flex-shrink-0">
@@ -273,31 +428,65 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
               </div>
               <div>
                 <span className="font-semibold text-lime-400">Schedule generated</span>
-                <p className="text-sm text-gray-400">{poolMatches.length} matches across {poolGroups.length} pools</p>
+                <p className="text-sm text-gray-400">
+                  {isRoundRobinFormat
+                    ? `${poolMatches.length} round robin matches`
+                    : `${poolMatches.length} matches across ${poolGroups.length} pools`}
+                </p>
               </div>
             </div>
+
+            {/* V07.52: Delete & Regenerate button for Round Robin */}
+            {isRoundRobinFormat && !playHasStarted && (
+              <button
+                onClick={async () => {
+                  if (!confirm('Delete all matches and regenerate the schedule?')) return;
+                  try {
+                    const deletedCount = await deletePoolMatches(tournament.id, activeDivision.id);
+                    console.log(`[PoolStageTab] Deleted ${deletedCount} matches, now regenerating...`);
+                    // Small delay to ensure Firestore propagates the deletes
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    handleGenerateSchedule();
+                  } catch (err) {
+                    console.error('[PoolStageTab] Error deleting matches:', err);
+                    alert('Error deleting matches. Check console for details.');
+                  }
+                }}
+                className="w-full py-2.5 rounded-xl font-medium text-sm border border-amber-500/30 text-amber-400 hover:bg-amber-500/10 transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Delete Schedule & Regenerate
+              </button>
+            )}
+
             {playHasStarted && (
               <p className="text-amber-400 text-sm flex items-center gap-2 px-4">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
-                Play has started. To regenerate, use "Delete Schedule & Save" in Pool Assignments above.
+                {isRoundRobinFormat
+                  ? 'Play has started. Delete matches first to regenerate schedule.'
+                  : 'Play has started. To regenerate, use "Delete Schedule & Save" in Pool Assignments above.'}
               </p>
             )}
           </div>
         ) : (
           <div className="space-y-4">
             <p className="text-gray-400 text-sm">
-              Generate round-robin matches for all pools. Teams must be assigned to pools first.
+              {isRoundRobinFormat
+                ? 'Generate round-robin matches where every team plays every other team.'
+                : 'Generate round-robin matches for all pools. Teams must be assigned to pools first.'}
             </p>
             <button
               onClick={handleGenerateSchedule}
-              disabled={teamsCount < 2 || !isValidBracketConfig}
+              disabled={teamsCount < 2 || (!isRoundRobinFormat && !isValidBracketConfig)}
               className={`
                 w-full py-3 rounded-xl font-bold text-sm
                 transition-all duration-300 ease-out
                 flex items-center justify-center gap-2
-                ${teamsCount < 2 || !isValidBracketConfig
+                ${teamsCount < 2 || (!isRoundRobinFormat && !isValidBracketConfig)
                   ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/20 transform hover:scale-[1.01]'}
               `}
@@ -305,9 +494,11 @@ export const PoolStageTab: React.FC<PoolStageTabProps> = ({
               <CalendarIcon />
               {teamsCount < 2
                 ? `Need at least 2 teams (have ${teamsCount})`
-                : !isValidBracketConfig
+                : !isRoundRobinFormat && !isValidBracketConfig
                   ? `Invalid: ${totalQualifiers} qualifiers creates ${byeCount} bye${byeCount !== 1 ? 's' : ''}`
-                  : 'Generate Pool Schedule'}
+                  : isRoundRobinFormat
+                    ? 'Generate Round Robin Schedule'
+                    : 'Generate Pool Schedule'}
             </button>
           </div>
         )}

@@ -91,13 +91,47 @@ export const ensureTeamExists = async (
     for (const d of snap.docs) {
       const t = d.data();
       const tPlayers = (t.players || []).map(String).sort();
-      if (tPlayers.length === normalizedPlayers.length && 
+      if (tPlayers.length === normalizedPlayers.length &&
           normalizedPlayers.every((p, i) => p === tPlayers[i])) {
         return { existed: true, teamId: d.id, team: { id: d.id, ...t } };
       }
     }
   } catch (err) {
     console.error('ensureTeamExists: initial lookup failed', err);
+  }
+
+  // V07.51: Fetch player profiles for denormalized storage (industry standard for fast reads)
+  // Store player details with display names to avoid async lookups at render time
+  const playerDetails: Array<{ odUserId: string; displayName: string; email?: string }> = [];
+  let resolvedTeamName = teamName;
+
+  try {
+    const playerNames: string[] = [];
+    for (const playerId of normalizedPlayers) {
+      const profile = await getUserProfile(playerId);
+      if (profile) {
+        playerDetails.push({
+          odUserId: playerId,
+          displayName: profile.displayName || profile.email || 'Unknown',
+          email: profile.email,
+        });
+        if (profile.displayName) {
+          playerNames.push(profile.displayName);
+        }
+      } else {
+        // Still add the ID even if profile not found
+        playerDetails.push({
+          odUserId: playerId,
+          displayName: 'Unknown',
+        });
+      }
+    }
+    // Auto-generate team name if not provided
+    if (!resolvedTeamName && playerNames.length > 0) {
+      resolvedTeamName = playerNames.join(' & ');
+    }
+  } catch (err) {
+    console.warn('ensureTeamExists: failed to fetch player profiles', err);
   }
 
   const teamRef = doc(collection(db, 'tournaments', tournamentId, 'teams'));
@@ -115,7 +149,7 @@ export const ensureTeamExists = async (
       for (const d of snap.docs) {
         const t = d.data();
         const tPlayers = (t.players || []).map(String).sort();
-        if (tPlayers.length === normalizedPlayers.length && 
+        if (tPlayers.length === normalizedPlayers.length &&
             normalizedPlayers.every((p, i) => p === tPlayers[i])) {
           throw { alreadyExists: true, teamId: d.id, team: { id: d.id, ...t } };
         }
@@ -125,8 +159,9 @@ export const ensureTeamExists = async (
         id: teamRef.id,
         tournamentId,
         divisionId,
-        players: normalizedPlayers,
-        teamName: teamName || null,
+        players: normalizedPlayers,  // Keep for backwards compatibility (array of IDs)
+        playerDetails,  // V07.51: Denormalized player info with display names for fast UI reads
+        teamName: resolvedTeamName || null,
         createdByUserId,
         captainPlayerId: normalizedPlayers[0] || createdByUserId,
         isLookingForPartner: (options?.status === 'pending_partner') || (normalizedPlayers.length === 1),
@@ -145,15 +180,15 @@ export const ensureTeamExists = async (
         action: 'create',
         createdByUserId,
         timestamp: now,
-        payload: { tournamentId, divisionId, players: normalizedPlayers, teamName }
+        payload: { tournamentId, divisionId, players: normalizedPlayers, teamName: resolvedTeamName }
       });
     });
 
     const createdSnap = await getDoc(teamRef);
-    return { 
-      existed: false, 
-      teamId: teamRef.id, 
-      team: createdSnap.exists() ? { id: createdSnap.id, ...createdSnap.data() } : null 
+    return {
+      existed: false,
+      teamId: teamRef.id,
+      team: createdSnap.exists() ? { id: createdSnap.id, ...createdSnap.data() } : null
     };
   } catch (err: any) {
     if (err && err.alreadyExists) {
@@ -305,6 +340,7 @@ export const withdrawPlayerFromDivision = async (
   const team = teams.find(t => t.divisionId === divisionId);
 
   const batch = writeBatch(db);
+  let teamFullyWithdrawn = false;
 
   if (team) {
     const newPlayers = team.players.filter(p => p !== userId);
@@ -317,15 +353,16 @@ export const withdrawPlayerFromDivision = async (
         players: [],
         updatedAt: Date.now()
       });
+      teamFullyWithdrawn = true;
     } else {
       const remainingUserId = newPlayers[0];
       const remainingUserDoc = await getDoc(doc(db, 'users', remainingUserId));
-      const remainingUserData = remainingUserDoc.exists() 
-        ? remainingUserDoc.data() as UserProfile 
+      const remainingUserData = remainingUserDoc.exists()
+        ? remainingUserDoc.data() as UserProfile
         : null;
-      
-      const newTeamName = remainingUserData?.displayName 
-        ? `${remainingUserData.displayName} (Looking for partner)` 
+
+      const newTeamName = remainingUserData?.displayName
+        ? `${remainingUserData.displayName} (Looking for partner)`
         : 'Player (Looking for partner)';
 
       batch.update(teamRef, {
@@ -355,6 +392,15 @@ export const withdrawPlayerFromDivision = async (
   }
 
   await batch.commit();
+
+  // Release division capacity if team was fully withdrawn (V07.51)
+  if (teamFullyWithdrawn) {
+    try {
+      await releaseDivisionCapacity(tournamentId, divisionId);
+    } catch (err) {
+      console.warn('Failed to release division capacity:', err);
+    }
+  }
 };
 
 // ============================================
@@ -583,3 +629,70 @@ export const respondToPartnerInvite = async (
 
   return null;
 };
+
+// ============================================
+// Division Capacity Management (V07.51)
+// ============================================
+
+/**
+ * Reserve capacity in a division (transactional - prevents overbooking)
+ * Call BEFORE creating a team to atomically check and reserve a slot.
+ *
+ * Uses tournaments/{tournamentId}/divisionStats/{divisionId} for counter storage.
+ */
+export async function reserveDivisionCapacity(
+  tournamentId: string,
+  divisionId: string,
+  teamsToAdd: number = 1
+): Promise<void> {
+  const divRef = doc(db, 'tournaments', tournamentId, 'divisions', divisionId);
+  const statsRef = doc(db, 'tournaments', tournamentId, 'divisionStats', divisionId);
+
+  await runTransaction(db, async (tx) => {
+    const divSnap = await tx.get(divRef);
+    if (!divSnap.exists()) throw new Error('Division not found');
+
+    const division = divSnap.data();
+    const maxTeams = division.maxTeams;
+
+    if (!maxTeams) return; // Unlimited - no reservation needed
+
+    const statsSnap = await tx.get(statsRef);
+    const currentCount = statsSnap.exists()
+      ? (statsSnap.data()?.activeTeamCount ?? 0)
+      : 0;
+
+    if (currentCount + teamsToAdd > maxTeams) {
+      throw new Error(`Division "${division.name}" is full (${currentCount}/${maxTeams} entries)`);
+    }
+
+    tx.set(statsRef, {
+      activeTeamCount: currentCount + teamsToAdd,
+      updatedAt: Date.now(),
+    }, { merge: true });
+  });
+}
+
+/**
+ * Release capacity when a team withdraws/cancels
+ * Should be called when team status changes to 'withdrawn'
+ */
+export async function releaseDivisionCapacity(
+  tournamentId: string,
+  divisionId: string,
+  teamsToRemove: number = 1
+): Promise<void> {
+  const statsRef = doc(db, 'tournaments', tournamentId, 'divisionStats', divisionId);
+
+  await runTransaction(db, async (tx) => {
+    const statsSnap = await tx.get(statsRef);
+    const currentCount = statsSnap.exists()
+      ? (statsSnap.data()?.activeTeamCount ?? 0)
+      : 0;
+
+    tx.set(statsRef, {
+      activeTeamCount: Math.max(0, currentCount - teamsToRemove),
+      updatedAt: Date.now(),
+    }, { merge: true });
+  });
+}

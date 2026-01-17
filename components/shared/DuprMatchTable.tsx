@@ -162,6 +162,12 @@ function MatchRow({
         }`}>
           {row.duprStatusLabel}
         </span>
+        {/* V07.53: Show DUPR submission error if failed */}
+        {match.dupr?.submissionError && (
+          <p className="mt-1 text-xs text-red-400 max-w-xs truncate" title={match.dupr.submissionError}>
+            {match.dupr.submissionError}
+          </p>
+        )}
       </td>
 
       {/* Actions */}

@@ -10,8 +10,14 @@
  * - dupr_processQueue: Scheduled function to process pending submissions
  * - dupr_submitCorrections: Process matches needing correction
  *
+ * V07.54: Migrated from deprecated functions.config() to Firebase Parameters + Secret Manager
+ * - DUPR_ENV: Environment param ('uat' | 'production'), defaults to 'production'
+ * - DUPR_CLIENT_KEY: Client key param for API authentication
+ * - DUPR_CLIENT_SECRET: Secret Manager secret for client secret
+ * - DUPR_CLUB_ID: Optional club ID param for CLUB source submissions
+ *
  * FILE LOCATION: functions/src/dupr.ts
- * VERSION: V07.04
+ * VERSION: V07.54
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -47,30 +53,44 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_updateMySubscriptions = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = void 0;
+exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_testConnection = exports.dupr_updateMySubscriptions = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = void 0;
 const functions = __importStar(require("firebase-functions"));
+const params_1 = require("firebase-functions/params");
 const admin = __importStar(require("firebase-admin"));
 const crypto = __importStar(require("crypto"));
 const logger = functions.logger;
 const db = admin.firestore();
 // ============================================
-// Configuration
+// Firebase Parameters (replaces deprecated functions.config())
+// ============================================
+// Environment: 'uat' or 'production' - defaults to production
+const DUPR_ENV = (0, params_1.defineString)('DUPR_ENV', {
+    default: 'production',
+    description: 'DUPR API environment (uat or production)',
+});
+// Client key for API authentication
+const DUPR_CLIENT_KEY = (0, params_1.defineString)('DUPR_CLIENT_KEY', {
+    description: 'DUPR API client key',
+});
+// Client secret (stored in Secret Manager)
+const DUPR_CLIENT_SECRET = (0, params_1.defineSecret)('DUPR_CLIENT_SECRET');
+// Optional: Club ID for CLUB source submissions
+const DUPR_CLUB_ID = (0, params_1.defineString)('DUPR_CLUB_ID', {
+    default: '',
+    description: 'DUPR Club ID for CLUB source submissions (optional)',
+});
+// ============================================
+// Configuration (static URLs only)
 // ============================================
 const CONFIG = {
-    // DUPR API configuration
-    // Using UAT environment for testing
-    // Switch to production URLs after DUPR approval
-    ENVIRONMENT: 'uat',
     // UAT URLs (testing)
     UAT_BASE_URL: 'https://uat.mydupr.com/api',
     UAT_TOKEN_URL: 'https://uat.mydupr.com/api/auth/v1.0/token',
     UAT_MATCH_URL: 'https://uat.mydupr.com/api/match/v1.0/create',
-    // Production URLs (after approval)
+    // Production URLs
     PROD_BASE_URL: 'https://prod.mydupr.com/api',
     PROD_TOKEN_URL: 'https://prod.mydupr.com/api/auth/v1.0/token',
     PROD_MATCH_URL: 'https://prod.mydupr.com/api/match/v1.0/create',
-    // NOTE: Credentials (client_key, client_secret) come from functions.config().dupr
-    // Never store secrets in source code
     // Retry configuration
     MAX_RETRIES: 3,
     RETRY_DELAYS: [60000, 120000, 180000], // 1min, 2min, 3min
@@ -78,26 +98,31 @@ const CONFIG = {
     BATCH_SIZE: 50,
     PROCESS_INTERVAL_MINUTES: 5,
 };
-// Get URL based on environment
-const getTokenUrl = () => CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_TOKEN_URL : CONFIG.PROD_TOKEN_URL;
-const getMatchUrl = () => CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_MATCH_URL : CONFIG.PROD_MATCH_URL;
+// Get URL based on environment param
+const getEnvironment = () => DUPR_ENV.value();
+const getTokenUrl = () => getEnvironment() === 'uat' ? CONFIG.UAT_TOKEN_URL : CONFIG.PROD_TOKEN_URL;
+const getMatchUrl = () => getEnvironment() === 'uat' ? CONFIG.UAT_MATCH_URL : CONFIG.PROD_MATCH_URL;
+const getBaseUrl = () => getEnvironment() === 'uat' ? CONFIG.UAT_BASE_URL : CONFIG.PROD_BASE_URL;
 // ============================================
 // Helper Functions
 // ============================================
 /**
  * Get DUPR API token using client credentials
  * Per DUPR RaaS docs: https://dupr.gitbook.io/dupr-raas/quick-start-and-token-generation
+ *
+ * V07.54: Uses Firebase Parameters instead of deprecated functions.config()
  */
 async function getDuprToken() {
-    var _a, _b, _c;
-    // Get credentials from Firebase config
-    const config = functions.config();
-    const clientKey = (_a = config.dupr) === null || _a === void 0 ? void 0 : _a.client_key;
-    const clientSecret = (_b = config.dupr) === null || _b === void 0 ? void 0 : _b.client_secret;
+    var _a;
+    // Get credentials from Firebase Parameters and Secret Manager
+    // IMPORTANT: .trim() to remove any trailing whitespace from Secret Manager
+    const clientKey = DUPR_CLIENT_KEY.value().trim();
+    const clientSecret = DUPR_CLIENT_SECRET.value().trim();
     if (!clientKey || !clientSecret) {
-        logger.error('[DUPR] Missing API credentials in config', {
+        logger.error('[DUPR] Missing API credentials', {
             hasClientKey: !!clientKey,
             hasClientSecret: !!clientSecret,
+            environment: getEnvironment(),
         });
         return null;
     }
@@ -105,7 +130,16 @@ async function getDuprToken() {
         // Base64 encode clientKey:clientSecret as per DUPR docs
         const credentials = Buffer.from(`${clientKey}:${clientSecret}`).toString('base64');
         const tokenUrl = getTokenUrl();
-        logger.info('[DUPR] Requesting token from:', tokenUrl);
+        // Debug: Log credential format (masked)
+        const keyPrefix = clientKey.substring(0, 8);
+        const secretPrefix = clientSecret.substring(0, 8);
+        logger.info('[DUPR] Requesting token:', {
+            url: tokenUrl,
+            environment: getEnvironment(),
+            keyFormat: `${keyPrefix}...(len=${clientKey.length})`,
+            secretFormat: `${secretPrefix}...(len=${clientSecret.length})`,
+            credentialsBase64Len: credentials.length,
+        });
         // Request token from DUPR API
         const response = await fetch(tokenUrl, {
             method: 'POST',
@@ -124,7 +158,7 @@ async function getDuprToken() {
             return null;
         }
         const data = await response.json();
-        const token = data.token || data.accessToken || ((_c = data.result) === null || _c === void 0 ? void 0 : _c.token);
+        const token = data.token || data.accessToken || ((_a = data.result) === null || _a === void 0 ? void 0 : _a.token);
         if (!token) {
             logger.error('[DUPR] No token in response:', data);
             return null;
@@ -177,7 +211,6 @@ async function fetchDuprIdsForPlayers(playerIds) {
  * - CLUB: require clubId as number
  */
 async function convertMatchToDuprFormat(match, eventName, eventType, eventId) {
-    var _a, _b;
     const warnings = [];
     if (!match.officialResult || !match.sideA || !match.sideB) {
         logger.warn(`[DUPR] Match ${match.id} missing officialResult or sides`);
@@ -206,9 +239,9 @@ async function convertMatchToDuprFormat(match, eventName, eventType, eventId) {
     const sideAPlayerIds = match.sideA.playerIds || [];
     const sideBPlayerIds = match.sideB.playerIds || [];
     // Determine if this is a doubles match BEFORE checking DUPR IDs
-    // Doubles = more than 1 player per side, or playType is not 'singles'
-    const isDoubles = sideAPlayerIds.length > 1 || sideBPlayerIds.length > 1 ||
-        (((_a = match.gameSettings) === null || _a === void 0 ? void 0 : _a.playType) && match.gameSettings.playType !== 'singles');
+    // V07.55: Use ACTUAL player count as primary indicator, not playType setting
+    // This handles cases where playType is "doubles" but teams have only 1 player each
+    const isDoubles = sideAPlayerIds.length > 1 || sideBPlayerIds.length > 1;
     // First check if DUPR IDs are already on the match
     let sideADuprIds = match.sideA.duprIds || [];
     let sideBDuprIds = match.sideB.duprIds || [];
@@ -274,9 +307,8 @@ async function convertMatchToDuprFormat(match, eventName, eventType, eventId) {
     });
     // Deterministic identifier for stable retries
     const identifier = `${eventType}_${eventId}_${match.id}`;
-    // Get club ID from config
-    const config = functions.config();
-    const clubId = (_b = config.dupr) === null || _b === void 0 ? void 0 : _b.club_id;
+    // Get club ID from Firebase Parameter
+    const clubId = DUPR_CLUB_ID.value();
     // HARD RULE: matchSource determines clubId handling
     const matchSource = clubId ? 'CLUB' : 'PARTNER';
     // Build submission payload
@@ -418,9 +450,14 @@ async function getEventName(eventType, eventId) {
  *
  * Called by organizers to submit matches to DUPR.
  * Submits immediately and returns results.
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
 exports.dupr_submitMatches = functions
-    .runWith({ timeoutSeconds: 300 }) // 5 minute timeout for bulk submissions
+    .runWith({
+    timeoutSeconds: 300, // 5 minute timeout for bulk submissions
+    secrets: [DUPR_CLIENT_SECRET],
+})
     .https.onCall(async (data, context) => {
     var _a, _b, _c, _d, _e, _f;
     // Verify authentication
@@ -658,8 +695,12 @@ exports.dupr_submitMatches = functions
  *
  * Runs every 5 minutes to process queued batches.
  * Implements retry logic with exponential backoff.
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_processQueue = functions.pubsub
+exports.dupr_processQueue = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .pubsub
     .schedule(`every ${CONFIG.PROCESS_INTERVAL_MINUTES} minutes`)
     .onRun(async () => {
     console.log('[DUPR] Processing submission queue...');
@@ -783,8 +824,12 @@ exports.dupr_processQueue = functions.pubsub
  *
  * Runs hourly to handle matches where officialResult was changed
  * after initial DUPR submission.
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_processCorrections = functions.pubsub
+exports.dupr_processCorrections = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .pubsub
     .schedule('every 1 hours')
     .onRun(async () => {
     console.log('[DUPR] Processing corrections...');
@@ -864,8 +909,12 @@ exports.dupr_getBatchStatus = functions.https.onCall(async (data, context) => {
  *
  * Runs daily at 3 AM NZ time (14:00 UTC previous day / 15:00 UTC during DST)
  * Fetches latest ratings from DUPR and updates user profiles
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_syncRatings = functions.pubsub
+exports.dupr_syncRatings = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .pubsub
     .schedule('0 3 * * *') // 3 AM daily
     .timeZone('Pacific/Auckland')
     .onRun(async () => {
@@ -888,7 +937,7 @@ exports.dupr_syncRatings = functions.pubsub
     logger.info(`[DUPR] Found ${usersWithDupr.docs.length} users with linked DUPR accounts`);
     let successCount = 0;
     let failureCount = 0;
-    const baseUrl = CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_BASE_URL : CONFIG.PROD_BASE_URL;
+    const baseUrl = getBaseUrl();
     for (const userDoc of usersWithDupr.docs) {
         const userData = userDoc.data();
         const duprId = userData.duprId;
@@ -957,8 +1006,12 @@ exports.dupr_syncRatings = functions.pubsub
  * Manually refresh DUPR rating for current user
  * V2: Uses server-side client credentials (identical to dupr_syncRatings)
  * NO SSO tokens, NO session refresh - pure client-credential flow
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_refreshMyRating = functions.https.onCall(async (_data, context) => {
+exports.dupr_refreshMyRating = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .https.onCall(async (_data, context) => {
     var _a, _b, _c;
     // Auth check
     if (!context.auth) {
@@ -993,7 +1046,7 @@ exports.dupr_refreshMyRating = functions.https.onCall(async (_data, context) => 
         logger.error('[DUPR] refreshMyRating v2: failed to get API token');
         throw new functions.https.HttpsError('unavailable', 'DUPR API unavailable');
     }
-    const baseUrl = CONFIG.ENVIRONMENT === 'uat' ? CONFIG.UAT_BASE_URL : CONFIG.PROD_BASE_URL;
+    const baseUrl = getBaseUrl();
     // Fetch player ratings via POST /v1.0/player (verified via Swagger)
     const response = await fetch(`${baseUrl}/v1.0/player`, {
         method: 'POST',
@@ -1110,6 +1163,50 @@ exports.dupr_updateMySubscriptions = functions.https.onCall(async (data, context
     return { success: true, duprPlusActive };
 });
 /**
+ * Test DUPR API connection
+ *
+ * Diagnostic function for admins to verify DUPR credentials are working.
+ * Attempts to get a token from the DUPR API.
+ *
+ * V07.54: Added for admin dashboard connection testing
+ */
+exports.dupr_testConnection = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .https.onCall(async (_data, context) => {
+    var _a;
+    // Only admins can test connection
+    if (!context.auth) {
+        return { success: false, environment: getEnvironment(), error: 'Must be logged in' };
+    }
+    const userDoc = await db.collection('users').doc(context.auth.uid).get();
+    const userData = userDoc.data();
+    // Check for admin using all known patterns (isAppAdmin, role, roles array)
+    const isAdmin = (userData === null || userData === void 0 ? void 0 : userData.isAppAdmin) === true ||
+        (userData === null || userData === void 0 ? void 0 : userData.role) === 'app_admin' ||
+        ((_a = userData === null || userData === void 0 ? void 0 : userData.roles) === null || _a === void 0 ? void 0 : _a.includes('app_admin'));
+    if (!isAdmin) {
+        return { success: false, environment: getEnvironment(), error: 'Admin access required' };
+    }
+    const env = getEnvironment();
+    try {
+        const token = await getDuprToken();
+        if (token) {
+            return { success: true, environment: env };
+        }
+        else {
+            return { success: false, environment: env, error: 'Failed to get token - check credentials' };
+        }
+    }
+    catch (err) {
+        logger.error('[DUPR] Connection test failed:', err);
+        return {
+            success: false,
+            environment: env,
+            error: err instanceof Error ? err.message : 'Unknown error',
+        };
+    }
+});
+/**
  * Test submitting a single match to DUPR
  *
  * This diagnostic function:
@@ -1120,8 +1217,12 @@ exports.dupr_updateMySubscriptions = functions.https.onCall(async (data, context
  * - Returns DUPR response (no player IDs exposed to client)
  *
  * Use this to debug submission issues before bulk operations.
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_testSubmitOneMatch = functions.https.onCall(async (data, context) => {
+exports.dupr_testSubmitOneMatch = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .https.onCall(async (data, context) => {
     var _a, _b, _c, _d, _e;
     // STEP 1: Verify authentication
     if (!context.auth) {
@@ -1243,9 +1344,14 @@ exports.dupr_testSubmitOneMatch = functions.https.onCall(async (data, context) =
  *
  * Retries all failed DUPR submissions for an event.
  * Called by organizers to retry matches that previously failed.
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
 exports.dupr_retryFailed = functions
-    .runWith({ timeoutSeconds: 300 })
+    .runWith({
+    timeoutSeconds: 300,
+    secrets: [DUPR_CLIENT_SECRET],
+})
     .https.onCall(async (data, context) => {
     var _a, _b, _c, _d, _e;
     // Verify authentication
@@ -1592,8 +1698,12 @@ exports.duprWebhook = functions.https.onRequest(async (req, res) => {
  * specific users (by DUPR ID) to receive rating notifications.
  *
  * Endpoint: POST /v1.0/subscribe/rating-changes
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_subscribeToRatings = functions.https.onCall(async (data, context) => {
+exports.dupr_subscribeToRatings = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .https.onCall(async (data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
@@ -1605,9 +1715,7 @@ exports.dupr_subscribeToRatings = functions.https.onCall(async (data, context) =
     if (!token) {
         throw new functions.https.HttpsError('unavailable', 'Failed to get DUPR token');
     }
-    const baseUrl = CONFIG.ENVIRONMENT === 'production'
-        ? CONFIG.PROD_BASE_URL
-        : CONFIG.UAT_BASE_URL;
+    const baseUrl = getBaseUrl();
     try {
         const response = await fetch(`${baseUrl}/v1.0/subscribe/rating-changes`, {
             method: 'POST',
@@ -1689,9 +1797,14 @@ async function subscribeSingleDuprId(duprId, token, baseUrl) {
  *
  * Run this once after registering your webhook, then new users
  * will be auto-subscribed when they link their DUPR account.
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
 exports.dupr_subscribeAllUsers = functions
-    .runWith({ timeoutSeconds: 540 }) // 9 min timeout for one-at-a-time calls
+    .runWith({
+    timeoutSeconds: 540, // 9 min timeout for one-at-a-time calls
+    secrets: [DUPR_CLIENT_SECRET],
+})
     .https.onCall(async (_data, context) => {
     var _a;
     if (!context.auth) {
@@ -1732,9 +1845,7 @@ exports.dupr_subscribeAllUsers = functions
     if (!token) {
         throw new functions.https.HttpsError('unavailable', 'Failed to get DUPR token');
     }
-    const baseUrl = CONFIG.ENVIRONMENT === 'production'
-        ? CONFIG.PROD_BASE_URL
-        : CONFIG.UAT_BASE_URL;
+    const baseUrl = getBaseUrl();
     // Subscribe ONE BY ONE (DUPR API doesn't accept arrays)
     let subscribedCount = 0;
     const errors = [];
@@ -1768,8 +1879,12 @@ exports.dupr_subscribeAllUsers = functions
  *
  * Returns list of users currently subscribed to rating notifications.
  * Endpoint: GET /v1.0/subscribe/rating-changes
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_getSubscriptions = functions.https.onCall(async (_data, context) => {
+exports.dupr_getSubscriptions = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .https.onCall(async (_data, context) => {
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
@@ -1777,9 +1892,7 @@ exports.dupr_getSubscriptions = functions.https.onCall(async (_data, context) =>
     if (!token) {
         throw new functions.https.HttpsError('unavailable', 'Failed to get DUPR token');
     }
-    const baseUrl = CONFIG.ENVIRONMENT === 'production'
-        ? CONFIG.PROD_BASE_URL
-        : CONFIG.UAT_BASE_URL;
+    const baseUrl = getBaseUrl();
     try {
         const response = await fetch(`${baseUrl}/v1.0/subscribe/rating-changes`, {
             method: 'GET',
@@ -1814,8 +1927,12 @@ exports.dupr_getSubscriptions = functions.https.onCall(async (_data, context) =>
  * - duprId is changed (different value)
  *
  * This ensures new users get webhook notifications automatically.
+ *
+ * V07.54: Added secrets for Secret Manager access
  */
-exports.dupr_onUserDuprLinked = functions.firestore
+exports.dupr_onUserDuprLinked = functions
+    .runWith({ secrets: [DUPR_CLIENT_SECRET] })
+    .firestore
     .document('users/{userId}')
     .onUpdate(async (change, context) => {
     const before = change.before.data();
@@ -1836,9 +1953,7 @@ exports.dupr_onUserDuprLinked = functions.firestore
         logger.error('[DUPR] Auto-subscribe failed: could not get token');
         return;
     }
-    const baseUrl = CONFIG.ENVIRONMENT === 'production'
-        ? CONFIG.PROD_BASE_URL
-        : CONFIG.UAT_BASE_URL;
+    const baseUrl = getBaseUrl();
     // Subscribe this user to rating notifications
     const result = await subscribeSingleDuprId(newDuprId, token, baseUrl);
     if (result.success) {

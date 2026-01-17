@@ -192,13 +192,15 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       maxRating: string;
       minAge: string;
       maxAge: string;
+      maxTeams: string;
   }>({
       gender: 'mixed',
       type: 'doubles',
       minRating: '',
       maxRating: '',
       minAge: '',
-      maxAge: ''
+      maxAge: '',
+      maxTeams: ''
   });
 
   const [newDivFormat, setNewDivFormat] = useState<DivisionFormat>(DEFAULT_FORMAT);
@@ -468,7 +470,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
         minRating: div.minRating ? div.minRating.toString() : '',
         maxRating: div.maxRating ? div.maxRating.toString() : '',
         minAge: div.minAge ? div.minAge.toString() : '',
-        maxAge: div.maxAge ? div.maxAge.toString() : ''
+        maxAge: div.maxAge ? div.maxAge.toString() : '',
+        maxTeams: div.maxTeams ? div.maxTeams.toString() : ''
     });
 
     // Restore format settings
@@ -502,7 +505,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
 
   const handleCancelEdit = () => {
     setEditingId(null);
-    setNewDivBasic(prev => ({ ...prev, minRating: '', maxRating: '', minAge: '', maxAge: '' }));
+    setNewDivBasic(prev => ({ ...prev, minRating: '', maxRating: '', minAge: '', maxAge: '', maxTeams: '' }));
     setNewDivFormat(DEFAULT_FORMAT);
     setSelectedFormat('round_robin');
     setPoolPlaySettings(DEFAULT_POOL_PLAY_MEDALS_SETTINGS);
@@ -579,6 +582,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
           maxRating: newDivBasic.maxRating ? parseFloat(newDivBasic.maxRating) : null,
           minAge: newDivBasic.minAge ? parseInt(newDivBasic.minAge) : null,
           maxAge: newDivBasic.maxAge ? parseInt(newDivBasic.maxAge) : null,
+          maxTeams: newDivBasic.maxTeams ? Math.max(1, parseInt(newDivBasic.maxTeams)) : undefined,
           registrationOpen: true,
           format: divisionFormat,
           createdByUserId: userId,
@@ -594,7 +598,7 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
       }
 
       // Reset form to defaults
-      setNewDivBasic(prev => ({ ...prev, minRating: '', maxRating: '', minAge: '', maxAge: '' }));
+      setNewDivBasic(prev => ({ ...prev, minRating: '', maxRating: '', minAge: '', maxAge: '', maxTeams: '' }));
       setNewDivFormat(DEFAULT_FORMAT);
       setSelectedFormat('round_robin');
       setPoolPlaySettings(DEFAULT_POOL_PLAY_MEDALS_SETTINGS);
@@ -1066,8 +1070,8 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                       </div>
 
                       <div className="space-y-3">
-                        {/* DUPR Mode Selection */}
-                        <div className="grid grid-cols-3 gap-2">
+                        {/* DUPR Mode Selection - 2 cols for regular users, 3 cols for admins */}
+                        <div className={`grid gap-2 ${isAppAdmin ? 'grid-cols-3' : 'grid-cols-2'}`}>
                           <button
                             type="button"
                             onClick={() => setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'none', autoSubmit: false }})}
@@ -1080,22 +1084,19 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                             <div className="text-lg mb-1">🎾</div>
                             <div className="text-xs font-medium">No DUPR</div>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => isAppAdmin && setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'optional', autoSubmit: true }})}
-                            disabled={!isAppAdmin}
-                            className={`p-3 rounded-lg border text-center transition-all ${
-                              formData.duprSettings?.mode === 'optional'
-                                ? 'bg-[#00B4D8]/20 border-[#00B4D8] text-[#00B4D8]'
-                                : !isAppAdmin
-                                  ? 'bg-gray-800/50 border-gray-700/50 text-gray-600 cursor-not-allowed opacity-50'
-                                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
-                            }`}
-                          >
-                            <div className="text-lg mb-1">📊</div>
-                            <div className="text-xs font-medium">DUPR Optional</div>
-                            {!isAppAdmin && <div className="text-[10px] text-gray-600 mt-1">Coming Soon</div>}
-                          </button>
+                          {/* DUPR Optional - Only visible to app admins (greyed out/disabled) */}
+                          {isAppAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => {}} // Disabled - do nothing
+                              disabled={true}
+                              className="p-3 rounded-lg border text-center transition-all bg-gray-800/50 border-gray-700/50 text-gray-600 cursor-not-allowed opacity-50"
+                            >
+                              <div className="text-lg mb-1">📊</div>
+                              <div className="text-xs font-medium">DUPR Optional</div>
+                              <div className="text-[10px] text-gray-600 mt-1">Coming Soon</div>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => setFormData({...formData, duprSettings: { ...formData.duprSettings!, mode: 'required', autoSubmit: true }})}
@@ -1284,13 +1285,29 @@ export const CreateTournament: React.FC<CreateTournamentProps> = ({ onCreateTour
                                 </div>
                                 <div>
                                     <label className="block text-xs text-gray-400 mb-1">Max Age (Years)</label>
-                                    <input 
+                                    <input
                                         type="number" placeholder="e.g. 18"
                                         className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
                                         value={newDivBasic.maxAge}
                                         onChange={e => setNewDivBasic({...newDivBasic, maxAge: e.target.value})}
                                     />
                                 </div>
+                          </div>
+
+                          {/* Max Entries */}
+                          <div className="mt-4">
+                              <label className="block text-xs text-gray-400 mb-1">Max Entries (Teams)</label>
+                              <input
+                                  type="number"
+                                  placeholder="Leave blank for unlimited"
+                                  min="1"
+                                  className="w-full bg-gray-800 text-white p-2 rounded border border-gray-600 focus:border-green-500 outline-none"
+                                  value={newDivBasic.maxTeams}
+                                  onChange={e => setNewDivBasic({...newDivBasic, maxTeams: e.target.value})}
+                              />
+                              <p className="text-xs text-gray-500 mt-1">
+                                  Limit registrations for this division. Leave empty for no limit.
+                              </p>
                           </div>
                       </div>
 

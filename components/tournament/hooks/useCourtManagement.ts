@@ -72,7 +72,7 @@
  */
 
 import { useMemo, useCallback, useEffect, useRef } from 'react';
-import type { Match, Court, Division, TournamentCourtSettings, TournamentMatchType } from '../../../types';
+import type { Match, Court, Division, Team, TournamentCourtSettings, TournamentMatchType } from '../../../types';
 import { updateMatchScore, completeMatchWithAdvancement, notifyCourtAssignment, updatePoolResultsOnMatchCompleteSafe } from '../../../services/firebase';
 import { validateGameScore } from '../../../services/game/scoreValidation';
 import type { GameSettings } from '../../../types/game/gameSettings';
@@ -90,6 +90,8 @@ interface UseCourtManagementProps {
   matches: Match[];
   courts: Court[];
   divisions: Division[];
+  teams?: Team[];  // V07.51: Teams for resolving display names
+  playersCache?: Record<string, { displayName?: string }>;  // V07.51: Player lookup cache
   autoAssignOnRestComplete?: boolean; // Auto-assign matches when rest time ends
   options?: CourtManagementOptions;   // V06.27: Additional options (testMode, etc.)
   courtSettings?: TournamentCourtSettings;  // V07.02: Premier court settings
@@ -204,6 +206,8 @@ export const useCourtManagement = ({
   matches,
   courts,
   divisions,
+  teams = [],
+  playersCache = {},
   autoAssignOnRestComplete = false,
   options = {},
   courtSettings,
@@ -212,6 +216,23 @@ export const useCourtManagement = ({
   // V06.27: Use shorter rest time in test mode for faster iteration
   const { testMode = false } = options;
   const effectiveRestTime = testMode ? TEST_REST_TIME_MINIMUM_MS : REST_TIME_MINIMUM_MS;
+
+  // V07.51: Helper to get team display name from team object or player names
+  const getTeamDisplayName = useCallback((teamId: string | undefined, fallbackName?: string): string => {
+    if (!teamId) return fallbackName || 'TBD';
+    const team = teams.find(t => t.id === teamId);
+    if (!team) return fallbackName || 'TBD';
+    if (team.teamName) return team.teamName;
+    // Fallback: build name from player profiles
+    const names = (team.players || [])
+      .map(p => {
+        const pid = typeof p === 'string' ? p : ((p as any).odUserId || (p as any).id || '');
+        return playersCache[pid]?.displayName || null;
+      })
+      .filter(Boolean);
+    if (names.length > 0) return names.join(' & ');
+    return fallbackName || 'TBD';
+  }, [teams, playersCache]);
 
   // V07.02: Helper to get preferred court for a match based on matchType
   const getPreferredCourtForMatch = useCallback((match: Match): string | string[] | null => {
@@ -673,9 +694,11 @@ export const useCourtManagement = ({
         status = 'WAITING';
       }
 
-      // Support both OLD (teamAId/teamBId) and NEW (sideA/sideB) match structures
-      const teamAName = m.sideA?.name || m.teamAId || 'TBD';
-      const teamBName = m.sideB?.name || m.teamBId || 'TBD';
+      // V07.51: Use team display name resolver for proper player names
+      const teamAId = m.sideA?.id || m.teamAId;
+      const teamBId = m.sideB?.id || m.teamBId;
+      const teamAName = getTeamDisplayName(teamAId, m.sideA?.name);
+      const teamBName = getTeamDisplayName(teamBId, m.sideB?.name);
 
       return {
         id: m.id,
@@ -690,7 +713,7 @@ export const useCourtManagement = ({
         isReady: true, // courtMatchModels are all matches, not queue-filtered
       };
     });
-  }, [safeMatches, safeDivisions, safeCourts]);
+  }, [safeMatches, safeDivisions, safeCourts, getTeamDisplayName]);
 
   // ============================================
   // Queue Match Models (smart-filtered queue in CourtMatchModel format)
@@ -730,8 +753,9 @@ export const useCourtManagement = ({
       const division = safeDivisions.find(d => d.id === m.divisionId);
       const teamAId = m.teamAId || m.sideA?.id;
       const teamBId = m.teamBId || m.sideB?.id;
-      const teamAName = m.sideA?.name || teamAId || 'TBD';
-      const teamBName = m.sideB?.name || teamBId || 'TBD';
+      // V07.51: Use team display name resolver for proper player names
+      const teamAName = getTeamDisplayName(teamAId, m.sideA?.name);
+      const teamBName = getTeamDisplayName(teamBId, m.sideB?.name);
 
       // Check if teams are busy (on court)
       // V07.29: Removed name-based check - different players can have same name
@@ -789,7 +813,7 @@ export const useCourtManagement = ({
     const maxQueueSize = Math.max(activeCourts.length + 3, 6);
 
     return modelsWithRestInfo.slice(0, maxQueueSize);
-  }, [safeMatches, safeDivisions, safeCourts, getMatchRestingUntil]);
+  }, [safeMatches, safeDivisions, safeCourts, getMatchRestingUntil, getTeamDisplayName]);
 
   // ============================================
   // Conflict Detection

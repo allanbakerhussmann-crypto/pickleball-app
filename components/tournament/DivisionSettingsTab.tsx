@@ -20,6 +20,7 @@ interface DivisionSettingsTabProps {
     maxRating: string;
     minAge: string;
     maxAge: string;
+    maxTeams: string;
     seedingMethod: SeedingMethod;
     tournamentDayId: string;
   };
@@ -28,6 +29,7 @@ interface DivisionSettingsTabProps {
     maxRating: string;
     minAge: string;
     maxAge: string;
+    maxTeams: string;
     seedingMethod: SeedingMethod;
     tournamentDayId: string;
   }>>;
@@ -373,6 +375,26 @@ export const DivisionSettingsTab: React.FC<DivisionSettingsTabProps> = ({
                 </GlassInput>
               </div>
             </div>
+          </div>
+
+          {/* Max Teams / Entry Limit */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 mb-3">
+              <UsersIcon />
+              <span className="text-sm font-medium text-gray-300">Entry Limit</span>
+            </div>
+            <GlassInput
+              label="Max Teams"
+              hint="Limit registrations for this division. Leave empty for unlimited."
+            >
+              <StyledInput
+                type="number"
+                min="1"
+                value={divisionSettings.maxTeams}
+                onChange={e => setDivisionSettings(prev => ({ ...prev, maxTeams: e.target.value }))}
+                placeholder="Unlimited"
+              />
+            </GlassInput>
           </div>
 
           {/* Seeding Method */}

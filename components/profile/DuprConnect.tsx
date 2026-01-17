@@ -393,7 +393,7 @@ export const DuprConnect: React.FC = () => {
         {/* Action Buttons */}
         <div className="flex gap-2">
           <a
-            href={`https://mydupr.com/profile/${duprData.duprId}`}
+            href={`https://mydupr.com/player/${duprData.duprId}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex-1 py-2 bg-[#00B4D8] hover:bg-[#0096B4] text-white rounded-lg text-sm font-medium flex items-center justify-center gap-2"

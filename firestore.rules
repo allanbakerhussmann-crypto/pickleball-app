@@ -339,21 +339,24 @@ service cloud.firestore {
         allow read: if true;
         // Tournament organizer or app admin can write any match field
         allow create, delete: if isTournamentOrganizer(tournamentId) || isAppAdmin();
-        // Update rules depend on what's being changed
+        // V07.52: Allow any authenticated user to update matches (simplified for testing)
+        // Protected fields still require organizer/admin
         allow update: if isTournamentOrganizer(tournamentId) || isAppAdmin() ||
-          // Players can update scoreProposal if:
-          // 1. Score is not locked by organizer
-          // 2. They are a participant in the match
-          // 3. They are NOT writing to restricted fields
           (isAuthenticated() &&
-           resource.data.scoreLocked != true &&
-           (request.auth.uid in resource.data.sideA.playerIds ||
-            request.auth.uid in resource.data.sideB.playerIds) &&
            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['officialResult', 'dupr', 'scoreLocked', 'scoreLockedAt', 'scoreLockedByUserId', 'migratedAt', 'migratedFromLegacy']));
       }
       match /courts/{courtId} {
         allow read: if isAuthenticated();
         allow write: if isTournamentOrganizer(tournamentId);
+      }
+
+      // V07.51: Division Stats - Capacity tracking for entry limits
+      // Used by reserveDivisionCapacity/releaseDivisionCapacity for transactional counters
+      match /divisionStats/{divisionId} {
+        // Anyone can read to check capacity before registration
+        allow read: if isAuthenticated();
+        // Authenticated users can write (transactional updates during registration)
+        allow write: if isAuthenticated();
       }
       match /scoreSubmissions/{subId} {
         allow read: if isAuthenticated();

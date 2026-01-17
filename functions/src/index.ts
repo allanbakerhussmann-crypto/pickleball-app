@@ -104,6 +104,7 @@ export {
   dupr_getBatchStatus,
   dupr_syncRatings,       // Daily rating sync
   dupr_refreshMyRating,   // Manual rating refresh
+  dupr_testConnection,    // V07.54: Admin connection test
   dupr_testSubmitOneMatch, // Debug single match submission
   dupr_retryFailed,       // Retry failed submissions
   // Webhook & subscriptions (V07.25)
@@ -150,6 +151,14 @@ export {
   comms_processQueue,
   comms_processLeagueQueue,
 } from './comms';
+
+// ============================================
+// RECEIPT EMAIL FUNCTIONS (V07.51)
+// ============================================
+
+export {
+  receipt_resend,
+} from './receiptEmail';
 
 // ============================================
 // PLATFORM FINANCE FUNCTIONS (V07.50)

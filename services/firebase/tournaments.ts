@@ -98,15 +98,23 @@ export const getTournament = async (id: string): Promise<Tournament | null> => {
 // ============================================
 
 export const subscribeToDivisions = (
-  tournamentId: string, 
+  tournamentId: string,
   callback: (divisions: Division[]) => void
 ) => {
   return onSnapshot(
-    collection(db, 'tournaments', tournamentId, 'divisions'), 
+    collection(db, 'tournaments', tournamentId, 'divisions'),
     (snap) => {
       callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as Division)));
     }
   );
+};
+
+export const getDivision = async (
+  tournamentId: string,
+  divisionId: string
+): Promise<Division | null> => {
+  const snap = await getDoc(doc(db, 'tournaments', tournamentId, 'divisions', divisionId));
+  return snap.exists() ? { id: snap.id, ...snap.data() } as Division : null;
 };
 
 export const updateDivision = async (

@@ -18,9 +18,9 @@ import {
 } from '@firebase/firestore';
 import { db } from './config';
 import { getUserProfile } from './users';
-import { getTournament } from './tournaments';
-import { ensureTeamExists } from './teams';
-import type { TournamentRegistration, Tournament } from '../../types';
+import { getTournament, getDivision } from './tournaments';
+import { ensureTeamExists, reserveDivisionCapacity } from './teams';
+import type { TournamentRegistration, Tournament, Division } from '../../types';
 
 // ============================================
 // Registration CRUD
@@ -79,6 +79,25 @@ export const finalizeRegistration = async (
   const isFreeEvent = tournament.isFreeEvent || tournament.entryFee === 0;
   const paymentStatus = isFreeEvent ? 'paid' : (paymentMethod === 'stripe' ? 'processing' : 'pending');
 
+  // V07.51: Reserve capacity and validate DUPR ratings for each division FIRST
+  for (const divisionId of selectedEventIds) {
+    const division = await getDivision(tournamentId, divisionId);
+    if (!division) throw new Error(`Division ${divisionId} not found`);
+
+    // Check DUPR rating requirements (if division has rating limits)
+    const playerRating = userProfile.duprDoublesRating || userProfile.duprSinglesRating || 0;
+    if (division.minRating && playerRating < division.minRating) {
+      throw new Error(`Your DUPR rating (${playerRating.toFixed(2)}) is below the minimum (${division.minRating}) for "${division.name}"`);
+    }
+    if (division.maxRating && playerRating > division.maxRating) {
+      throw new Error(`Your DUPR rating (${playerRating.toFixed(2)}) exceeds the maximum (${division.maxRating}) for "${division.name}"`);
+    }
+
+    // Reserve capacity (transactional - prevents overbooking)
+    await reserveDivisionCapacity(tournamentId, divisionId, 1);
+  }
+
+  // Now create teams (capacity already reserved)
   for (const divisionId of selectedEventIds) {
     const partnerInfo = partnerDetails[divisionId];
 

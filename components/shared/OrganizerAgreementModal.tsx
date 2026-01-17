@@ -80,10 +80,10 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-      <div className="bg-gray-900 rounded-xl max-w-3xl w-full max-h-[90vh] flex flex-col border border-gray-700 overflow-hidden">
+    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-gray-900 rounded-xl max-w-3xl w-full max-h-[95vh] sm:max-h-[90vh] flex flex-col border border-gray-700 overflow-hidden my-auto">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-700 flex-shrink-0">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-700 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl font-bold text-white">
@@ -118,7 +118,7 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
-          className="flex-1 overflow-y-auto px-6 py-4"
+          className="flex-1 overflow-y-auto px-4 sm:px-6 py-3 sm:py-4 min-h-0"
         >
           <div className="space-y-6">
             {ORGANIZER_AGREEMENT.sections.map((section, index) => (
@@ -146,7 +146,7 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
         </div>
 
         {/* Checkboxes and Accept Button */}
-        <div className="px-6 py-4 border-t border-gray-700 flex-shrink-0 space-y-4 bg-gray-800/50">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-700 flex-shrink-0 space-y-3 sm:space-y-4 bg-gray-800/50 max-h-[45vh] overflow-y-auto">
           {/* Main Acceptance */}
           <label className="flex items-start gap-3 cursor-pointer group">
             <div className="pt-0.5">
@@ -193,11 +193,11 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
           </label>
 
           {/* Action Buttons */}
-          <div className="flex gap-3 pt-2">
+          <div className="flex gap-2 sm:gap-3 pt-2">
             {mode === 'request' && (
               <button
                 onClick={onClose}
-                className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors text-sm sm:text-base"
               >
                 Cancel
               </button>
@@ -205,23 +205,23 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
             <button
               onClick={handleAccept}
               disabled={!canAccept}
-              className={`flex-1 px-4 py-3 rounded-lg font-medium transition-colors ${
+              className={`flex-1 px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg font-medium transition-colors text-sm sm:text-base ${
                 canAccept
                   ? 'bg-lime-600 hover:bg-lime-500 text-black'
                   : 'bg-gray-700 text-gray-500 cursor-not-allowed'
               }`}
             >
               {!hasScrolledToBottom
-                ? 'Please read the full agreement'
+                ? 'Read agreement first'
                 : !allChecked
-                ? 'Please accept all terms'
+                ? 'Accept all terms'
                 : 'I Agree'}
             </button>
           </div>
 
           {/* Version info */}
-          <p className="text-xs text-gray-500 text-center">
-            Effective Date: {ORGANIZER_AGREEMENT.effectiveDate} • Version {ORGANIZER_AGREEMENT.version}
+          <p className="text-xs text-gray-500 text-center pb-1">
+            Effective: {ORGANIZER_AGREEMENT.effectiveDate} • v{ORGANIZER_AGREEMENT.version}
           </p>
         </div>
       </div>

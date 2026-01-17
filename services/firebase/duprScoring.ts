@@ -11,8 +11,9 @@
  * - scoreLocked blocks ALL player writes after organizer finalizes
  * - Signer must be on opposing team (validated via teamSnapshot)
  * - Proposal immutable once signed/disputed (except organizer override)
+ * - V07.52: In DUPR tournaments, organizers CANNOT propose scores (anti-self-reporting)
  *
- * @version V07.04
+ * @version V07.52
  * @file services/firebase/duprScoring.ts
  */
 
@@ -40,6 +41,7 @@ import {
   canFinalizeResult,
   canCorrectResult,
   validateSignerIsOpposingTeam,
+  type DuprContext,
 } from '../../utils/scorePermissions';
 import { updatePoolResultsOnMatchComplete } from './poolResults';
 
@@ -98,6 +100,17 @@ function getMatchDocPath(
  * Creates a scoreProposal with status 'proposed'.
  * Can only be called by match participants.
  * Will fail if scoreLocked or proposal already locked.
+ *
+ * V07.52: In DUPR tournaments, organizers CANNOT propose scores (anti-self-reporting).
+ * Pass duprContext to enable this check.
+ *
+ * @param eventType - 'tournament', 'league', or 'meetup'
+ * @param eventId - The event ID
+ * @param matchId - The match ID
+ * @param scores - Array of game scores
+ * @param winnerId - ID of the winning side
+ * @param userId - ID of the user proposing the score
+ * @param duprContext - Optional DUPR context for DUPR tournament rules
  */
 export async function proposeScore(
   eventType: EventType,
@@ -105,7 +118,8 @@ export async function proposeScore(
   matchId: string,
   scores: GameScore[],
   winnerId: string,
-  userId: string
+  userId: string,
+  duprContext?: DuprContext
 ): Promise<void> {
   const matchPath = getMatchDocPath(eventType, eventId, matchId);
   const matchRef = doc(db, matchPath);
@@ -118,8 +132,8 @@ export async function proposeScore(
 
     const match = { id: matchSnap.id, ...matchSnap.data() } as Match;
 
-    // Check permission
-    const permission = canProposeScore(match, userId);
+    // Check permission (V07.52: Pass duprContext for DUPR-specific rules)
+    const permission = canProposeScore(match, userId, duprContext);
     if (!permission.allowed) {
       throw new DuprScoringError(
         permission.reason || 'Cannot propose score',

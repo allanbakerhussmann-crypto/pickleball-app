@@ -13,28 +13,44 @@
  * - "Dispute Score" (not just "Dispute")
  * - "Awaiting organiser approval" (after opponent signs)
  *
+ * V07.53: DUPR anti-self-reporting (updated)
+ * - If organizer IS in the match: Cannot enter scores (blocked)
+ * - If organizer is NOT in the match: Can enter scores as FINAL (official)
+ * - Regular players always propose (normal flow)
+ *
  * FILE LOCATION: components/tournament/PlayerMatchCard.tsx
- * VERSION: V07.04 - DUPR-Compliant Labels
+ * VERSION: V07.53 - DUPR Organizer Direct Finalize
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import type { Match, GameScore } from '../../types/game/match';
 import type { GameSettings } from '../../types/game/gameSettings';
+import type { DuprMode } from '../../types';
 // V07.04: DisputeReason and MatchVerificationData no longer needed (using DUPR scoring)
 import { updateMatchScore } from '../../services/firebase';
 import { ScoreEntryModal } from '../shared/ScoreEntryModal';
 // V07.04: DUPR-Compliant Scoring
+// V07.53: Added finaliseResult for organizer direct finalization
 import {
   proposeScore,
   signScore,
   disputeScore,
+  finaliseResult,
 } from '../../services/firebase/duprScoring';
+import { canOrganizerDirectFinalize, type DuprContext } from '../../utils/scorePermissions';
+import type { Match as TypesMatch } from '../../types';
 
 interface PlayerMatchCardProps {
   match: Match;
   tournamentId: string;
   currentUserId: string;
   gameSettings?: GameSettings;
+  // V07.51: Optional name resolver for proper player names
+  getTeamDisplayName?: (teamId: string) => string;
+  /** V07.52: DUPR mode for anti-self-reporting compliance */
+  duprMode?: DuprMode;
+  /** V07.52: Is the current user an organizer? */
+  isOrganizer?: boolean;
   onMatchStarted?: () => void;
   onScoreSubmitted?: () => void;
   onScoreConfirmed?: () => void;
@@ -58,6 +74,9 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
   tournamentId,
   currentUserId,
   gameSettings = DEFAULT_GAME_SETTINGS,
+  getTeamDisplayName,
+  duprMode,
+  isOrganizer = false,
   onMatchStarted,
   onScoreSubmitted,
   onScoreConfirmed,
@@ -116,9 +135,13 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
     }
   }, [match.court, match.status, match.scheduledDate, match.createdAt]);
 
-  // Get team names
-  const sideAName = match.sideA?.name || 'Team A';
-  const sideBName = match.sideB?.name || 'Team B';
+  // Get team names - V07.51: Use resolver if provided for proper player names
+  const sideAName = getTeamDisplayName && match.sideA?.id
+    ? getTeamDisplayName(match.sideA.id)
+    : (match.sideA?.name || 'Team A');
+  const sideBName = getTeamDisplayName && match.sideB?.id
+    ? getTeamDisplayName(match.sideB.id)
+    : (match.sideB?.name || 'Team B');
 
   // Determine match status display
   // V07.04: Use scoreState for DUPR compliance
@@ -150,23 +173,48 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
   };
 
   // Handle score submission from modal - V07.04: Use proposeScore for DUPR compliance
+  // V07.53: Organizers NOT in match can directly finalize in DUPR tournaments
   const handleScoreSubmit = async (scores: GameScore[], winnerId: string) => {
     setIsSubmitting(true);
     try {
-      // V07.04: Use DUPR-compliant proposeScore
-      await proposeScore(
-        'tournament',
-        tournamentId,
-        match.id,
-        scores,
-        winnerId,
-        currentUserId
-      );
+      // V07.53: Build DUPR context for permission check
+      const duprContext: DuprContext | undefined = duprMode && duprMode !== 'none'
+        ? { mode: duprMode, isOrganizer }
+        : undefined;
+
+      // V07.53: Check if organizer can directly finalize (NOT in match, DUPR tournament)
+      // Cast match to TypesMatch for scorePermissions compatibility
+      const directFinalizeResult = canOrganizerDirectFinalize(match as unknown as TypesMatch, currentUserId, duprContext);
+
+      if (directFinalizeResult.allowed) {
+        // Organizer is NOT in the match - finalize directly as official
+        await finaliseResult(
+          'tournament',
+          tournamentId,
+          match.id,
+          scores,
+          winnerId,
+          currentUserId,
+          true // DUPR eligible
+        );
+        console.log('V07.53: Organizer finalized score directly (not in match)');
+      } else {
+        // Regular player or organizer in match - use propose flow
+        await proposeScore(
+          'tournament',
+          tournamentId,
+          match.id,
+          scores,
+          winnerId,
+          currentUserId,
+          duprContext
+        );
+      }
       setShowScoreModal(false);
       onScoreSubmitted?.();
     } catch (error: any) {
-      console.error('Failed to propose score:', error);
-      alert(error.message || 'Failed to propose score. Please try again.');
+      console.error('Failed to submit score:', error);
+      alert(error.message || 'Failed to submit score. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -447,17 +495,52 @@ export const PlayerMatchCard: React.FC<PlayerMatchCardProps> = ({
         )}
 
         {/* "Propose Score" button - Match in progress (DUPR-compliant label) */}
-        {isInProgress && (
-          <button
-            onClick={() => setShowScoreModal(true)}
-            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
-            Propose Score
-          </button>
-        )}
+        {/* V07.53: Different handling based on organizer status and match participation */}
+        {isInProgress && (() => {
+          // Build DUPR context for permission check
+          const duprContext: DuprContext | undefined = duprMode && duprMode !== 'none'
+            ? { mode: duprMode, isOrganizer }
+            : undefined;
+          // Cast match to TypesMatch for scorePermissions compatibility
+          const directFinalizeResult = canOrganizerDirectFinalize(match as unknown as TypesMatch, currentUserId, duprContext);
+
+          // Case 1: Organizer NOT in match (DUPR) - can directly finalize
+          if (directFinalizeResult.allowed) {
+            return (
+              <button
+                onClick={() => setShowScoreModal(true)}
+                className="w-full py-3 px-4 bg-lime-600 hover:bg-lime-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Enter & Finalize Score
+              </button>
+            );
+          }
+
+          // Case 2: Organizer IN the match (DUPR) - blocked from entering
+          if (duprMode && duprMode !== 'none' && isOrganizer && isParticipant) {
+            return (
+              <div className="w-full py-3 px-4 bg-amber-900/50 border border-amber-600 text-amber-400 font-medium rounded-lg text-center">
+                In DUPR tournaments, organizers cannot enter scores for matches they are playing in. Only your opponent can propose the score.
+              </div>
+            );
+          }
+
+          // Case 3: Regular player - normal propose flow
+          return (
+            <button
+              onClick={() => setShowScoreModal(true)}
+              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              Propose Score
+            </button>
+          );
+        })()}
 
         {/* Sign/Dispute buttons - Pending confirmation (opponent's view) - DUPR-compliant labels */}
         {/* V07.04: Don't show if already signed */}

@@ -190,13 +190,24 @@ export const useTournamentData = ({
     const team = teams.find(t => t.id === teamId);
     if (!team) return 'TBD';
     if (team.teamName) return team.teamName;
-    // Handle both string[] and object[] cases for team.players
+
+    // V07.51: Use denormalized playerDetails if available (faster, no async lookup needed)
+    const teamAny = team as any;
+    if (teamAny.playerDetails && teamAny.playerDetails.length > 0) {
+      const names = teamAny.playerDetails
+        .map((p: { displayName?: string }) => p.displayName || 'Unknown')
+        .filter((n: string) => n !== 'Unknown');
+      if (names.length > 0) return names.join(' & ');
+    }
+
+    // Fallback: Handle both string[] and object[] cases for team.players
     const names = (team.players || [])
       .map(p => {
         const pid = typeof p === 'string' ? p : (p.odUserId || p.id || '');
         return playersCache[pid]?.displayName || 'Unknown';
       })
-      .join(' / ');
+      .filter(n => n !== 'Unknown')
+      .join(' & ');
     return names || 'TBD';
   }, [teams, playersCache]);
 

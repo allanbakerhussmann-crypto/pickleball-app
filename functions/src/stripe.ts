@@ -16,6 +16,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
+import { sendReceiptEmail, sendRefundReceiptEmail } from './receiptEmail';
 
 // Initialize Firebase Admin if not already
 if (!admin.apps.length) {
@@ -1444,6 +1445,36 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
     });
 
     console.log(`✅ Completed Finance transaction ${txDoc.id}: platformFee=${platformFee}, totalFees=${totalFees}, net=${netAmount}`);
+
+    // Send receipt email (non-blocking)
+    const metadata = charge.metadata || {};
+    if (metadata.type && metadata.type !== 'sms_bundle') {
+      let userEmail = (metadata as any).payerEmail;
+      if (!userEmail && metadata.odUserId) {
+        try {
+          const userDoc = await db.collection('users').doc(metadata.odUserId).get();
+          userEmail = userDoc.data()?.email;
+        } catch (err) {
+          console.warn('Failed to fetch user email for receipt:', err);
+        }
+      }
+      if (userEmail) {
+        sendReceiptEmail({
+          transactionId: txDoc.id,
+          userId: metadata.odUserId || '',
+          userEmail,
+          userName: (metadata as any).payerName || 'Customer',
+          paymentType: metadata.type as any,
+          amount: charge.amount,
+          currency: charge.currency.toUpperCase(),
+          eventName: (metadata as any).eventName || '',
+          clubId: metadata.clubId,
+          cardLast4: charge.payment_method_details?.card?.last4 || undefined,
+        }).catch(err => console.error('Receipt email failed:', err));
+      } else {
+        console.warn('Receipt skipped: missing userEmail', { txId: txDoc.id });
+      }
+    }
   } else {
     // OUT-OF-ORDER HANDLING: charge.succeeded arrived before checkout.session.completed
     // Create + complete from PI metadata
@@ -1500,6 +1531,33 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
         completedAt: Date.now(),
       });
       console.log(`✅ Created completed Finance transaction ${txRef.id}: platformFee=${platformFee}, totalFees=${totalFees}, net=${netAmount}`);
+
+      // Send receipt email for out-of-order case too (non-blocking)
+      if (metadata.type && metadata.type !== 'sms_bundle') {
+        let userEmail = metadata.payerEmail;
+        if (!userEmail && metadata.odUserId) {
+          try {
+            const userDoc = await db.collection('users').doc(metadata.odUserId).get();
+            userEmail = userDoc.data()?.email;
+          } catch (err) {
+            console.warn('Failed to fetch user email for receipt:', err);
+          }
+        }
+        if (userEmail) {
+          sendReceiptEmail({
+            transactionId: txRef.id,
+            userId: metadata.odUserId || '',
+            userEmail,
+            userName: metadata.payerName || 'Customer',
+            paymentType: metadata.type as any,
+            amount: charge.amount,
+            currency: (charge.currency || 'nzd').toUpperCase(),
+            eventName: metadata.eventName || '',
+            clubId: metadata.clubId,
+            cardLast4: charge.payment_method_details?.card?.last4 || undefined,
+          }).catch(err => console.error('Receipt email failed:', err));
+        }
+      }
     } else {
       console.warn(`charge.succeeded: Cannot create transaction - no clubId in metadata for charge ${charge.id}`);
     }
@@ -1584,6 +1642,27 @@ async function handleChargeRefunded(charge: Stripe.Charge, event: Stripe.Event) 
         'stripe.webhookEventId': event.id,
       });
       console.log(`✅ Confirmed refund transaction ${processingDoc.id} for refund ${refundId}`);
+
+      // Send refund receipt email (non-blocking)
+      if (original.odUserId) {
+        let userEmail: string | null = null;
+        try {
+          const userDoc = await db.collection('users').doc(original.odUserId).get();
+          userEmail = userDoc.data()?.email || null;
+        } catch (err) {
+          console.warn('Failed to fetch user email for refund receipt:', err);
+        }
+        sendRefundReceiptEmail({
+          originalTransactionId: original.id,
+          refundAmount: stripeRefund.amount,
+          userId: original.odUserId,
+          userEmail,
+          userName: original.payerDisplayName || 'Customer',
+          currency: original.currency || 'NZD',
+          eventName: original.referenceName || 'Refund',
+          clubId: original.odClubId,
+        }).catch(err => console.error('Refund receipt email failed:', err));
+      }
     } else {
       // Create new refund transaction (initiated outside app, e.g., Stripe Dashboard)
       const refTxRef = db.collection('transactions').doc();
@@ -1616,6 +1695,27 @@ async function handleChargeRefunded(charge: Stripe.Charge, event: Stripe.Event) 
         completedAt: Date.now(),
       });
       console.log(`✅ Created new refund transaction ${refTxRef.id} for external refund ${refundId}`);
+
+      // Send refund receipt email for external refunds too (non-blocking)
+      if (original.odUserId) {
+        let userEmail: string | null = null;
+        try {
+          const userDoc = await db.collection('users').doc(original.odUserId).get();
+          userEmail = userDoc.data()?.email || null;
+        } catch (err) {
+          console.warn('Failed to fetch user email for refund receipt:', err);
+        }
+        sendRefundReceiptEmail({
+          originalTransactionId: original.id,
+          refundAmount: stripeRefund.amount,
+          userId: original.odUserId,
+          userEmail,
+          userName: original.payerDisplayName || 'Customer',
+          currency: original.currency || 'NZD',
+          eventName: original.referenceName || 'Refund',
+          clubId: original.odClubId,
+        }).catch(err => console.error('Refund receipt email failed:', err));
+      }
     }
   }
 

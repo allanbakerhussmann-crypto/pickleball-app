@@ -17,7 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { collection, getDocs } from '@firebase/firestore';
 import { getFunctions, httpsCallable } from '@firebase/functions';
 import { db } from '../services/firebase';
-import { testDuprConnection } from '../services/dupr';
+// DUPR connection test moved to Cloud Function in V07.54
 import type { UserProfile, Club } from '../types';
 
 // ============================================
@@ -400,8 +400,14 @@ const AdminDashboard: React.FC = () => {
                 onClick={async () => {
                   setDuprTestResult({ testing: true });
                   try {
-                    const result = await testDuprConnection();
-                    setDuprTestResult({ testing: false, result });
+                    // V07.54: Use Cloud Function instead of client-side test
+                    const functions = getFunctions();
+                    const testConnection = httpsCallable<
+                      Record<string, never>,
+                      { success: boolean; environment: 'uat' | 'production'; error?: string }
+                    >(functions, 'dupr_testConnection');
+                    const response = await testConnection({});
+                    setDuprTestResult({ testing: false, result: response.data });
                   } catch (err) {
                     setDuprTestResult({
                       testing: false,

@@ -1097,3 +1097,21 @@ export const generateReceiptFilename = (
   const sanitized = receiptNumber.replace(/[^a-zA-Z0-9-]/g, '_');
   return `receipt_${sanitized}.${format}`;
 };
+
+// ============================================
+// CLOUD FUNCTION WRAPPERS (V07.51)
+// ============================================
+
+import { getFunctions, httpsCallable } from '@firebase/functions';
+
+/**
+ * Resend a receipt email via Cloud Function
+ *
+ * @param receiptId - The ID of the receipt to resend
+ * @returns Promise that resolves when email is sent
+ */
+export const resendReceipt = async (receiptId: string): Promise<void> => {
+  const functions = getFunctions();
+  const resendFn = httpsCallable(functions, 'receipt_resend');
+  await resendFn({ receiptId });
+};

@@ -47,6 +47,8 @@ interface PoolGroupStandingsProps {
   poolSettings?: PoolPlayMedalsSettings;
   plateSettings?: PlateSettings;  // V06.39: For displaying plate bracket indicator
   getTeamPlayers?: (teamId: string) => { displayName: string }[];
+  // V07.51: Optional name resolver for proper player names
+  getTeamDisplayName?: (teamId: string) => string;
 }
 
 interface PoolStandingRow {
@@ -105,12 +107,14 @@ function getPoolNames(matches: Match[]): string[] {
  *
  * V07.30: Now uses shared calculatePoolStandings from services/standings/poolStandings.ts
  * This ensures UI and database use identical tiebreaker logic (including proper H2H for multi-way ties).
+ * V07.51: Added optional getTeamDisplayName for proper player name resolution
  */
 function calculatePoolStandings(
   poolMatches: Match[],
   teams: Team[],
   advancementCount: number,
-  tiebreakers: TiebreakerKey[] = ['wins', 'head_to_head', 'point_diff', 'points_scored']
+  tiebreakers: TiebreakerKey[] = ['wins', 'head_to_head', 'point_diff', 'points_scored'],
+  getTeamDisplayName?: (teamId: string) => string
 ): PoolStandingRow[] {
   // Get all team IDs involved in this pool
   const teamIds = new Set<string>();
@@ -127,7 +131,10 @@ function calculatePoolStandings(
 
   teamIds.forEach((teamId) => {
     const team = (teams || []).find((t) => t.id === teamId);
-    const name = team?.teamName || team?.name || `Team ${teamId.slice(0, 4)}`;
+    // V07.51: Use resolver for proper player names, fallback to team data
+    const name = getTeamDisplayName
+      ? getTeamDisplayName(teamId)
+      : (team?.teamName || team?.name || `Team ${teamId.slice(0, 4)}`);
     participants.push({ id: teamId, name });
     if (team) teamLookup.set(teamId, team);
   });
@@ -439,6 +446,7 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
   poolSettings,
   plateSettings,  // V06.39
   getTeamPlayers,
+  getTeamDisplayName,  // V07.51
 }) => {
   // Determine advancement count from settings
   const advancementCount = useMemo(() => {
@@ -471,8 +479,9 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
         return false;
       });
       // V06.37: Pass tiebreakers from poolSettings (or use default order)
+      // V07.51: Pass getTeamDisplayName for proper player name resolution
       const tiebreakers = poolSettings?.tiebreakers || ['wins', 'head_to_head', 'point_diff', 'points_scored'];
-      const standings = calculatePoolStandings(poolMatches, teams, advancementCount, tiebreakers as TiebreakerKey[]);
+      const standings = calculatePoolStandings(poolMatches, teams, advancementCount, tiebreakers as TiebreakerKey[], getTeamDisplayName);
       const completedCount = (poolMatches || []).filter((m) => m.status === 'completed').length;
       const isComplete = poolMatches.length > 0 && completedCount === poolMatches.length;
 
@@ -483,7 +492,7 @@ export const PoolGroupStandings: React.FC<PoolGroupStandingsProps> = ({
         isComplete,
       };
     });
-  }, [matches, teams, advancementCount, poolSettings?.tiebreakers]);
+  }, [matches, teams, advancementCount, poolSettings?.tiebreakers, getTeamDisplayName]);
 
   // Overall progress - include both modern (poolGroup) and legacy (stage='Pool Play'/'pool') matches
   const isPoolMatch = (m: Match) => m.poolGroup || m.stage === 'Pool Play' || m.stage === 'pool';

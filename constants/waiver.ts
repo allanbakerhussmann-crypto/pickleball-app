@@ -136,3 +136,57 @@ export const DEFAULT_WAIVER_SETTINGS = {
  * Current waiver version for audit logging
  */
 export const WAIVER_VERSION = '1.0';
+
+/**
+ * DUPR Rating Submission Waiver - V07.51
+ *
+ * Required consent for tournaments that submit match results to DUPR.
+ * Players must acknowledge that their match results will affect their DUPR rating.
+ */
+export const DUPR_WAIVER_TEXT = `DUPR Rating Submission Consent
+
+1. Match Result Submission
+
+I understand and consent to the following regarding DUPR (Dynamic Universal Pickleball Rating):
+• My match results from this event will be submitted to DUPR
+• These results will affect my official DUPR rating
+• Submitted results cannot be removed or modified after processing
+
+2. Rating Impact Acknowledgement
+
+I acknowledge that:
+• My DUPR rating may increase or decrease based on match outcomes
+• Results are submitted by the event organizer, not individual players
+• DUPR's rating algorithm determines how results affect my rating
+• All submitted matches become part of my permanent match history
+
+3. Data Sharing Authorization
+
+I authorize the sharing of the following information with DUPR:
+• My name and DUPR ID
+• Match scores and outcomes
+• Event name and date
+• Opponent information (name, DUPR ID)
+
+4. Accuracy of Information
+
+I confirm that:
+• My DUPR ID is accurate and belongs to me
+• I am the person registered to play under this account
+• I will report any scoring disputes to the organizer before match submission
+
+5. DUPR Terms of Service
+
+I acknowledge that:
+• DUPR match submissions are subject to DUPR's Terms of Service
+• Any disputes about rating calculations should be directed to DUPR
+• The platform and organizers are not responsible for DUPR's rating methodology
+
+6. Consent
+
+By participating in this DUPR-rated event, I consent to having my match results submitted to DUPR and understand that this will permanently affect my rating.`;
+
+/**
+ * DUPR waiver version for audit logging
+ */
+export const DUPR_WAIVER_VERSION = '1.0';

@@ -51,6 +51,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.comms_processLeagueQueue = exports.comms_processQueue = void 0;
+exports.sendEmail = sendEmail;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const crypto = __importStar(require("crypto"));
@@ -284,7 +285,7 @@ async function sendSMSViaSMSGlobal(to, body, apiKey, apiSecret, origin) {
 // ============================================
 // HELPER: Send Email via Amazon SES
 // ============================================
-async function sendEmail(to, subject, body) {
+async function sendEmail(to, subject, body, htmlBody) {
     try {
         const sesConfig = getSESConfig();
         const client = new client_ses_1.SESClient({
@@ -305,12 +306,10 @@ async function sendEmail(to, subject, body) {
                     Data: subject,
                     Charset: 'UTF-8',
                 },
-                Body: {
-                    Text: {
+                Body: Object.assign({ Text: {
                         Data: body,
                         Charset: 'UTF-8',
-                    },
-                },
+                    } }, (htmlBody ? { Html: { Data: htmlBody, Charset: 'UTF-8' } } : {})),
             },
         });
         const response = await client.send(command);

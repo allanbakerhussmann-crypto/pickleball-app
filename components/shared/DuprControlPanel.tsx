@@ -4,7 +4,9 @@
  * Orchestrates the DUPR tab for both Tournament and League managers.
  * Provides match review, finalization, and bulk submission to DUPR.
  *
- * @version V07.10
+ * V07.53: Pass currentUserId to DuprReviewModal for participant check
+ *
+ * @version V07.53
  * @file components/shared/DuprControlPanel.tsx
  */
 
@@ -459,6 +461,7 @@ export function DuprControlPanel({
         onFinalise={handleModalFinalise}
         isSaving={isSaving}
         isOrganizer={isOrganizer}
+        currentUserId={currentUserId}
       />
 
       {/* Test Single Match Modal */}
