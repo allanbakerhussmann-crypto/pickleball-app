@@ -19,6 +19,9 @@ dist-ssr
 .env.production
 .env*.local
 
+# Firebase emulator config (contains test API keys)
+functions/.runtimeconfig.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

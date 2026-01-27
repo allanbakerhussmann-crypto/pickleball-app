@@ -6,10 +6,10 @@
  */
 
 import { initializeApp, getApps } from '@firebase/app';
-import { getAuth as getFirebaseAuth, type Auth } from '@firebase/auth';
-import { getFirestore, type Firestore } from '@firebase/firestore';
-import { getStorage, type FirebaseStorage } from '@firebase/storage';
-import { getFunctions, type Functions } from '@firebase/functions';
+import { getAuth as getFirebaseAuth, connectAuthEmulator, type Auth } from '@firebase/auth';
+import { getFirestore, connectFirestoreEmulator, type Firestore } from '@firebase/firestore';
+import { getStorage, connectStorageEmulator, type FirebaseStorage } from '@firebase/storage';
+import { getFunctions, connectFunctionsEmulator, type Functions } from '@firebase/functions';
 
 // ============================================
 // 🔥 FIREBASE CONFIG FROM ENVIRONMENT VARIABLES
@@ -53,6 +53,23 @@ export const storage: FirebaseStorage = getStorage(app);
 export const functions: Functions = getFunctions(app);
 
 export const getAuth = (): Auth => authInstance;
+
+// ============================================
+// 🧪 EMULATOR CONNECTION (Local Testing Only)
+// ============================================
+// Set VITE_USE_EMULATORS=true in .env to use local emulators
+// This connects to: Auth (9099), Firestore (8080), Functions (5001), Storage (9199)
+
+const useEmulators = import.meta.env.VITE_USE_EMULATORS === 'true';
+
+if (useEmulators) {
+  console.log('🧪 Connecting to Firebase Emulators...');
+  connectAuthEmulator(authInstance, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  connectFunctionsEmulator(functions, '127.0.0.1', 5001);
+  connectStorageEmulator(storage, '127.0.0.1', 9199);
+  console.log('✅ Connected to Emulators - Auth:9099, Firestore:8080, Functions:5001, Storage:9199');
+}
 
 // ============================================
 // Config Helper Functions

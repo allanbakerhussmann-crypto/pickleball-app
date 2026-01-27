@@ -11,15 +11,20 @@
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "emulators": "npm run build && firebase emulators:start",
+    "emulators:debug": "npm run build && firebase emulators:start --debug",
+    "seed": "ts-node src/seedEmulator.ts"
   },
   "dependencies": {
     "@aws-sdk/client-ses": "^3.700.0",
+    "@sendgrid/mail": "^8.1.0",
     "firebase-admin": "^12.0.0",
     "firebase-functions": "^5.0.0",
     "stripe": "^17.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.2"
   }
 }

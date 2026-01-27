@@ -162,7 +162,51 @@ npm run typecheck    # Run tsc --noEmit
 
 # Preview
 npm run preview      # Preview production build
+
+# Local Testing (Emulators)
+cd functions && npm run emulators    # Start Firebase emulators
+cd functions && npm run seed         # Seed emulator with test data
 ```
+
+---
+
+## Deployment Safety Rules (CRITICAL)
+
+**Claude MUST follow these rules before ANY deployment:**
+
+### Pre-Deployment Checklist
+1. **NEVER deploy without explicit user approval** - Always ask "Should I deploy now?" and wait for confirmation
+2. **ALWAYS run build first** - `npm run build` must succeed with no errors
+3. **ALWAYS run typecheck** - `npm run typecheck` must pass
+4. **ALWAYS run functions build** - `cd functions && npm run build` must succeed
+5. **NEVER deploy if there are TypeScript errors**
+6. **NEVER deploy untested code** - User must confirm testing is complete
+
+### Deployment Commands (Only run after checklist passes)
+```bash
+# Deploy functions only
+cd functions && npm run deploy
+
+# Deploy firestore rules and indexes
+firebase deploy --only firestore:rules,firestore:indexes
+
+# Deploy frontend only
+npm run build && firebase deploy --only hosting
+
+# Deploy everything (USE WITH CAUTION)
+firebase deploy
+```
+
+### Rollback Plan
+If something breaks after deployment:
+1. Check Firebase Functions logs: `cd functions && npm run logs`
+2. Previous function versions can be restored in Firebase Console
+3. Hosting can be rolled back in Firebase Console → Hosting → Release History
+
+### Environment Checklist
+- [ ] `.env` has `VITE_USE_EMULATORS` removed or set to `false`
+- [ ] `functions/.runtimeconfig.json` is NOT committed (gitignored)
+- [ ] All sensitive keys are in Firebase Functions config, not in code
 
 ---
 
@@ -437,6 +481,99 @@ interface Match {
 - `wallet.ts` - User wallet/balance system
 - `transactions.ts` - Transaction history
 - `annualPass.ts` - Annual pass management
+
+---
+
+## Refund System Architecture
+
+### Overview
+
+Refunds use Stripe Direct Charges with the `stripeAccount` header. This ensures refunds are processed from the connected account (organizer), not the platform.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `functions/src/stripe.ts` | `stripe_createRefund` function + `handleChargeRefunded` webhook |
+| `components/clubs/TransactionDetailDrawer.tsx` | UI for issuing refunds |
+| `components/clubs/FinanceTab.tsx` | Finance tab showing transactions + refunds |
+| `services/firebase/payments/finance.ts` | Queries transactions by `organizerUserId` |
+
+### Critical Field: organizerUserId
+
+**The `organizerUserId` field is REQUIRED on all refund transactions for them to appear in individual organizer Finance tabs.**
+
+The Finance tab queries transactions using:
+```typescript
+query(collection(db, 'transactions'),
+  where('organizerUserId', '==', currentUser.uid),
+  where('referenceType', '==', 'meetup'),
+  orderBy('createdAt', 'desc')
+)
+```
+
+If `organizerUserId` is missing, the refund won't appear in the organizer's Finance tab (only in club/admin views).
+
+### Refund Transaction Creation Points
+
+There are TWO places where refund transactions are created:
+
+1. **`stripe_createRefund`** (line ~2378) - App-initiated refunds
+   ```typescript
+   organizerUserId: tx.organizerUserId || '',
+   ```
+
+2. **`handleChargeRefunded`** (line ~1704) - External refunds from Stripe Dashboard
+   ```typescript
+   organizerUserId: original.organizerUserId || '',
+   ```
+
+**BOTH locations must include `organizerUserId` or refunds will be invisible to organizers.**
+
+### Refund Amount Calculation
+
+For Direct Charges, the refund amount calculation uses:
+```typescript
+const refundAmount = tx.amount - (tx.platformFeeAmount || 0);
+```
+
+This refunds the NET amount (what organizer received), not the GROSS amount (what customer paid). The platform fee is NOT refunded automatically - Stripe handles application_fee refunds separately.
+
+### Transaction Status Flow
+
+```
+Payment: pending → completed
+Refund (app): processing → completed (via webhook)
+Refund (external): created as completed directly
+```
+
+### Firestore Indexes Required
+
+The Finance tab requires composite indexes on the `transactions` collection:
+- `organizerUserId` + `referenceType` + `createdAt`
+- `organizerUserId` + `type` + `referenceType` + `createdAt`
+- `organizerUserId` + `type` + `status` + `createdAt`
+
+### Firestore Rules
+
+Organizers can read their own transactions:
+```javascript
+resource.data.organizerUserId != null &&
+resource.data.organizerUserId == request.auth.uid
+```
+
+### Debugging Refund Issues
+
+1. **Refund not appearing in Finance tab?**
+   - Check Firestore: Does the refund transaction have `organizerUserId`?
+   - Check indexes: Are all required composite indexes enabled?
+
+2. **Refund amount wrong?**
+   - Verify using `tx.amount - tx.platformFeeAmount` (not just `tx.amount`)
+   - Direct Charges refund from connected account, not platform
+
+3. **No success notification?**
+   - Check `TransactionDetailDrawer.tsx` has alert after `createRefund` call
 
 ---
 
