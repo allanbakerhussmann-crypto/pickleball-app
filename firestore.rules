@@ -41,6 +41,21 @@ service cloud.firestore {
         request.auth.uid == get(/databases/$(database)/documents/leagues/$(leagueId)).data.createdByUserId;
     }
 
+    // V07.57: Team League Admin Helper
+    // Check if user is the organizer of a team league or app admin
+    function isTeamLeagueAdmin(teamLeagueId) {
+      return isAppAdmin() ||
+        (isAuthenticated() &&
+         exists(/databases/$(database)/documents/teamLeagues/$(teamLeagueId)) &&
+         request.auth.uid == get(/databases/$(database)/documents/teamLeagues/$(teamLeagueId)).data.createdByUserId);
+    }
+
+    // V07.57: Check if user is a captain in the fixture (uses denormalized captain IDs)
+    function isTeamCaptainInFixture(fixtureData) {
+      return request.auth.uid == fixtureData.homeCaptainId ||
+             request.auth.uid == fixtureData.awayCaptainId;
+    }
+
     function isAppAdmin() {
       return isAuthenticated() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
@@ -87,7 +102,9 @@ service cloud.firestore {
         // Tournament organizers can see tournament transactions
         (resource.data.tournamentId != null && isTournamentOrganizer(resource.data.tournamentId)) ||
         // League admins can see league transactions
-        (resource.data.leagueId != null && isLeagueAdmin(resource.data.leagueId))
+        (resource.data.leagueId != null && isLeagueAdmin(resource.data.leagueId)) ||
+        // Organizers can see their own organizer transactions (meetups, leagues organized by individuals)
+        (resource.data.organizerUserId != null && resource.data.organizerUserId == request.auth.uid)
       );
       // All writes go through Cloud Functions
       allow write: if false;
@@ -436,11 +453,12 @@ service cloud.firestore {
       allow create: if isAuthenticated();
       // V07.12: Allow authenticated users to update memberCount when joining
       // Full update/delete still requires league admin
-      allow update: if isLeagueAdmin(leagueId) ||
+      allow update: if isLeagueAdmin(leagueId) || isAppAdmin() ||
         (isAuthenticated() &&
          // Only allow memberCount and updatedAt to be modified by non-admins (for joining)
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt']));
-      allow delete: if isLeagueAdmin(leagueId);
+      // V07.55: Allow league admin or app admin to delete
+      allow delete: if isLeagueAdmin(leagueId) || isAppAdmin();
 
       match /members/{memberId} {
         // V07.12: Allow public read for viewing league standings
@@ -565,6 +583,145 @@ service cloud.firestore {
         allow read: if true;
         // Only league admin can manage box players
         allow create, update, delete: if isLeagueAdmin(leagueId);
+      }
+
+      // V07.55: League Divisions (if used)
+      // Some league formats may use divisions
+      match /divisions/{divisionId} {
+        // Anyone can read divisions
+        allow read: if true;
+        // Only league admin or app admin can manage divisions
+        allow create, update, delete: if isLeagueAdmin(leagueId) || isAppAdmin();
+      }
+
+      // V07.55: Team League (Interclub) Teams
+      // Teams in team_league_interclub format leagues
+      match /teams/{teamId} {
+        // Anyone can read teams (public standings/rosters)
+        allow read: if true;
+        // Authenticated users can create teams (registration)
+        allow create: if isAuthenticated();
+        // Team captain or league admin can update
+        allow update: if isLeagueAdmin(leagueId) ||
+          (isAuthenticated() && resource.data.captainId == request.auth.uid);
+        // League admin or app admin can delete teams
+        allow delete: if isLeagueAdmin(leagueId) || isAppAdmin();
+      }
+
+      // V07.55: Team League Fixtures
+      // Fixtures/matches between teams in team leagues
+      match /fixtures/{fixtureId} {
+        // Anyone can read fixtures (public schedule/results)
+        allow read: if true;
+        // Only league admin can create fixtures
+        allow create: if isLeagueAdmin(leagueId);
+        // League admin or team captains can update (for lineups/scores)
+        allow update: if isLeagueAdmin(leagueId) ||
+          (isAuthenticated() && (
+            resource.data.homeTeamId != null &&
+            exists(/databases/$(database)/documents/leagues/$(leagueId)/teams/$(resource.data.homeTeamId)) &&
+            get(/databases/$(database)/documents/leagues/$(leagueId)/teams/$(resource.data.homeTeamId)).data.captainId == request.auth.uid
+          )) ||
+          (isAuthenticated() && (
+            resource.data.awayTeamId != null &&
+            exists(/databases/$(database)/documents/leagues/$(leagueId)/teams/$(resource.data.awayTeamId)) &&
+            get(/databases/$(database)/documents/leagues/$(leagueId)/teams/$(resource.data.awayTeamId)).data.captainId == request.auth.uid
+          ));
+        // League admin or app admin can delete fixtures
+        allow delete: if isLeagueAdmin(leagueId) || isAppAdmin();
+      }
+    }
+
+    // ============================================
+    // TEAM LEAGUES - Separate Collection (V07.57)
+    // ============================================
+    // Team leagues are stored in their own collection, separate from regular player leagues.
+    // Collection path: teamLeagues/{teamLeagueId}
+    // Subcollections: teams/, fixtures/
+
+    match /teamLeagues/{teamLeagueId} {
+      // Anyone can read team leagues (public for browsing)
+      allow read: if true;
+
+      // Authenticated users can create team leagues
+      allow create: if isAuthenticated();
+
+      // Only organizer or app admin can update
+      // Prevent changing immutable fields
+      allow update: if isTeamLeagueAdmin(teamLeagueId) && (
+        // Immutable fields cannot be changed after creation
+        request.resource.data.createdByUserId == resource.data.createdByUserId
+      );
+
+      // Only organizer or app admin can delete
+      allow delete: if isTeamLeagueAdmin(teamLeagueId);
+
+      // ----------------------------------------
+      // Teams Subcollection
+      // Path: teamLeagues/{teamLeagueId}/teams/{teamId}
+      // ----------------------------------------
+      match /teams/{teamId} {
+        // Anyone can read teams (public for standings/rosters)
+        allow read: if true;
+
+        // Authenticated users can create teams (registration)
+        allow create: if isAuthenticated();
+
+        // Team captain or league admin can update
+        // Captain restrictions enforced at service level:
+        //   - Captains can edit: name, homeVenue, contactPhone, roster[]
+        //   - Captains CANNOT edit: status, approvedAt, approvedById, etc.
+        allow update: if isTeamLeagueAdmin(teamLeagueId) ||
+          (isAuthenticated() && resource.data.captainId == request.auth.uid) && (
+            // Immutable fields
+            request.resource.data.teamLeagueId == resource.data.teamLeagueId &&
+            // Status changes only by admin (captain uses Cloud Function)
+            (request.resource.data.status == resource.data.status || isTeamLeagueAdmin(teamLeagueId)) &&
+            // Captain changes only by admin
+            (request.resource.data.captainId == resource.data.captainId || isTeamLeagueAdmin(teamLeagueId))
+          );
+
+        // Only league admin or app admin can delete teams
+        allow delete: if isTeamLeagueAdmin(teamLeagueId);
+      }
+
+      // ----------------------------------------
+      // Fixtures Subcollection
+      // Path: teamLeagues/{teamLeagueId}/fixtures/{fixtureId}
+      // ----------------------------------------
+      match /fixtures/{fixtureId} {
+        // Anyone can read fixtures (public schedule/results)
+        allow read: if true;
+
+        // Only league admin can create fixtures
+        allow create: if isTeamLeagueAdmin(teamLeagueId);
+
+        // Update rules with finalized lock and captain access
+        allow update: if isAuthenticated() &&
+          // Gate 1: FINALIZED LOCK - once finalized, ONLY admin can edit
+          (resource.data.status != 'finalized' || isTeamLeagueAdmin(teamLeagueId)) &&
+          // Gate 2: Must be admin OR captain in this fixture
+          (isTeamLeagueAdmin(teamLeagueId) || isTeamCaptainInFixture(resource.data)) &&
+          // Gate 3: IMMUTABLE FIELDS
+          request.resource.data.teamLeagueId == resource.data.teamLeagueId &&
+          request.resource.data.homeTeamId == resource.data.homeTeamId &&
+          request.resource.data.awayTeamId == resource.data.awayTeamId &&
+          // Gate 4: Only admin can SET status TO finalized
+          (request.resource.data.status != 'finalized' || isTeamLeagueAdmin(teamLeagueId));
+
+        // Only league admin or app admin can delete fixtures
+        allow delete: if isTeamLeagueAdmin(teamLeagueId);
+      }
+
+      // ----------------------------------------
+      // Meta Subcollection (for counters)
+      // Path: teamLeagues/{teamLeagueId}/meta/{docId}
+      // ----------------------------------------
+      match /meta/{docId} {
+        // Anyone can read meta (for team count checks)
+        allow read: if true;
+        // Only admin can write (or Cloud Functions via Admin SDK)
+        allow write: if isTeamLeagueAdmin(teamLeagueId);
       }
     }
 
@@ -875,6 +1032,111 @@ service cloud.firestore {
     match /retention_policies/{policyId} {
       allow read: if isAppAdmin();
       allow write: if isAppAdmin();
+    }
+
+    // ============================================
+    // V07.53: STANDING MEETUPS (Recurring Weekly Sessions)
+    // ============================================
+
+    // Helper: Check if user is organizer of a standing meetup's club
+    function isStandingMeetupOrganizer(standingMeetupId) {
+      let meetup = get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data;
+      return isAuthenticated() && (
+        request.auth.uid == meetup.createdByUserId ||
+        isClubAdmin(meetup.clubId)
+      );
+    }
+
+    // Standing Meetups - organizers/admins can write, anyone can read public
+    match /standingMeetups/{standingMeetupId} {
+      allow read: if resource.data.visibility == 'public' ||
+                     isClubMember(resource.data.clubId) ||
+                     isClubAdmin(resource.data.clubId) ||
+                     isAppAdmin();
+      allow create: if isClubAdmin(request.resource.data.clubId);
+      allow update: if isClubAdmin(resource.data.clubId) || isAppAdmin();
+      allow delete: if isClubAdmin(resource.data.clubId);
+
+      // Occurrences - Cloud Functions write only
+      match /occurrences/{dateId} {
+        allow read: if get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.visibility == 'public' ||
+                       isClubMember(get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.clubId) ||
+                       isClubAdmin(get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.clubId) ||
+                       isAppAdmin();
+        allow write: if false; // Cloud Functions only
+
+        // Participants - users can read their own, organizers can read all
+        match /participants/{odUserId} {
+          allow read: if request.auth.uid == odUserId ||
+                        isStandingMeetupOrganizer(standingMeetupId) ||
+                        isAppAdmin();
+          allow write: if false; // Cloud Functions only
+        }
+      }
+    }
+
+    // Meetup Occurrence Index - read-only for clients, Cloud Functions write
+    match /meetupOccurrencesIndex/{indexId} {
+      allow read: if true;  // Public discovery feed
+      allow write: if false; // Cloud Functions only
+    }
+
+    // Standing Meetup Subscriptions - user can read their own, organizers can read for their meetups
+    match /standingMeetupSubscriptions/{subscriptionId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.userId ||
+        isStandingMeetupOrganizer(resource.data.standingMeetupId) ||
+        isClubAdmin(resource.data.clubId) ||
+        isAppAdmin()
+      );
+      allow write: if false; // Cloud Functions only
+    }
+
+    // Stripe Event Locks - Cloud Functions only (webhook idempotency)
+    match /stripeEvents/{eventId} {
+      allow read, write: if false; // Cloud Functions only
+    }
+
+    // Wallet Transactions - for credit history
+    match /walletTransactions/{transactionId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isClubAdmin(resource.data.clubId) ||
+        isAppAdmin()
+      );
+      allow write: if false; // Cloud Functions only
+    }
+
+    // ============================================
+    // V07.53: COLLECTION GROUP QUERIES
+    // ============================================
+
+    // Collection group query for matches - PARTICIPANT ONLY
+    //
+    // SECURITY DECISION: Participant-only + Admin (V07.53)
+    // Approved: 2025-01-18
+    //
+    // - Only match participants can read via collectionGroup
+    // - App admins can read all matches
+    // - Organizers use subcollection queries (existing rules apply)
+    //
+    // This prevents any authenticated user from reading all matches system-wide.
+    // Combined with participantIds denormalized field for efficient queries.
+    //
+    // Used by: usePendingScoreAcknowledgements hook
+    match /{path=**}/matches/{matchId} {
+      allow read: if isAuthenticated() && (
+        // User is a participant in this match (uses denormalized participantIds)
+        // Use get() with empty list fallback to handle matches without participantIds
+        request.auth.uid in resource.data.get('participantIds', []) ||
+        // Fallback: check sideA/sideB playerIds directly (for legacy matches)
+        request.auth.uid in resource.data.get('sideA', {}).get('playerIds', []) ||
+        request.auth.uid in resource.data.get('sideB', {}).get('playerIds', []) ||
+        // App admin can see all matches
+        isAppAdmin()
+      );
+      // Note: Writes are handled by the specific subcollection rules above
+      // (tournaments/{id}/matches, leagues/{id}/matches, meetups/{id}/matches)
     }
   }
 }

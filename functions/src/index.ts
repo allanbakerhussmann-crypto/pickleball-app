@@ -43,6 +43,10 @@ export {
   // SMS Bundles
   stripe_purchaseSMSBundle,
   stripe_seedSMSBundles,
+
+  // Standing Meetup Subscriptions (V07.53)
+  stripe_createStandingMeetupSubscription,
+  stripe_cancelStandingMeetupSubscription,
 } from './stripe';
 
 // ============================================
@@ -118,11 +122,12 @@ export {
 } from './dupr';
 
 // ============================================
-// LEAGUE FUNCTIONS (V07.50)
+// LEAGUE FUNCTIONS (V07.53)
 // ============================================
 
 export {
   league_join,            // Join league with server-side DUPR+ gate enforcement
+  league_markMemberAsPaid, // Mark league member payment as paid (organizer only)
 } from './leagues';
 
 // ============================================
@@ -171,3 +176,26 @@ export {
   platform_addMissingTransaction,
   platform_exportTransactions,
 } from './platformFinance';
+
+// ============================================
+// USER ACCOUNT FUNCTIONS (V07.53)
+// ============================================
+
+export {
+  user_deleteAccount,
+} from './userAccount';
+
+// ============================================
+// STANDING MEETUP FUNCTIONS (V07.53)
+// ============================================
+
+export {
+  standingMeetup_ensureOccurrences,
+  standingMeetup_checkIn,
+  standingMeetup_generateCheckInToken,
+  standingMeetup_cancelAttendance,
+  standingMeetup_cancelOccurrence,
+  standingMeetup_manualCheckIn,
+  standingMeetup_markNoShow,
+  onOccurrenceDeleted,
+} from './standingMeetups';

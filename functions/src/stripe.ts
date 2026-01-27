@@ -647,10 +647,14 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
     customerEmail,
     successUrl,
     cancelUrl,
+    leagueId,         // V07.54: Highest priority - routes to league.organizerStripeAccountId
     clubId,
-    organizerUserId, // For user-based organizer accounts
+    organizerUserId,  // For user-based organizer accounts (fallback)
     metadata = {},
   } = data;
+
+  // V07.54: Debug logging for routing
+  console.log('[Checkout] Input params:', { leagueId, clubId, organizerUserId, metadataType: metadata?.type });
 
   if (!items || items.length === 0) {
     throw new functions.https.HttpsError('invalid-argument', 'Items required');
@@ -667,26 +671,96 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
     let connectedAccountId: string | null = null;
     let accountVersion: string | null = null;
     let currency = 'nzd'; // Default
+    let routingSource = 'none'; // Track which routing path was used
 
-    // Try club first, then organizer user
-    if (clubId) {
+    // V07.54: Priority order for routing:
+    // 1. leagueId -> league.organizerStripeAccountId (highest priority - fixes stale user account issue)
+    // 2. clubId -> club.stripeConnectedAccountId
+    // 3. organizerUserId -> user.stripeConnectedAccountId (fallback)
+    if (leagueId) {
+      console.log(`[Checkout] Attempting league routing for leagueId=${leagueId}`);
+      const leagueDoc = await db.collection('leagues').doc(leagueId).get();
+      if (leagueDoc.exists) {
+        const leagueData = leagueDoc.data();
+        console.log(`[Checkout] League found. organizerStripeAccountId=${leagueData?.organizerStripeAccountId}, clubId=${leagueData?.clubId}, createdByUserId=${leagueData?.createdByUserId}`);
+        connectedAccountId = leagueData?.organizerStripeAccountId || null;
+        routingSource = 'league';
+        // Derive currency from league's club if available, otherwise use creator's country
+        if (leagueData?.clubId) {
+          const clubDoc = await db.collection('clubs').doc(leagueData.clubId).get();
+          if (clubDoc.exists) {
+            const clubData = clubDoc.data();
+            const country = clubData?.stripeAccountCountry || 'NZ';
+            currency = getCurrencyForCountry(country);
+          }
+        } else if (leagueData?.createdByUserId) {
+          const userDoc = await db.collection('users').doc(leagueData.createdByUserId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            const country = userData?.stripeAccountCountry || 'NZ';
+            currency = getCurrencyForCountry(country);
+          }
+        }
+        console.log(`[Checkout] League routing result: connectedAccount=${connectedAccountId}, currency=${currency}`);
+      } else {
+        console.log(`[Checkout] League not found for leagueId=${leagueId}`);
+      }
+    }
+
+    // Fallback to club if no league or league had no connected account
+    if (!connectedAccountId && clubId) {
+      console.log(`[Checkout] Falling back to club routing for clubId=${clubId}`);
       const clubDoc = await db.collection('clubs').doc(clubId).get();
       if (clubDoc.exists) {
         const clubData = clubDoc.data();
         connectedAccountId = clubData?.stripeConnectedAccountId || null;
         accountVersion = clubData?.stripeAccountVersion || null;
+        routingSource = 'club';
         // Get currency from country (UPPERCASE in DB)
         const country = clubData?.stripeAccountCountry || 'NZ';
         currency = getCurrencyForCountry(country);
+        console.log(`[Checkout] Club routing result: connectedAccount=${connectedAccountId}`);
       }
-    } else if (organizerUserId) {
+    }
+
+    // Fallback to organizer user if no club account found
+    if (!connectedAccountId && organizerUserId) {
+      console.log(`[Checkout] Falling back to user routing for organizerUserId=${organizerUserId}`);
       const userDoc = await db.collection('users').doc(organizerUserId).get();
       if (userDoc.exists) {
         const userData = userDoc.data();
         connectedAccountId = userData?.stripeConnectedAccountId || null;
         accountVersion = userData?.stripeAccountVersion || null;
+        routingSource = 'user';
         const country = userData?.stripeAccountCountry || 'NZ';
         currency = getCurrencyForCountry(country);
+        console.log(`[Checkout] User routing result: connectedAccount=${connectedAccountId}`);
+      }
+    }
+
+    console.log(`[Checkout] Final routing: source=${routingSource}, connectedAccountId=${connectedAccountId}, currency=${currency}`);
+
+    // V07.54: Detect test/live mode mismatch
+    // Test accounts start with acct_1 and have 18 chars, live accounts are longer
+    // More reliable: check if we're using a live key (starts with sk_live_) vs test key (sk_test_)
+    const stripeKey = functions.config().stripe?.secret_key || process.env.STRIPE_SECRET_KEY || '';
+    const isLiveMode = stripeKey.startsWith('sk_live_') || stripeKey.startsWith('rk_live_');
+    if (connectedAccountId && isLiveMode) {
+      // In live mode, verify the account is not a test account by checking a simple API call
+      // Test accounts will fail with "The account was created with a testmode key"
+      // We catch this early to give a better error message
+      try {
+        await stripe.accounts.retrieve(connectedAccountId);
+      } catch (accountError: any) {
+        if (accountError.message?.includes('testmode')) {
+          console.error(`[Checkout] Test account detected in live mode: ${connectedAccountId}`);
+          throw new functions.https.HttpsError(
+            'failed-precondition',
+            `The organizer's Stripe account is a test account and cannot process live payments. Please ask the organizer to reconnect their Stripe account.`
+          );
+        }
+        // Other errors - let them proceed and fail at checkout creation
+        console.warn(`[Checkout] Account check warning:`, accountError.message);
       }
     }
 
@@ -703,20 +777,49 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
       quantity: item.quantity,
     }));
 
-    // Build payment metadata - used at BOTH session and payment_intent levels
-    const paymentMetadata = {
+    // Build payment metadata - MUST be flat string map (Stripe requirement)
+    // Stringify all values to ensure no objects/arrays/numbers
+    const paymentMetadata: Record<string, string> = {
       clubId: clubId || '',
+      organizerUserId: organizerUserId || '',
       odUserId: context.auth.uid,
-      type: metadata.type || '',
-      referenceId: metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.bookingKey || '',
-      eventName: metadata.eventName || '',
-      payerName: metadata.payerName || '',
-      ...metadata,
+      type: String(metadata.type || ''),
+      referenceId: String(metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.bookingKey || ''),
+      meetupId: String(metadata.meetupId || ''),
+      tournamentId: String(metadata.tournamentId || ''),
+      leagueId: String(metadata.leagueId || ''),
+      bookingKey: String(metadata.bookingKey || ''),
+      eventName: String(metadata.eventName || ''),
+      payerName: String(metadata.payerName || ''),
+      payerEmail: String(customerEmail || ''),
+      headcount: String(metadata.headcount || '1'),
+      includeSelf: String(metadata.includeSelf || 'true'),
     };
 
-    // For V2 accounts, use DIRECT CHARGES (stripeAccount header)
-    if (accountVersion === 'v2' && connectedAccountId) {
-      console.log(`Creating V2 direct charge session on account ${connectedAccountId}`);
+    // Add optional guest/member info if present (already strings from client)
+    if (metadata.guestNames) paymentMetadata.guestNames = String(metadata.guestNames);
+    if (metadata.guestRelationships) paymentMetadata.guestRelationships = String(metadata.guestRelationships);
+    if (metadata.memberIds) paymentMetadata.memberIds = String(metadata.memberIds);
+    if (metadata.memberNames) paymentMetadata.memberNames = String(metadata.memberNames);
+
+    // V07.54: League payment fields (for webhook to update correct member)
+    if (metadata.memberId) paymentMetadata.memberId = String(metadata.memberId);
+    if (metadata.slot) paymentMetadata.slot = String(metadata.slot);
+
+    // GATE: If leagueId, clubId or organizerUserId is provided, we MUST have a connected account
+    // This catches organizer-owned events that should have Stripe Connect set up
+    // Platform-owned events (no routing params) are allowed to proceed without connected account
+    if ((leagueId || clubId || organizerUserId) && !connectedAccountId) {
+      console.error(`Payment rejected: No connected account. LeagueId: ${leagueId}, ClubId: ${clubId}, OrganizerUserId: ${organizerUserId}`);
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Payment cannot be processed: The organizer has not connected their Stripe account. Please contact the organizer.'
+      );
+    }
+
+    // ALL connected account payments use DIRECT CHARGES
+    if (connectedAccountId) {
+      console.log(`Creating direct charge session on account ${connectedAccountId}`);
 
       const session = await stripe.checkout.sessions.create(
         {
@@ -725,20 +828,20 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
           line_items: lineItems,
           success_url: successUrl,
           cancel_url: cancelUrl,
-          // Session-level metadata (easy access from session events)
+          // Session-level metadata (for checkout.session.completed webhook)
           metadata: paymentMetadata,
           payment_intent_data: {
-            application_fee_amount: platformFee, // Platform receives this
-            // Same metadata on PI (for charge events)
+            application_fee_amount: platformFee, // Platform receives this as "Collected fee"
+            // Same metadata on PaymentIntent (for charge.succeeded webhook)
             metadata: paymentMetadata,
           },
         },
         {
-          stripeAccount: connectedAccountId, // DIRECT CHARGE - execute ON connected account
+          stripeAccount: connectedAccountId, // DIRECT CHARGE - charge created ON connected account
         }
       );
 
-      console.log(`✅ Created V2 direct charge session ${session.id}`);
+      console.log(`✅ Created direct charge session ${session.id} on account ${connectedAccountId}`);
 
       return {
         sessionId: session.id,
@@ -747,49 +850,25 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
       };
     }
 
-    // CRITICAL: If this is a meetup/tournament/league payment, we MUST have a connected account
-    // Otherwise payments would incorrectly go to the platform instead of the organizer
-    const requiresConnectedAccount = metadata.type === 'meetup' || metadata.type === 'tournament' ||
-                                      metadata.type === 'league' || metadata.type === 'court_booking';
-
-    if (requiresConnectedAccount && !connectedAccountId) {
-      console.error(`Payment rejected: No connected account for ${metadata.type} payment. ClubId: ${clubId}, OrganizerUserId: ${organizerUserId}`);
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'Payment cannot be processed: The organizer has not connected their Stripe account. Please contact the organizer.'
-      );
-    }
-
-    // For V1 accounts, use DESTINATION CHARGES
-    const sessionConfig: Stripe.Checkout.SessionCreateParams = {
+    // Platform-only payment (no connected account - e.g., SMS bundles, platform-owned events)
+    const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       customer_email: customerEmail,
       line_items: lineItems,
       success_url: successUrl,
       cancel_url: cancelUrl,
       metadata: paymentMetadata,
-    };
-
-    // If connected account (V1), split the payment with destination charge
-    if (connectedAccountId) {
-      sessionConfig.payment_intent_data = {
-        application_fee_amount: platformFee,
-        transfer_data: {
-          destination: connectedAccountId,
-        },
+      payment_intent_data: {
         metadata: paymentMetadata,
-      };
-    }
+      },
+    });
 
-    // Create Checkout Session
-    const session = await stripe.checkout.sessions.create(sessionConfig);
-
-    console.log(`✅ Created ${connectedAccountId ? 'V1 destination charge' : 'platform'} session ${session.id}`);
+    console.log(`✅ Created platform session ${session.id}`);
 
     return {
       sessionId: session.id,
       url: session.url,
-      chargeModel: connectedAccountId ? 'destination' : 'platform',
+      chargeModel: 'platform',
     };
   } catch (error: any) {
     console.error('Create checkout session error:', error);
@@ -1110,12 +1189,17 @@ async function handleV2AccountUpdate(event: any) {
 // ============================================
 // STRIPE WEBHOOK HANDLER (Standard)
 // For checkout.session.completed, account.updated, charges, refunds
-// Uses ONE webhook secret (Connect application type recommended)
+// Supports TWO webhook secrets:
+// - stripe.webhook_secret = Account webhook (platform events)
+// - stripe.connect_webhook_secret = Connect webhook (connected account events)
 // ============================================
 
 export const stripe_webhook = functions.https.onRequest(async (req, res) => {
   const sig = req.headers['stripe-signature'];
-  const webhookSecret = functions.config().stripe?.webhook_secret || process.env.STRIPE_WEBHOOK_SECRET;
+
+  // Support multiple webhook secrets (Account + Connect webhooks use different secrets)
+  const accountWebhookSecret = functions.config().stripe?.webhook_secret || process.env.STRIPE_WEBHOOK_SECRET;
+  const connectWebhookSecret = functions.config().stripe?.connect_webhook_secret || process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
 
   if (!sig) {
     console.error('Missing stripe-signature header');
@@ -1123,18 +1207,27 @@ export const stripe_webhook = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  if (!webhookSecret) {
-    console.error('Webhook secret not configured');
+  if (!accountWebhookSecret && !connectWebhookSecret) {
+    console.error('No webhook secrets configured');
     res.status(500).send('Webhook not configured');
     return;
   }
 
-  // 1. Verify signature - return 400 only for verification failures
-  let event: Stripe.Event;
-  try {
-    event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
-  } catch (err: any) {
-    console.error('Webhook signature verification failed:', err.message);
+  // 1. Verify signature - try both secrets (Account and Connect webhooks have different secrets)
+  let event: Stripe.Event | null = null;
+  const secrets = [accountWebhookSecret, connectWebhookSecret].filter(Boolean) as string[];
+
+  for (const secret of secrets) {
+    try {
+      event = stripe.webhooks.constructEvent(req.rawBody, sig, secret);
+      break; // Success - exit loop
+    } catch (err: any) {
+      // Continue to try next secret
+    }
+  }
+
+  if (!event) {
+    console.error('Webhook signature verification failed with all secrets');
     res.status(400).send('Signature verification failed');
     return;
   }
@@ -1220,6 +1313,37 @@ export const stripe_webhook = functions.https.onRequest(async (req, res) => {
         break;
       }
 
+      // Standing Meetup Subscription Events
+      case 'invoice.paid': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const connectedAccountId = (event as any).account;
+        if (connectedAccountId && invoice.subscription) {
+          console.log('Processing invoice.paid for subscription:', invoice.subscription);
+          await handleStandingMeetupInvoicePaid(invoice, connectedAccountId);
+        }
+        break;
+      }
+
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const connectedAccountId = (event as any).account;
+        if (connectedAccountId && invoice.subscription) {
+          console.log('Processing invoice.payment_failed for subscription:', invoice.subscription);
+          await handleStandingMeetupPaymentFailed(invoice, connectedAccountId);
+        }
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const connectedAccountId = (event as any).account;
+        if (connectedAccountId) {
+          console.log('Processing customer.subscription.deleted:', subscription.id);
+          await handleStandingMeetupSubscriptionDeleted(subscription, connectedAccountId);
+        }
+        break;
+      }
+
       default:
         console.log(`Unhandled event type: ${event.type}`);
     }
@@ -1269,7 +1393,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
     // For direct charges, event.account contains the connected account ID
     const connectedAccountId = (event as any).account;
 
-    if (connectedAccountId && clubId && paymentType !== 'sms_bundle') {
+    if (connectedAccountId && (clubId || metadata.organizerUserId) && paymentType !== 'sms_bundle') {
       // Secondary idempotency: check if transaction already exists for this PaymentIntent
       const existingTx = await db.collection('transactions')
         .where('stripe.paymentIntentId', '==', session.payment_intent)
@@ -1285,8 +1409,9 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
         await txRef.set({
           id: txRef.id, // ID matches Firestore doc ID
           schemaVersion: 1,
-          odClubId: clubId,
+          odClubId: clubId || '',
           odUserId: odUserId,
+          organizerUserId: metadata.organizerUserId || '',
           type: 'payment',
           status: 'processing', // NOT completed yet - wait for charge.succeeded
           referenceType: paymentType || 'unknown',
@@ -1314,6 +1439,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
     }
 
     // Route to appropriate handler based on payment type (existing logic for RSVPs, bookings, etc.)
+    console.log(`🔀 Routing payment type: "${paymentType}" for session ${session.id}`);
     switch (paymentType) {
       case 'meetup':
         await handleMeetupPayment(session, metadata);
@@ -1365,14 +1491,26 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
   }
 
   const paymentIntentId = charge.payment_intent as string;
-  console.log(`Processing charge.succeeded for PI ${paymentIntentId} on account ${connectedAccountId}`);
+  console.log(`Processing charge.succeeded for PI ${paymentIntentId} on account ${connectedAccountId}, chargeId=${charge.id}`);
 
-  // Find the processing transaction
-  const txSnap = await db.collection('transactions')
+  // Find the processing transaction - try by paymentIntentId first
+  let txSnap = await db.collection('transactions')
     .where('stripe.paymentIntentId', '==', paymentIntentId)
     .where('type', '==', 'payment')
     .limit(1)
     .get();
+
+  console.log(`charge.succeeded: Query by PI found ${txSnap.size} transactions`);
+
+  // Fallback: try by chargeId if PI lookup failed (in case checkout stored chargeId differently)
+  if (txSnap.empty && charge.id) {
+    txSnap = await db.collection('transactions')
+      .where('stripe.chargeId', '==', charge.id)
+      .where('type', '==', 'payment')
+      .limit(1)
+      .get();
+    console.log(`charge.succeeded: Fallback query by chargeId found ${txSnap.size} transactions`);
+  }
 
   // Get actual fees and net from balance_transaction (source of truth for what club receives)
   let platformFee = charge.application_fee_amount || 0;
@@ -1421,6 +1559,8 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
     // Update existing transaction to completed
     const txDoc = txSnap.docs[0];
     const existingTx = txDoc.data();
+
+    console.log(`charge.succeeded: Found transaction ${txDoc.id} with status=${existingTx.status}, PI=${existingTx.stripe?.paymentIntentId}`);
 
     // Verify accountId matches (detect webhook routing issues)
     if (existingTx.stripe?.accountId && existingTx.stripe.accountId !== connectedAccountId) {
@@ -1495,13 +1635,14 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
       }
     }
 
-    if (metadata.clubId) {
+    if (metadata.clubId || metadata.organizerUserId) {
       const txRef = db.collection('transactions').doc();
       await txRef.set({
         id: txRef.id,
         schemaVersion: 1,
-        odClubId: metadata.clubId,
+        odClubId: metadata.clubId || '',
         odUserId: metadata.odUserId || '',
+        organizerUserId: metadata.organizerUserId || '',
         type: 'payment',
         status: 'completed', // Already completed since charge succeeded
         referenceType: metadata.type || 'unknown',
@@ -1671,6 +1812,7 @@ async function handleChargeRefunded(charge: Stripe.Charge, event: Stripe.Event) 
         schemaVersion: 1,
         odClubId: original.odClubId,
         odUserId: original.odUserId,
+        organizerUserId: original.organizerUserId || '',
         type: 'refund',
         status: 'completed',
         parentTransactionId: original.id,
@@ -2006,22 +2148,76 @@ async function handleTournamentPayment(
 }
 
 // ============================================
-// LEAGUE PAYMENT HANDLER (Placeholder)
+// LEAGUE PAYMENT HANDLER (V07.53)
 // ============================================
 
 async function handleLeaguePayment(
   session: Stripe.Checkout.Session,
   metadata: Record<string, string>
 ) {
-  const leagueId = metadata.leagueId;
-  const odUserId = metadata.odUserId;
+  console.log(`🏆 handleLeaguePayment called with metadata:`, JSON.stringify(metadata));
 
-  console.log(`League payment: league=${leagueId}, user=${odUserId}`);
+  const { leagueId, memberId } = metadata;
+  const slot = metadata.slot || 'primary';  // Default to 'primary' if omitted
 
-  // TODO: Implement league membership payment handling
-  // 1. Update membership status to 'paid'
-  // 2. Add user to league members
-  // 3. Send confirmation email
+  // Validate required fields - log and return if missing (never throw)
+  if (!leagueId || !memberId) {
+    console.error('League payment missing required metadata:', { leagueId, memberId, slot });
+    return;
+  }
+
+  const db = admin.firestore();
+  const memberRef = db.collection('leagues').doc(leagueId).collection('members').doc(memberId);
+  const memberDoc = await memberRef.get();
+
+  if (!memberDoc.exists) {
+    console.error(`League member not found: ${leagueId}/members/${memberId}`);
+    return;
+  }
+
+  const now = Date.now();
+  const member = memberDoc.data();
+
+  // Update correct slot (defaults to 'primary')
+  // NOTE: Firestore will create partnerPayment map if it doesn't exist
+  // UI should only show partner payment status when entryFeeType === 'per_player'
+  try {
+    if (slot === 'partner') {
+      // Use amountDue from member doc (set at join time), NOT session.amount_total
+      const amountDue = member?.partnerPayment?.amountDue || 0;
+      await memberRef.update({
+        'partnerPayment.status': 'paid',
+        'partnerPayment.method': 'stripe',
+        'partnerPayment.amountPaid': amountDue,           // Match the entry fee, not Stripe total
+        'partnerPayment.totalCharged': session.amount_total,  // Audit: actual charge incl fees
+        'partnerPayment.paidAt': now,
+        'partnerPayment.stripeSessionId': session.id,
+        updatedAt: now,
+      });
+    } else {
+      // Use amountDue from member doc (set at join time), NOT session.amount_total
+      const amountDue = member?.payment?.amountDue || 0;
+      // Primary - write BOTH nested AND flat for backwards compat
+      await memberRef.update({
+        'payment.status': 'paid',
+        'payment.method': 'stripe',
+        'payment.amountPaid': amountDue,                  // Match the entry fee, not Stripe total
+        'payment.totalCharged': session.amount_total,    // Audit: actual charge incl fees
+        'payment.paidAt': now,
+        'payment.stripeSessionId': session.id,
+        // Flat format (backwards compat)
+        paymentStatus: 'paid',
+        amountPaid: amountDue,
+        paidAt: now,
+        stripeSessionId: session.id,
+        updatedAt: now,
+      });
+    }
+    console.log(`✅ League payment confirmed: league=${leagueId}, member=${memberId}, slot=${slot}`);
+  } catch (updateError) {
+    console.error(`❌ Failed to update league member payment status:`, updateError);
+    throw updateError;
+  }
 }
 
 // ============================================
@@ -2309,13 +2505,19 @@ export const stripe_createRefund = functions.https.onCall(async (data, context) 
       throw new functions.https.HttpsError('failed-precondition', 'Transaction has no connected account');
     }
 
-    // Validate refund amount
-    const refundAmount = amount || tx.amount; // Full refund if not specified
+    // Validate refund amount - default to NET amount (what organizer actually received)
+    // clubNetAmount is the TRUE net from Stripe's balance_transaction (set by charge.succeeded webhook)
+    const netAmount = tx.clubNetAmount || tx.organizerNetAmount || (tx.amount - (tx.totalFeeAmount || tx.platformFeeAmount || 0));
+
+    console.log(`Refund calculation: original=${tx.amount}, totalFees=${tx.totalFeeAmount}, platformFee=${tx.platformFeeAmount}, net=${netAmount}`);
+
+    const refundAmount = amount || netAmount; // Refund net amount if not specified
+
     if (refundAmount <= 0) {
       throw new functions.https.HttpsError('invalid-argument', 'Refund amount must be positive');
     }
-    if (refundAmount > tx.amount) {
-      throw new functions.https.HttpsError('invalid-argument', 'Refund amount cannot exceed original amount');
+    if (refundAmount > netAmount) {
+      throw new functions.https.HttpsError('invalid-argument', `Refund amount (${refundAmount}) cannot exceed net amount (${netAmount})`);
     }
 
     // 2. Create Stripe refund on connected account
@@ -2339,6 +2541,7 @@ export const stripe_createRefund = functions.https.onCall(async (data, context) 
       schemaVersion: 1,
       odClubId: tx.odClubId,
       odUserId: tx.odUserId,
+      organizerUserId: tx.organizerUserId || '',
       type: 'refund',
       status: 'processing', // Webhook will complete
       parentTransactionId: transactionId,
@@ -2533,4 +2736,609 @@ async function handleDisputeClosed(dispute: Stripe.Dispute, event: Stripe.Event)
   }
 
   console.log(`✅ Dispute ${dispute.id} closed with status: ${dispute.status} (${won ? 'WON' : lost ? 'LOST' : 'OTHER'})`);
+}
+
+// ============================================
+// STANDING MEETUP SUBSCRIPTIONS
+// ============================================
+
+/**
+ * Create a subscription for a standing meetup
+ * Uses Direct Charges - subscription on connected account
+ */
+export const stripe_createStandingMeetupSubscription = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+  }
+
+  const { standingMeetupId, paymentMethodId } = data;
+  const userId = context.auth.uid;
+
+  if (!standingMeetupId || !paymentMethodId) {
+    throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId and paymentMethodId are required');
+  }
+
+  const db = admin.firestore();
+
+  // Get standing meetup
+  const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+  if (!meetupDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'MEETUP_NOT_FOUND');
+  }
+
+  const meetup = meetupDoc.data()!;
+
+  // Validate meetup is active
+  if (meetup.status !== 'active') {
+    throw new functions.https.HttpsError('failed-precondition', 'MEETUP_NOT_ACTIVE');
+  }
+
+  // CAPACITY CHECK FIRST - before any Stripe API calls
+  if (meetup.subscriberCount >= meetup.maxPlayers) {
+    throw new functions.https.HttpsError('failed-precondition', 'CAPACITY_FULL');
+  }
+
+  // Check if already subscribed
+  const subscriptionId = `${standingMeetupId}_${userId}`;
+  const existingSubDoc = await db.collection('standingMeetupSubscriptions').doc(subscriptionId).get();
+  if (existingSubDoc.exists && existingSubDoc.data()?.status === 'active') {
+    throw new functions.https.HttpsError('already-exists', 'ALREADY_SUBSCRIBED');
+  }
+
+  // Get user info
+  const userDoc = await db.collection('users').doc(userId).get();
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'User not found');
+  }
+  const user = userDoc.data()!;
+
+  const connectedAccountId = meetup.organizerStripeAccountId;
+  if (!connectedAccountId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Organizer has no Stripe account');
+  }
+
+  try {
+    // STEP 1: Create/get customer on CONNECTED account (not platform)
+    // IMPORTANT: Customers are per-account in Stripe Connect
+    let customerId: string;
+
+    // Check if user has a customer ID for this connected account
+    const customerMapping = user.stripeCustomers?.[connectedAccountId];
+    if (customerMapping) {
+      customerId = customerMapping;
+    } else {
+      // Create customer on connected account
+      const customer = await stripe.customers.create(
+        {
+          email: user.email,
+          name: user.displayName || user.email,
+          metadata: {
+            userId,
+            platform: 'pickleball-director',
+          },
+        },
+        { stripeAccount: connectedAccountId }
+      );
+      customerId = customer.id;
+
+      // Store customer mapping for future use
+      await db.collection('users').doc(userId).update({
+        [`stripeCustomers.${connectedAccountId}`]: customerId,
+        updatedAt: Date.now(),
+      });
+    }
+
+    // STEP 2: Attach payment method to customer on connected account
+    await stripe.paymentMethods.attach(
+      paymentMethodId,
+      { customer: customerId },
+      { stripeAccount: connectedAccountId }
+    );
+
+    // Set as default payment method
+    await stripe.customers.update(
+      customerId,
+      { invoice_settings: { default_payment_method: paymentMethodId } },
+      { stripeAccount: connectedAccountId }
+    );
+
+    // STEP 3: Get or create price on connected account
+    let priceId = meetup.billing.stripePriceId;
+    if (!priceId) {
+      // Map our interval to Stripe's interval
+      const stripeInterval = meetup.billing.interval === 'weekly' ? 'week' : 'month';
+
+      const price = await stripe.prices.create(
+        {
+          unit_amount: meetup.billing.amount,
+          currency: meetup.billing.currency,
+          recurring: {
+            interval: stripeInterval,
+            interval_count: meetup.billing.intervalCount || 1,
+          },
+          product_data: {
+            name: `${meetup.title} Subscription`,
+          },
+        },
+        { stripeAccount: connectedAccountId }
+      );
+      priceId = price.id;
+
+      // Store price ID for reuse
+      await db.collection('standingMeetups').doc(standingMeetupId).update({
+        'billing.stripePriceId': priceId,
+        updatedAt: Date.now(),
+      });
+    }
+
+    // STEP 4: Calculate billing anchor (next meetup day)
+    // If today is meetup day and past start time, use next week
+    const now = new Date();
+    const dayOfWeek = meetup.recurrence.dayOfWeek;
+    const currentDay = now.getDay();
+    let daysUntilMeetup = (dayOfWeek - currentDay + 7) % 7;
+
+    // Parse start time
+    const [startHour, startMinute] = meetup.recurrence.startTime.split(':').map(Number);
+    const todaysMeetupTime = new Date(now);
+    todaysMeetupTime.setHours(startHour, startMinute, 0, 0);
+
+    // If today is meetup day but past start time, use next occurrence
+    if (daysUntilMeetup === 0 && now > todaysMeetupTime) {
+      daysUntilMeetup = 7 * (meetup.recurrence.intervalCount || 1);
+    }
+
+    const nextMeetupDate = new Date(now);
+    nextMeetupDate.setDate(now.getDate() + daysUntilMeetup);
+    nextMeetupDate.setHours(startHour, startMinute, 0, 0);
+    const billingAnchor = Math.floor(nextMeetupDate.getTime() / 1000);
+
+    // STEP 5: Create subscription with billing anchor
+    const subscription = await stripe.subscriptions.create(
+      {
+        customer: customerId,
+        items: [{ price: priceId }],
+        billing_cycle_anchor: billingAnchor,
+        proration_behavior: 'create_prorations',
+        payment_settings: {
+          payment_method_types: ['card'],
+          save_default_payment_method: 'on_subscription',
+        },
+        metadata: {
+          type: 'standing_meetup_subscription',
+          standingMeetupId,
+          clubId: meetup.clubId,
+          userId,
+          platform: 'pickleball-director',
+        },
+        // Apply platform fee as application_fee_percent
+        application_fee_percent: PLATFORM_FEE_PERCENT,
+      },
+      { stripeAccount: connectedAccountId }
+    );
+
+    // STEP 6: Create subscription document in Firestore
+    const subscriptionData = {
+      id: subscriptionId,
+      standingMeetupId,
+      clubId: meetup.clubId,
+      userId,
+      userName: user.displayName || user.email,
+      userEmail: user.email,
+      stripeAccountId: connectedAccountId,
+      stripeSubscriptionId: subscription.id,
+      stripeCustomerId: customerId,
+      stripeStatus: subscription.status as 'active' | 'past_due' | 'canceled' | 'unpaid',
+      currentPeriodStart: subscription.current_period_start * 1000,
+      currentPeriodEnd: subscription.current_period_end * 1000,
+      billingAmount: meetup.billing.amount,
+      status: 'active' as const,
+      totalPaid: 0,
+      totalCreditsReceived: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await db.collection('standingMeetupSubscriptions').doc(subscriptionId).set(subscriptionData);
+
+    // STEP 7: Increment subscriber count on standing meetup
+    await db.collection('standingMeetups').doc(standingMeetupId).update({
+      subscriberCount: admin.firestore.FieldValue.increment(1),
+      updatedAt: Date.now(),
+    });
+
+    // STEP 8: Stamp subscriber into occurrences in window [now, currentPeriodEnd]
+    // This is done via Cloud Function standingMeetup_ensureOccurrences
+    // Call it to ensure occurrences exist, then stamp the subscriber
+    const periodEnd = subscription.current_period_end * 1000;
+    const occurrencesSnap = await db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .where('startAt', '>=', Date.now())
+      .where('startAt', '<', periodEnd)
+      .get();
+
+    const batch = db.batch();
+    let firstOccurrenceDate = '';
+
+    for (const occDoc of occurrencesSnap.docs) {
+      if (!firstOccurrenceDate) {
+        firstOccurrenceDate = occDoc.id;
+      }
+
+      const participantRef = occDoc.ref.collection('participants').doc(userId);
+      batch.set(participantRef, {
+        userName: user.displayName || user.email,
+        status: 'expected',
+        creditIssued: false,
+        updatedAt: Date.now(),
+      });
+
+      // Increment expectedCount
+      batch.update(occDoc.ref, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: Date.now(),
+      });
+
+      // Update index
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${standingMeetupId}_${occDoc.id}`);
+      batch.update(indexRef, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        spotsLeft: admin.firestore.FieldValue.increment(-1),
+        updatedAt: Date.now(),
+      });
+    }
+
+    await batch.commit();
+
+    console.log(`✅ Created standing meetup subscription ${subscriptionId} for user ${userId}`);
+
+    return {
+      subscriptionId,
+      stripeSubscriptionId: subscription.id,
+      currentPeriodEnd: subscription.current_period_end * 1000,
+      firstOccurrenceDate: firstOccurrenceDate || nextMeetupDate.toISOString().split('T')[0],
+    };
+  } catch (error: any) {
+    console.error('Error creating standing meetup subscription:', error);
+
+    if (error.type === 'StripeCardError') {
+      throw new functions.https.HttpsError('failed-precondition', 'PAYMENT_FAILED');
+    }
+
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to create subscription');
+  }
+});
+
+/**
+ * Cancel a standing meetup subscription
+ * Cancels at period end (subscriber keeps access until billing period ends)
+ */
+export const stripe_cancelStandingMeetupSubscription = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+  }
+
+  const { subscriptionId } = data;
+  const userId = context.auth.uid;
+
+  if (!subscriptionId) {
+    throw new functions.https.HttpsError('invalid-argument', 'subscriptionId is required');
+  }
+
+  const db = admin.firestore();
+
+  // Get subscription
+  const subDoc = await db.collection('standingMeetupSubscriptions').doc(subscriptionId).get();
+  if (!subDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'SUBSCRIPTION_NOT_FOUND');
+  }
+
+  const subscription = subDoc.data()!;
+
+  // Verify ownership
+  if (subscription.userId !== userId) {
+    throw new functions.https.HttpsError('permission-denied', 'NOT_OWNER');
+  }
+
+  // Check if already cancelled
+  if (subscription.status === 'cancelled') {
+    throw new functions.https.HttpsError('already-exists', 'ALREADY_CANCELLED');
+  }
+
+  try {
+    // Cancel on Stripe (at period end)
+    const stripeSubscription = await stripe.subscriptions.update(
+      subscription.stripeSubscriptionId,
+      { cancel_at_period_end: true },
+      { stripeAccount: subscription.stripeAccountId }
+    );
+
+    const cancelledAt = Date.now();
+
+    // Update Firestore subscription
+    await subDoc.ref.update({
+      status: 'cancelled',
+      cancelledAt,
+      stripeStatus: stripeSubscription.status,
+      updatedAt: Date.now(),
+    });
+
+    // Note: We don't decrement subscriberCount or remove from occurrences yet
+    // That happens when the subscription actually ends (via webhook)
+
+    console.log(`✅ Cancelled standing meetup subscription ${subscriptionId}`);
+
+    return {
+      cancelledAt,
+      effectiveEndDate: subscription.currentPeriodEnd,
+    };
+  } catch (error: any) {
+    console.error('Error cancelling standing meetup subscription:', error);
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to cancel subscription');
+  }
+});
+
+/**
+ * Handle standing meetup subscription webhooks
+ * Called by the main webhook handler for subscription-related events
+ */
+export async function handleStandingMeetupSubscriptionWebhook(event: Stripe.Event) {
+  const db = admin.firestore();
+  const connectedAccountId = (event as any).account;
+
+  // Only process events from connected accounts
+  if (!connectedAccountId) {
+    return;
+  }
+
+  // 2-STEP LOCK PATTERN: Acquire lock FIRST
+  const lockRef = db.collection('stripeEvents').doc(event.id);
+
+  let alreadyProcessed = false;
+  await db.runTransaction(async (transaction) => {
+    const lockSnap = await transaction.get(lockRef);
+    if (lockSnap.exists) {
+      alreadyProcessed = true;
+      return;
+    }
+
+    transaction.set(lockRef, {
+      eventType: event.type,
+      status: 'processing',
+      startedAt: Date.now(),
+      accountId: connectedAccountId,
+    });
+  });
+
+  if (alreadyProcessed) {
+    console.log(`Event ${event.id} already processed, skipping`);
+    return;
+  }
+
+  try {
+    // Process event OUTSIDE the transaction
+    switch (event.type) {
+      case 'invoice.paid':
+        await handleStandingMeetupInvoicePaid(event.data.object as Stripe.Invoice, connectedAccountId);
+        break;
+
+      case 'invoice.payment_failed':
+        await handleStandingMeetupPaymentFailed(event.data.object as Stripe.Invoice, connectedAccountId);
+        break;
+
+      case 'customer.subscription.deleted':
+        await handleStandingMeetupSubscriptionDeleted(event.data.object as Stripe.Subscription, connectedAccountId);
+        break;
+    }
+
+    // Mark lock as done
+    await lockRef.update({
+      status: 'done',
+      completedAt: Date.now(),
+    });
+  } catch (error: any) {
+    // Mark lock as failed
+    await lockRef.update({
+      status: 'failed',
+      error: error.message,
+      failedAt: Date.now(),
+    });
+    throw error;
+  }
+}
+
+/**
+ * Handle invoice.paid for standing meetup subscriptions
+ */
+async function handleStandingMeetupInvoicePaid(invoice: Stripe.Invoice, connectedAccountId: string) {
+  const db = admin.firestore();
+
+  // Check if this is a standing meetup subscription
+  const subscription = invoice.subscription as string;
+  if (!subscription) return;
+
+  // Get subscription by Stripe ID
+  const subsSnap = await db.collection('standingMeetupSubscriptions')
+    .where('stripeSubscriptionId', '==', subscription)
+    .where('stripeAccountId', '==', connectedAccountId)
+    .limit(1)
+    .get();
+
+  if (subsSnap.empty) {
+    // Not a standing meetup subscription
+    return;
+  }
+
+  const subDoc = subsSnap.docs[0];
+  const subData = subDoc.data();
+
+  // Update subscription with new period
+  const stripeSubscription = await stripe.subscriptions.retrieve(
+    subscription,
+    { stripeAccount: connectedAccountId }
+  );
+
+  await subDoc.ref.update({
+    currentPeriodStart: stripeSubscription.current_period_start * 1000,
+    currentPeriodEnd: stripeSubscription.current_period_end * 1000,
+    stripeStatus: stripeSubscription.status,
+    totalPaid: admin.firestore.FieldValue.increment(invoice.amount_paid),
+    updatedAt: Date.now(),
+  });
+
+  // Stamp subscriber into new occurrences for the new period
+  const periodEnd = stripeSubscription.current_period_end * 1000;
+  const periodStart = stripeSubscription.current_period_start * 1000;
+
+  const occurrencesSnap = await db
+    .collection('standingMeetups')
+    .doc(subData.standingMeetupId)
+    .collection('occurrences')
+    .where('startAt', '>=', periodStart)
+    .where('startAt', '<', periodEnd)
+    .get();
+
+  // Get user info
+  const userDoc = await db.collection('users').doc(subData.userId).get();
+  const userName = userDoc.data()?.displayName || userDoc.data()?.email || 'Unknown';
+
+  const batch = db.batch();
+
+  for (const occDoc of occurrencesSnap.docs) {
+    const participantRef = occDoc.ref.collection('participants').doc(subData.userId);
+    const participantSnap = await participantRef.get();
+
+    if (!participantSnap.exists) {
+      batch.set(participantRef, {
+        userName,
+        status: 'expected',
+        creditIssued: false,
+        updatedAt: Date.now(),
+      });
+
+      batch.update(occDoc.ref, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: Date.now(),
+      });
+
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${subData.standingMeetupId}_${occDoc.id}`);
+      batch.update(indexRef, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        spotsLeft: admin.firestore.FieldValue.increment(-1),
+        updatedAt: Date.now(),
+      });
+    }
+  }
+
+  await batch.commit();
+
+  console.log(`✅ Processed invoice.paid for subscription ${subDoc.id}`);
+}
+
+/**
+ * Handle invoice.payment_failed for standing meetup subscriptions
+ */
+async function handleStandingMeetupPaymentFailed(invoice: Stripe.Invoice, connectedAccountId: string) {
+  const db = admin.firestore();
+
+  const subscription = invoice.subscription as string;
+  if (!subscription) return;
+
+  // Get subscription by Stripe ID
+  const subsSnap = await db.collection('standingMeetupSubscriptions')
+    .where('stripeSubscriptionId', '==', subscription)
+    .where('stripeAccountId', '==', connectedAccountId)
+    .limit(1)
+    .get();
+
+  if (subsSnap.empty) return;
+
+  const subDoc = subsSnap.docs[0];
+
+  // Update status to past_due
+  await subDoc.ref.update({
+    status: 'past_due',
+    stripeStatus: 'past_due',
+    updatedAt: Date.now(),
+  });
+
+  // TODO: Send SMS notification to player about payment failure
+
+  console.log(`✅ Marked subscription ${subDoc.id} as past_due`);
+}
+
+/**
+ * Handle customer.subscription.deleted for standing meetup subscriptions
+ */
+async function handleStandingMeetupSubscriptionDeleted(subscription: Stripe.Subscription, connectedAccountId: string) {
+  const db = admin.firestore();
+
+  // Get subscription by Stripe ID
+  const subsSnap = await db.collection('standingMeetupSubscriptions')
+    .where('stripeSubscriptionId', '==', subscription.id)
+    .where('stripeAccountId', '==', connectedAccountId)
+    .limit(1)
+    .get();
+
+  if (subsSnap.empty) return;
+
+  const subDoc = subsSnap.docs[0];
+  const subData = subDoc.data();
+
+  // Mark as cancelled (final)
+  await subDoc.ref.update({
+    status: 'cancelled',
+    stripeStatus: 'canceled',
+    updatedAt: Date.now(),
+  });
+
+  // Decrement subscriber count
+  await db.collection('standingMeetups').doc(subData.standingMeetupId).update({
+    subscriberCount: admin.firestore.FieldValue.increment(-1),
+    updatedAt: Date.now(),
+  });
+
+  // Remove from future occurrences
+  const now = Date.now();
+  const occurrencesSnap = await db
+    .collection('standingMeetups')
+    .doc(subData.standingMeetupId)
+    .collection('occurrences')
+    .where('startAt', '>', now)
+    .get();
+
+  const batch = db.batch();
+
+  for (const occDoc of occurrencesSnap.docs) {
+    const participantRef = occDoc.ref.collection('participants').doc(subData.userId);
+    const participantSnap = await participantRef.get();
+
+    if (participantSnap.exists && participantSnap.data()?.status === 'expected') {
+      batch.delete(participantRef);
+
+      batch.update(occDoc.ref, {
+        expectedCount: admin.firestore.FieldValue.increment(-1),
+        updatedAt: Date.now(),
+      });
+
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${subData.standingMeetupId}_${occDoc.id}`);
+      batch.update(indexRef, {
+        expectedCount: admin.firestore.FieldValue.increment(-1),
+        spotsLeft: admin.firestore.FieldValue.increment(1),
+        updatedAt: Date.now(),
+      });
+    }
+  }
+
+  await batch.commit();
+
+  console.log(`✅ Processed subscription.deleted for ${subDoc.id}`);
 }
