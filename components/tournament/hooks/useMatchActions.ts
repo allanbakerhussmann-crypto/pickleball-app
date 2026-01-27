@@ -55,7 +55,6 @@ import {
 } from '../../../services/firebase';
 import {
   submitMatchScore,
-  confirmMatchScore,
   disputeMatchScore,
 } from '../../../services/matchService';
 // V07.04: DUPR-Compliant Scoring
@@ -65,6 +64,8 @@ import {
   disputeScore,
   finaliseResult,
 } from '../../../services/firebase/duprScoring';
+// V07.53: Use confirmScore wrapper (routes to correct flow based on DB state)
+import { confirmScore } from '../../../services/firebase/confirmScore';
 import type { DuprMode } from '../../../types';
 
 interface UseMatchActionsProps {
@@ -529,12 +530,16 @@ export const useMatchActions = ({
           isOrganizer
         );
       } else if (action === 'confirm') {
-        await confirmMatchScore(
+        // V07.53: Use confirmScore wrapper (routes based on fresh DB state)
+        const result = await confirmScore(
+          'tournament',
           tournamentId,
           matchId,
-          currentUserId,
-          isOrganizer
+          currentUserId
         );
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to confirm score');
+        }
       } else if (action === 'dispute') {
         await disputeMatchScore(
           tournamentId,

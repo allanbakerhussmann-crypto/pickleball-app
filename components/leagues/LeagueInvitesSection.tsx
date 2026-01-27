@@ -5,7 +5,11 @@
  * - Partner invites (someone invited you to be their partner)
  * - Join requests (someone wants to join your open team)
  *
- * @version 07.26
+ * V07.53: Added payment handling for per_player leagues
+ * - Shows payment modal when accepting invite in per_player league
+ * - Supports both Stripe and bank transfer payment methods
+ *
+ * @version 07.53
  * @file components/leagues/LeagueInvitesSection.tsx
  */
 
@@ -17,8 +21,10 @@ import {
   respondToLeaguePartnerInviteAtomic,
   respondToLeagueJoinRequest,
   getLeague,
+  generateBankTransferReference,
 } from '../../services/firebase';
-import type { LeaguePartnerInvite, LeagueJoinRequest, League } from '../../types';
+import { createCheckoutSession, redirectToCheckout, calculateFees, PLATFORM_FEE_PERCENT } from '../../services/stripe';
+import type { LeaguePartnerInvite, LeagueJoinRequest, League, LeaguePaymentSlot } from '../../types';
 
 // ============================================
 // TYPES
@@ -34,6 +40,13 @@ interface InviteWithMeta extends LeaguePartnerInvite {
 
 interface JoinRequestWithMeta extends LeagueJoinRequest {
   league?: League | null;
+}
+
+// V07.53: Payment modal state for per_player leagues
+interface PaymentModalState {
+  isOpen: boolean;
+  invite: InviteWithMeta | null;
+  selectedMethod: 'stripe' | 'bank_transfer' | null;
 }
 
 // ============================================
@@ -55,6 +68,14 @@ export const LeagueInvitesSection: React.FC<LeagueInvitesSectionProps> = ({
 
   // Processing state
   const [processingId, setProcessingId] = useState<string | null>(null);
+
+  // V07.53: Payment modal state for per_player leagues
+  const [paymentModal, setPaymentModal] = useState<PaymentModalState>({
+    isOpen: false,
+    invite: null,
+    selectedMethod: null,
+  });
+  const [processingPayment, setProcessingPayment] = useState(false);
 
   // ============================================
   // SUBSCRIPTIONS
@@ -126,11 +147,48 @@ export const LeagueInvitesSection: React.FC<LeagueInvitesSectionProps> = ({
   // HANDLERS
   // ============================================
 
+  // V07.53: Check if partner payment is required for a league
+  const requiresPartnerPayment = (league: League | null | undefined): boolean => {
+    if (!league?.pricing) return false;
+    const entryFee = league.pricing.entryFee || 0;
+    const isPerPlayer = league.pricing.entryFeeType === 'per_player';
+    const isDoubles = league.type === 'doubles' || league.type === 'mixed_doubles';
+    return entryFee > 0 && isPerPlayer && isDoubles;
+  };
+
+  // V07.53: Get payment methods available for the league
+  const getPaymentMethods = (league: League | null | undefined): { stripe: boolean; bank: boolean } => {
+    if (!league?.pricing) return { stripe: false, bank: false };
+    const pricing = league.pricing;
+    // Default to stripe if nothing specified and paymentMode is stripe
+    if (pricing.paymentMode === 'stripe') {
+      return {
+        stripe: pricing.allowStripe !== false, // Default true
+        bank: pricing.allowBankTransfer === true,
+      };
+    }
+    return { stripe: false, bank: pricing.paymentMode === 'external' };
+  };
+
   const handleRespondToInvite = async (
     inviteId: string,
     _leagueId: string,
     response: 'accepted' | 'declined'
   ) => {
+    // Find the invite to check if payment is required
+    const invite = partnerInvites.find(i => i.id === inviteId);
+
+    // V07.53: If accepting and payment is required, show payment modal
+    if (response === 'accepted' && invite && requiresPartnerPayment(invite.league)) {
+      setPaymentModal({
+        isOpen: true,
+        invite,
+        selectedMethod: null,
+      });
+      return;
+    }
+
+    // No payment required - proceed directly
     setProcessingId(inviteId);
     try {
       const result = await respondToLeaguePartnerInviteAtomic(inviteId, response);
@@ -141,6 +199,95 @@ export const LeagueInvitesSection: React.FC<LeagueInvitesSectionProps> = ({
       console.error('Failed to respond to invite:', error);
     } finally {
       setProcessingId(null);
+    }
+  };
+
+  // V07.53: Handle payment and accept invite
+  const handlePayAndAccept = async () => {
+    if (!paymentModal.invite || !paymentModal.selectedMethod || !currentUser) return;
+
+    const invite = paymentModal.invite;
+    const league = invite.league;
+    if (!league?.pricing) return;
+
+    setProcessingPayment(true);
+    const entryFee = league.pricing.entryFee || 0;
+
+    try {
+      if (paymentModal.selectedMethod === 'bank_transfer') {
+        // Bank transfer - accept with pending payment
+        const paymentPatch: Partial<LeaguePaymentSlot> = {
+          status: 'pending',
+          method: 'bank_transfer',
+          amountDue: entryFee,
+          bankTransferReference: generateBankTransferReference(league.id, currentUser.uid, 'partner'),
+        };
+
+        const result = await respondToLeaguePartnerInviteAtomic(
+          invite.id,
+          'accepted',
+          { slot: 'partner', paymentPatch }
+        );
+
+        if (result) {
+          onInviteAccepted?.(result.leagueId);
+        }
+        setPaymentModal({ isOpen: false, invite: null, selectedMethod: null });
+      } else {
+        // Stripe - create checkout session and redirect
+        const fees = calculateFees(entryFee, league.pricing.feesPaidBy || 'organizer');
+        const amount = league.pricing.feesPaidBy === 'player' ? fees.playerPays : entryFee;
+
+        // First, accept the invite with pending stripe payment
+        const paymentPatch: Partial<LeaguePaymentSlot> = {
+          status: 'pending',
+          method: 'stripe',
+          amountDue: entryFee,
+        };
+
+        const result = await respondToLeaguePartnerInviteAtomic(
+          invite.id,
+          'accepted',
+          { slot: 'partner', paymentPatch }
+        );
+
+        if (!result) {
+          throw new Error('Failed to accept invite');
+        }
+
+        // Create checkout session with proper metadata
+        const { url } = await createCheckoutSession({
+          items: [{
+            name: `Partner Fee: ${league.name}`,
+            description: `Entry fee for ${league.name}`,
+            amount: amount,
+            quantity: 1,
+          }],
+          successUrl: `${window.location.origin}/#/leagues/${league.id}?payment=success`,
+          cancelUrl: `${window.location.origin}/#/leagues/${league.id}?payment=cancelled`,
+          // V07.54: Route to correct Stripe account - leagueId is highest priority
+          // Server loads league.organizerStripeAccountId (fixes stale user account issue)
+          leagueId: league.id,
+          clubId: league.clubId || undefined,
+          organizerUserId: !league.clubId ? league.createdByUserId : undefined,
+          metadata: {
+            type: 'league',
+            leagueId: league.id,
+            memberId: result.memberId,
+            slot: 'partner',
+            odUserId: currentUser.uid,
+            eventName: league.name,
+            payerName: currentUser.displayName || currentUser.email || '',
+          },
+        });
+
+        // Redirect to Stripe
+        await redirectToCheckout(url);
+      }
+    } catch (error) {
+      console.error('Failed to process payment:', error);
+    } finally {
+      setProcessingPayment(false);
     }
   };
 
@@ -376,6 +523,181 @@ export const LeagueInvitesSection: React.FC<LeagueInvitesSectionProps> = ({
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* V07.53: Payment Modal for Per-Player Leagues */}
+      {paymentModal.isOpen && paymentModal.invite && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-gray-900 rounded-2xl border border-gray-700 w-full max-w-md shadow-2xl">
+            {/* Header */}
+            <div className="p-5 border-b border-gray-700">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-white">Accept Partner Invite</h3>
+                <button
+                  onClick={() => setPaymentModal({ isOpen: false, invite: null, selectedMethod: null })}
+                  className="text-gray-400 hover:text-white"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-5 space-y-4">
+              <div className="bg-gray-800/50 rounded-lg p-4">
+                <p className="text-gray-400 text-sm">You've been invited to join:</p>
+                <p className="text-white font-semibold mt-1">
+                  {paymentModal.invite.league?.name || paymentModal.invite.leagueName}
+                </p>
+                <p className="text-gray-400 text-sm mt-1">
+                  Partner: {paymentModal.invite.inviterName}
+                </p>
+              </div>
+
+              {/* Entry Fee */}
+              <div className="bg-lime-500/10 border border-lime-500/30 rounded-lg p-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-400">Entry Fee (per player)</span>
+                  <span className="text-lime-400 font-bold text-lg">
+                    ${((paymentModal.invite.league?.pricing?.entryFee || 0) / 100).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Payment Method Selection */}
+              <div className="space-y-3">
+                <p className="text-sm text-gray-400">Payment Method:</p>
+
+                {(() => {
+                  const methods = getPaymentMethods(paymentModal.invite.league);
+                  return (
+                    <>
+                      {methods.stripe && (
+                        <label
+                          className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                            paymentModal.selectedMethod === 'stripe'
+                              ? 'bg-purple-500/20 border-purple-500'
+                              : 'bg-gray-800 border-gray-700 hover:border-gray-600'
+                          }`}
+                          onClick={() => setPaymentModal(prev => ({ ...prev, selectedMethod: 'stripe' }))}
+                        >
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            paymentModal.selectedMethod === 'stripe' ? 'border-purple-500' : 'border-gray-500'
+                          }`}>
+                            {paymentModal.selectedMethod === 'stripe' && (
+                              <div className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-white font-medium">Pay Online</div>
+                            <div className="text-xs text-gray-400">
+                              ${(() => {
+                                const fee = paymentModal.invite.league?.pricing?.entryFee || 0;
+                                const feesPaidBy = paymentModal.invite.league?.pricing?.feesPaidBy || 'organizer';
+                                if (feesPaidBy === 'player') {
+                                  const fees = calculateFees(fee, 'player');
+                                  return (fees.playerPays / 100).toFixed(2);
+                                }
+                                return (fee / 100).toFixed(2);
+                              })()} total {paymentModal.invite.league?.pricing?.feesPaidBy === 'player' ? '(incl. fees)' : ''}
+                            </div>
+                          </div>
+                        </label>
+                      )}
+
+                      {methods.bank && (
+                        <label
+                          className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                            paymentModal.selectedMethod === 'bank_transfer'
+                              ? 'bg-blue-500/20 border-blue-500'
+                              : 'bg-gray-800 border-gray-700 hover:border-gray-600'
+                          }`}
+                          onClick={() => setPaymentModal(prev => ({ ...prev, selectedMethod: 'bank_transfer' }))}
+                        >
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            paymentModal.selectedMethod === 'bank_transfer' ? 'border-blue-500' : 'border-gray-500'
+                          }`}>
+                            {paymentModal.selectedMethod === 'bank_transfer' && (
+                              <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-white font-medium">Bank Transfer</div>
+                            <div className="text-xs text-gray-400">
+                              No fees - organizer confirms manually
+                            </div>
+                          </div>
+                        </label>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Bank Details (if bank transfer selected and details available) */}
+              {paymentModal.selectedMethod === 'bank_transfer' &&
+               paymentModal.invite.league?.pricing?.bankDetails?.accountNumber &&
+               paymentModal.invite.league?.pricing?.showBankDetails && (
+                <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                  <h4 className="text-sm font-medium text-white mb-3">Bank Details</h4>
+                  <div className="space-y-2 text-sm">
+                    {paymentModal.invite.league.pricing.bankDetails.bankName && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Bank:</span>
+                        <span className="text-white">{paymentModal.invite.league.pricing.bankDetails.bankName}</span>
+                      </div>
+                    )}
+                    {paymentModal.invite.league.pricing.bankDetails.accountName && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Name:</span>
+                        <span className="text-white">{paymentModal.invite.league.pricing.bankDetails.accountName}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Account:</span>
+                      <span className="text-white font-mono">{paymentModal.invite.league.pricing.bankDetails.accountNumber}</span>
+                    </div>
+                    {paymentModal.invite.league.pricing.bankDetails.reference && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Reference:</span>
+                        <span className="text-white">{paymentModal.invite.league.pricing.bankDetails.reference}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-5 border-t border-gray-700 flex gap-3">
+              <button
+                onClick={() => setPaymentModal({ isOpen: false, invite: null, selectedMethod: null })}
+                disabled={processingPayment}
+                className="flex-1 px-4 py-3 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-medium transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePayAndAccept}
+                disabled={!paymentModal.selectedMethod || processingPayment}
+                className="flex-1 px-4 py-3 rounded-lg bg-lime-500 hover:bg-lime-400 text-gray-900 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {processingPayment ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <div className="w-4 h-4 border-2 border-gray-900 border-t-transparent rounded-full animate-spin" />
+                    Processing...
+                  </span>
+                ) : paymentModal.selectedMethod === 'stripe' ? (
+                  'Pay & Accept'
+                ) : (
+                  'Accept'
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

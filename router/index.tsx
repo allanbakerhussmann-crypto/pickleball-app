@@ -36,6 +36,7 @@ import AdminOrganizerRequestsPage from '../pages/AdminOrganizerRequestsPage';
 import InvitesPage from '../pages/InvitesPage';
 import PlaceholderPage from '../pages/PlaceholderPage';
 import LeaguesPage from '../pages/LeaguesPage';
+import TeamLeaguesPage from '../pages/TeamLeaguesPage';
 import PaymentDemoPage from '../pages/PaymentDemoPage';
 import AdminTestPaymentsPage from '../pages/AdminTestPaymentsPage';
 
@@ -51,6 +52,9 @@ import ScoringDashboardPage from '../pages/ScoringDashboardPage';
 
 // Public Results Page (V06.19)
 import EventResultsPage from '../pages/EventResultsPage';
+
+// Team League Public View (V07.53)
+import { TeamLeaguePublicView } from '../components/teamLeague';
 
 // Legal / Privacy Pages (V06.04)
 import PrivacyPolicyPage from '../pages/PrivacyPolicyPage';
@@ -318,13 +322,25 @@ export const router = createHashRouter([
       },
       {
         path: 'team-leagues',
-        element: <PlaceholderPage title="Team Leagues" message="Team-based league competitions." />,
+        element: <TeamLeaguesPage />,
+      },
+      {
+        path: 'team-leagues/create',
+        element: (
+          <ProtectedRoute requireOrganizer>
+            <TeamLeaguesPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'team-leagues/:id',
+        element: <TeamLeaguesPage />,
       },
       {
         path: 'my-team-leagues',
         element: (
           <ProtectedRoute>
-            <PlaceholderPage title="My Team Leagues" message="Your team league memberships." />
+            <TeamLeaguesPage />
           </ProtectedRoute>
         ),
       },
@@ -359,6 +375,12 @@ export const router = createHashRouter([
       {
         path: 'results/:eventId',
         element: <EventResultsPage />,
+      },
+
+      // Team League public results page (V07.53)
+      {
+        path: 'team-league/:leagueId',
+        element: <TeamLeaguePublicView />,
       },
 
       // ==========================================

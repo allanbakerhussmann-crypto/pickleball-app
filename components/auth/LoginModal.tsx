@@ -5,7 +5,6 @@ import { useAuth } from '../../contexts/AuthContext';
 import { ROUTES } from '../../router/routes';
 import type { UserRole } from '../../types';
 import { isFirebaseConfigured } from '../../services/firebase';
-import { PhoneVerificationModal } from './PhoneVerificationModal';
 import { PhoneInput } from '../shared/PhoneInput';
 
 interface LoginModalProps {
@@ -56,7 +55,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
   const [agreeToTerms, setAgreeToTerms] = useState(false);
   const [agreeToDataProcessing, setAgreeToDataProcessing] = useState(false);
   const [phone, setPhone] = useState('');
-  const [showPhoneVerification, setShowPhoneVerification] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [isConfigError, setIsConfigError] = useState(false);
@@ -81,11 +79,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
         setError('Passwords do not match.');
         return;
       }
-      // Phone number is mandatory for all signups
-      if (!phone || !phone.startsWith('+') || phone.length < 10) {
-        setError('Please enter a valid mobile number. Phone verification is required.');
-        return;
-      }
+      // Phone number is optional at signup
+      // Will be required when joining leagues/tournaments
       if (!agreeToTerms) {
         setError('You must agree to the Privacy Policy and Terms of Service.');
         return;
@@ -119,10 +114,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
           dataProcessing: agreeToDataProcessing,
         });
 
-        // Phone verification is mandatory - save phone and show verification modal
-        await updateUserExtendedProfile({ phone, phoneVerified: false });
-        setShowPhoneVerification(true);
-        return; // Don't close - must complete verification
+        // Save phone if provided (optional at signup)
+        // Phone will be required when joining leagues/tournaments
+        if (phone && phone.startsWith('+') && phone.length >= 10) {
+          await updateUserExtendedProfile({ phone, phoneVerified: false });
+        }
+
+        // Go straight to dashboard - no blocking verification
+        onClose();
+        navigate(ROUTES.DASHBOARD);
       }
     } catch (err: any) {
       console.error("Login Error:", err);
@@ -246,14 +246,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
 
               <div>
                 <label className="block text-sm text-gray-300 mb-1">
-                  Mobile Number <span className="text-red-400">*</span>
+                  Mobile Number <span className="text-gray-500">(optional)</span>
                 </label>
                 <PhoneInput
                   value={phone}
                   onChange={(e164Value) => setPhone(e164Value)}
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  You'll need to verify your number via SMS
+                  Required later when joining leagues or tournaments
                 </p>
               </div>
 
@@ -381,23 +381,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
         </p>
       </div>
 
-      {/* Phone Verification Modal - MANDATORY after signup */}
-      {showPhoneVerification && (
-        <PhoneVerificationModal
-          onClose={() => {
-            // Can't skip - just close and reopen on next action
-            setShowPhoneVerification(false);
-            onClose();
-          }}
-          onVerified={() => {
-            setShowPhoneVerification(false);
-            onClose();
-            navigate(ROUTES.DASHBOARD);
-          }}
-          initialPhone={phone}
-          canSkip={false}
-        />
-      )}
     </div>
   );
 };

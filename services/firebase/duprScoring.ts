@@ -13,7 +13,9 @@
  * - Proposal immutable once signed/disputed (except organizer override)
  * - V07.52: In DUPR tournaments, organizers CANNOT propose scores (anti-self-reporting)
  *
- * @version V07.52
+ * V07.53: Added participantIds denormalized field for efficient collectionGroup queries
+ *
+ * @version V07.53
  * @file services/firebase/duprScoring.ts
  */
 
@@ -204,6 +206,12 @@ export async function proposeScore(
       playerIds: teamSnapshot.sideBPlayerIds,
     };
 
+    // V07.53: Compute participantIds for efficient collectionGroup queries
+    const participantIds = [
+      ...teamSnapshot.sideAPlayerIds,
+      ...teamSnapshot.sideBPlayerIds,
+    ];
+
     // Update match
     transaction.update(matchRef, {
       scoreProposal,
@@ -211,6 +219,7 @@ export async function proposeScore(
       teamSnapshot,
       sideA,
       sideB,
+      participantIds,  // V07.53: Denormalized for collectionGroup queries
       // Also update legacy fields for compatibility
       scores,
       status: 'pending_confirmation',

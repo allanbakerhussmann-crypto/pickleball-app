@@ -330,6 +330,16 @@ export {
 
   // DUPR+ Gate (V07.50)
   checkDuprPlusGate,
+
+  // Payment Helpers (V07.53)
+  generateBankTransferReference,
+  getMemberPaymentStatus,
+  getPartnerPaymentStatus,
+  isTeamFullyPaid,
+  markMemberAsPaid,
+
+  // Types
+  type LeaguePaymentParams,
 } from './leagues';
 
 // League Scheduling (V07.27)
@@ -514,7 +524,6 @@ export {
 
 // Account Deletion
 export {
-  deleteUserData,
   deleteAccount,
   exportUserData,
   type DeletionResult,
@@ -732,3 +741,56 @@ export const listCompetitions = async (): Promise<Competition[]> => {
   console.warn('listCompetitions: Not implemented');
   return [];
 };
+
+// ============================================
+// TEAM LEAGUE (INTERCLUB) SERVICE (V07.53)
+// ============================================
+export {
+  // Team CRUD
+  createInterclubTeam,
+  getInterclubTeam,
+  getInterclubTeams,
+  getInterclubTeamsByStatus,
+  updateInterclubTeam,
+  approveTeam,
+  rejectTeam,
+  withdrawTeam,
+  // Subscriptions
+  subscribeToInterclubTeams,
+  subscribeToFixtures,
+  // Roster management
+  addPlayerToRoster,
+  removePlayerFromRoster,
+  acceptPlayerWaivers,
+  updatePlayerSeeding,
+  // Fixtures
+  createFixture,
+  getFixture,
+  getFixtures,
+  getFixturesByWeek,
+  getTeamFixtures,
+  updateFixture,
+  // Lineup
+  submitLineup,
+  unlockLineup,
+  validateLineup,
+  // Scoring
+  proposeFixtureScores,
+  confirmFixtureScores,
+  disputeFixtureScores,
+  finalizeFixture,
+  // Standings
+  calculateStandings as calculateTeamLeagueStandings,
+  // Schedule
+  generateTeamLeagueSchedule,
+  // Listing (V07.54+)
+  getTeamLeagues,
+  getTeamLeague,
+  subscribeToTeamLeagues,
+  subscribeToTeamLeague,
+  // CRUD
+  createTeamLeague,
+  updateTeamLeague,
+  deleteTeamLeague,
+  updateTeamLeagueStatus,
+} from './teamLeague';

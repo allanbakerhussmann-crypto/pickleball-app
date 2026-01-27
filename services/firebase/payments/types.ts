@@ -881,7 +881,24 @@ export interface FinanceTransactionQueryOptions {
 }
 
 /**
- * Finance overview/summary for a club
+ * Query options for organizer finance transactions
+ * Same as club options but uses organizerUserId instead of odClubId
+ */
+export interface OrganizerFinanceQueryOptions {
+  organizerUserId: string;
+  type?: FinanceTransactionType;
+  status?: FinanceTransactionStatus;
+  referenceType?: FinanceReferenceType;
+  startDate?: number;
+  endDate?: number;
+  limit?: number;
+  offset?: number;
+  orderBy?: 'createdAt' | 'amount';
+  orderDirection?: 'asc' | 'desc';
+}
+
+/**
+ * Finance overview/summary for a club or organizer
  */
 export interface FinanceOverview {
   // Period

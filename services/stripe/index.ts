@@ -70,9 +70,15 @@ export interface CreateCheckoutSessionInput {
     quantity: number;
   }>;
   customerEmail?: string;
+  // V07.54: Routing priority order (server-side):
+  // 1. leagueId -> loads league.organizerStripeAccountId (highest priority)
+  // 2. clubId -> loads club.stripeConnectedAccountId
+  // 3. organizerUserId -> loads user.stripeConnectedAccountId (fallback)
+  leagueId?: string;              // V07.54: League ID for server-side account lookup
   clubId?: string;
-  clubStripeAccountId?: string;
-  organizerStripeAccountId?: string; // NEW: For meetup/league organizers
+  clubStripeAccountId?: string;   // Legacy - not used by CF
+  organizerStripeAccountId?: string; // Legacy - not used by CF (security: don't pass account IDs from client)
+  organizerUserId?: string;       // User ID of organizer (fallback routing)
   successUrl: string;
   cancelUrl: string;
   metadata?: Record<string, string>;

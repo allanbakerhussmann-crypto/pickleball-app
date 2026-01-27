@@ -1,8 +1,12 @@
 /**
- * LiveCourtsTab - V07.04
+ * LiveCourtsTab - V07.53
  *
  * Redesigned Live Courts interface with "Sports Command Center" aesthetic.
  * Features glass-morphism cards, live status indicators, and polished court cards.
+ *
+ * V07.53 Changes:
+ * - Uses unified EventScoreEntryModal via CourtAllocationStyled
+ * - Passes tournamentId, isDuprEvent, tournamentName for scoring
  *
  * V07.04 Changes:
  * - Added isOrganizer and onFinaliseResult props for DUPR-compliant scoring
@@ -16,7 +20,7 @@
  * @file components/tournament/LiveCourtsTab.tsx
  */
 import React, { useMemo } from 'react';
-import { Tournament, Court as FirestoreCourt, Match, TournamentMatchType } from '../../types';
+import { Tournament, Court as FirestoreCourt, Match } from '../../types';
 import { CourtAllocationStyled } from './CourtAllocationStyled';
 import { Court as CourtViewModel, CourtMatch } from '../CourtAllocation';
 
@@ -446,10 +450,21 @@ export const LiveCourtsTab: React.FC<LiveCourtsTabProps> = ({
       <CourtAllocationStyled
         courts={courtViewModels}
         matches={courtMatchModels}
+        fullMatches={matches}  // V07.53: Full match objects for scoring modal
         filteredQueue={queueMatchModels}
         courtSettings={tournament.courtSettings}  // V07.02: Pass court tier settings
         firestoreCourts={courts}  // V07.02: Pass Firestore courts for ID lookup
         isOrganizer={isOrganizer}  // V07.04: DUPR-compliant scoring
+        // V07.53: Pass tournament context for unified EventScoreEntryModal
+        tournamentId={tournament.id}
+        isDuprEvent={tournament.duprSettings?.mode !== 'none'}
+        tournamentName={tournament.name}
+        gameSettings={tournament.settings?.matchFormat ? {
+          playType: 'doubles',
+          pointsPerGame: tournament.settings.matchFormat.pointsPerGame as 11 | 15 | 21,
+          winBy: tournament.settings.matchFormat.winBy as 1 | 2,
+          bestOf: tournament.settings.matchFormat.gamesPerMatch as 1 | 3 | 5,
+        } : undefined}
         onAssignMatchToCourt={async (matchId, courtId) => {
           const court = (courts || []).find(c => c.id === courtId);
           if (!court) return;
@@ -458,8 +473,11 @@ export const LiveCourtsTab: React.FC<LiveCourtsTabProps> = ({
         onStartMatchOnCourt={async courtId => {
           await startMatchOnCourt(courtId);
         }}
-        onFinishMatchOnCourt={finishMatchOnCourt}
-        onFinaliseResult={onFinaliseResult}  // V07.04: DUPR-compliant finalization
+        onFinishMatchOnCourt={async (courtId, scoreTeamA, scoreTeamB, _scores) => {
+          // Wrapper to match the expected Promise<void> signature
+          finishMatchOnCourt(courtId, scoreTeamA, scoreTeamB);
+        }}
+        onFinaliseResult={onFinaliseResult}  // V07.04: Kept for backwards compat
       />
     </div>
   );

@@ -47,6 +47,8 @@ import {
   getUserProfile,
   // V07.50: DUPR+ gate check
   checkDuprPlusGate,
+  // V07.53: Payment status helper
+  getMemberPaymentStatus,
 } from '../../services/firebase';
 // V07.36: Drag-and-drop for tiebreakers
 import {
@@ -87,17 +89,21 @@ import type { BoxLeagueWeek, WeekAbsence } from '../../types/rotatingDoublesBox'
 import { collection, onSnapshot, query, orderBy } from '@firebase/firestore';
 import { LeagueStandings } from './LeagueStandings';
 import { LeagueCommsTab } from './LeagueCommsTab';
+import { LeagueFinanceTab } from './LeagueFinanceTab';
 import { LeagueRegistrationWizard } from './LeagueRegistrationWizard';
 import { BoxLeagueVenueConfig } from './BoxLeagueVenueConfig';
 import type { BoxLeagueVenueSettings } from '../../types/rotatingDoublesBox';
 import { DuprControlPanel } from '../shared/DuprControlPanel';
 import { OrganizerMatchPanel } from '../shared/OrganizerMatchPanel';
 import DuprPlusVerificationModal from '../shared/DuprPlusVerificationModal';
+import { PhoneRequiredModal } from '../shared/PhoneRequiredModal';
 import { getDuprLoginIframeUrl, parseDuprLoginEvent } from '../../services/dupr';
 import { doc, updateDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import { StandingsPointsCard, RoundsSlider, type StandingsPointsConfig } from '../shared/PointsSlider';
 import { DEFAULT_WAIVER_TEXT } from '../../constants';
+// V07.53: Team League (Interclub) format detection and routing
+import { TeamLeagueDetail } from '../teamLeague';
 
 // ============================================
 // TYPES
@@ -219,7 +225,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [activeTab, setActiveTab] = useState<TabType>('standings');
   const [selectedDivisionId, setSelectedDivisionId] = useState<string | null>(null);
   const [activeWeekTab, setActiveWeekTab] = useState<string>(''); // For matches sub-tabs
-  const [organizerSubTab, setOrganizerSubTab] = useState<'schedule' | 'matches' | 'comms' | 'venue' | 'rules'>('schedule'); // V07.43: Organizer sub-tabs, V07.50: Removed absentees (now in weeks), added venue, rules
+  const [organizerSubTab, setOrganizerSubTab] = useState<'schedule' | 'matches' | 'comms' | 'venue' | 'rules' | 'finance'>('schedule'); // V07.43: Organizer sub-tabs, V07.50: Removed absentees (now in weeks), added venue, rules, V07.53: Added finance
   const [activeStandingsTab, setActiveStandingsTab] = useState<string>('overall'); // V07.16: For standings sub-tabs
   const [joining, setJoining] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -236,6 +242,7 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const [duprLinking, setDuprLinking] = useState(false); // V07.15: DUPR linking in progress
   const [showWaiverModal, setShowWaiverModal] = useState(false); // V07.25: Waiver acceptance modal
   const [waiverAccepted, setWaiverAccepted] = useState(false); // V07.25: Waiver checkbox state
+  const [showPhoneRequiredModal, setShowPhoneRequiredModal] = useState(false); // V07.50: Phone required for joining
   const [showRegistrationWizard, setShowRegistrationWizard] = useState(false); // V07.27: Registration wizard for doubles
   const [pendingInvites, setPendingInvites] = useState<LeaguePartnerInvite[]>([]); // V07.27: Partner invites for current user
   const [respondingToInvite, setRespondingToInvite] = useState<string | null>(null); // V07.27: Invite being responded to
@@ -946,8 +953,15 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
 
   // V07.15: skipDuprCheck param allows bypassing the acknowledgement check after user has confirmed
   // V07.25: skipWaiverCheck param allows bypassing after waiver has been accepted
-  const handleJoin = async (skipDuprCheck: boolean = false, skipWaiverCheck: boolean = false) => {
+  // V07.50: skipPhoneCheck param allows bypassing after phone has been provided
+  const handleJoin = async (skipDuprCheck: boolean = false, skipWaiverCheck: boolean = false, skipPhoneCheck: boolean = false) => {
     if (!currentUser || !userProfile) return;
+
+    // V07.50: Check phone number requirement first (before any other checks)
+    if (!skipPhoneCheck && !userProfile.phone) {
+      setShowPhoneRequiredModal(true);
+      return;
+    }
 
     // V07.15: Refresh league data to get current member count
     const freshLeague = await getLeague(leagueId);
@@ -1018,16 +1032,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
       return;
     }
 
-    // Check if league requires payment
-    if (league?.pricing?.enabled && league.pricing.entryFee > 0) {
-      // Show payment modal instead of direct join
-      setShowPaymentModal(true);
-      return;
-    }
-
-    // V07.27: For doubles/mixed leagues, show registration wizard with partner flow
+    // V07.53: For paid leagues OR doubles/mixed leagues, show registration wizard
+    // The wizard handles both partner selection (for doubles) and payment options (Stripe/Bank Transfer)
     const isDoublesType = freshLeague.type === 'doubles' || freshLeague.type === 'mixed_doubles';
-    if (isDoublesType) {
+    const requiresPayment = freshLeague.pricing?.enabled && (freshLeague.pricing.entryFee || 0) > 0;
+
+    if (isDoublesType || requiresPayment) {
       setShowRegistrationWizard(true);
       return;
     }
@@ -1050,19 +1060,26 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     }
   };
   
+  // V07.50: Handle phone requirement completion
+  const handlePhoneComplete = () => {
+    setShowPhoneRequiredModal(false);
+    // Continue with join flow - skipPhoneCheck: true since phone was just provided
+    handleJoin(false, false, true);
+  };
+
   // V07.25: Handle waiver acceptance
   const handleWaiverAccept = () => {
     setShowWaiverModal(false);
     // Continue with join flow - pass skipWaiverCheck: true since waiver was just accepted
-    handleJoin(false, true);
+    handleJoin(false, true, true);
   };
 
   // V07.12: Handle DUPR acknowledgement confirmation
   const handleDuprAcknowledge = () => {
     setDuprAcknowledged(true);
     setShowDuprAcknowledgement(false);
-    // Continue with join flow - pass true to skip DUPR check and waiver check (already completed)
-    handleJoin(true, true);
+    // Continue with join flow - pass true to skip DUPR check, waiver check, and phone check (already completed)
+    handleJoin(true, true, true);
   };
 
   // V07.15: Handle DUPR iframe login message for required leagues
@@ -1267,6 +1284,11 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
     );
   }
 
+  // V07.53: Detect Team League (Interclub) format and render specialized component
+  if (league.competitionFormat === 'team_league_interclub') {
+    return <TeamLeagueDetail teamLeagueId={leagueId} onBack={onBack} />;
+  }
+
   const isDoublesOrMixed = league.type === 'doubles' || league.type === 'mixed_doubles';
   const isOrganizer = currentUser?.uid === league.createdByUserId;
   // V07.35: Check if this is a DUPR-enabled league (for score entry compliance rules)
@@ -1329,6 +1351,13 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
   const handleCancelTiebreakerEdit = () => {
     setLocalTiebreakers(league?.settings?.tiebreakers || []);
     setEditingTiebreakers(false);
+  };
+
+  // V07.53: Handle league updates from Finance tab (payment settings)
+  const handleLeagueUpdate = (updates: Partial<League>) => {
+    if (league) {
+      setLeague({ ...league, ...updates });
+    }
   };
 
   // V07.37: Save promotion/relegation settings
@@ -1757,6 +1786,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           {currentUser && !isOrganizer && (
             myMembership ? (
               <div className="text-right">
+                {/* V07.53: Payment pending indicator */}
+                {getMemberPaymentStatus(myMembership) === 'pending' && (
+                  <div className="mb-2 px-3 py-1 bg-yellow-900/50 border border-yellow-600 rounded-lg text-yellow-400 text-xs font-medium inline-block">
+                    Payment Pending
+                  </div>
+                )}
                 <div className="text-sm text-gray-400 mb-1">
                   Your Rank: <span className="text-white font-bold text-lg">#{myMembership.currentRank}</span>
                 </div>
@@ -1790,6 +1825,12 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           {/* Member status for organizer who joined */}
           {currentUser && isOrganizer && myMembership && (
             <div className="text-right">
+              {/* V07.53: Payment pending indicator */}
+              {getMemberPaymentStatus(myMembership) === 'pending' && (
+                <div className="mb-2 px-3 py-1 bg-yellow-900/50 border border-yellow-600 rounded-lg text-yellow-400 text-xs font-medium inline-block">
+                  Payment Pending
+                </div>
+              )}
               <div className="text-sm text-gray-400 mb-1">
                 Your Rank: <span className="text-white font-bold text-lg">#{myMembership.currentRank}</span>
               </div>
@@ -2675,6 +2716,18 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
             >
               Rules
             </button>
+
+            {/* V07.53: Finance sub-tab for payment management */}
+            <button
+              onClick={() => setOrganizerSubTab('finance')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                organizerSubTab === 'finance'
+                  ? 'bg-lime-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Finance
+            </button>
           </div>
 
           {/* Schedule Sub-tab */}
@@ -2981,6 +3034,17 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 </div>
               )}
             </div>
+          )}
+
+          {/* V07.53: Finance Sub-tab - Payment Management */}
+          {organizerSubTab === 'finance' && (
+            <LeagueFinanceTab
+              league={league}
+              members={members}
+              currentUserId={currentUser?.uid || ''}
+              userProfile={userProfile}
+              onLeagueUpdate={handleLeagueUpdate}
+            />
           )}
         </div>
       )}
@@ -3495,6 +3559,14 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
           }}
         />
       )}
+
+      {/* V07.50: Phone Required Modal */}
+      <PhoneRequiredModal
+        isOpen={showPhoneRequiredModal}
+        onClose={() => setShowPhoneRequiredModal(false)}
+        onComplete={handlePhoneComplete}
+        context="league"
+      />
 
       {/* V07.25: Waiver Acceptance Modal - Purple Theme */}
       {showWaiverModal && league?.settings?.waiverRequired && (

@@ -53,7 +53,10 @@ export const UserStripeConnect: React.FC = () => {
   const [status, setStatus] = useState<StripeConnectStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isTestModeAccount, setIsTestModeAccount] = useState(false);
   
   // Request state (for non-organizers)
   const [existingRequest, setExistingRequest] = useState<OrganizerRequest | null>(null);
@@ -120,11 +123,12 @@ export const UserStripeConnect: React.FC = () => {
       try {
         const accountStatus = await getUserConnectAccountStatus(stripeData.stripeConnectedAccountId!);
         setStatus(accountStatus);
+        setIsTestModeAccount(false);
 
         // Update local data if status changed
         if (currentUser && accountStatus) {
           const updates: Partial<UserStripeData> = {};
-          
+
           if (accountStatus.chargesEnabled !== stripeData.stripeChargesEnabled) {
             updates.stripeChargesEnabled = accountStatus.chargesEnabled;
           }
@@ -139,8 +143,21 @@ export const UserStripeConnect: React.FC = () => {
             await updateDoc(doc(db, 'users', currentUser.uid), updates);
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load Stripe status:', err);
+        // Check if this is a test mode account error
+        // When using live keys to look up a test mode account, Stripe returns "No such account"
+        // or similar errors because test and live modes are separate
+        const errorMessage = (err?.message || '').toLowerCase();
+        if (
+          errorMessage.includes('testmode') ||
+          errorMessage.includes('test mode') ||
+          errorMessage.includes('no such account') ||
+          errorMessage.includes('does not exist') ||
+          errorMessage.includes('invalid account')
+        ) {
+          setIsTestModeAccount(true);
+        }
       }
     };
 
@@ -188,6 +205,31 @@ export const UserStripeConnect: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to open dashboard:', err);
       setError(err.message || 'Failed to open Stripe dashboard');
+    }
+  };
+
+  const handleDisconnectStripe = async () => {
+    if (!currentUser) return;
+
+    setDisconnecting(true);
+    setError(null);
+
+    try {
+      // Remove Stripe fields from user profile
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        stripeConnectedAccountId: null,
+        stripeOnboardingComplete: null,
+        stripeChargesEnabled: null,
+        stripePayoutsEnabled: null,
+      });
+
+      setShowDisconnectConfirm(false);
+      setStatus(null);
+    } catch (err: any) {
+      console.error('Failed to disconnect Stripe:', err);
+      setError(err.message || 'Failed to disconnect Stripe account');
+    } finally {
+      setDisconnecting(false);
     }
   };
 
@@ -515,6 +557,30 @@ export const UserStripeConnect: React.FC = () => {
         </div>
       )}
 
+      {/* Test Mode Account Warning */}
+      {isTestModeAccount && isConnected && (
+        <div className="bg-red-900/30 border border-red-500 rounded-lg p-4 mb-4">
+          <div className="flex items-start gap-3">
+            <svg className="w-6 h-6 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div>
+              <p className="text-red-200 font-bold">Test Mode Account Detected</p>
+              <p className="text-red-300/80 text-sm mt-1">
+                Your Stripe account was created in test mode and cannot process real payments.
+                You need to disconnect this account and connect a new one for live payments.
+              </p>
+              <button
+                onClick={() => setShowDisconnectConfirm(true)}
+                className="mt-3 bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              >
+                Disconnect & Reconnect for Live Payments
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Status Badges */}
       {isConnected && (
         <div className="flex flex-wrap gap-2 mb-4">
@@ -592,39 +658,96 @@ export const UserStripeConnect: React.FC = () => {
         </div>
       )}
 
+      {/* Disconnect Confirmation Modal */}
+      {showDisconnectConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full border border-gray-700">
+            <h3 className="text-lg font-bold text-white mb-2">Disconnect Stripe Account?</h3>
+            <p className="text-gray-300 text-sm mb-4">
+              This will remove your connected Stripe account. You can reconnect a new account afterwards.
+            </p>
+            <p className="text-yellow-300 text-sm mb-4">
+              Note: This does not delete your Stripe account - it only removes the connection to Pickleball Director.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDisconnectConfirm(false)}
+                className="flex-1 py-2 px-4 bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDisconnectStripe}
+                disabled={disconnecting}
+                className="flex-1 py-2 px-4 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2"
+              >
+                {disconnecting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Disconnecting...
+                  </>
+                ) : (
+                  'Disconnect'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Actions */}
       {isReady ? (
-        <div className="flex gap-3">
+        <div className="space-y-3">
           <button
             onClick={handleOpenDashboard}
-            className="flex-1 bg-purple-600 hover:bg-purple-500 text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+            className="w-full bg-purple-600 hover:bg-purple-500 text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
             Open Stripe Dashboard
           </button>
+          <button
+            onClick={() => setShowDisconnectConfirm(true)}
+            className="w-full bg-gray-700 hover:bg-gray-600 text-gray-300 px-4 py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            Disconnect Stripe Account
+          </button>
         </div>
       ) : needsMoreInfo ? (
-        <button
-          onClick={handleConnectStripe}
-          disabled={connecting}
-          className="w-full bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
-        >
-          {connecting ? (
-            <>
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-              Connecting...
-            </>
-          ) : (
-            <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-              </svg>
-              Complete Stripe Setup
-            </>
-          )}
-        </button>
+        <div className="space-y-3">
+          <button
+            onClick={handleConnectStripe}
+            disabled={connecting}
+            className="w-full bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+          >
+            {connecting ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                Connecting...
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                Complete Stripe Setup
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => setShowDisconnectConfirm(true)}
+            className="w-full bg-gray-700 hover:bg-gray-600 text-gray-300 px-4 py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            Disconnect & Start Over
+          </button>
+        </div>
       ) : (
         <button
           onClick={handleConnectStripe}

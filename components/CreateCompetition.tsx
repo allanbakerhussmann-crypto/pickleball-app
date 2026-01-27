@@ -76,9 +76,9 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
     
     // Team Match Config (Only for team_league)
     const [teamBoards, setTeamBoards] = useState<TeamLeagueBoardConfig[]>([
-        { boardNumber: 1, boardType: 'men_doubles', weight: 1 },
-        { boardNumber: 2, boardType: 'women_doubles', weight: 1 },
-        { boardNumber: 3, boardType: 'mixed_doubles', weight: 1 }
+        { id: 'board_1', name: "Men's Doubles", format: 'doubles' },
+        { id: 'board_2', name: "Women's Doubles", format: 'doubles' },
+        { id: 'board_3', name: 'Mixed Doubles', format: 'doubles' }
     ]);
     const [rosterMin, setRosterMin] = useState(6);
     const [rosterMax, setRosterMax] = useState(12);
@@ -139,12 +139,13 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
 
     // Helper for team boards
     const addBoard = () => {
-        setTeamBoards([...teamBoards, { boardNumber: teamBoards.length + 1, boardType: 'mixed_doubles', weight: 1 }]);
+        const newId = `board_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        setTeamBoards([...teamBoards, { id: newId, name: 'Mixed Doubles', format: 'doubles' }]);
     };
     const removeBoard = (index: number) => {
         setTeamBoards(teamBoards.filter((_, i) => i !== index));
     };
-    const updateBoard = (index: number, field: keyof typeof teamBoards[0], value: any) => {
+    const updateBoard = (index: number, field: keyof TeamLeagueBoardConfig, value: string) => {
         const updated = [...teamBoards];
         updated[index] = { ...updated[index], [field]: value };
         setTeamBoards(updated);
@@ -184,13 +185,18 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
             }
 
             const teamLeagueSettings: TeamLeagueSettings | undefined = type === 'team_league' ? {
-                boards: teamBoards.map((b, i) => ({ ...b, boardNumber: i + 1 })),
-                rosterMin,
-                rosterMax,
+                boards: teamBoards.map((b, idx) => ({
+                  ...b,
+                  order: idx + 1,
+                  format: b.format as 'singles' | 'doubles' | 'mixed',
+                })),
+                minPlayersPerTeam: rosterMin,
+                maxPlayersPerTeam: rosterMax,
                 lineupLockMinutesBeforeMatch: lineupLock,
                 pointsPerBoardWin,
                 pointsPerMatchWin,
-                tieBreakerOrder: ['matchWins', 'boardDiff', 'headToHead']
+                tieBreakerOrder: ['matchWins', 'boardDiff', 'headToHead'],
+                duprMode: 'none',
             } : undefined;
 
             const comp: Competition = {
@@ -425,30 +431,25 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                                 <label className="block text-sm font-bold text-gray-300 mb-3">Boards (Lines) Configuration</label>
                                 <div className="space-y-2">
                                     {teamBoards.map((board, idx) => (
-                                        <div key={idx} className="flex gap-3 items-center bg-gray-800 p-2 rounded">
+                                        <div key={board.id} className="flex gap-3 items-center bg-gray-800 p-2 rounded">
                                             <span className="text-gray-500 text-sm font-mono w-6">#{idx + 1}</span>
-                                            <select 
+                                            <input
+                                                type="text"
                                                 className="bg-gray-700 text-white p-2 rounded border border-gray-600 text-sm flex-1"
-                                                value={board.boardType}
-                                                onChange={e => updateBoard(idx, 'boardType', e.target.value)}
+                                                value={board.name}
+                                                onChange={e => updateBoard(idx, 'name', e.target.value)}
+                                                placeholder="Board name (e.g., Men's Doubles)"
+                                            />
+                                            <select
+                                                className="bg-gray-700 text-white p-2 rounded border border-gray-600 text-sm w-28"
+                                                value={board.format}
+                                                onChange={e => updateBoard(idx, 'format', e.target.value)}
                                             >
-                                                <option value="men_doubles">Men's Doubles</option>
-                                                <option value="women_doubles">Women's Doubles</option>
-                                                <option value="mixed_doubles">Mixed Doubles</option>
-                                                <option value="open_doubles">Open Doubles</option>
+                                                <option value="doubles">Doubles</option>
                                                 <option value="singles">Singles</option>
                                             </select>
-                                            <div className="flex items-center gap-1">
-                                                <span className="text-xs text-gray-400">Pts:</span>
-                                                <input 
-                                                    type="number" min="0" step="0.5"
-                                                    className="w-16 bg-gray-700 text-white p-2 rounded border border-gray-600 text-sm"
-                                                    value={board.weight}
-                                                    onChange={e => updateBoard(idx, 'weight', parseFloat(e.target.value))}
-                                                />
-                                            </div>
-                                            <button 
-                                                type="button" 
+                                            <button
+                                                type="button"
                                                 onClick={() => removeBoard(idx)}
                                                 className="text-red-400 hover:text-red-300 px-2"
                                             >
@@ -457,8 +458,8 @@ export const CreateCompetition: React.FC<CreateCompetitionProps> = ({ onCancel, 
                                         </div>
                                     ))}
                                 </div>
-                                <button 
-                                    type="button" 
+                                <button
+                                    type="button"
                                     onClick={addBoard}
                                     className="mt-3 text-xs bg-blue-900 hover:bg-blue-800 text-blue-200 px-3 py-1.5 rounded"
                                 >

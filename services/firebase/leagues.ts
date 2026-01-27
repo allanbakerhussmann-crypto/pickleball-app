@@ -3,11 +3,13 @@
  *
  * Database operations for the Leagues feature.
  *
- * UPDATED V05.44:
- * - Added auto-registration check functions
+ * UPDATED V07.53:
+ * - Added payment params to join functions
+ * - Added markMemberAsPaid client wrapper
+ * - Added generateBankTransferReference helper
  *
  * FILE LOCATION: src/services/firebase/leagues.ts
- * VERSION: V05.44
+ * VERSION: V07.53
  */
 
 import {
@@ -44,7 +46,133 @@ import type {
   MemberStats,
   GameScore,
   UserProfile,
+  LeaguePaymentSlot,
+  AttendeePaymentStatus,
 } from '../../types';
+
+// ============================================
+// PAYMENT TYPES (V07.53)
+// ============================================
+
+/**
+ * Payment parameters for join functions
+ */
+export interface LeaguePaymentParams {
+  slot?: 'primary' | 'partner';  // Defaults to 'primary'
+  paymentPatch: Partial<LeaguePaymentSlot>;  // { status, method?, amountDue, amountPaid?, stripeSessionId?, bankTransferReference? }
+}
+
+// ============================================
+// PAYMENT HELPERS (V07.53)
+// ============================================
+
+/**
+ * Generate deterministic bank transfer reference code
+ * Keep <= 12 chars to fit NZ bank reference fields
+ *
+ * Format: LG{5-char league}{4-char user}{P if partner}
+ * Example: "LGABC12XY34" or "LGABC12XY34P"
+ *
+ * @param leagueId - The league ID
+ * @param userId - The user ID (primary member's userId)
+ * @param slot - 'primary' or 'partner'
+ * @returns Reference code (max 12 chars)
+ */
+export const generateBankTransferReference = (
+  leagueId: string,
+  userId: string,
+  slot: 'primary' | 'partner' = 'primary'
+): string => {
+  const leagueShort = leagueId.slice(-5).toUpperCase();  // 5 chars
+  const userShort = userId.slice(-4).toUpperCase();       // 4 chars
+  const suffix = slot === 'partner' ? 'P' : '';           // 0-1 char
+  return `LG${leagueShort}${userShort}${suffix}`;         // Total: 11-12 chars
+};
+
+/**
+ * Helper to get member payment status (reads nested then falls back to flat)
+ * Use this for backwards compatibility with old members that don't have nested payment
+ *
+ * @param member - The league member
+ * @returns The payment status
+ */
+export const getMemberPaymentStatus = (
+  member: LeagueMember
+): AttendeePaymentStatus => {
+  return member.payment?.status ?? member.paymentStatus ?? 'not_required';
+};
+
+/**
+ * Helper to get partner payment status
+ *
+ * @param member - The league member
+ * @returns The partner payment status (or 'not_required' if no partner or no per_player fee)
+ */
+export const getPartnerPaymentStatus = (
+  member: LeagueMember
+): AttendeePaymentStatus => {
+  return member.partnerPayment?.status ?? 'not_required';
+};
+
+/**
+ * Check if team is fully paid (for doubles per_player, both must pay)
+ *
+ * @param member - The league member
+ * @param entryFeeType - 'per_team' or 'per_player'
+ * @returns true if fully paid
+ */
+export const isTeamFullyPaid = (
+  member: LeagueMember,
+  entryFeeType: 'per_team' | 'per_player' = 'per_team'
+): boolean => {
+  const primaryStatus = getMemberPaymentStatus(member);
+
+  if (primaryStatus === 'not_required') {
+    return true;  // Free registration
+  }
+
+  if (primaryStatus !== 'paid') {
+    return false;
+  }
+
+  // For per_team, only primary needs to pay
+  if (entryFeeType === 'per_team') {
+    return true;
+  }
+
+  // For per_player, partner must also be paid (if they have a partner)
+  if (member.partnerUserId) {
+    const partnerStatus = getPartnerPaymentStatus(member);
+    return partnerStatus === 'paid' || partnerStatus === 'not_required';
+  }
+
+  return true;  // No partner yet, primary is paid
+};
+
+/**
+ * Mark a league member's payment as paid (client wrapper for Cloud Function)
+ *
+ * This calls the server-side league_markMemberAsPaid Cloud Function.
+ * Only organizers can mark payments as paid.
+ *
+ * @param leagueId - The league ID
+ * @param memberId - The member document ID
+ * @param slot - 'primary' (default) or 'partner' for per-player doubles
+ * @param amount - The entry fee amount in cents
+ */
+export const markMemberAsPaid = async (
+  leagueId: string,
+  memberId: string,
+  amount: number,
+  slot: 'primary' | 'partner' = 'primary'
+): Promise<void> => {
+  const markPaidFn = httpsCallable<
+    { leagueId: string; memberId: string; slot: 'primary' | 'partner'; amount: number },
+    { success: boolean }
+  >(functions, 'league_markMemberAsPaid');
+
+  await markPaidFn({ leagueId, memberId, slot, amount });
+};
 
 // ============================================
 // LEAGUE CRUD
@@ -103,32 +231,39 @@ export const updateLeague = async (
  * Delete a league (and all its data)
  */
 export const deleteLeague = async (leagueId: string): Promise<void> => {
-  const batch = writeBatch(db);
-  
-  // Delete league document
-  batch.delete(doc(db, 'leagues', leagueId));
-  
-  // Delete all members
+  // Delete subcollections first
   const membersSnap = await getDocs(collection(db, 'leagues', leagueId, 'members'));
-  membersSnap.forEach(docSnap => batch.delete(docSnap.ref));
-  
-  // Delete all matches
+  for (const docSnap of membersSnap.docs) {
+    await deleteDoc(docSnap.ref);
+  }
+
   const matchesSnap = await getDocs(collection(db, 'leagues', leagueId, 'matches'));
-  matchesSnap.forEach(docSnap => batch.delete(docSnap.ref));
-  
-  // Delete all challenges
+  for (const docSnap of matchesSnap.docs) {
+    await deleteDoc(docSnap.ref);
+  }
+
   const challengesSnap = await getDocs(collection(db, 'leagues', leagueId, 'challenges'));
-  challengesSnap.forEach(docSnap => batch.delete(docSnap.ref));
-  
-  // Delete all divisions
+  for (const docSnap of challengesSnap.docs) {
+    await deleteDoc(docSnap.ref);
+  }
+
   const divisionsSnap = await getDocs(collection(db, 'leagues', leagueId, 'divisions'));
-  divisionsSnap.forEach(docSnap => batch.delete(docSnap.ref));
-  
-  // Delete all teams
+  for (const docSnap of divisionsSnap.docs) {
+    await deleteDoc(docSnap.ref);
+  }
+
   const teamsSnap = await getDocs(collection(db, 'leagues', leagueId, 'teams'));
-  teamsSnap.forEach(docSnap => batch.delete(docSnap.ref));
-  
-  await batch.commit();
+  for (const docSnap of teamsSnap.docs) {
+    await deleteDoc(docSnap.ref);
+  }
+
+  const fixturesSnap = await getDocs(collection(db, 'leagues', leagueId, 'fixtures'));
+  for (const docSnap of fixturesSnap.docs) {
+    await deleteDoc(docSnap.ref);
+  }
+
+  // Finally delete the league document itself
+  await deleteDoc(doc(db, 'leagues', leagueId));
 };
 
 /**
@@ -385,15 +520,30 @@ export const checkDuprPlusGate = async (
 // LEAGUE MEMBERSHIP
 // ============================================
 
+/**
+ * Join a league (creates a member record)
+ * V07.53: Added payment params support
+ *
+ * @param leagueId - League ID
+ * @param userId - User ID
+ * @param displayName - Display name
+ * @param divisionId - Optional division ID
+ * @param partnerUserId - Optional partner user ID (for doubles)
+ * @param partnerDisplayName - Optional partner display name
+ * @param paymentParams - Optional payment parameters (V07.53)
+ * @returns Member ID
+ */
 export const joinLeague = async (
   leagueId: string,
   userId: string,
   displayName: string,
   divisionId?: string | null,
   partnerUserId?: string | null,
-  partnerDisplayName?: string | null
+  partnerDisplayName?: string | null,
+  paymentParams?: LeaguePaymentParams
 ): Promise<string> => {
   // V07.50: For singles join (no partner), use Cloud Function for DUPR+ gate enforcement
+  // Note: Cloud Function currently doesn't handle payment - payment is added client-side after join
   if (!partnerUserId) {
     const joinFn = httpsCallable<
       { leagueId: string; divisionId?: string | null; displayName: string },
@@ -401,7 +551,35 @@ export const joinLeague = async (
     >(functions, 'league_join');
 
     const result = await joinFn({ leagueId, divisionId, displayName });
-    return result.data.memberId;
+    const memberId = result.data.memberId;
+
+    // V07.53: If payment params provided, update member with payment info
+    if (paymentParams?.paymentPatch) {
+      const memberRef = doc(db, 'leagues', leagueId, 'members', memberId);
+      const paymentPatch = paymentParams.paymentPatch;
+      const updateData: Record<string, any> = {
+        // Nested format (new)
+        payment: paymentPatch,
+        // Flat format (backwards compat)
+        paymentStatus: paymentPatch.status || 'not_required',
+        updatedAt: Date.now(),
+      };
+
+      // Also write flat fields for paid amounts
+      if (paymentPatch.amountPaid !== undefined) {
+        updateData.amountPaid = paymentPatch.amountPaid;
+      }
+      if (paymentPatch.paidAt !== undefined) {
+        updateData.paidAt = paymentPatch.paidAt;
+      }
+      if (paymentPatch.stripeSessionId !== undefined) {
+        updateData.stripeSessionId = paymentPatch.stripeSessionId;
+      }
+
+      await updateDoc(memberRef, updateData);
+    }
+
+    return memberId;
   }
 
   // For doubles with partner, keep existing transaction logic
@@ -441,6 +619,10 @@ export const joinLeague = async (
       recentForm: [],
     };
 
+    // V07.53: Build payment fields
+    const paymentPatch = paymentParams?.paymentPatch;
+    const paymentStatus = paymentPatch?.status || 'not_required';
+
     const newMember: LeagueMember = {
       id: memberRef.id,
       leagueId,
@@ -451,7 +633,13 @@ export const joinLeague = async (
       partnerDisplayName: partnerDisplayName || null,
       status: 'active',
       role: 'member',
-      paymentStatus: 'not_required',
+      // Flat payment fields (backwards compat)
+      paymentStatus,
+      amountPaid: paymentPatch?.amountPaid,
+      paidAt: paymentPatch?.paidAt,
+      stripeSessionId: paymentPatch?.stripeSessionId,
+      // Nested payment (V07.53)
+      payment: paymentPatch ? { ...paymentPatch } as LeaguePaymentSlot : undefined,
       currentRank: initialRank,
       stats: emptyStats,
       joinedAt: now,
@@ -1586,6 +1774,7 @@ export const getOpenLeagueMembers = async (
 /**
  * Join league with partner invite (atomic operation)
  * Creates member with pending_partner status and partner invite in one transaction
+ * V07.53: Added payment params support
  */
 export const joinLeagueWithPartnerInvite = async (
   leagueId: string,
@@ -1596,7 +1785,8 @@ export const joinLeagueWithPartnerInvite = async (
   partnerName: string,
   partnerDuprId: string | null,
   divisionId?: string | null,
-  leagueName?: string
+  leagueName?: string,
+  paymentParams?: LeaguePaymentParams
 ): Promise<{ memberId: string; inviteId: string }> => {
   return runTransaction(db, async (transaction) => {
     const memberRef = doc(collection(db, 'leagues', leagueId, 'members'));
@@ -1642,6 +1832,10 @@ export const joinLeagueWithPartnerInvite = async (
       }
     }
 
+    // V07.53: Build payment fields
+    const paymentPatch = paymentParams?.paymentPatch;
+    const paymentStatus = paymentPatch?.status || 'not_required';
+
     // Create member with pending_partner status
     const newMember: LeagueMember = {
       id: memberRef.id,
@@ -1662,7 +1856,13 @@ export const joinLeagueWithPartnerInvite = async (
       teamKey,
       status: 'pending_partner',
       role: 'member',
-      paymentStatus: 'unpaid',
+      // Flat payment fields (backwards compat)
+      paymentStatus,
+      amountPaid: paymentPatch?.amountPaid,
+      paidAt: paymentPatch?.paidAt,
+      stripeSessionId: paymentPatch?.stripeSessionId,
+      // Nested payment (V07.53)
+      payment: paymentPatch ? { ...paymentPatch } as LeaguePaymentSlot : undefined,
       currentRank: 0,
       stats: {
         played: 0,
@@ -1717,13 +1917,15 @@ export const joinLeagueWithPartnerInvite = async (
 /**
  * Join league as open team (looking for partner)
  * Creates member with pending_partner status and isLookingForPartner=true
+ * V07.53: Added payment params support
  */
 export const joinLeagueAsOpenTeam = async (
   leagueId: string,
   userId: string,
   displayName: string,
   duprId: string | null,
-  divisionId?: string | null
+  divisionId?: string | null,
+  paymentParams?: LeaguePaymentParams
 ): Promise<string> => {
   return runTransaction(db, async (transaction) => {
     const memberRef = doc(collection(db, 'leagues', leagueId, 'members'));
@@ -1765,6 +1967,10 @@ export const joinLeagueAsOpenTeam = async (
       }
     }
 
+    // V07.53: Build payment fields
+    const paymentPatch = paymentParams?.paymentPatch;
+    const paymentStatus = paymentPatch?.status || 'not_required';
+
     // Create member with open team status
     const newMember: LeagueMember = {
       id: memberRef.id,
@@ -1785,7 +1991,13 @@ export const joinLeagueAsOpenTeam = async (
       teamKey: null,
       status: 'pending_partner',
       role: 'member',
-      paymentStatus: 'unpaid',
+      // Flat payment fields (backwards compat)
+      paymentStatus,
+      amountPaid: paymentPatch?.amountPaid,
+      paidAt: paymentPatch?.paidAt,
+      stripeSessionId: paymentPatch?.stripeSessionId,
+      // Nested payment (V07.53)
+      payment: paymentPatch ? { ...paymentPatch } as LeaguePaymentSlot : undefined,
       currentRank: 0,
       stats: {
         played: 0,
@@ -1821,6 +2033,7 @@ export const joinLeagueAsOpenTeam = async (
  * Join an open team directly (no request/approval needed)
  * V07.27: Simplified flow - joining an open team automatically makes you the partner
  * The team owner consented to this by creating an "open team"
+ * V07.53: Added payment params support for partner payment (per_player mode)
  *
  * @returns The member ID of the updated team
  */
@@ -1829,7 +2042,8 @@ export const joinOpenTeamDirect = async (
   openTeamMemberId: string,
   joinerId: string,
   joinerName: string,
-  joinerDuprId: string | null
+  joinerDuprId: string | null,
+  paymentParams?: LeaguePaymentParams  // V07.53: For per_player mode, partner pays here
 ): Promise<{ memberId: string; teamName: string }> => {
   // Check if joiner is already a member of this league (as primary)
   const existingMembership = await getLeagueMemberByUserId(leagueId, joinerId);
@@ -1866,8 +2080,8 @@ export const joinOpenTeamDirect = async (
     const teamKey = [member.userId, joinerId].sort().join('_');
     const teamName = `${member.displayName} / ${joinerName}`;
 
-    // Update member with the new partner
-    transaction.update(memberRef, {
+    // V07.53: Build partner payment update if provided
+    const updateData: Record<string, any> = {
       partnerLockedAt: now,
       partnerUserId: joinerId,
       partnerDisplayName: joinerName,
@@ -1881,7 +2095,15 @@ export const joinOpenTeamDirect = async (
       pendingRequesterId: null,
       pendingRequesterName: null,
       lastActiveAt: now,
-    });
+    };
+
+    // V07.53: Add partner payment if provided (for per_player mode)
+    if (paymentParams?.paymentPatch && paymentParams.slot === 'partner') {
+      updateData.partnerPayment = paymentParams.paymentPatch;
+    }
+
+    // Update member with the new partner
+    transaction.update(memberRef, updateData);
 
     // Cancel any pending join requests for this team (from other players)
     // Note: We do this outside the transaction to avoid the read-after-write issue
@@ -1993,10 +2215,12 @@ export const createLeagueJoinRequest = async (
 /**
  * Respond to league partner invite (atomic operation)
  * On accept: Updates member with partner info, cancels other invites
+ * V07.53: Added payment params support for partner payment (per_player mode)
  */
 export const respondToLeaguePartnerInviteAtomic = async (
   inviteId: string,
-  response: 'accepted' | 'declined'
+  response: 'accepted' | 'declined',
+  paymentParams?: LeaguePaymentParams  // V07.53: For per_player mode, partner pays here
 ): Promise<{ leagueId: string; memberId: string } | null> => {
   // V07.27: First, get the invite to know what queries we need
   const inviteRef = doc(db, 'leaguePartnerInvites', inviteId);
@@ -2075,7 +2299,8 @@ export const respondToLeaguePartnerInviteAtomic = async (
 
     // ACCEPTED - Update member with partner info
     if (memberRef && member) {
-      transaction.update(memberRef, {
+      // V07.53: Build update data with optional partner payment
+      const updateData: Record<string, any> = {
         partnerLockedAt: now,
         partnerUserId: invite.invitedUserId,
         partnerDisplayName: invite.invitedUserName || null,
@@ -2086,7 +2311,14 @@ export const respondToLeaguePartnerInviteAtomic = async (
         pendingInvitedUserId: null,
         isLookingForPartner: false,
         lastActiveAt: now,
-      });
+      };
+
+      // V07.53: Add partner payment if provided (for per_player mode)
+      if (paymentParams?.paymentPatch && paymentParams.slot === 'partner') {
+        updateData.partnerPayment = paymentParams.paymentPatch;
+      }
+
+      transaction.update(memberRef, updateData);
     }
 
     // Note: Other pending invites from the same inviter will expire naturally

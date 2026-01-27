@@ -340,6 +340,28 @@ export const ClubStripeConnect: React.FC<ClubStripeConnectProps> = ({
             </ul>
           </div>
 
+          {/* Important Note about Stripe Account Sharing */}
+          <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              <div>
+                <h4 className="text-blue-400 font-medium">One Stripe Account Per Email</h4>
+                <p className="text-sm text-gray-300 mt-1">
+                  Stripe uses your email address to identify your account. If you've already connected
+                  Stripe with this email (e.g., as an individual organizer), this club will use the
+                  same Stripe account and receive payments to the same bank account.
+                </p>
+                <p className="text-xs text-gray-400 mt-2">
+                  To use a separate account for this club, connect with a different email address.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Country Selection */}
           <div className="bg-gray-900 rounded-lg p-4">
             <label className="block text-sm text-gray-400 mb-2">Country</label>

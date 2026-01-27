@@ -25,7 +25,10 @@
       "WebFetch(domain:uat.mydupr.com)",
       "Bash(find:*)",
       "Bash(firebase deploy:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(firebase functions:log:*)",
+      "Bash(firebase functions:config:set:*)",
+      "Read(//c/Users/allan/.claude/plans/**)"
     ]
   }
 }

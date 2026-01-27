@@ -1,31 +1,32 @@
 /**
  * Profile Component
- * 
- * User profile management with:
- * - Personal info (name, email, DOB, etc.)
- * - DUPR SSO integration (Login with DUPR) - NO MANUAL ENTRY
- * - Profile photo upload
- * - Stripe Connect for organizers
- * 
+ *
+ * User profile management with tabbed layout:
+ * - Profile Tab: Personal info, photo, DUPR, Stripe Connect, Organizer Status
+ * - Finance Tab: Financial transactions (only if Stripe enabled)
+ * - Settings Tab: Privacy, data export, password, account deletion
+ *
  * FILE LOCATION: components/Profile.tsx
- * VERSION: V05.17 - Updated DUPR to use SSO only
+ * VERSION: V07.53 - Added tabbed layout with Finance tab for organizers
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { FirebaseError } from '@firebase/app';
 import { COUNTRIES, COUNTRY_REGIONS } from '../constants/locations';
 import { UserStripeConnect } from './profile/UserStripeConnect';
 import { DuprConnect } from './profile/DuprConnect';
-import { DeleteAccountModal } from './profile/DeleteAccountModal';
-import { DataExportButton } from './profile/DataExportButton';
 import { BecomeOrganizerSection } from './profile/BecomeOrganizerSection';
+import { ProfileSettingsTab } from './profile/ProfileSettingsTab';
+import { FinanceTab } from './clubs/FinanceTab';
 import { PhoneVerificationModal } from './auth/PhoneVerificationModal';
 import { PhoneInput } from './shared/PhoneInput';
 
 // Gender type defined locally since not exported from types
 type UserGender = 'male' | 'female' | 'other';
+
+// Tab type for the profile page
+type ProfileTabType = 'profile' | 'finance' | 'settings';
 
 const getFriendlyErrorMessage = (error: FirebaseError): string => {
     switch (error.code) {
@@ -54,12 +55,16 @@ interface ProfileProps {
 }
 
 export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
-    const { currentUser, userProfile, updateUserProfile, updateUserEmail, updateUserExtendedProfile, resetPassword } = useAuth();
+    const { currentUser, userProfile, updateUserProfile, updateUserEmail, updateUserExtendedProfile } = useAuth();
     const fileInputRef = useRef<HTMLInputElement>(null);
-    
+
     // Cast userProfile to any to access extended fields stored via updateUserExtendedProfile
     const extendedProfile = userProfile as any;
-    
+
+    // Tab state
+    const [activeTab, setActiveTab] = useState<ProfileTabType>('profile');
+
+    // Form state
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
     const [email, setEmail] = useState('');
@@ -70,7 +75,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [phone, setPhone] = useState('');
     const [playsHand, setPlaysHand] = useState<'right'|'left'|''>('');
     const [height, setHeight] = useState('');
-    
+
     // Image States
     const [photoData, setPhotoData] = useState('');
     const [photoMimeType, setPhotoMimeType] = useState('');
@@ -79,11 +84,11 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
-    const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showPhoneVerification, setShowPhoneVerification] = useState(false);
-    const [passwordResetSent, setPasswordResetSent] = useState(false);
-    const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
-    const [passwordResetLoading, setPasswordResetLoading] = useState(false);
+
+    // Check if user has Stripe enabled for Finance tab
+    const hasStripeEnabled = extendedProfile?.stripeChargesEnabled === true;
+    const stripeAccountId = extendedProfile?.stripeConnectedAccountId;
 
     // Auto-correct legacy phone numbers without country code
     const normalizePhone = (phone: string | undefined): string => {
@@ -115,7 +120,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             setPhone(normalizePhone(userProfile.phone));
             setPlaysHand(extendedProfile?.playsHand || '');
             setHeight(extendedProfile?.height || '');
-            
+
             setPhotoData(extendedProfile?.photoData || '');
             setPhotoMimeType(extendedProfile?.photoMimeType || '');
         } else if (currentUser) {
@@ -155,7 +160,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.files && event.target.files[0]) {
             const file = event.target.files[0];
-            
+
             // Basic validation
             if (file.size > 1024 * 1024) {
                 setError("Image size must be less than 1MB for database storage.");
@@ -167,7 +172,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             }
 
             setError(null);
-            
+
             // Convert to Base64
             const reader = new FileReader();
             reader.onloadend = () => {
@@ -176,22 +181,6 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                 setPhotoMimeType(file.type);
             };
             reader.readAsDataURL(file);
-        }
-    };
-
-    const handleChangePassword = async () => {
-        if (!userProfile?.email) return;
-
-        setPasswordResetError(null);
-        setPasswordResetLoading(true);
-
-        try {
-            await resetPassword(userProfile.email);
-            setPasswordResetSent(true);
-        } catch (err: any) {
-            setPasswordResetError(err.message || 'Failed to send password reset email');
-        } finally {
-            setPasswordResetLoading(false);
         }
     };
 
@@ -256,305 +245,261 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
             setIsLoading(false);
         }
     };
-    
+
     if (!currentUser) {
         return <div className="text-center p-10">Loading profile...</div>;
     }
 
     const availableRegions = COUNTRY_REGIONS[country];
 
+    // Build tabs array - Finance tab always shows (contains Stripe Connect)
+    const tabs: { id: ProfileTabType; label: string; show: boolean }[] = [
+        { id: 'profile', label: 'Profile', show: true },
+        { id: 'finance', label: 'Finance', show: true },
+        { id: 'settings', label: 'Settings', show: true },
+    ];
+
+    const visibleTabs = tabs.filter(t => t.show);
+
     return (
         <div className="max-w-4xl mx-auto">
             <button
                 onClick={onBack}
-                className="flex items-center gap-2 text-sm text-gray-400 hover:text-green-400 transition-colors mb-4 focus:outline-none focus:ring-2 focus:ring-green-500 rounded-md p-1"
+                className="flex items-center gap-2 text-sm text-gray-400 hover:text-lime-400 transition-colors mb-4 focus:outline-none focus:ring-2 focus:ring-lime-500 rounded-md p-1"
             >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
                 Back to Dashboard
             </button>
-            
-            <div className="bg-gray-800 rounded-lg p-8 shadow-lg border border-gray-700">
-                <h2 className="text-3xl font-bold mb-6 text-green-400">My Profile</h2>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    
-                    {/* Profile Picture Upload Section */}
-                    <div className="flex flex-col items-center justify-center mb-8">
-                        <div className="relative group">
-                            <div className="w-32 h-32 rounded-full bg-gray-700 border-4 border-gray-600 overflow-hidden flex items-center justify-center shadow-2xl relative">
-                                {displayPhotoSrc ? (
-                                    <img src={displayPhotoSrc} alt="Profile" className="w-full h-full object-cover" />
-                                ) : (
-                                    <span className="text-4xl font-bold text-gray-500">
-                                        {firstName?.charAt(0) || currentUser?.displayName?.charAt(0) || '?'}
-                                    </span>
-                                )}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => fileInputRef.current?.click()}
-                                className="absolute bottom-0 right-0 bg-green-600 hover:bg-green-500 text-white p-2.5 rounded-full shadow-lg transition-transform transform group-hover:scale-110"
-                                title="Change Photo"
-                            >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                                </svg>
-                            </button>
-                        </div>
-                        
-                        <input 
-                            type="file" 
-                            ref={fileInputRef} 
-                            onChange={handleFileChange} 
-                            accept="image/*" 
-                            className="hidden" 
-                        />
-                        <p className="text-xs text-gray-500 mt-2">JPG or PNG (Max 1MB).</p>
-                    </div>
-
-                    {/* Name Fields */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label htmlFor="firstName" className="block text-sm font-medium text-gray-300 mb-2">First Name</label>
-                            <input type="text" id="firstName" value={firstName} onChange={e => setFirstName(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                        </div>
-                        <div>
-                            <label htmlFor="lastName" className="block text-sm font-medium text-gray-300 mb-2">Last Name</label>
-                            <input type="text" id="lastName" value={lastName} onChange={e => setLastName(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                        </div>
-                    </div>
-
-                    {/* Email Field */}
-                    <div>
-                        <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-2">Email Address</label>
-                        <div className="flex items-center gap-2">
-                            <input type="email" id="email" value={email} onChange={e => setEmail(e.target.value)} readOnly={!isEditingEmail} className="flex-grow bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500 read-only:bg-gray-700/50 read-only:text-gray-400" />
-                            <button type="button" onClick={() => setIsEditingEmail(!isEditingEmail)} className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md transition-colors text-sm">
-                                {isEditingEmail ? 'Cancel' : 'Edit'}
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* DOB and Gender */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label htmlFor="dob" className="block text-sm font-medium text-gray-300 mb-2">
-                                Date of Birth {calculatedAge !== null && <span className="text-gray-500">({calculatedAge} years old)</span>}
-                            </label>
-                            <input type="date" id="dob" value={dob} onChange={e => setDob(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500" />
-                        </div>
-                        <div>
-                            <label htmlFor="gender" className="block text-sm font-medium text-gray-300 mb-2">Gender</label>
-                            <select id="gender" value={gender} onChange={e => setGender(e.target.value as UserGender | '')} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                                <option value="">Prefer not to say</option>
-                                <option value="male">Male</option>
-                                <option value="female">Female</option>
-                                <option value="other">Other</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    {/* Country and Region */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label htmlFor="country" className="block text-sm font-medium text-gray-300 mb-2">Country</label>
-                            <select id="country" value={country} onChange={e => { setCountry(e.target.value); setRegion(''); }} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                                {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
-                            </select>
-                        </div>
-                        <div>
-                            <label htmlFor="region" className="block text-sm font-medium text-gray-300 mb-2">Region/State</label>
-                            <select id="region" value={region} onChange={e => setRegion(e.target.value)} disabled={!availableRegions || availableRegions.length === 0} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50">
-                                <option value="">Select region...</option>
-                                {availableRegions?.map((r: string) => <option key={r} value={r}>{r}</option>)}
-                            </select>
-                        </div>
-                    </div>
-
-                    {/* Phone and Hand */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-300 mb-2">
-                                Phone Number
-                                {userProfile?.phoneVerified && (
-                                    <span className="ml-2 px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded-full">
-                                        Verified
-                                    </span>
-                                )}
-                            </label>
-                            <PhoneInput
-                                value={phone}
-                                onChange={(e164Value) => setPhone(e164Value)}
-                            />
-                            {phone && !userProfile?.phoneVerified ? (
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPhoneVerification(true)}
-                                    className="mt-1 text-sm text-green-400 hover:text-green-300 underline"
-                                >
-                                    Verify your phone to receive SMS notifications
-                                </button>
-                            ) : !userProfile?.phoneVerified && (
-                                <p className="text-xs text-gray-500 mt-1">
-                                    Verify your phone to receive SMS notifications
-                                </p>
+            {/* Tab Navigation */}
+            <div className="bg-gray-800 rounded-t-lg border border-gray-700 border-b-0">
+                <div className="flex">
+                    {visibleTabs.map((tab) => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id)}
+                            className={`flex-1 py-4 px-6 text-sm font-medium transition-colors relative ${
+                                activeTab === tab.id
+                                    ? 'text-lime-400 bg-gray-900/50'
+                                    : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+                            }`}
+                        >
+                            {tab.label}
+                            {activeTab === tab.id && (
+                                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
                             )}
-                        </div>
-                        <div>
-                            <label htmlFor="playsHand" className="block text-sm font-medium text-gray-300 mb-2">Playing Hand</label>
-                            <select id="playsHand" value={playsHand} onChange={e => setPlaysHand(e.target.value as 'right' | 'left' | '')} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                                <option value="">Select...</option>
-                                <option value="right">Right-Handed</option>
-                                <option value="left">Left-Handed</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    {/* Height */}
-                    <div>
-                        <label htmlFor="height" className="block text-sm font-medium text-gray-300 mb-2">Height <span className="text-gray-500">(Optional)</span></label>
-                        <select id="height" value={height} onChange={e => setHeight(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                            <option value="">Select...</option>
-                            {HEIGHT_OPTIONS.map(h => <option key={h} value={h}>{h}</option>)}
-                        </select>
-                    </div>
-                    
-                    {error && <p className="text-red-400 text-sm text-center bg-red-900/50 p-3 rounded-md">{error}</p>}
-                    {successMessage && <p className="text-green-300 text-sm text-center bg-green-900/50 p-3 rounded-md">{successMessage}</p>}
-
-                    <div className="pt-4">
-                        <button
-                            type="submit"
-                            disabled={isLoading}
-                            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-500 disabled:cursor-not-allowed"
-                        >
-                            {isLoading ? 'Saving...' : 'Save Changes'}
                         </button>
-                    </div>
-                </form>
-                
-                {/* ============================================ */}
-                {/* DUPR CONNECT SECTION - SSO ONLY */}
-                {/* ============================================ */}
-                <div className="mt-8 pt-8 border-t border-gray-700">
-                    <DuprConnect />
-                </div>
-                
-                {/* ============================================ */}
-                {/* STRIPE CONNECT SECTION */}
-                {/* ============================================ */}
-                <div className="mt-8 pt-8 border-t border-gray-700">
-                    <UserStripeConnect />
-                </div>
-
-                {/* ============================================ */}
-                {/* ORGANIZER STATUS SECTION (V07.05) */}
-                {/* ============================================ */}
-                <div className="mt-8 pt-8 border-t border-gray-700">
-                    <h3 className="text-lg font-bold text-white mb-4">Organiser Status</h3>
-                    <BecomeOrganizerSection />
-                </div>
-
-                {/* ============================================ */}
-                {/* PRIVACY & ACCOUNT SECTION */}
-                {/* ============================================ */}
-                <div className="mt-8 pt-8 border-t border-gray-700">
-                    <h3 className="text-lg font-bold text-white mb-4">Privacy & Account</h3>
-
-                    {/* Privacy Links */}
-                    <div className="flex flex-wrap gap-4 mb-6 text-sm">
-                        <Link
-                            to="/privacy-policy"
-                            className="text-green-400 hover:text-green-300 underline"
-                        >
-                            Privacy Policy
-                        </Link>
-                        <Link
-                            to="/terms"
-                            className="text-green-400 hover:text-green-300 underline"
-                        >
-                            Terms of Service
-                        </Link>
-                        <Link
-                            to="/privacy-request"
-                            className="text-green-400 hover:text-green-300 underline"
-                        >
-                            Privacy Request
-                        </Link>
-                        <a
-                            href="mailto:support@pickleballdirector.co.nz"
-                            className="text-green-400 hover:text-green-300 underline"
-                        >
-                            Contact Support
-                        </a>
-                    </div>
-
-                    {/* Data Export */}
-                    <div className="mb-6">
-                        <DataExportButton />
-                    </div>
-
-                    {/* Change Password */}
-                    <div className="mb-6">
-                        <h4 className="text-gray-300 font-medium mb-2">Password</h4>
-                        {passwordResetSent ? (
-                            <div>
-                                <p className="text-sm text-green-400 mb-2">
-                                    Password reset email sent. Check your inbox (and spam folder).
-                                </p>
-                                <button
-                                    onClick={() => {
-                                        setPasswordResetSent(false);
-                                        setPasswordResetError(null);
-                                    }}
-                                    className="text-sm text-gray-400 hover:text-gray-300"
-                                >
-                                    Send Again
-                                </button>
-                            </div>
-                        ) : (
-                            <>
-                                <button
-                                    onClick={handleChangePassword}
-                                    disabled={passwordResetLoading}
-                                    className="text-sm text-lime-500 hover:text-lime-400 disabled:text-gray-500 disabled:cursor-not-allowed"
-                                >
-                                    {passwordResetLoading ? 'Sending...' : 'Change Password'}
-                                </button>
-                                {passwordResetError && (
-                                    <p className="text-sm text-red-400 mt-1">{passwordResetError}</p>
-                                )}
-                            </>
-                        )}
-                    </div>
-
-                    {/* Delete Account */}
-                    <div className="bg-red-900/10 border border-red-900/30 rounded-lg p-4">
-                        <h4 className="text-red-400 font-medium mb-2">Delete Account</h4>
-                        <p className="text-gray-400 text-sm mb-4">
-                            Permanently delete your account and all associated data.
-                            This action cannot be undone.
-                        </p>
-                        <button
-                            onClick={() => setShowDeleteModal(true)}
-                            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                        >
-                            Delete My Account
-                        </button>
-                    </div>
+                    ))}
                 </div>
             </div>
 
-            {/* Delete Account Modal */}
-            {showDeleteModal && (
-                <DeleteAccountModal
-                    onClose={() => setShowDeleteModal(false)}
-                    userEmail={currentUser?.email || ''}
-                />
-            )}
+            {/* Tab Content */}
+            <div className="bg-gray-800 rounded-b-lg p-6 md:p-8 shadow-lg border border-gray-700 border-t-0">
+                {/* Profile Tab */}
+                {activeTab === 'profile' && (
+                    <>
+                        <h2 className="text-2xl font-bold mb-6 text-lime-400">My Profile</h2>
+
+                        <form onSubmit={handleSubmit} className="space-y-6">
+
+                            {/* Profile Picture Upload Section */}
+                            <div className="flex flex-col items-center justify-center mb-8">
+                                <div className="relative group">
+                                    <div className="w-32 h-32 rounded-full bg-gray-700 border-4 border-gray-600 overflow-hidden flex items-center justify-center shadow-2xl relative">
+                                        {displayPhotoSrc ? (
+                                            <img src={displayPhotoSrc} alt="Profile" className="w-full h-full object-cover" />
+                                        ) : (
+                                            <span className="text-4xl font-bold text-gray-500">
+                                                {firstName?.charAt(0) || currentUser?.displayName?.charAt(0) || '?'}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="absolute bottom-0 right-0 bg-lime-600 hover:bg-lime-500 text-white p-2.5 rounded-full shadow-lg transition-transform transform group-hover:scale-110"
+                                        title="Change Photo"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                    </button>
+                                </div>
+
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    onChange={handleFileChange}
+                                    accept="image/*"
+                                    className="hidden"
+                                />
+                                <p className="text-xs text-gray-500 mt-2">JPG or PNG (Max 1MB).</p>
+                            </div>
+
+                            {/* Name Fields */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label htmlFor="firstName" className="block text-sm font-medium text-gray-300 mb-2">First Name</label>
+                                    <input type="text" id="firstName" value={firstName} onChange={e => setFirstName(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500" />
+                                </div>
+                                <div>
+                                    <label htmlFor="lastName" className="block text-sm font-medium text-gray-300 mb-2">Last Name</label>
+                                    <input type="text" id="lastName" value={lastName} onChange={e => setLastName(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500" />
+                                </div>
+                            </div>
+
+                            {/* Email Field */}
+                            <div>
+                                <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-2">Email Address</label>
+                                <div className="flex items-center gap-2">
+                                    <input type="email" id="email" value={email} onChange={e => setEmail(e.target.value)} readOnly={!isEditingEmail} className="flex-grow bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500 read-only:bg-gray-700/50 read-only:text-gray-400" />
+                                    <button type="button" onClick={() => setIsEditingEmail(!isEditingEmail)} className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md transition-colors text-sm">
+                                        {isEditingEmail ? 'Cancel' : 'Edit'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* DOB and Gender */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label htmlFor="dob" className="block text-sm font-medium text-gray-300 mb-2">
+                                        Date of Birth {calculatedAge !== null && <span className="text-gray-500">({calculatedAge} years old)</span>}
+                                    </label>
+                                    <input type="date" id="dob" value={dob} onChange={e => setDob(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500" />
+                                </div>
+                                <div>
+                                    <label htmlFor="gender" className="block text-sm font-medium text-gray-300 mb-2">Gender</label>
+                                    <select id="gender" value={gender} onChange={e => setGender(e.target.value as UserGender | '')} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500">
+                                        <option value="">Prefer not to say</option>
+                                        <option value="male">Male</option>
+                                        <option value="female">Female</option>
+                                        <option value="other">Other</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Country and Region */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label htmlFor="country" className="block text-sm font-medium text-gray-300 mb-2">Country</label>
+                                    <select id="country" value={country} onChange={e => { setCountry(e.target.value); setRegion(''); }} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500">
+                                        {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label htmlFor="region" className="block text-sm font-medium text-gray-300 mb-2">Region/State</label>
+                                    <select id="region" value={region} onChange={e => setRegion(e.target.value)} disabled={!availableRegions || availableRegions.length === 0} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500 disabled:opacity-50">
+                                        <option value="">Select region...</option>
+                                        {availableRegions?.map((r: string) => <option key={r} value={r}>{r}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Phone and Hand */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                                        Phone Number
+                                        {userProfile?.phoneVerified && (
+                                            <span className="ml-2 px-2 py-0.5 bg-lime-500/20 text-lime-400 text-xs rounded-full">
+                                                Verified
+                                            </span>
+                                        )}
+                                    </label>
+                                    <PhoneInput
+                                        value={phone}
+                                        onChange={(e164Value) => setPhone(e164Value)}
+                                    />
+                                    {phone && !userProfile?.phoneVerified ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPhoneVerification(true)}
+                                            className="mt-1 text-sm text-lime-400 hover:text-lime-300 underline"
+                                        >
+                                            Verify your phone to receive SMS notifications
+                                        </button>
+                                    ) : !userProfile?.phoneVerified && (
+                                        <p className="text-xs text-gray-500 mt-1">
+                                            Verify your phone to receive SMS notifications
+                                        </p>
+                                    )}
+                                </div>
+                                <div>
+                                    <label htmlFor="playsHand" className="block text-sm font-medium text-gray-300 mb-2">Playing Hand</label>
+                                    <select id="playsHand" value={playsHand} onChange={e => setPlaysHand(e.target.value as 'right' | 'left' | '')} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500">
+                                        <option value="">Select...</option>
+                                        <option value="right">Right-Handed</option>
+                                        <option value="left">Left-Handed</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Height */}
+                            <div>
+                                <label htmlFor="height" className="block text-sm font-medium text-gray-300 mb-2">Height <span className="text-gray-500">(Optional)</span></label>
+                                <select id="height" value={height} onChange={e => setHeight(e.target.value)} className="w-full bg-gray-700 text-white rounded-md px-4 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-lime-500">
+                                    <option value="">Select...</option>
+                                    {HEIGHT_OPTIONS.map(h => <option key={h} value={h}>{h}</option>)}
+                                </select>
+                            </div>
+
+                            {error && <p className="text-red-400 text-sm text-center bg-red-900/50 p-3 rounded-md">{error}</p>}
+                            {successMessage && <p className="text-lime-300 text-sm text-center bg-lime-900/50 p-3 rounded-md">{successMessage}</p>}
+
+                            <div className="pt-4">
+                                <button
+                                    type="submit"
+                                    disabled={isLoading}
+                                    className="w-full bg-lime-600 hover:bg-lime-700 text-white font-bold py-3 px-4 rounded-md transition-colors duration-200 disabled:bg-gray-500 disabled:cursor-not-allowed"
+                                >
+                                    {isLoading ? 'Saving...' : 'Save Changes'}
+                                </button>
+                            </div>
+                        </form>
+
+                        {/* ============================================ */}
+                        {/* DUPR CONNECT SECTION - SSO ONLY */}
+                        {/* ============================================ */}
+                        <div className="mt-8 pt-8 border-t border-gray-700">
+                            <DuprConnect />
+                        </div>
+
+                        {/* ============================================ */}
+                        {/* ORGANIZER STATUS SECTION */}
+                        {/* ============================================ */}
+                        <div className="mt-8 pt-8 border-t border-gray-700">
+                            <h3 className="text-lg font-bold text-white mb-4">Organiser Status</h3>
+                            <BecomeOrganizerSection />
+                        </div>
+                    </>
+                )}
+
+                {/* Finance Tab */}
+                {activeTab === 'finance' && currentUser && (
+                    <div className="space-y-8">
+                        {/* Stripe Connect Section */}
+                        <UserStripeConnect />
+
+                        {/* Finance Overview & Transactions - only show if Stripe is enabled */}
+                        {hasStripeEnabled && (
+                            <div className="pt-8 border-t border-gray-700">
+                                <FinanceTab
+                                    organizerId={currentUser.uid}
+                                    stripeAccountId={stripeAccountId}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Settings Tab */}
+                {activeTab === 'settings' && (
+                    <ProfileSettingsTab />
+                )}
+            </div>
 
             {/* Phone Verification Modal */}
             {showPhoneVerification && (

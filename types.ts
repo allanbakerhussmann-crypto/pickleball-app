@@ -39,6 +39,33 @@ import type { CompetitionFormat, PoolPlayMedalsSettings } from './types/formats'
 import type { MatchParticipant, PlayType } from './types/game';
 import type { BoxLeagueVenueSettings, RotatingDoublesBoxSettings } from './types/rotatingDoublesBox';
 
+// V07.53: Re-export team league types for convenience
+// Note: TeamLeagueSettings and TeamLeagueBoardConfig are already exported from ./types/formats
+export type {
+  TeamLeagueVenue,
+  TeamLeagueFeeConfig,
+  WaiverAcceptance,
+  CaptainAgreement,
+  TeamRosterPlayer,
+  TeamStatus,
+  InterclubTeam,
+  InterclubTeamStats,
+  BoardAssignment,
+  TeamLineup,
+  BoardDuprData,
+  BoardMatchStatus,
+  BoardMatch,
+  FixtureSession,
+  FixtureAuditAction,
+  FixtureAuditEntry,
+  FixtureCourtFees,
+  FixtureScoreState,
+  FixtureStatus,
+  TeamLeagueFixture,
+  TeamLeagueStanding,
+  LeaguePublicSettings,
+} from './types/teamLeague';
+
 // ============================================
 // TOURNAMENT FORMAT TYPES (V06.06)
 // ============================================
@@ -1151,6 +1178,22 @@ export interface BankDetails {
 }
 
 /**
+ * Payment slot for league member payments (V07.53)
+ * Used for primary player payment and partner payment (per_player doubles)
+ */
+export interface LeaguePaymentSlot {
+  status: AttendeePaymentStatus;  // 'not_required' | 'pending' | 'paid' | 'refunded' | 'failed'
+  method?: 'stripe' | 'bank_transfer';
+  amountDue: number;              // In cents - league entry fee only
+  amountPaid?: number;            // In cents - should match amountDue when paid (NOT Stripe total)
+  totalCharged?: number;          // In cents - actual Stripe charge incl fees (optional, for audit)
+  paidAt?: number;
+  stripeSessionId?: string;
+  paidMarkedBy?: string;          // Organizer ID for manual payments
+  bankTransferReference?: string; // Auto-generated reference code for bank transfers
+}
+
+/**
  * Pricing settings for paid leagues
  */
 export interface LeaguePricing {
@@ -1185,6 +1228,14 @@ export interface LeaguePricing {
   refundPolicy: 'full' | 'full_7days' | 'full_14days' | '75_percent' | 'partial' | '25_percent' | 'admin_fee_only' | 'none';
   refundDeadline?: number | null;
   currency: string;
+
+  // V07.53: Payment method options
+  allowStripe?: boolean;         // Allow card payments via Stripe (default: true if Stripe connected)
+  allowBankTransfer?: boolean;   // Allow bank transfer payments (default: false)
+
+  // Bank details (only relevant if allowBankTransfer is true)
+  bankDetails?: BankDetails;     // Organizer's bank account for transfers
+  showBankDetails?: boolean;     // Whether to show in-app (vs share manually)
 }
 
 /**
@@ -1807,13 +1858,19 @@ export interface LeagueMember {
   status: MembershipStatus;
   role: MemberRole;
   
-  // Payment
+  // Payment (flat fields - KEEP for backwards compatibility)
   paymentStatus: AttendeePaymentStatus;
   amountPaid?: number;
   paidAt?: number;
   stripeSessionId?: string;
   stripePaymentIntentId?: string;
-  
+
+  // V07.53: Nested payment structure (for new registrations)
+  // Read strategy: Check payment?.status first, fall back to paymentStatus
+  // Write strategy: Write BOTH nested + flat for backwards compat (primary only)
+  payment?: LeaguePaymentSlot;           // Primary player payment
+  partnerPayment?: LeaguePaymentSlot;    // Partner payment (for per_player doubles only)
+
   // Rankings
   currentRank: number;
   previousRank?: number | null;

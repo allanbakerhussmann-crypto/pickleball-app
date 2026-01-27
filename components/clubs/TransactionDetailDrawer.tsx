@@ -69,12 +69,13 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
     setRefundError(null);
 
     try {
-      const createRefund = httpsCallable(functions, 'stripe_createRefund');
-      await createRefund({
+      const createRefund = httpsCallable<any, { amount: number }>(functions, 'stripe_createRefund');
+      const result = await createRefund({
         transactionId: tx.id,
         reason: 'requested_by_customer',
       });
 
+      alert(`Refund of $${(result.data.amount / 100).toFixed(2)} processed successfully`);
       onRefresh?.();
       onClose();
     } catch (err: any) {

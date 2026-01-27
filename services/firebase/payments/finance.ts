@@ -24,6 +24,7 @@ import { db } from '../index';
 import {
   FinanceTransaction,
   FinanceTransactionQueryOptions,
+  OrganizerFinanceQueryOptions,
   FinanceOverview,
   FinanceCurrency,
 } from './types';
@@ -283,4 +284,143 @@ export async function searchTransactionsByPayer(
       ...docSnap.data(),
     }) as FinanceTransaction)
     .filter((tx: FinanceTransaction) => tx.payerDisplayName?.toLowerCase().includes(searchLower));
+}
+
+// ============================================
+// ORGANIZER FINANCE FUNCTIONS
+// ============================================
+
+/**
+ * Get transactions for an organizer (Finance tab main query)
+ * Queries by organizerUserId instead of odClubId
+ */
+export async function getOrganizerTransactions(
+  options: OrganizerFinanceQueryOptions
+): Promise<{ transactions: FinanceTransaction[]; hasMore: boolean }> {
+  const {
+    organizerUserId,
+    type,
+    status,
+    referenceType,
+    startDate,
+    endDate,
+    limit: pageLimit = 20,
+    orderDirection = 'desc',
+  } = options;
+
+  const transactionsRef = collection(db, 'transactions');
+
+  // Build query constraints
+  const constraints: any[] = [
+    where('organizerUserId', '==', organizerUserId),
+    orderBy('createdAt', orderDirection),
+  ];
+
+  // Add optional filters
+  if (type) {
+    constraints.push(where('type', '==', type));
+  }
+  if (status) {
+    constraints.push(where('status', '==', status));
+  }
+  if (referenceType) {
+    constraints.push(where('referenceType', '==', referenceType));
+  }
+  if (startDate) {
+    constraints.push(where('createdAt', '>=', startDate));
+  }
+  if (endDate) {
+    constraints.push(where('createdAt', '<=', endDate));
+  }
+
+  // Add limit + 1 to check if there are more
+  constraints.push(limit(pageLimit + 1));
+
+  const q = query(transactionsRef, ...constraints);
+  const snapshot = await getDocs(q);
+
+  const transactions: FinanceTransaction[] = [];
+  snapshot.docs.slice(0, pageLimit).forEach((docSnap: QueryDocumentSnapshot<DocumentData>) => {
+    transactions.push({
+      id: docSnap.id,
+      ...docSnap.data(),
+    } as FinanceTransaction);
+  });
+
+  return {
+    transactions,
+    hasMore: snapshot.docs.length > pageLimit,
+  };
+}
+
+/**
+ * Calculate finance overview for an organizer
+ * Returns aggregated totals for the specified period
+ */
+export async function getOrganizerFinanceOverview(
+  organizerUserId: string,
+  startDate: number,
+  endDate: number
+): Promise<FinanceOverview> {
+  const transactionsRef = collection(db, 'transactions');
+
+  // Get completed transactions in the period
+  const q = query(
+    transactionsRef,
+    where('organizerUserId', '==', organizerUserId),
+    where('status', '==', 'completed'),
+    where('createdAt', '>=', startDate),
+    where('createdAt', '<=', endDate)
+  );
+
+  const snapshot = await getDocs(q);
+
+  let grossSales = 0;
+  let refundsTotal = 0;
+  let platformFeesTotal = 0;
+  let transactionCount = 0;
+  let refundCount = 0;
+  let currency: FinanceCurrency = 'NZD';
+
+  snapshot.docs.forEach((docSnap: QueryDocumentSnapshot<DocumentData>) => {
+    const tx = docSnap.data() as FinanceTransaction;
+
+    // Get currency from first transaction
+    if (!currency && tx.currency) {
+      currency = tx.currency;
+    }
+
+    if (tx.type === 'payment') {
+      grossSales += tx.amount;
+      // Use totalFeeAmount (includes Stripe fees) if available, otherwise fall back to platformFeeAmount
+      platformFeesTotal += (tx as any).totalFeeAmount || tx.platformFeeAmount || 0;
+      transactionCount++;
+    } else if (tx.type === 'refund') {
+      refundsTotal += Math.abs(tx.amount); // Refunds stored as negative
+      refundCount++;
+    }
+  });
+
+  const netRevenue = grossSales - refundsTotal - platformFeesTotal;
+
+  return {
+    periodStart: startDate,
+    periodEnd: endDate,
+    grossSales,
+    refundsTotal,
+    platformFeesTotal,
+    netRevenue,
+    transactionCount,
+    refundCount,
+    currency,
+  };
+}
+
+/**
+ * Get finance overview for organizer for last 30 days
+ */
+export async function getOrganizerFinanceOverviewLast30Days(organizerUserId: string): Promise<FinanceOverview> {
+  const now = Date.now();
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  return getOrganizerFinanceOverview(organizerUserId, thirtyDaysAgo, now);
 }

@@ -1,14 +1,16 @@
 /**
- * CourtAllocationStyled - V07.04
+ * CourtAllocationStyled - V07.53
  *
  * Redesigned Court Allocation with "Sports Command Center" aesthetic.
  * Matches the visual style of DivisionSettingsTab.
  *
- * V07.04: DUPR-Compliant Scoring
- * - Added isOrganizer and onFinaliseResult props for DUPR-compliant finalization
- * - Uses FinaliseScoreModal for organizers when onFinaliseResult is provided
- * - Organizer finalization creates officialResult and sets scoreLocked
+ * V07.53: Unified Scoring Architecture
+ * - Uses EventScoreEntryModal for ALL score entry (organizers and players)
+ * - Uses ScorableMatch adapter pattern
+ * - Follows unified scoring flow: propose -> sign -> finalize
+ * - DUPR compliance enforced via useEventScoringState hook
  *
+ * @see docs/SCORING_ARCHITECTURE.md for full documentation
  * @file components/tournament/CourtAllocationStyled.tsx
  */
 import React, { useState, useEffect } from 'react';
@@ -30,10 +32,11 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Match as UniversalMatch, GameScore } from '../../types/game/match';
+import type { GameScore } from '../../types/game/match';
+import type { Match as FullMatch } from '../../types';
 import type { GameSettings } from '../../types/game/gameSettings';
-import { ScoreEntryModal } from '../shared/ScoreEntryModal';
-import { FinaliseScoreModal } from '../shared/FinaliseScoreModal';
+import { EventScoreEntryModal } from '../shared/EventScoreEntryModal';
+import { toScorableMatch, type ScorableMatch } from '../../types/game/scorableMatch';
 
 // Import types from original CourtAllocation
 export type MatchStatus = 'WAITING' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED';
@@ -69,15 +72,21 @@ type CourtTier = 'gold' | 'plate' | 'semi' | 'regular';
 interface CourtAllocationStyledProps {
   courts: Court[];
   matches: CourtMatch[];
+  /** V07.53: Full match objects for scoring modal (provides actual sideA/sideB IDs) */
+  fullMatches?: FullMatch[];
   filteredQueue?: CourtMatch[];
   courtSettings?: TournamentCourtSettings;  // V07.02: Premier court settings
   firestoreCourts?: FirestoreCourt[];  // V07.02: For ID-to-name mapping
   gameSettings?: GameSettings;  // V07.03: Game settings for ScoreEntryModal
   isOrganizer?: boolean;  // V07.04: For DUPR-compliant finalization
+  // V07.53: Required for unified EventScoreEntryModal
+  tournamentId: string;
+  isDuprEvent?: boolean;
+  tournamentName?: string;
   onAssignMatchToCourt: (matchId: string, courtId: string) => void;
   onStartMatchOnCourt: (courtId: string) => void;
   onFinishMatchOnCourt: (courtId: string, scoreTeamA?: number, scoreTeamB?: number, scores?: GameScore[]) => Promise<void>;
-  // V07.04: DUPR-compliant finalization callback
+  // V07.04: DUPR-compliant finalization callback (DEPRECATED - now handled by EventScoreEntryModal)
   onFinaliseResult?: (matchId: string, scores: GameScore[], winnerId: string, duprEligible: boolean) => Promise<void>;
   onReorderQueue?: (matchIds: string[]) => void;
 }
@@ -376,146 +385,87 @@ const CourtCard: React.FC<{
 export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
   courts,
   matches,
+  fullMatches,  // V07.53: Full match objects for scoring modal
   filteredQueue,
   courtSettings,  // V07.02: Premier court settings
   firestoreCourts: _firestoreCourts,  // V07.02: For ID-to-name mapping (kept for future use)
   gameSettings,  // V07.03: Game settings for ScoreEntryModal
   isOrganizer = true,  // V07.04: Default true since this is organizer UI
+  // V07.53: Required for unified EventScoreEntryModal
+  tournamentId,
+  isDuprEvent = false,
+  tournamentName,
   onAssignMatchToCourt,
   onStartMatchOnCourt,
-  onFinishMatchOnCourt,
-  onFinaliseResult,  // V07.04: DUPR-compliant finalization
+  onFinishMatchOnCourt: _onFinishMatchOnCourt,  // V07.53: No longer needed - EventScoreEntryModal handles scoring
+  onFinaliseResult: _onFinaliseResult,  // V07.53: DEPRECATED - kept for backwards compat
   onReorderQueue,
 }) => {
-  // V07.03: State for score entry modal
+  // V07.53: Single modal state for unified EventScoreEntryModal
   const [scoreModalData, setScoreModalData] = useState<{
     courtId: string;
-    match: CourtMatch;
+    matchId: string;  // Store matchId to look up full match
   } | null>(null);
-  const [isSubmittingScore, setIsSubmittingScore] = useState(false);
 
-  // V07.04: State for finalise score modal (organizer DUPR-compliant finalization)
-  const [finaliseModalData, setFinaliseModalData] = useState<{
-    courtId: string;
-    match: CourtMatch;
-  } | null>(null);
-  const [isFinalisingScore, setIsFinalisingScore] = useState(false);
-
-  // V07.03: Default game settings if not provided
-  // V07.07: Memoize to prevent downstream useMemo invalidation on every render
-  const defaultGameSettings: GameSettings = React.useMemo(() => gameSettings || {
+  // V07.53: Default game settings if not provided
+  const effectiveGameSettings: GameSettings = React.useMemo(() => gameSettings || {
     playType: 'doubles',
     pointsPerGame: 11,
     winBy: 2,
     bestOf: 1,
   }, [gameSettings]);
 
-  // V07.03: Handle score submission from modal
-  const handleScoreSubmit = async (scores: GameScore[], _winnerId: string) => {
-    if (!scoreModalData) return;
-
-    setIsSubmittingScore(true);
-    try {
-      // Extract first game score for legacy compatibility
-      const scoreA = scores[0]?.scoreA;
-      const scoreB = scores[0]?.scoreB;
-      // V07.07: Must await to ensure save completes before closing modal
-      await onFinishMatchOnCourt(scoreModalData.courtId, scoreA, scoreB, scores);
-      setScoreModalData(null);
-    } catch (error) {
-      console.error('Failed to submit score:', error);
-      alert('Failed to submit score. Please try again.');
-    } finally {
-      setIsSubmittingScore(false);
-    }
-  };
-
-  // V07.04: Handle DUPR-compliant finalisation from organizer
-  const handleFinaliseSubmit = async (
-    scores: GameScore[],
-    winnerId: string,
-    duprEligible: boolean,
-    _correctionReason?: string
-  ) => {
-    if (!finaliseModalData) return;
-
-    setIsFinalisingScore(true);
-    try {
-      if (onFinaliseResult) {
-        // Use DUPR-compliant finalization
-        await onFinaliseResult(finaliseModalData.match.id, scores, winnerId, duprEligible);
-      } else {
-        // Fallback to legacy finish
-        const scoreA = scores[0]?.scoreA;
-        const scoreB = scores[0]?.scoreB;
-        // V07.07: Must await to ensure save completes
-        await onFinishMatchOnCourt(finaliseModalData.courtId, scoreA, scoreB, scores);
-      }
-      setFinaliseModalData(null);
-    } catch (error) {
-      console.error('Failed to finalise score:', error);
-      throw error; // Re-throw so FinaliseScoreModal can show the error
-    } finally {
-      setIsFinalisingScore(false);
-    }
-  };
-
-  // V07.03: Convert CourtMatch to Match for ScoreEntryModal
-  // V07.07: CRITICAL - memoize to prevent useEffect in ScoreEntryModal from
-  // resetting scores on every parent re-render (match prop reference must be stable)
-  const matchForModal = React.useMemo((): UniversalMatch | null => {
+  // V07.53: Convert full Match to ScorableMatch for EventScoreEntryModal
+  // Uses the actual match from fullMatches array to get correct sideA/sideB IDs
+  const scorableMatch = React.useMemo((): ScorableMatch | null => {
     if (!scoreModalData) return null;
-    const { match } = scoreModalData;
-    return {
-      id: match.id,
-      eventType: 'tournament',
-      eventId: '',
-      format: 'pool_play_medals',
-      sideA: {
-        id: match.teamAName,
-        name: match.teamAName,
-        playerIds: [],
-      },
-      sideB: {
-        id: match.teamBName,
-        name: match.teamBName,
-        playerIds: [],
-      },
-      gameSettings: defaultGameSettings,
-      status: 'in_progress',
-      scores: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-  }, [scoreModalData, defaultGameSettings]);
 
-  // V07.04: Convert CourtMatch to Match for FinaliseScoreModal
-  // V07.07: Memoize to prevent score reset on re-renders
-  const matchForFinaliseModal = React.useMemo((): UniversalMatch | null => {
-    if (!finaliseModalData) return null;
-    const { match } = finaliseModalData;
+    // Find the full match object by ID
+    const fullMatch = fullMatches?.find(m => m.id === scoreModalData.matchId);
+
+    if (fullMatch) {
+      // Use the proper adapter to convert full match to ScorableMatch
+      // Cast to any to handle type differences between types.ts Match and types/game/match Match
+      // Both have the same sideA/sideB structure, so toScorableMatch works with both
+      return toScorableMatch(fullMatch as any, 'tournament', tournamentId, tournamentName);
+    }
+
+    // Fallback: If no fullMatches provided, look up from CourtMatch view models
+    // This shouldn't happen in normal use but provides backwards compatibility
+    const courtMatch = matches.find(m => m.id === scoreModalData.matchId);
+    if (!courtMatch) return null;
+
+    console.warn('[CourtAllocationStyled] Using CourtMatch fallback - fullMatches not provided');
     return {
-      id: match.id,
+      id: courtMatch.id,
       eventType: 'tournament',
-      eventId: '',
-      format: 'pool_play_medals',
+      eventId: tournamentId,
+      eventName: tournamentName,
       sideA: {
-        id: match.teamAName,
-        name: match.teamAName,
+        id: courtMatch.teamAName,
+        name: courtMatch.teamAName,
         playerIds: [],
       },
       sideB: {
-        id: match.teamBName,
-        name: match.teamBName,
+        id: courtMatch.teamBName,
+        name: courtMatch.teamBName,
         playerIds: [],
       },
-      gameSettings: defaultGameSettings,
       status: 'in_progress',
       scores: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
     };
-  }, [finaliseModalData, defaultGameSettings]);
+  }, [scoreModalData, fullMatches, matches, tournamentId, tournamentName]);
+
+  // V07.53: Handle success from EventScoreEntryModal
+  // The modal already saved the score to Firestore via finaliseResult().
+  // Real-time listeners will update the match status and court allocation.
+  // We just close the modal - no need to call legacy finishMatchOnCourt.
+  const handleScoreSuccess = () => {
+    setScoreModalData(null);
+    // Note: The match status and court allocation will update automatically
+    // via Firestore real-time listeners in useCourtManagement
+  };
+
 
   // Legacy score input state removed in V07.03 - now using ScoreEntryModal
 
@@ -629,12 +579,8 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
                   onStartMatch={() => onStartMatchOnCourt(court.id)}
                   onOpenScoreModal={() => {
                     if (!match) return;
-                    // V07.04: Use FinaliseScoreModal for organizers
-                    if (isOrganizer && onFinaliseResult) {
-                      setFinaliseModalData({ courtId: court.id, match });
-                    } else {
-                      setScoreModalData({ courtId: court.id, match });
-                    }
+                    // V07.53: Use unified EventScoreEntryModal for all cases
+                    setScoreModalData({ courtId: court.id, matchId: match.id });
                   }}
                 />
               );
@@ -643,27 +589,20 @@ export const CourtAllocationStyled: React.FC<CourtAllocationStyledProps> = ({
         </GlassCard>
       </div>
 
-      {/* V07.03: Score Entry Modal (fallback for non-DUPR flow) */}
-      {/* V07.07: Use memoized matchForModal to prevent score reset on re-renders */}
-      {scoreModalData && matchForModal && (
-        <ScoreEntryModal
-          isOpen={!!scoreModalData}
+      {/* V07.53: Unified EventScoreEntryModal for ALL score entry */}
+      {scoreModalData && scorableMatch && (
+        <EventScoreEntryModal
+          eventType="tournament"
+          eventId={tournamentId}
+          eventName={tournamentName}
+          match={scorableMatch}
+          bestOf={effectiveGameSettings.bestOf}
+          pointsPerGame={effectiveGameSettings.pointsPerGame}
+          winBy={effectiveGameSettings.winBy}
+          isOrganizer={isOrganizer}
+          isDuprEvent={isDuprEvent}
           onClose={() => setScoreModalData(null)}
-          match={matchForModal}
-          onSubmit={handleScoreSubmit}
-          isLoading={isSubmittingScore}
-        />
-      )}
-
-      {/* V07.04: Finalise Score Modal (organizer DUPR-compliant finalization) */}
-      {/* V07.07: Use memoized matchForFinaliseModal to prevent score reset on re-renders */}
-      {finaliseModalData && matchForFinaliseModal && (
-        <FinaliseScoreModal
-          isOpen={!!finaliseModalData}
-          onClose={() => setFinaliseModalData(null)}
-          match={matchForFinaliseModal}
-          onSubmit={handleFinaliseSubmit}
-          isLoading={isFinalisingScore}
+          onSuccess={handleScoreSuccess}
         />
       )}
     </div>

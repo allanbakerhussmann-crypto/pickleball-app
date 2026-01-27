@@ -5,7 +5,10 @@
  * Replaces the separate LeagueMatch, BoxLeagueMatch, Match, MeetupMatch types.
  *
  * FILE LOCATION: types/game/match.ts
- * VERSION: V07.04
+ * VERSION: V07.53
+ *
+ * V07.53 CHANGES:
+ * - Added participantIds denormalized field for efficient collectionGroup queries
  *
  * V07.04 CHANGES:
  * - Added DUPR-compliant scoring fields (scoreProposal, officialResult, dupr)
@@ -239,6 +242,17 @@ export interface Match {
   /** Migration tracking (for legacy matches) */
   migratedAt?: number;
   migratedFromLegacy?: boolean;
+
+  // ==========================================
+  // V07.53: Denormalized Fields for Queries
+  // ==========================================
+
+  /**
+   * All participant user IDs (for Firestore array-contains queries)
+   * Computed from sideA.playerIds + sideB.playerIds
+   * Used by usePendingScoreAcknowledgements for efficient collectionGroup queries
+   */
+  participantIds?: string[];
 
   // ==========================================
   // DUPR Integration (Legacy Fields)

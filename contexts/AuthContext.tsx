@@ -125,8 +125,12 @@ useEffect(() => {
 }, []);
 
   
-  // Helper to improve email link clickability on mobile (especially iOS)
-  const getActionCodeSettings = () => undefined;
+  // Action code settings for email verification and password reset
+  // This configures the continue URL where users land after clicking email links
+  const getActionCodeSettings = () => ({
+    url: window.location.origin + '/#/login',
+    handleCodeInApp: false,
+  });
 
   const signup = useCallback(async (email: string, pass: string, role: UserRole, name: string, consent: SignupConsent) => {
       const auth = getAuth();

@@ -5,7 +5,7 @@
  * Updated for V05.17 with format filter, improved cards, mixed doubles support.
  * 
  * FILE LOCATION: components/leagues/LeaguesList.tsx
- * VERSION: V05.17
+ * VERSION: V07.55
  */
 
 import React, { useState, useEffect } from 'react';
@@ -65,30 +65,36 @@ export const LeaguesList: React.FC<LeaguesListProps> = ({
   // ============================================
 
   const filteredLeagues = leagues.filter(league => {
+    // Exclude team leagues - they have their own section
+    if ((league.format as string) === 'team_league_interclub') return false;
+
     // Search filter
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      const matchesSearch = 
+      const matchesSearch =
         league.name.toLowerCase().includes(term) ||
         (league.description || '').toLowerCase().includes(term) ||
         (league.location || '').toLowerCase().includes(term) ||
         (league.clubName || '').toLowerCase().includes(term);
       if (!matchesSearch) return false;
     }
-    
+
     // Type filter
     if (typeFilter !== 'all' && league.type !== typeFilter) return false;
-    
+
     // Format filter
     if (formatFilter !== 'all' && league.format !== formatFilter) return false;
-    
+
     // Status filter
     if (statusFilter !== 'all' && league.status !== statusFilter) return false;
-    
+
     return true;
   });
 
-  const displayLeagues = activeTab === 'my' ? myLeagues : filteredLeagues;
+  // Filter team leagues from My Leagues as well
+  const filteredMyLeagues = myLeagues.filter(l => (l.format as string) !== 'team_league_interclub');
+
+  const displayLeagues = activeTab === 'my' ? filteredMyLeagues : filteredLeagues;
 
   // Sort: active first, then registration, then by date
   const sortedLeagues = [...displayLeagues].sort((a, b) => {

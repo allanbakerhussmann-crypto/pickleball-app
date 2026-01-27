@@ -76,6 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
       { id: 'tournaments', label: 'Tournaments' },
       { id: 'meetups', label: 'Meetups' },
       { id: 'leagues', label: 'Leagues' },
+      { id: 'teamLeagues', label: 'Team Leagues' },
       { id: 'clubs', label: 'Clubs' },
       { id: 'players', label: 'Players' },
       { id: 'score', label: 'Score' },

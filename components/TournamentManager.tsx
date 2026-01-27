@@ -53,6 +53,7 @@ import { useTournamentPermissions } from '../hooks/useTournamentPermissions';
 import { clearTestData, quickScoreMatch, simulatePoolCompletion, deleteCorruptedSelfMatches, deletePoolMatches } from '../services/firebase/matches';
 import { getTournament } from '../services/firebase/tournaments';
 import { DuprControlPanel } from './shared/DuprControlPanel';
+import { PhoneRequiredModal } from './shared/PhoneRequiredModal';
 import { finaliseResult } from '../services/firebase/duprScoring';
 import type { GameScore } from '../types/game/match';
 
@@ -188,6 +189,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   
   // Wizard State
   const [showRegistrationWizard, setShowRegistrationWizard] = useState(false);
+  const [showPhoneRequiredModal, setShowPhoneRequiredModal] = useState(false); // V07.50: Phone required for registration
   const [wizardProps, setWizardProps] = useState<{
     mode: 'full' | 'waiver_only';
     initialDivisionId?: string;
@@ -205,6 +207,19 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
   }, [initialWizardState, clearWizardState]);
 
   const handleOpenWizard = () => {
+    // V07.50: Check phone number requirement before opening registration wizard
+    if (!userProfile?.phone) {
+      setShowPhoneRequiredModal(true);
+      return;
+    }
+    setWizardProps({ mode: 'full' });
+    setShowRegistrationWizard(true);
+  };
+
+  // V07.50: Handle phone requirement completion for tournament registration
+  const handlePhoneComplete = () => {
+    setShowPhoneRequiredModal(false);
+    // Phone is now saved, continue with registration
     setWizardProps({ mode: 'full' });
     setShowRegistrationWizard(true);
   };
@@ -914,6 +929,14 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
       onExitTestMode={handleExitTestMode}
     >
     <div className="animate-fade-in relative">
+      {/* V07.50: Phone Required Modal */}
+      <PhoneRequiredModal
+        isOpen={showPhoneRequiredModal}
+        onClose={() => setShowPhoneRequiredModal(false)}
+        onComplete={handlePhoneComplete}
+        context="tournament"
+      />
+
       {showRegistrationWizard && userProfile && (
         <TournamentRegistrationWizard
           tournament={tournament}
@@ -2297,7 +2320,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
               assignMatchToCourt={assignMatchToCourt}
               startMatchOnCourt={startMatchOnCourt}
               finishMatchOnCourt={finishMatchOnCourt}
-              isOrganizer={isOrganizer}
+              isOrganizer={permissions.isTournamentOrganizer}
               onFinaliseResult={handleFinaliseResult}
             />
           )}
@@ -2316,7 +2339,7 @@ export const TournamentManager: React.FC<TournamentManagerProps> = ({
                 currentUserId={currentUser.uid}
                 getTeamDisplayName={getTeamDisplayName}
                 duprMode={tournament.duprSettings?.mode}
-                isOrganizer={isOrganizer}
+                isOrganizer={permissions.isTournamentOrganizer}
               />
             )}
 

@@ -14,6 +14,7 @@ import { BottomNav } from '../BottomNav';
 import { LoginModal } from '../auth/LoginModal';
 import { CookieConsentBanner } from '../shared/CookieConsentBanner';
 import { OrganizerAgreementBlockingModal } from '../shared/OrganizerAgreementBlockingModal';
+import { PendingScoreAlert } from '../shared/PendingScoreAlert';
 import { useAuth } from '../../contexts/AuthContext';
 import { ROUTES, getRoute } from '../../router/routes';
 import { ensureRegistrationForUser } from '../../services/firebase';
@@ -113,6 +114,7 @@ export const AppLayout: React.FC = () => {
     if (path.startsWith('/dashboard/score')) return 'score';
     if (path.startsWith('/dashboard')) return 'dashboard';
     if (path.startsWith('/results')) return 'results';
+    if (path.startsWith('/team-leagues')) return 'teamLeagues';
     if (path.startsWith('/leagues')) return 'leagues';
     if (path.startsWith('/score')) return 'score';
     return 'tournaments';
@@ -170,6 +172,9 @@ export const AppLayout: React.FC = () => {
       case 'leagues':
         navigate(ROUTES.LEAGUES);
         break;
+      case 'teamLeagues':
+        navigate(ROUTES.TEAM_LEAGUES);
+        break;
       case 'score':
         navigate('/dashboard/score');
         break;
@@ -197,6 +202,9 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
+      {/* V07.53: Global alert for pending score acknowledgements */}
+      <PendingScoreAlert />
+
       <Header
         activeView={getActiveView()}
         onNavigate={handleNavigate}

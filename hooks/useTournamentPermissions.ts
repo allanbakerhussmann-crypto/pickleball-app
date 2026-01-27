@@ -36,6 +36,8 @@ export interface TournamentPermissions {
   isFullAdmin: boolean;
   /** Is staff member (not owner/admin) */
   isStaff: boolean;
+  /** V07.53: Is organizer of THIS tournament (for DUPR anti-self-reporting) */
+  isTournamentOrganizer: boolean;
 }
 
 /**
@@ -52,6 +54,7 @@ function createNoPermissions(): TournamentPermissions {
     canViewAdminDashboard: false,
     isFullAdmin: false,
     isStaff: false,
+    isTournamentOrganizer: false,
   };
 }
 
@@ -91,6 +94,7 @@ export function getTournamentPermissions(
     // Role flags
     isFullAdmin,
     isStaff: isStaff && !isFullAdmin, // Only true if staff but NOT full admin
+    isTournamentOrganizer: isOwner, // V07.53: For DUPR anti-self-reporting (owner only, not app admin)
   };
 }
 

@@ -22,7 +22,7 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
   userEmail,
 }) => {
   const navigate = useNavigate();
-  const [step, setStep] = useState<'warning' | 'confirm' | 'deleting' | 'error'>('warning');
+  const [step, setStep] = useState<'warning' | 'confirm' | 'deleting' | 'success' | 'error'>('warning');
   const [confirmText, setConfirmText] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -39,8 +39,12 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
       const result = await deleteAccount();
 
       if (result.success) {
-        // Account deleted, redirect to home
-        navigate('/');
+        // Show success message, then redirect to home
+        setStep('success');
+        setTimeout(() => {
+          navigate('/');
+          window.location.reload(); // Force reload to clear auth state
+        }, 3000);
       } else {
         setError(result.message);
         setStep('error');
@@ -172,6 +176,29 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
             </div>
           )}
 
+          {step === 'success' && (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-green-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg
+                  className="w-8 h-8 text-green-500"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+              </div>
+              <p className="text-white text-lg font-semibold mb-2">Account Deleted</p>
+              <p className="text-gray-400">Your account and all associated data have been permanently deleted.</p>
+              <p className="text-gray-500 text-sm mt-4">Redirecting to home page...</p>
+            </div>
+          )}
+
           {step === 'error' && (
             <>
               <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 mb-4">
@@ -191,7 +218,7 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
         </div>
 
         {/* Footer */}
-        {step !== 'deleting' && (
+        {step !== 'deleting' && step !== 'success' && (
           <div className="p-6 border-t border-gray-700">
             <button
               onClick={onClose}

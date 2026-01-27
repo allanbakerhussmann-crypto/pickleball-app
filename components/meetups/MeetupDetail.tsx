@@ -301,6 +301,7 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
         }],
         customerEmail: currentUser.email || undefined,
         clubId: meetup.clubId, // Required for V2 account detection
+        organizerUserId: meetup.createdByUserId, // For looking up organizer's Stripe Connect account
         organizerStripeAccountId: meetup.organizerStripeAccountId,
         successUrl: `${window.location.origin}/#/meetups/${meetupId}?payment=success`,
         cancelUrl: `${window.location.origin}/#/meetups/${meetupId}?payment=cancel`,
@@ -308,6 +309,7 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
           type: 'meetup',
           meetupId,
           clubId: meetup.clubId || '',
+          organizerUserId: meetup.createdByUserId, // For Finance tab queries
           odUserId: currentUser.uid,
           payerName: userProfile.displayName || 'Guest',
           eventName: meetup.title,

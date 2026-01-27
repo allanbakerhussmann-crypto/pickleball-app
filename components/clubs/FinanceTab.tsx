@@ -1,5 +1,5 @@
 /**
- * FinanceTab - Main Finance container for clubs
+ * FinanceTab - Main Finance container for clubs and organizers
  *
  * Shows:
  * - Overview cards (Gross Sales, Refunds, Platform Fee, Net Revenue)
@@ -7,7 +7,11 @@
  * - Transaction table with filters
  * - Export functionality
  *
- * @version 07.50
+ * Supports both club and organizer modes:
+ * - Pass clubId for club finance view
+ * - Pass organizerId for organizer finance view
+ *
+ * @version 07.53
  * @file components/clubs/FinanceTab.tsx
  */
 
@@ -18,20 +22,30 @@ import { TransactionDetailDrawer } from './TransactionDetailDrawer';
 import {
   getClubFinanceOverviewLast30Days,
   getClubTransactions,
+  getOrganizerFinanceOverviewLast30Days,
+  getOrganizerTransactions,
 } from '../../services/firebase/payments/finance';
 import {
   FinanceTransaction,
   FinanceOverview as FinanceOverviewType,
   FinanceReferenceType,
 } from '../../services/firebase/payments/types';
-import { createConnectLoginLink } from '../../services/stripe';
+import { createConnectLoginLink, createUserConnectLoginLink } from '../../services/stripe';
 
 interface FinanceTabProps {
-  clubId: string;
+  /** Club ID for club finance view */
+  clubId?: string;
+  /** Organizer user ID for organizer finance view */
+  organizerId?: string;
+  /** Stripe connected account ID */
   stripeAccountId?: string;
 }
 
-export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, stripeAccountId }) => {
+export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, organizerId, stripeAccountId }) => {
+  // Determine which mode we're in
+  const isOrganizerMode = !!organizerId && !clubId;
+  const entityId = clubId || organizerId || '';
+
   // State
   const [overview, setOverview] = useState<FinanceOverviewType | null>(null);
   const [transactions, setTransactions] = useState<FinanceTransaction[]>([]);
@@ -48,10 +62,14 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, stripeAccountId 
 
   // Load data
   const loadData = useCallback(async () => {
+    if (!entityId) return;
+
     setLoading(true);
     try {
-      // Load overview
-      const overviewData = await getClubFinanceOverviewLast30Days(clubId);
+      // Load overview - use appropriate function based on mode
+      const overviewData = isOrganizerMode
+        ? await getOrganizerFinanceOverviewLast30Days(entityId)
+        : await getClubFinanceOverviewLast30Days(entityId);
       setOverview(overviewData);
 
       // Calculate date range
@@ -63,14 +81,22 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, stripeAccountId 
         startDate = now - 90 * 24 * 60 * 60 * 1000;
       }
 
-      // Load transactions
-      const { transactions: txList, hasMore: more } = await getClubTransactions({
-        odClubId: clubId,
-        type: typeFilter === 'all' ? undefined : typeFilter,
-        referenceType: referenceFilter === 'all' ? undefined : referenceFilter,
-        startDate,
-        limit: 20,
-      });
+      // Load transactions - use appropriate function based on mode
+      const { transactions: txList, hasMore: more } = isOrganizerMode
+        ? await getOrganizerTransactions({
+            organizerUserId: entityId,
+            type: typeFilter === 'all' ? undefined : typeFilter,
+            referenceType: referenceFilter === 'all' ? undefined : referenceFilter,
+            startDate,
+            limit: 20,
+          })
+        : await getClubTransactions({
+            odClubId: entityId,
+            type: typeFilter === 'all' ? undefined : typeFilter,
+            referenceType: referenceFilter === 'all' ? undefined : referenceFilter,
+            startDate,
+            limit: 20,
+          });
 
       setTransactions(txList);
       setHasMore(more);
@@ -79,7 +105,7 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, stripeAccountId 
     } finally {
       setLoading(false);
     }
-  }, [clubId, typeFilter, referenceFilter, dateRange]);
+  }, [entityId, isOrganizerMode, typeFilter, referenceFilter, dateRange]);
 
   useEffect(() => {
     loadData();
@@ -106,7 +132,10 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, stripeAccountId 
 
     setLoadingStripeLink(true);
     try {
-      const { url } = await createConnectLoginLink(stripeAccountId);
+      // Use appropriate login link function based on mode
+      const { url } = isOrganizerMode
+        ? await createUserConnectLoginLink(stripeAccountId)
+        : await createConnectLoginLink(stripeAccountId);
       window.open(url, '_blank');
     } catch (error) {
       console.error('Failed to create Stripe login link:', error);
@@ -138,7 +167,8 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, stripeAccountId 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `finance-${clubId}-${new Date().toISOString().split('T')[0]}.csv`;
+    const prefix = isOrganizerMode ? 'organizer-finance' : 'club-finance';
+    a.download = `${prefix}-${entityId}-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };

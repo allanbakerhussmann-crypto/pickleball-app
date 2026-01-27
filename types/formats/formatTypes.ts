@@ -94,7 +94,6 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '🔄',
-    adminOnly: true,
   },
   {
     value: 'rotating_doubles_box',
@@ -104,7 +103,6 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     supportsPlayType: ['singles', 'doubles', 'mixed', 'open'],
     generatesMatchesUpfront: true,
     icon: '📦',
-    adminOnly: true,
   },
   {
     value: 'fixed_doubles_box',
@@ -152,7 +150,7 @@ export const COMPETITION_FORMATS: FormatOption[] = [
     requiresTeams: true,
     generatesMatchesUpfront: true,
     icon: '🏢',
-    comingSoon: true,
+    disabledIn: ['tournament', 'meetup'],
   },
   {
     value: 'swiss',
@@ -304,22 +302,61 @@ export const DEFAULT_KING_OF_COURT_SETTINGS: KingOfCourtSettings = {
 
 /**
  * Settings for Team League (Interclub) format
+ *
+ * NOTE: Full type definition is in types/teamLeague.ts
+ * This is a simplified version for the format settings union type.
+ * Import TeamLeagueSettings from '../teamLeague' for full type.
  */
 export interface TeamLeagueSettings {
-  /** Number of matches per team matchup */
-  matchesPerTeamMatchup: number;
+  /** Board configurations */
+  boards: {
+    id: string;
+    name: string;
+    format: 'singles' | 'doubles' | 'mixed';
+    gender?: 'mens' | 'womens' | 'open' | 'mixed';
+    order: number;
+    pointValue?: number;
+  }[];
 
   /** Minimum players per team roster */
   minPlayersPerTeam: number;
 
   /** Maximum players per team roster */
   maxPlayersPerTeam: number;
+
+  /** Minutes before match when lineups lock */
+  lineupLockMinutesBeforeMatch: number;
+
+  /** Points awarded per board win */
+  pointsPerBoardWin: number;
+
+  /** Bonus points for winning the fixture */
+  pointsPerMatchWin: number;
+
+  /** Tiebreaker order for standings */
+  tieBreakerOrder: ('matchWins' | 'boardDiff' | 'headToHead' | 'pointDiff')[];
+
+  /** DUPR mode - only none or required for team leagues */
+  duprMode?: 'none' | 'required';
+
+  /** When standings update */
+  standingsUpdateMode?: 'on_finalize' | 'on_board_complete';
+
+  /** Default withdrawal handling */
+  defaultWithdrawalHandling?: 'auto_forfeit' | 'convert_to_bye' | 'remove_fixtures' | 'void_all';
 }
 
 export const DEFAULT_TEAM_LEAGUE_SETTINGS: TeamLeagueSettings = {
-  matchesPerTeamMatchup: 5,
+  boards: [],
   minPlayersPerTeam: 4,
-  maxPlayersPerTeam: 8,
+  maxPlayersPerTeam: 12,
+  lineupLockMinutesBeforeMatch: 30,
+  pointsPerBoardWin: 1,
+  pointsPerMatchWin: 2,
+  tieBreakerOrder: ['matchWins', 'boardDiff', 'headToHead'],
+  duprMode: 'none',
+  standingsUpdateMode: 'on_finalize',
+  defaultWithdrawalHandling: 'auto_forfeit',
 };
 
 /**

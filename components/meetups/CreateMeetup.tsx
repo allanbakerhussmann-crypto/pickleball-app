@@ -351,6 +351,14 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
 
   const validateStep2 = (): boolean => {
     if (pricingEnabled && totalPerPersonCents > 0) {
+      // Check if trying to create paid meetup as non-admin club member
+      if (hostType === 'club' && selectedClub) {
+        const isAdmin = selectedClub.adminIds?.includes(currentUser?.uid || '');
+        if (!isAdmin) {
+          setError('Only club admins can create paid meetups on behalf of a club. You can create a paid meetup as yourself instead.');
+          return false;
+        }
+      }
       // Check if host has Stripe connected
       if (!canAcceptPayments) {
         setError(`${hostType === 'club' ? 'This club' : 'You'} must connect Stripe before creating paid meetups. Go to ${hostType === 'club' ? 'Club Settings' : 'Profile'} → Payments to set up.`);
@@ -563,9 +571,14 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                     className="w-full mt-3 bg-gray-900 border border-gray-600 text-white p-3 rounded-lg focus:outline-none focus:border-green-500"
                   >
                     <option value="">Select a club...</option>
-                    {userClubs.map((club) => (
-                      <option key={club.id} value={club.id}>{club.name}</option>
-                    ))}
+                    {userClubs.map((club) => {
+                      const isAdmin = club.adminIds?.includes(currentUser?.uid || '');
+                      return (
+                        <option key={club.id} value={club.id}>
+                          {club.name}{isAdmin ? ' (Admin)' : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                 )}
               </div>
@@ -721,6 +734,16 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                     <p className="text-yellow-400 text-sm">
                       ⚠️ {hostType === 'club' ? 'This club' : 'You'} need to connect Stripe to accept payments.
                       Go to {hostType === 'club' ? 'Club Settings' : 'Profile'} → Payments to set up.
+                    </p>
+                  </div>
+                )}
+
+                {/* Non-admin club warning */}
+                {hostType === 'club' && selectedClub && !selectedClub.adminIds?.includes(currentUser?.uid || '') && (
+                  <div className="p-4 bg-yellow-900/30 border border-yellow-600 rounded-lg">
+                    <p className="text-yellow-400 text-sm">
+                      ⚠️ Only club admins can create paid meetups on behalf of a club.
+                      Select "Myself" as host to charge entry fees with your own Stripe account.
                     </p>
                   </div>
                 )}

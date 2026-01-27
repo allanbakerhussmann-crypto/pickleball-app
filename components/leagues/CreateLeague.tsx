@@ -286,16 +286,27 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   // Step 6: Payment
   // Payment modes: 'free' = no payment, 'external' = collect outside app, 'stripe' = collect via Stripe
   const [paymentMode, setPaymentMode] = useState<'free' | 'external' | 'stripe'>('free');
-  const [price, setPrice] = useState({ 
-    entryFee: 1500, entryFeeType: 'per_player' as 'per_player' | 'per_team', 
-    memberDiscount: 0, earlyBirdEnabled: false, earlyBirdFee: 1000, 
-    lateFeeEnabled: false, lateFee: 2000, 
-    prizePool: { enabled: false, type: 'none' as 'none' | 'fixed' | 'percentage', 
-      amount: 0, distribution: { first: 60, second: 30, third: 10, fourth: 0 } 
+  const [price, setPrice] = useState({
+    entryFee: 1500, entryFeeType: 'per_player' as 'per_player' | 'per_team',
+    memberDiscount: 0, earlyBirdEnabled: false, earlyBirdFee: 1000,
+    lateFeeEnabled: false, lateFee: 2000,
+    prizePool: { enabled: false, type: 'none' as 'none' | 'fixed' | 'percentage',
+      amount: 0, distribution: { first: 60, second: 30, third: 10, fourth: 0 }
     } as LeaguePrizePool,
-    feesPaidBy: 'player' as 'player' | 'organizer', 
-    refundPolicy: 'partial' as 'full' | 'partial' | 'none' 
+    feesPaidBy: 'player' as 'player' | 'organizer',
+    refundPolicy: 'partial' as 'full' | 'partial' | 'none'
   });
+
+  // V07.53: Payment method options (for stripe mode)
+  const [allowStripe, setAllowStripe] = useState(true);
+  const [allowBankTransfer, setAllowBankTransfer] = useState(false);
+  const [bankDetails, setBankDetails] = useState({
+    bankName: '',
+    accountName: '',
+    accountNumber: '',
+    reference: '',
+  });
+  const [showBankDetails, setShowBankDetails] = useState(true);
 
   // ============================================
   // EFFECTS
@@ -328,9 +339,11 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
   }, [selectedFormat]);
 
   // V07.25: Auto-select 'singles' for rotating_doubles_box (individual entry, rotating partners)
+  // V07.53: Also force per_player fee type since there are no teams
   useEffect(() => {
     if (selectedFormat === 'rotating_doubles_box') {
       setBasic(b => ({ ...b, type: 'singles' }));
+      setPrice(p => ({ ...p, entryFeeType: 'per_player' }));
     }
   }, [selectedFormat]);
 
@@ -514,6 +527,16 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
         prizePool: price.prizePool, feesPaidBy: price.feesPaidBy, refundPolicy: price.refundPolicy,
         refundDeadline: scheduleConfig.startDate ? new Date(scheduleConfig.startDate).getTime() : null,
         currency: 'nzd',
+        // V07.53: Payment method options
+        allowStripe: paymentMode === 'stripe' ? allowStripe : false,
+        allowBankTransfer: paymentMode === 'stripe' ? allowBankTransfer : (paymentMode === 'external'),
+        bankDetails: (paymentMode === 'external' || (paymentMode === 'stripe' && allowBankTransfer)) && bankDetails.accountNumber ? {
+          bankName: bankDetails.bankName,
+          accountName: bankDetails.accountName,
+          accountNumber: bankDetails.accountNumber,
+          reference: bankDetails.reference,
+        } : undefined,
+        showBankDetails: (paymentMode === 'external' || (paymentMode === 'stripe' && allowBankTransfer)) ? showBankDetails : false,
       } : null;
 
       const stripeId = basic.clubId && clubStripe 
@@ -1648,7 +1671,7 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 </div>
               </label>
 
-              {/* External Payment Option */}
+              {/* Bank Transfer Only Option */}
               <label
                 className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
                   paymentMode === 'external'
@@ -1662,8 +1685,8 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                   {paymentMode === 'external' && <div className="w-2.5 h-2.5 rounded-full bg-blue-500"/>}
                 </div>
                 <div className="flex-1">
-                  <div className="font-semibold text-white">Collect Payment Outside App</div>
-                  <div className="text-sm text-gray-400">Entry fee shown but you collect payment directly</div>
+                  <div className="font-semibold text-white">Bank Transfer Only</div>
+                  <div className="text-sm text-gray-400">Players pay via bank transfer, you confirm manually</div>
                 </div>
               </label>
 
@@ -1684,10 +1707,10 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 </div>
                 <div className="flex-1">
                   <div className="font-semibold text-white flex items-center gap-2">
-                    Collect via Stripe
+                    Accept Payments
                     <span className="text-xs px-1.5 py-0.5 rounded bg-purple-600/30 text-purple-300">⚡ Recommended</span>
                   </div>
-                  <div className="text-sm text-gray-400">Secure online payments, automatic registration</div>
+                  <div className="text-sm text-gray-400">Card payments + optional bank transfers</div>
                 </div>
                 {!canPay && (
                   <span className="text-xs text-yellow-400">Setup Required</span>
@@ -1737,35 +1760,106 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                       ))}
                     </div>
                   </div>
-                  {/* Fee Type */}
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-2">Fee Type</label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPrice({ ...price, entryFeeType: 'per_player' })}
-                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                          price.entryFeeType === 'per_player'
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        }`}
-                      >
-                        Per Player
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPrice({ ...price, entryFeeType: 'per_team' })}
-                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                          price.entryFeeType === 'per_team'
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        }`}
-                      >
-                        Per Team
-                      </button>
+                  {/* Fee Type - Only show for doubles leagues (not rotating box where players enter individually) */}
+                  {isDoubles && selectedFormat !== 'rotating_doubles_box' ? (
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Fee Type</label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPrice({ ...price, entryFeeType: 'per_player' })}
+                          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                            price.entryFeeType === 'per_player'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          Per Player
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPrice({ ...price, entryFeeType: 'per_team' })}
+                          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                            price.entryFeeType === 'per_team'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          Per Team
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">
+                      {selectedFormat === 'rotating_doubles_box'
+                        ? 'Fee is per player (individual entry with rotating partners)'
+                        : 'Fee is per player'}
+                    </div>
+                  )}
+                </div>
+                {/* V07.53: Bank Details for external/bank-transfer-only mode */}
+                {paymentMode === 'external' && (
+                  <div className="bg-gray-800 p-4 rounded-lg border border-blue-600/30">
+                    <label className="block text-sm text-gray-400 mb-2">Your Bank Details</label>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Players will see these details when registering
+                    </p>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Bank Name</label>
+                        <input
+                          type="text"
+                          value={bankDetails.bankName}
+                          onChange={(e) => setBankDetails({ ...bankDetails, bankName: e.target.value })}
+                          placeholder="e.g., ANZ Bank"
+                          className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Account Name</label>
+                        <input
+                          type="text"
+                          value={bankDetails.accountName}
+                          onChange={(e) => setBankDetails({ ...bankDetails, accountName: e.target.value })}
+                          placeholder="e.g., Monday Night League"
+                          className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Account Number *</label>
+                        <input
+                          type="text"
+                          value={bankDetails.accountNumber}
+                          onChange={(e) => setBankDetails({ ...bankDetails, accountNumber: e.target.value })}
+                          placeholder="e.g., 12-3456-7890123-00"
+                          className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Reference Instructions</label>
+                        <input
+                          type="text"
+                          value={bankDetails.reference}
+                          onChange={(e) => setBankDetails({ ...bankDetails, reference: e.target.value })}
+                          placeholder="e.g., Use your name as reference"
+                          className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                        />
+                      </div>
+                      <label className="flex items-center gap-3 cursor-pointer pt-2">
+                        <input
+                          type="checkbox"
+                          checked={showBankDetails}
+                          onChange={(e) => setShowBankDetails(e.target.checked)}
+                          className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500"
+                        />
+                        <div className="text-sm text-gray-400">
+                          Show bank details in registration form
+                        </div>
+                      </label>
                     </div>
                   </div>
-                </div>
+                )}
+
                 {paymentMode === 'stripe' && (
                   <>
                     {/* Who pays fees */}
@@ -1809,6 +1903,108 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                         </button>
                       </div>
                     </div>
+
+                    {/* V07.53: Payment Methods */}
+                    <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                      <label className="block text-sm text-gray-400 mb-2">Payment Methods</label>
+                      <p className="text-xs text-gray-500 mb-3">
+                        Choose how players can pay for registration
+                      </p>
+                      <div className="space-y-3">
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={allowStripe}
+                            onChange={(e) => setAllowStripe(e.target.checked)}
+                            className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500"
+                          />
+                          <div>
+                            <div className="text-white font-medium">Card payments (Stripe)</div>
+                            <div className="text-xs text-gray-400">Instant confirmation, fees apply</div>
+                          </div>
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={allowBankTransfer}
+                            onChange={(e) => setAllowBankTransfer(e.target.checked)}
+                            className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500"
+                          />
+                          <div>
+                            <div className="text-white font-medium">Bank transfers (EFT)</div>
+                            <div className="text-xs text-gray-400">No fees, you confirm manually</div>
+                          </div>
+                        </label>
+                      </div>
+                      {!allowStripe && !allowBankTransfer && (
+                        <div className="mt-3 text-sm text-yellow-400">
+                          Select at least one payment method
+                        </div>
+                      )}
+                    </div>
+
+                    {/* V07.53: Bank Details (when bank transfer enabled) */}
+                    {allowBankTransfer && (
+                      <div className="bg-gray-800 p-4 rounded-lg border border-blue-600/30">
+                        <label className="block text-sm text-gray-400 mb-2">Bank Details for Transfers</label>
+                        <p className="text-xs text-gray-500 mb-3">
+                          Players will see these details when choosing bank transfer
+                        </p>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Bank Name</label>
+                            <input
+                              type="text"
+                              value={bankDetails.bankName}
+                              onChange={(e) => setBankDetails({ ...bankDetails, bankName: e.target.value })}
+                              placeholder="e.g., ANZ Bank"
+                              className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Account Name</label>
+                            <input
+                              type="text"
+                              value={bankDetails.accountName}
+                              onChange={(e) => setBankDetails({ ...bankDetails, accountName: e.target.value })}
+                              placeholder="e.g., Monday Night League"
+                              className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Account Number *</label>
+                            <input
+                              type="text"
+                              value={bankDetails.accountNumber}
+                              onChange={(e) => setBankDetails({ ...bankDetails, accountNumber: e.target.value })}
+                              placeholder="e.g., 12-3456-7890123-00"
+                              className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-500 mb-1">Reference Instructions</label>
+                            <input
+                              type="text"
+                              value={bankDetails.reference}
+                              onChange={(e) => setBankDetails({ ...bankDetails, reference: e.target.value })}
+                              placeholder="e.g., Use your name as reference"
+                              className="w-full bg-gray-900 text-white p-2.5 rounded border border-gray-600 focus:border-lime-500 focus:outline-none"
+                            />
+                          </div>
+                          <label className="flex items-center gap-3 cursor-pointer pt-2">
+                            <input
+                              type="checkbox"
+                              checked={showBankDetails}
+                              onChange={(e) => setShowBankDetails(e.target.checked)}
+                              className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500"
+                            />
+                            <div className="text-sm text-gray-400">
+                              Show bank details in registration form
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Refund Policy */}
                     <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
@@ -1921,8 +2117,17 @@ export const CreateLeague: React.FC<CreateLeagueProps> = ({ onBack, onCreated })
                 <div className="text-sm space-y-1">
                   <div className="text-white">{fmtCur(price.entryFee)} per {price.entryFeeType === 'per_team' ? 'team' : 'player'}</div>
                   <div className="text-gray-400">
-                    {paymentMode === 'stripe' ? 'Collected via Stripe' : 'Collected outside app'}
+                    {paymentMode === 'stripe' ? (
+                      <>
+                        {allowStripe && allowBankTransfer ? 'Card or Bank Transfer' :
+                         allowStripe ? 'Card payments only' :
+                         allowBankTransfer ? 'Bank transfer only' : 'No payment method selected'}
+                      </>
+                    ) : 'Bank Transfer Only'}
                   </div>
+                  {(paymentMode === 'external' || (paymentMode === 'stripe' && allowBankTransfer)) && bankDetails.accountNumber && (
+                    <div className="text-xs text-gray-500">Bank: {bankDetails.bankName || 'Not set'} - {bankDetails.accountNumber}</div>
+                  )}
                 </div>
               )}
             </div>

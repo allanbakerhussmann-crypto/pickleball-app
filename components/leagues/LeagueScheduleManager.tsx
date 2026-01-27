@@ -32,6 +32,7 @@ import { db } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { League, LeagueMember, LeagueMatch, LeagueDivision, UserProfile } from '../../types';
 import { BoxDraftWeekPanel } from './boxLeague';
+import { InfoTooltip } from '../shared/InfoTooltip';
 
 // ============================================
 // LOCAL TYPES
@@ -937,61 +938,89 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
       {/* Filter Tabs - Underline Style */}
       <div className="flex gap-6 border-b border-gray-700">
-        <button
-          onClick={() => setActiveTab('generate')}
-          className={`pb-3 text-sm font-medium transition-colors relative ${
-            activeTab === 'generate'
-              ? 'text-white'
-              : 'text-gray-400 hover:text-gray-300'
-          }`}
-        >
-          Generate
-          {activeTab === 'generate' && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab('weeks')}
-          className={`pb-3 text-sm font-medium transition-colors relative ${
-            activeTab === 'weeks'
-              ? 'text-white'
-              : 'text-gray-400 hover:text-gray-300'
-          }`}
-        >
-          Weeks
-          {activeTab === 'weeks' && (
-            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
-          )}
-        </button>
-        {hasVenue && (
+        <div className="flex items-center gap-1">
           <button
-            onClick={() => setActiveTab('courts')}
+            onClick={() => setActiveTab('generate')}
             className={`pb-3 text-sm font-medium transition-colors relative ${
-              activeTab === 'courts'
+              activeTab === 'generate'
                 ? 'text-white'
                 : 'text-gray-400 hover:text-gray-300'
             }`}
           >
-            Courts
-            {activeTab === 'courts' && (
+            Generate
+            {activeTab === 'generate' && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
             )}
           </button>
+          <InfoTooltip
+            text="Create the match schedule for your league. For box leagues, this creates Week 1 with initial box assignments."
+            position="bottom"
+            size={3}
+          />
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setActiveTab('weeks')}
+            className={`pb-3 text-sm font-medium transition-colors relative ${
+              activeTab === 'weeks'
+                ? 'text-white'
+                : 'text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            Weeks
+            {activeTab === 'weeks' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+            )}
+          </button>
+          <InfoTooltip
+            text="Manage weekly rounds. Activate weeks to create matches, finalize completed weeks to trigger promotion/relegation."
+            position="bottom"
+            size={3}
+          />
+        </div>
+        {hasVenue && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setActiveTab('courts')}
+              className={`pb-3 text-sm font-medium transition-colors relative ${
+                activeTab === 'courts'
+                  ? 'text-white'
+                  : 'text-gray-400 hover:text-gray-300'
+              }`}
+            >
+              Courts
+              {activeTab === 'courts' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+              )}
+            </button>
+            <InfoTooltip
+              text="Assign matches to specific courts. Use auto-assign for balanced distribution or manually assign each match."
+              position="bottom"
+              size={3}
+            />
+          </div>
         )}
         {hasVenue && (
-          <button
-            onClick={() => setActiveTab('timeline')}
-            className={`pb-3 text-sm font-medium transition-colors relative ${
-              activeTab === 'timeline'
-                ? 'text-white'
-                : 'text-gray-400 hover:text-gray-300'
-            }`}
-          >
-            Timeline
-            {activeTab === 'timeline' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
-            )}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setActiveTab('timeline')}
+              className={`pb-3 text-sm font-medium transition-colors relative ${
+                activeTab === 'timeline'
+                  ? 'text-white'
+                  : 'text-gray-400 hover:text-gray-300'
+              }`}
+            >
+              Timeline
+              {activeTab === 'timeline' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-lime-500" />
+              )}
+            </button>
+            <InfoTooltip
+              text="Visual grid showing matches organized by court and time slot. Useful for checking session capacity."
+              position="bottom"
+              size={3}
+            />
+          </div>
         )}
       </div>
 
@@ -1100,26 +1129,38 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
           )}
 
           {/* Action Buttons */}
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={handleGenerate}
-              disabled={generating || divisionMembers.length < 2}
-              className={`flex-1 py-3 px-6 rounded-lg font-semibold transition-all ${
-                matchStats.total > 0 && league.format !== 'swiss'
-                  ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-                  : 'bg-lime-600 hover:bg-lime-500 text-white'
-              } disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed`}
-            >
-              {generating ? 'Generating...' : league.format === 'swiss' ? `Generate Round ${swissRound}` : 'Generate Schedule'}
-            </button>
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="flex items-center gap-1 flex-1">
+              <button
+                onClick={handleGenerate}
+                disabled={generating || divisionMembers.length < 2}
+                className={`flex-1 py-3 px-6 rounded-lg font-semibold transition-all ${
+                  matchStats.total > 0 && league.format !== 'swiss'
+                    ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                    : 'bg-lime-600 hover:bg-lime-500 text-white'
+                } disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed`}
+              >
+                {generating ? 'Generating...' : league.format === 'swiss' ? `Generate Round ${swissRound}` : 'Generate Schedule'}
+              </button>
+              <InfoTooltip
+                text={league.format === 'swiss'
+                  ? "Generate the next Swiss round. Players are paired based on similar records."
+                  : "Create all matches based on format rules. For box leagues, this also creates Week 1 with box assignments."
+                }
+                size={4}
+              />
+            </div>
 
             {matchStats.total > 0 && (
-              <button
-                onClick={() => setShowConfirmClear(true)}
-                className="px-6 py-3 bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 rounded-lg font-semibold transition-colors"
-              >
-                Clear
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setShowConfirmClear(true)}
+                  className="px-6 py-3 bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 rounded-lg font-semibold transition-colors"
+                >
+                  Clear
+                </button>
+                <InfoTooltip text="Delete all scheduled matches. Completed matches are preserved." size={4} />
+              </div>
             )}
           </div>
 
@@ -1225,31 +1266,40 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                             {week.state === 'draft' && (
                               <>
                                 {canRecalculate && (
-                                  <button
-                                    onClick={() => handleRecalculateBoxes(week.weekNumber)}
-                                    disabled={loadingWeekAction === week.weekNumber}
-                                    className="px-2.5 py-1.5 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
-                                  >
-                                    {loadingWeekAction === week.weekNumber ? '...' : 'Recalculate'}
-                                  </button>
+                                  <div className="flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => handleRecalculateBoxes(week.weekNumber)}
+                                      disabled={loadingWeekAction === week.weekNumber}
+                                      className="px-2.5 py-1.5 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
+                                    >
+                                      {loadingWeekAction === week.weekNumber ? '...' : 'Recalculate'}
+                                    </button>
+                                    <InfoTooltip text="Re-apply promotion/relegation from last week's results" size={3} />
+                                  </div>
                                 )}
-                                <button
-                                  onClick={() => setExpandedDraftWeek(expandedDraftWeek === week.weekNumber ? null : week.weekNumber)}
-                                  className={`px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
-                                    expandedDraftWeek === week.weekNumber
-                                      ? 'bg-blue-500 text-white'
-                                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                                  }`}
-                                >
-                                  {expandedDraftWeek === week.weekNumber ? 'Close' : 'Edit'}
-                                </button>
-                                <button
-                                  onClick={() => handleActivateWeek(week.weekNumber)}
-                                  disabled={loadingWeekAction === week.weekNumber}
-                                  className="px-2.5 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 rounded text-xs font-medium text-white transition-colors"
-                                >
-                                  {loadingWeekAction === week.weekNumber ? '...' : 'Activate'}
-                                </button>
+                                <div className="flex items-center gap-0.5">
+                                  <button
+                                    onClick={() => setExpandedDraftWeek(expandedDraftWeek === week.weekNumber ? null : week.weekNumber)}
+                                    className={`px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                                      expandedDraftWeek === week.weekNumber
+                                        ? 'bg-blue-500 text-white'
+                                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                    }`}
+                                  >
+                                    {expandedDraftWeek === week.weekNumber ? 'Close' : 'Edit'}
+                                  </button>
+                                  <InfoTooltip text="Manually adjust player box assignments before activating" size={3} />
+                                </div>
+                                <div className="flex items-center gap-0.5">
+                                  <button
+                                    onClick={() => handleActivateWeek(week.weekNumber)}
+                                    disabled={loadingWeekAction === week.weekNumber}
+                                    className="px-2.5 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 rounded text-xs font-medium text-white transition-colors"
+                                  >
+                                    {loadingWeekAction === week.weekNumber ? '...' : 'Activate'}
+                                  </button>
+                                  <InfoTooltip text="Create matches and allow players to enter scores" size={3} />
+                                </div>
                               </>
                             )}
 
@@ -1257,33 +1307,42 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                             {week.state === 'active' && (
                               <>
                                 {completedMatches === totalMatches && totalMatches > 0 && (
-                                  <button
-                                    onClick={() => handleLockWeek(week.weekNumber)}
-                                    disabled={loadingWeekAction === week.weekNumber}
-                                    className="px-2.5 py-1.5 bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
-                                  >
-                                    {loadingWeekAction === week.weekNumber ? '...' : 'Close Week'}
-                                  </button>
+                                  <div className="flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => handleLockWeek(week.weekNumber)}
+                                      disabled={loadingWeekAction === week.weekNumber}
+                                      className="px-2.5 py-1.5 bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
+                                    >
+                                      {loadingWeekAction === week.weekNumber ? '...' : 'Close Week'}
+                                    </button>
+                                    <InfoTooltip text="Lock scores and prepare week for finalization" size={3} />
+                                  </div>
                                 )}
-                                <button
-                                  onClick={() => handleDeactivateWeek(week.weekNumber)}
-                                  disabled={loadingWeekAction === week.weekNumber}
-                                  className="px-2.5 py-1.5 bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
-                                >
-                                  {loadingWeekAction === week.weekNumber ? '...' : 'Deactivate'}
-                                </button>
+                                <div className="flex items-center gap-0.5">
+                                  <button
+                                    onClick={() => handleDeactivateWeek(week.weekNumber)}
+                                    disabled={loadingWeekAction === week.weekNumber}
+                                    className="px-2.5 py-1.5 bg-red-500/20 text-red-400 hover:bg-red-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
+                                  >
+                                    {loadingWeekAction === week.weekNumber ? '...' : 'Deactivate'}
+                                  </button>
+                                  <InfoTooltip text="Return to draft state and delete all matches for this week" size={3} />
+                                </div>
                               </>
                             )}
 
                             {/* Closing State Actions */}
                             {week.state === 'closing' && (
-                              <button
-                                onClick={() => handleFinalizeWeek(week.weekNumber)}
-                                disabled={loadingWeekAction === week.weekNumber}
-                                className="px-2.5 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 rounded text-xs font-medium text-white transition-colors"
-                              >
-                                {loadingWeekAction === week.weekNumber ? '...' : 'Finalize'}
-                              </button>
+                              <div className="flex items-center gap-0.5">
+                                <button
+                                  onClick={() => handleFinalizeWeek(week.weekNumber)}
+                                  disabled={loadingWeekAction === week.weekNumber}
+                                  className="px-2.5 py-1.5 bg-lime-600 hover:bg-lime-500 disabled:opacity-50 rounded text-xs font-medium text-white transition-colors"
+                                >
+                                  {loadingWeekAction === week.weekNumber ? '...' : 'Finalize'}
+                                </button>
+                                <InfoTooltip text="Apply promotion/relegation and create next week's draft" size={3} />
+                              </div>
                             )}
 
                             {/* Finalized State Actions */}
@@ -1291,13 +1350,16 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
                             {week.state === 'finalized' &&
                              !boxWeeks.some(w => w.weekNumber === week.weekNumber + 1) &&
                              (configuredTotalWeeks === null || week.weekNumber < configuredTotalWeeks) && (
-                              <button
-                                onClick={() => handleCreateNextWeek(week.weekNumber)}
-                                disabled={loadingWeekAction === week.weekNumber}
-                                className="px-2.5 py-1.5 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
-                              >
-                                {loadingWeekAction === week.weekNumber ? '...' : 'Create Next'}
-                              </button>
+                              <div className="flex items-center gap-0.5">
+                                <button
+                                  onClick={() => handleCreateNextWeek(week.weekNumber)}
+                                  disabled={loadingWeekAction === week.weekNumber}
+                                  className="px-2.5 py-1.5 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-50 rounded text-xs font-medium transition-colors"
+                                >
+                                  {loadingWeekAction === week.weekNumber ? '...' : 'Create Next'}
+                                </button>
+                                <InfoTooltip text="Manually create the next week if it wasn't auto-created" size={3} />
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1429,13 +1491,16 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
           {/* Auto-Assign Button */}
           {unassignedMatches.length > 0 && (
-            <button
-              onClick={handleAutoAssignCourts}
-              disabled={assigning}
-              className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
-            >
-              {assigning ? '⏳ Assigning...' : `⚡ Auto-Assign ${unassignedMatches.length} Matches`}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAutoAssignCourts}
+                disabled={assigning}
+                className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white rounded-lg font-semibold"
+              >
+                {assigning ? '⏳ Assigning...' : `⚡ Auto-Assign ${unassignedMatches.length} Matches`}
+              </button>
+              <InfoTooltip text="Automatically distribute matches across courts with balanced usage" size={4} />
+            </div>
           )}
 
           {/* Bulk Actions */}
@@ -1544,13 +1609,16 @@ export const LeagueScheduleManager: React.FC<LeagueScheduleManagerProps> = ({
 
           {/* Clear All Assignments */}
           {matchStats.withCourt > 0 && (
-            <button
-              onClick={handleClearCourtAssignments}
-              disabled={assigning}
-              className="w-full py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm"
-            >
-              Clear All Court Assignments ({matchStats.withCourt})
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleClearCourtAssignments}
+                disabled={assigning}
+                className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm"
+              >
+                Clear All Court Assignments ({matchStats.withCourt})
+              </button>
+              <InfoTooltip text="Remove court assignments from all scheduled matches" size={4} />
+            </div>
           )}
         </div>
       )}

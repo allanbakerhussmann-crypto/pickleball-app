@@ -34,6 +34,7 @@ interface MeetupCheckoutModalProps {
     locationName: string;
     maxPlayers?: number;
     clubId?: string; // Required for V2 account detection
+    createdByUserId: string; // Organizer user ID for Stripe Connect lookup
     pricing: {
       totalPerPerson: number;
       entryFee: number;
@@ -152,12 +153,14 @@ export const MeetupCheckoutModal: React.FC<MeetupCheckoutModalProps> = ({
         }],
         customerEmail: currentUser.email || undefined,
         clubId: meetup.clubId, // Required for V2 account detection
+        organizerUserId: meetup.createdByUserId, // For looking up organizer's Stripe Connect account
         organizerStripeAccountId: meetup.organizerStripeAccountId,
         successUrl,
         cancelUrl,
         metadata: {
           ...metadata,
           clubId: meetup.clubId || '',
+          organizerUserId: meetup.createdByUserId,
           eventName: meetup.title,
         },
       });
