@@ -108,6 +108,8 @@ const DEFAULT_SETTINGS: ClubBookingSettings = {
 interface ManageCourtsProps {
   clubId: string;
   onBack: () => void;
+  stripeConnected?: boolean;
+  stripeAccountId?: string;
 }
 
 // Helper to format cents to dollars
@@ -121,7 +123,7 @@ const parsePriceToCents = (value: string): number => {
   return isNaN(num) ? 0 : Math.round(num * 100);
 };
 
-export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) => {
+export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack, stripeConnected, stripeAccountId }) => {
   // State
   const [courts, setCourts] = useState<ClubCourt[]>([]);
   const [settings, setSettings] = useState<ClubBookingSettings>(DEFAULT_SETTINGS);
@@ -1148,25 +1150,30 @@ export const ManageCourts: React.FC<ManageCourtsProps> = ({ clubId, onBack }) =>
             </div>
           </div>
 
-          {/* Stripe Connection */}
+          {/* Stripe Connection Status */}
           <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
             <h3 className="text-white font-semibold mb-4">Payment Account</h3>
-            
-            {settings.stripeAccountId ? (
+
+            {stripeConnected ? (
               <div className="flex items-center gap-3 p-3 bg-green-900/30 rounded-lg border border-green-700">
                 <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <div>
                   <div className="text-white font-medium">Stripe Connected</div>
-                  <div className="text-gray-400 text-sm">You can receive payments</div>
+                  <div className="text-gray-400 text-sm">You can receive payments for court bookings</div>
                 </div>
               </div>
             ) : (
               <div className="text-center py-4">
-                <p className="text-gray-400 mb-4">Connect your bank account to receive payments</p>
-                <button className="bg-purple-600 hover:bg-purple-500 text-white px-5 py-2 rounded-lg font-semibold">
-                  Connect with Stripe
+                <p className="text-gray-400 mb-4">
+                  Connect your Stripe account in the Settings tab to receive payments
+                </p>
+                <button
+                  onClick={onBack}
+                  className="bg-purple-600 hover:bg-purple-500 text-white px-5 py-2 rounded-lg font-semibold"
+                >
+                  Go to Settings
                 </button>
               </div>
             )}

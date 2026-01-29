@@ -81,6 +81,15 @@ export {
 } from './ReceiptViewer';
 
 // ============================================
+// ORGANIZER PAYMENT SETTINGS
+// ============================================
+
+export { PaymentMethodsPanel } from './PaymentMethodsPanel';
+export { PendingPaymentsList } from './PendingPaymentsList';
+export type { PendingPaymentItem } from './PendingPaymentsList';
+export { BankDetailsDisplay } from './BankDetailsDisplay';
+
+// ============================================
 // COMBINED STYLES
 // ============================================
 
