@@ -1,9 +1,10 @@
 /**
  * Standing Meetup Types
  *
- * Types for recurring meetups with Stripe subscriptions and wallet-backed credits.
+ * Types for recurring meetups with one-time registration payments (MVP).
+ * Stripe subscriptions deferred to V2.
  *
- * @version 07.53
+ * @version 07.57
  * @file types/standingMeetup.ts
  */
 
@@ -51,7 +52,8 @@ export interface StandingMeetup {
     startTime: string; // "08:00" (interpreted in `timezone`)
     endTime: string; // "21:00" (interpreted in `timezone`)
     startDate: string; // "2025-02-01"
-    endDate?: string;
+    endDate?: string; // Calculated from startDate + totalSessions
+    totalSessions?: number; // Number of weekly sessions (e.g., 10 for school term)
   };
 
   // Capacity
@@ -64,12 +66,13 @@ export interface StandingMeetup {
 
   /**
    * Billing (organizer-configured)
-   * V1: ONLY 'weekly' is supported. Monthly deferred to V1.5.
+   * MVP Hybrid model: Season Pass + Pick-and-Pay
    */
   billing: {
     interval: 'weekly'; // V1: Weekly only. Monthly deferred to V1.5.
     intervalCount?: number; // e.g., 2 = every 2 weeks (default: 1)
-    amount: number; // Cents
+    amount: number; // Season Pass price in cents (optional - if 0, only pick-and-pay shown)
+    perSessionAmount: number; // Per-session price in cents (required for pick-and-pay)
     currency: 'nzd' | 'aud' | 'usd';
     feesPaidBy: 'organizer' | 'player';
     stripePriceId?: string; // Created on first subscription
@@ -96,6 +99,22 @@ export interface StandingMeetup {
   status: 'draft' | 'active' | 'paused' | 'archived';
   visibility: 'public' | 'linkOnly' | 'private';
   subscriberCount: number;
+
+  /**
+   * Payment Methods (MVP)
+   * Same pattern as leagues - one-time registration fee
+   */
+  paymentMethods?: {
+    acceptCardPayments: boolean;      // Stripe online payment
+    acceptBankTransfer: boolean;      // Manual bank transfer
+    bankDetails?: {
+      bankName: string;
+      accountName: string;
+      accountNumber: string;
+      reference?: string;             // Reference instructions
+      showToPlayers: boolean;
+    };
+  };
 
   createdAt: number;
   updatedAt: number;
@@ -413,6 +432,7 @@ export interface EnsureOccurrencesInput {
 
 export interface EnsureOccurrencesOutput {
   created: string[]; // List of dateIds created (e.g., ["2025-02-10", "2025-02-17"])
+  skippedCancelled: string[]; // List of cancelled sessions that were NOT auto-revived (safeguard)
   existing: number; // Count of occurrences that already existed
 }
 
@@ -441,15 +461,141 @@ export interface CancelAttendanceOutput {
 }
 
 // =============================================================================
+// Standing Meetup Registration (MVP)
+// =============================================================================
+
+/**
+ * Standing Meetup Registration - Player registration record (MVP Hybrid)
+ * Collection: standingMeetupRegistrations/{registrationId}
+ *
+ * MVP Hybrid model:
+ * - Season Pass: Pay once for all remaining sessions (discounted)
+ * - Pick-and-Pay: Select specific sessions, pay per session
+ *
+ * CRITICAL Payment Rules:
+ * - Stripe: Registration created ONLY on webhook success (no pending)
+ * - Bank Transfer: Pending registration created immediately, player NOT added to sessions until confirmed
+ */
+export interface StandingMeetupRegistration {
+  id: string;                    // {standingMeetupId}_{odUserId}
+  standingMeetupId: string;
+  clubId: string;
+  odUserId: string;
+  userName: string;
+  userEmail: string;
+
+  // Registration type (Hybrid model)
+  registrationType: 'season_pass' | 'pick_and_pay';
+
+  // For pick_and_pay: list of selected session IDs (occurrence dateIds)
+  selectedSessionIds?: string[];  // e.g., ['2025-02-03', '2025-02-10', '2025-02-17']
+
+  // Client-side only: When combining multiple registrations, track paid vs pending separately
+  // These are populated by subscribeToUserRegistrationForMeetup when merging registrations
+  paidSessionIds?: string[];      // Sessions from paid registrations
+  pendingSessionIds?: string[];   // Sessions from pending registrations
+
+  // Payment
+  paymentStatus: 'pending' | 'paid';
+  paymentMethod: 'stripe' | 'bank_transfer';
+  amount: number;                // Total amount paid (in cents)
+  sessionCount: number;          // Number of sessions (remaining for season_pass, selected for pick_and_pay)
+  currency: 'nzd' | 'aud' | 'usd';
+  paidAt?: number;
+
+  // Stripe-only fields (populated only after webhook success)
+  stripeCheckoutSessionId?: string;
+  stripePaymentIntentId?: string;
+
+  // Bank transfer reference (for organizer to verify)
+  bankTransferReference?: string;
+
+  // Status
+  status: 'active' | 'cancelled';
+  cancelledAt?: number;
+
+  createdAt: number;
+  updatedAt: number;
+}
+
+// =============================================================================
+// Registration Callable Function Types
+// =============================================================================
+
+// standingMeetup_register (Hybrid model)
+export interface RegisterInput {
+  standingMeetupId: string;
+  registrationType: 'season_pass' | 'pick_and_pay';
+  selectedSessionIds?: string[];  // Required if pick_and_pay
+  paymentMethod: 'stripe' | 'bank_transfer';
+  returnUrl: string;  // For Stripe redirect after checkout
+}
+
+// Stripe output - NO registration created yet (created on webhook)
+export interface RegisterOutputStripe {
+  checkoutUrl: string;
+}
+
+// Bank output - Registration created in pending state
+export interface RegisterOutputBank {
+  registrationId: string;
+  bankDetails: {
+    bankName: string;
+    accountName: string;
+    accountNumber: string;
+    reference?: string;
+  };
+}
+
+// standingMeetup_confirmBankPayment (organizer confirms bank transfer)
+export interface ConfirmBankPaymentInput {
+  registrationId: string;
+}
+
+export interface ConfirmBankPaymentOutput {
+  success: true;
+  paidAt: number;
+  addedToSessions: string[];  // List of occurrence dateIds player was added to
+}
+
+// standingMeetup_cancelUnpaidBankRegistration (organizer OR player)
+export interface CancelUnpaidBankRegistrationInput {
+  registrationId: string;
+}
+
+export interface CancelUnpaidBankRegistrationOutput {
+  success: true;
+  cancelledAt: number;
+}
+
+// standingMeetup_unregister (cancel paid registration)
+export interface UnregisterInput {
+  registrationId: string;
+}
+
+export interface UnregisterOutput {
+  success: true;
+  cancelledAt: number;
+  removedFromSessions: string[];  // List of occurrence dateIds player was removed from
+}
+
+// =============================================================================
 // Error Codes
 // =============================================================================
 
 export type StandingMeetupErrorCode =
   | 'CAPACITY_FULL'
+  | 'SESSIONS_FULL'              // All selected sessions are at capacity
+  | 'SOME_SESSIONS_FULL'         // Some selected sessions are full (pick-and-pay)
+  | 'NO_SESSIONS_AVAILABLE'      // No future sessions with capacity (season pass)
   | 'ALREADY_SUBSCRIBED'
+  | 'ALREADY_REGISTERED'
+  | 'REGISTRATION_NOT_FOUND'
   | 'MEETUP_NOT_FOUND'
   | 'MEETUP_NOT_ACTIVE'
   | 'PAYMENT_FAILED'
+  | 'PAYMENT_NOT_PENDING'
+  | 'PAYMENT_METHOD_NOT_ENABLED' // Stripe or bank not enabled
   | 'SUBSCRIPTION_NOT_FOUND'
   | 'NOT_OWNER'
   | 'ALREADY_CANCELLED'
@@ -460,4 +606,6 @@ export type StandingMeetupErrorCode =
   | 'NOT_PARTICIPANT'
   | 'ALREADY_CHECKED_IN'
   | 'SESSION_NOT_ACTIVE'
-  | 'OCCURRENCE_PASSED';
+  | 'OCCURRENCE_PASSED'
+  | 'INVALID_REGISTRATION_TYPE'  // registrationType must be season_pass or pick_and_pay
+  | 'MISSING_SESSION_SELECTION'; // pick_and_pay requires selectedSessionIds

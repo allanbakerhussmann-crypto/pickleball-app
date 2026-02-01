@@ -794,3 +794,53 @@ export {
   deleteTeamLeague,
   updateTeamLeagueStatus,
 } from './teamLeague';
+
+// ============================================
+// STANDING MEETUPS (V07.56)
+// ============================================
+export {
+  // CRUD
+  getStandingMeetup,
+  getStandingMeetupsByClub,
+  getPublicStandingMeetups,
+  createStandingMeetup,
+  updateStandingMeetup,
+  archiveStandingMeetup,
+  deleteStandingMeetup,
+  // Subscriptions
+  subscribeToStandingMeetup,
+  subscribeToClubStandingMeetups,
+  // Occurrences
+  getOccurrence,
+  getUpcomingOccurrences,
+  getPastOccurrences,
+  subscribeToOccurrences,
+  // Participants
+  getParticipant,
+  getOccurrenceParticipants,
+  subscribeToOccurrenceParticipants,
+  // Index (Discovery)
+  getUpcomingOccurrenceIndex,
+  subscribeToOccurrenceIndex,
+  // User Sessions
+  getUserUpcomingSessions,
+} from './standingMeetups';
+
+// Standing Meetup Registrations (MVP - one-time payments)
+// ============================================
+export {
+  // Read (prefixed to avoid conflict with tournament registrations)
+  getRegistration as getStandingMeetupRegistration,
+  getRegistrationByMeetupAndUser as getStandingMeetupRegistrationByMeetupAndUser,
+  getRegistrationsByMeetup as getStandingMeetupRegistrationsByMeetup,
+  getPendingRegistrationsByMeetup as getPendingStandingMeetupRegistrations,
+  getRegistrationsByUser as getStandingMeetupRegistrationsByUser,
+  // Subscriptions
+  subscribeToRegistrationsByMeetup,
+  subscribeToPendingRegistrations,
+  subscribeToUserRegistrations,
+  // Helpers
+  buildRegistrationId,
+  isUserRegistered,
+  hasUserPaid,
+} from './standingMeetupRegistrations';

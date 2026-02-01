@@ -1,16 +1,7 @@
 {
   "projects": {
-    "default": "pickleball-app-dev",
-    "firebase use dev": "pickleball-app-dev"
-  },
-  "targets": {
-    "pickleball-app-dev": {
-      "storage": {
-        "default": [
-          "pickleball-app-dev.firebasestorage.app"
-        ]
-      }
-    }
-  },
-  "etags": {}
+    "default": "pickleball-app-test",
+    "prod": "pickleball-app-dev",
+    "test": "pickleball-app-test"
+  }
 }

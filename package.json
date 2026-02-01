@@ -5,9 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:test": "vite --mode test",
     "build": "vite build",
+    "build:test": "vite build --mode test",
+    "build:prod": "vite build --mode production",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy:test": "npm run build:test && firebase use test && firebase deploy --only hosting",
+    "deploy:prod": "npm run build:prod && firebase use prod && firebase deploy --only hosting"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

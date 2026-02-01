@@ -108,10 +108,11 @@ export const createOrganizerRequest = async (
     odUserId: input.odUserId,
     userEmail: input.userEmail,
     userName: input.userName,
-    userPhotoURL: input.userPhotoURL,
+    // Only include optional fields if they have values (Firestore doesn't allow undefined)
+    ...(input.userPhotoURL && { userPhotoURL: input.userPhotoURL }),
     reason: input.reason,
-    experience: input.experience,
-    associatedClub: input.associatedClub,
+    ...(input.experience && { experience: input.experience }),
+    ...(input.associatedClub && { associatedClub: input.associatedClub }),
     agreement: input.agreement,  // V07.05: Store agreement acceptance
     status: 'pending',
     createdAt: Date.now(),

@@ -193,7 +193,8 @@ useEffect(() => {
   const resendVerificationEmail = useCallback(async () => {
     const auth = getAuth();
     if (auth.currentUser) {
-      await sendEmailVerification(auth.currentUser, getActionCodeSettings());
+      // Temporarily removed actionCodeSettings to test basic email sending
+      await sendEmailVerification(auth.currentUser);
     } else {
       throw new Error("No user is currently signed in to resend verification email.");
     }

@@ -1,9 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { getMeetups } from '../../services/firebase';
+import { getMeetups, getPublicStandingMeetups } from '../../services/firebase';
 import { MeetupsMap } from './MeetupsMap';
+import { formatTime } from '../../utils/timeFormat';
+import { getRoute } from '../../router/routes';
 import type { Meetup } from '../../types';
+import type { StandingMeetup } from '../../types/standingMeetup';
 
 interface MeetupsListProps {
   onCreateClick: () => void;
@@ -13,18 +16,27 @@ interface MeetupsListProps {
 export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelectMeetup }) => {
   const { currentUser } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [meetups, setMeetups] = useState<Meetup[]>([]);
+  const [weeklyMeetups, setWeeklyMeetups] = useState<StandingMeetup[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
 
   const loadMeetups = useCallback(async () => {
     setLoading(true);
-    const data = await getMeetups();
+
+    // Load both social meetups and weekly meetups in parallel
+    const [socialData, weeklyData] = await Promise.all([
+      getMeetups(),
+      getPublicStandingMeetups({ limit: 10 })
+    ]);
+
     const now = Date.now();
     // Keep past events for 3 days (72 hours)
     const cutoff = now - (3 * 24 * 60 * 60 * 1000);
-    const upcoming = data.filter(m => m.when >= cutoff);
+    const upcoming = socialData.filter(m => m.when >= cutoff);
     setMeetups(upcoming);
+    setWeeklyMeetups(weeklyData);
     setLoading(false);
   }, []);
 
@@ -46,8 +58,8 @@ export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelec
     <div className="max-w-4xl mx-auto p-4 animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Social Meetups</h1>
-          <p className="text-gray-400 text-sm">Find casual games and meetups near you.</p>
+          <h1 className="text-2xl font-bold text-white">Meetups</h1>
+          <p className="text-gray-400 text-sm">Find weekly sessions and casual games near you.</p>
         </div>
         <button
           onClick={onCreateClick}
@@ -55,6 +67,70 @@ export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelec
         >
           <span className="text-xl leading-none">+</span> Create Meetup
         </button>
+      </div>
+
+      {/* Weekly Meetups Section */}
+      {weeklyMeetups.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <h2 className="text-lg font-bold text-white">Weekly Meetups</h2>
+            <span className="bg-lime-600 text-white text-xs px-2 py-0.5 rounded font-bold">NEW</span>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {weeklyMeetups.map(meetup => {
+              const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+              const dayName = dayNames[meetup.recurrence.dayOfWeek];
+              // Use perSessionAmount for per-week display, fallback to amount if not set
+              const weeklyPrice = meetup.billing.perSessionAmount || meetup.billing.amount;
+              const priceDisplay = weeklyPrice > 0
+                ? `$${(weeklyPrice / 100).toFixed(0)} / week`
+                : 'Free';
+
+              return (
+                <div
+                  key={meetup.id}
+                  onClick={() => navigate(`${getRoute.clubDetail(meetup.clubId)}?tab=standingMeetups`)}
+                  className="bg-gray-800 rounded-xl p-5 border border-gray-700 shadow-lg hover:border-lime-600/50 cursor-pointer transition-all group relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 bg-lime-600/20 text-lime-400 text-[10px] px-2 py-1 rounded-bl uppercase font-bold">
+                    Weekly
+                  </div>
+
+                  <h3 className="font-bold text-lg mb-1 text-white group-hover:text-lime-400 transition-colors">
+                    {meetup.title}
+                  </h3>
+                  <p className="text-sm text-gray-500 mb-3">{meetup.clubName}</p>
+
+                  <div className="text-sm text-gray-400 mb-4 flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                      <span>{dayName}s • {formatTime(meetup.recurrence.startTime)} - {formatTime(meetup.recurrence.endTime)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      <span className="truncate">{meetup.locationName}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-gray-500 border-t border-gray-700 pt-3">
+                    <span>{meetup.subscriberCount || 0} members • {meetup.maxPlayers} spots</span>
+                    <span className="text-lime-400 font-bold">{priceDisplay}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Social Meetups Section */}
+      <div className="flex items-center gap-2 mb-4">
+        <h2 className="text-lg font-bold text-white">Social Meetups</h2>
       </div>
 
       {/* View Toggle */}

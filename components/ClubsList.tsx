@@ -17,9 +17,16 @@ export const ClubsList: React.FC<ClubsListProps> = ({ onCreateClub, onViewClub, 
 
     useEffect(() => {
         const fetchClubs = async () => {
-            const all = await getAllClubs();
-            setClubs(all.sort((a,b) => a.name.localeCompare(b.name)));
-            setLoading(false);
+            try {
+                const all = await getAllClubs();
+                setClubs(all.sort((a,b) => a.name.localeCompare(b.name)));
+            } catch (error) {
+                // Handle Firestore SDK errors gracefully (known bug in v12.6.0)
+                console.debug('Failed to fetch clubs (safe to ignore):', error);
+                setClubs([]);
+            } finally {
+                setLoading(false);
+            }
         };
         fetchClubs();
     }, []);

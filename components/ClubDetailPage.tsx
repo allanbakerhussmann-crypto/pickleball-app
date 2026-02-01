@@ -863,14 +863,16 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                         clubId={clubId}
                         clubName={club.name}
                         organizerStripeAccountId={
-                            // Prefer user's Stripe account if valid (not test placeholder)
-                            (userProfile as any)?.stripeConnectedAccountId &&
-                            !(userProfile as any).stripeConnectedAccountId.startsWith('acct_test')
-                                ? (userProfile as any).stripeConnectedAccountId
+                            // For club-hosted meetups, ALWAYS use club's Stripe account first
+                            // Priority: 1. Club's stripeConnectedAccountId, 2. Club's stripeAccountId (legacy)
+                            // Only fall back to organizer's personal account if club has no Stripe account
+                            (club as any).stripeConnectedAccountId &&
+                            !(club as any).stripeConnectedAccountId.startsWith('acct_test')
+                                ? (club as any).stripeConnectedAccountId
                                 : ((club as any).stripeAccountId &&
                                    !(club as any).stripeAccountId.startsWith('acct_test')
                                     ? (club as any).stripeAccountId
-                                    : (club as any).stripeConnectedAccountId || '')
+                                    : (userProfile as any)?.stripeConnectedAccountId || '')
                         }
                         onSuccess={(meetupId) => {
                             setShowCreateStandingMeetup(false);

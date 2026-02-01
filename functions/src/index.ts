@@ -186,9 +186,10 @@ export {
 } from './userAccount';
 
 // ============================================
-// STANDING MEETUP FUNCTIONS (V07.53)
+// STANDING MEETUP FUNCTIONS (V07.58) - Hybrid Model
 // ============================================
 
+// Core functions (2nd Gen - australia-southeast1)
 export {
   standingMeetup_ensureOccurrences,
   standingMeetup_checkIn,
@@ -199,3 +200,20 @@ export {
   standingMeetup_markNoShow,
   onOccurrenceDeleted,
 } from './standingMeetups';
+
+// Registration functions (1st Gen - us-central1)
+export {
+  standingMeetup_register,
+  standingMeetup_confirmBankPayment,
+  standingMeetup_cancelUnpaidBankRegistration,
+  standingMeetup_unregister,
+} from './standingMeetupRegistration';
+
+// ============================================
+// TEST DATA SEEDING (V07.57) - TEST PROJECT ONLY
+// ============================================
+
+export {
+  seed_testData,
+  seed_clearTestData,
+} from './seedTestData';

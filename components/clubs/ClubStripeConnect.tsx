@@ -176,11 +176,12 @@ export const ClubStripeConnect: React.FC<ClubStripeConnectProps> = ({
 
       // Step 2: Create onboarding link
       // NOTE: Use /#/ for HashRouter compatibility
+      // Return to /clubs/:id with stripe param - ClubDetailPage handles switching to settings tab
       const linkResult = await createAccountLinkV2(
         accountResult.accountId,
         clubId,
-        `${window.location.origin}/#/clubs/${clubId}/settings?stripe=success`,
-        `${window.location.origin}/#/clubs/${clubId}/settings?stripe=refresh`
+        `${window.location.origin}/#/clubs/${clubId}?stripe=success`,
+        `${window.location.origin}/#/clubs/${clubId}?stripe=refresh`
       );
 
       // Note: Club document is updated by the Cloud Function
@@ -209,22 +210,24 @@ export const ClubStripeConnect: React.FC<ClubStripeConnectProps> = ({
       if (stripeData.stripeAccountVersion === 'v2') {
         // V2 account - use V2 account link
         // NOTE: Use /#/ for HashRouter compatibility
+        // Return to /clubs/:id with stripe param - ClubDetailPage handles switching to settings tab
         const result = await createAccountLinkV2(
           stripeData.stripeConnectedAccountId,
           clubId,
-          `${window.location.origin}/#/clubs/${clubId}/settings?stripe=success`,
-          `${window.location.origin}/#/clubs/${clubId}/settings?stripe=refresh`
+          `${window.location.origin}/#/clubs/${clubId}?stripe=success`,
+          `${window.location.origin}/#/clubs/${clubId}?stripe=refresh`
         );
         url = result.url;
       } else {
         // V1 legacy account
         // NOTE: Use /#/ for HashRouter compatibility
+        // Return to /clubs/:id with stripe param - ClubDetailPage handles switching to settings tab
         const result = await createConnectAccountLink({
           clubId,
           clubName,
           clubEmail: clubEmail || currentUser.email || '',
-          returnUrl: `${window.location.origin}/#/clubs/${clubId}/settings?stripe=success`,
-          refreshUrl: `${window.location.origin}/#/clubs/${clubId}/settings?stripe=refresh`,
+          returnUrl: `${window.location.origin}/#/clubs/${clubId}?stripe=success`,
+          refreshUrl: `${window.location.origin}/#/clubs/${clubId}?stripe=refresh`,
         });
         url = result.url;
       }

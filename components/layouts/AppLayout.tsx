@@ -200,8 +200,18 @@ export const AppLayout: React.FC = () => {
     navigate(ROUTES.HOME);
   };
 
+  // Check if this is the test environment
+  const isTestEnvironment = import.meta.env.VITE_FIREBASE_PROJECT_ID === 'pickleball-app-test';
+
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
+      {/* Test Environment Banner */}
+      {isTestEnvironment && (
+        <div className="bg-yellow-500 text-black text-center py-2 px-4 text-sm font-bold sticky top-0 z-50">
+          ⚠️ TEST ENVIRONMENT — Not for real users. Test payments use fake cards.
+        </div>
+      )}
+
       {/* V07.53: Global alert for pending score acknowledgements */}
       <PendingScoreAlert />
 

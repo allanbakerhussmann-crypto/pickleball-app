@@ -13,3 +13,4 @@
 export { FormatSelector, FormatCard, FormatCards } from './FormatSelector';
 export { GameSettingsForm, GameSettingsPresets } from './GameSettingsForm';
 export { ScoreEntryModal } from './ScoreEntryModal';
+export { ScrollTimePicker } from './ScrollTimePicker';

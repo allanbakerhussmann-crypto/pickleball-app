@@ -10,6 +10,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
+import { isTestProject } from './envGuard';
 
 // ============================================
 // SMSGLOBAL CONFIG
@@ -162,11 +163,14 @@ export const sendSMS = functions.firestore
     try {
       const smsConfig = getSMSGlobalConfig();
 
-      console.log(`SMS ${messageId}: Sending to ${message.to} via SMSGlobal`);
+      // Add [TEST] prefix for test environment
+      const messageBody = isTestProject ? `[TEST] ${message.body}` : message.body;
+
+      console.log(`SMS ${messageId}: Sending to ${message.to} via SMSGlobal${isTestProject ? ' (TEST MODE)' : ''}`);
 
       const result = await sendViaSMSGlobal(
         message.to,
-        message.body,
+        messageBody,
         smsConfig.apiKey,
         smsConfig.apiSecret,
         smsConfig.origin
@@ -267,12 +271,13 @@ export const sendBulkSMS = functions.https.onCall(async (data: BulkSMSRequest, c
 
   if (validCount > 0) {
     await batch.commit();
+    console.log(`Bulk SMS: Queued ${validCount} messages${isTestProject ? ' (TEST MODE - will have [TEST] prefix)' : ''}`);
   }
 
   return {
     success: true,
     sent: validCount,
     invalid: invalidCount,
-    message: `Queued ${validCount} SMS messages for delivery`,
+    message: `Queued ${validCount} SMS messages for delivery${isTestProject ? ' (TEST MODE)' : ''}`,
   };
 });

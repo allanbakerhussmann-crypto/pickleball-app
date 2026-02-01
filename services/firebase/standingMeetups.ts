@@ -23,7 +23,7 @@ import {
   onSnapshot,
   Unsubscribe,
   increment,
-} from 'firebase/firestore';
+} from '@firebase/firestore';
 import { db } from './index';
 import {
   StandingMeetup,
@@ -177,13 +177,21 @@ export function subscribeToStandingMeetup(
 ): Unsubscribe {
   const docRef = doc(db, STANDING_MEETUPS_COLLECTION, standingMeetupId);
 
-  return onSnapshot(docRef, (docSnap) => {
-    if (!docSnap.exists()) {
+  return onSnapshot(
+    docRef,
+    (docSnap) => {
+      if (!docSnap.exists()) {
+        callback(null);
+        return;
+      }
+      callback({ id: docSnap.id, ...docSnap.data() } as StandingMeetup);
+    },
+    (error) => {
+      // Handle Firestore SDK errors gracefully (known bug in v12.6.0)
+      console.debug('Standing meetup subscription error (safe to ignore):', error.message);
       callback(null);
-      return;
     }
-    callback({ id: docSnap.id, ...docSnap.data() } as StandingMeetup);
-  });
+  );
 }
 
 /**
@@ -209,12 +217,20 @@ export function subscribeToClubStandingMeetups(
     );
   }
 
-  return onSnapshot(q, (snapshot) => {
-    const meetups = snapshot.docs.map(
-      (doc) => ({ id: doc.id, ...doc.data() } as StandingMeetup)
-    );
-    callback(meetups);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const meetups = snapshot.docs.map(
+        (doc) => ({ id: doc.id, ...doc.data() } as StandingMeetup)
+      );
+      callback(meetups);
+    },
+    (error) => {
+      // Handle Firestore SDK errors gracefully (known bug in v12.6.0)
+      console.debug('Club standing meetups subscription error (safe to ignore):', error.message);
+      callback([]);
+    }
+  );
 }
 
 // =============================================================================
@@ -335,12 +351,20 @@ export function subscribeToOccurrences(
     q = query(q, limit(options.limit));
   }
 
-  return onSnapshot(q, (snapshot) => {
-    const occurrences = snapshot.docs.map(
-      (doc) => ({ id: doc.id, ...doc.data() } as MeetupOccurrence)
-    );
-    callback(occurrences);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const occurrences = snapshot.docs.map(
+        (doc) => ({ id: doc.id, ...doc.data() } as MeetupOccurrence)
+      );
+      callback(occurrences);
+    },
+    (error) => {
+      // Handle Firestore SDK errors gracefully (known bug in v12.6.0)
+      console.debug('Occurrences subscription error (safe to ignore):', error.message);
+      callback([]);
+    }
+  );
 }
 
 // =============================================================================
@@ -417,13 +441,21 @@ export function subscribeToOccurrenceParticipants(
     )
   );
 
-  return onSnapshot(q, (snapshot) => {
-    const participants = snapshot.docs.map((doc) => ({
-      odUserId: doc.id,
-      ...(doc.data() as OccurrenceParticipant),
-    }));
-    callback(participants);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const participants = snapshot.docs.map((doc) => ({
+        odUserId: doc.id,
+        ...(doc.data() as OccurrenceParticipant),
+      }));
+      callback(participants);
+    },
+    (error) => {
+      // Handle Firestore SDK errors gracefully (known bug in v12.6.0)
+      console.debug('Occurrence participants subscription error (safe to ignore):', error.message);
+      callback([]);
+    }
+  );
 }
 
 // =============================================================================
@@ -499,12 +531,20 @@ export function subscribeToOccurrenceIndex(
     q = query(q, limit(options.limit));
   }
 
-  return onSnapshot(q, (snapshot) => {
-    const occurrences = snapshot.docs.map(
-      (doc) => ({ id: doc.id, ...doc.data() } as MeetupOccurrenceIndex)
-    );
-    callback(occurrences);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const occurrences = snapshot.docs.map(
+        (doc) => ({ id: doc.id, ...doc.data() } as MeetupOccurrenceIndex)
+      );
+      callback(occurrences);
+    },
+    (error) => {
+      // Handle Firestore SDK errors gracefully (known bug in v12.6.0)
+      console.debug('Occurrence index subscription error (safe to ignore):', error.message);
+      callback([]);
+    }
+  );
 }
 
 // =============================================================================

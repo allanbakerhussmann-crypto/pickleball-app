@@ -626,9 +626,8 @@ export {
   // Statistics
   getClubReceiptStats,
   getUserReceiptSummary,
-  
-  // Helpers
-  getCurrencySymbol,
+
+  // Helpers (getCurrencySymbol already exported from types.ts)
   formatAmount,
   formatDate,
   formatTime,

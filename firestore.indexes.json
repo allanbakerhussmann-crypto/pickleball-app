@@ -560,6 +560,14 @@
       ]
     },
     {
+      "collectionGroup": "occurrences",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "startAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "meetupOccurrencesIndex",
       "queryScope": "COLLECTION",
       "fields": [
@@ -592,6 +600,55 @@
         { "fieldPath": "standingMeetupId", "order": "ASCENDING" },
         { "fieldPath": "when", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "standingMeetupRegistrations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "standingMeetupId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "standingMeetupRegistrations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "standingMeetupId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "paymentStatus", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "standingMeetupRegistrations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "standingMeetupId", "order": "ASCENDING" },
+        { "fieldPath": "paymentMethod", "order": "ASCENDING" },
+        { "fieldPath": "paymentStatus", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "standingMeetupRegistrations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "odUserId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "standingMeetupRegistrations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "standingMeetupId", "order": "ASCENDING" },
+        { "fieldPath": "odUserId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
     },
     {
@@ -649,6 +706,33 @@
       "fields": [
         { "fieldPath": "walletId", "order": "ASCENDING" },
         { "fieldPath": "metadata.standingMeetupId", "order": "ASCENDING" }
+      ]
+    },
+
+    {
+      "collectionGroup": "phone_verification_codes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "phone", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "phone_verification_codes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "phone_verification_codes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "phone", "order": "ASCENDING" },
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "verified", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "DESCENDING" }
       ]
     }
   ],

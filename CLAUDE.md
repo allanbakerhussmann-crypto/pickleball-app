@@ -174,28 +174,61 @@ cd functions && npm run seed         # Seed emulator with test data
 
 **Claude MUST follow these rules before ANY deployment:**
 
+### Why This Matters - READ THIS FIRST
+
+There are TWO Firebase projects:
+- `pickleball-app-test` = Test site (for testing, safe to break)
+- `pickleball-app-dev` = **PRODUCTION** site (real users, real money)
+
+**PROBLEM WE SOLVED:** Vite loads `.env.production` for ALL builds, which previously contained production config. This caused test deployments to accidentally connect to production Firebase, corrupting real user data.
+
+**SOLUTION:** We flipped the defaults:
+- `.env.production` now contains TEST config (safe default)
+- `.env.productionsite` contains PRODUCTION config (only used explicitly)
+- Deploy scripts verify the correct project ID is in the bundle BEFORE deploying
+
+**NEVER run manual `npm run build && firebase deploy` commands.** Always use the deploy scripts.
+
 ### Pre-Deployment Checklist
 1. **NEVER deploy without explicit user approval** - Always ask "Should I deploy now?" and wait for confirmation
-2. **ALWAYS run build first** - `npm run build` must succeed with no errors
-3. **ALWAYS run typecheck** - `npm run typecheck` must pass
+2. **ALWAYS use deploy scripts** - `bash deploy-test.sh` or `bash deploy-prod.sh`
+3. **NEVER run manual firebase deploy commands** - The scripts handle env switching and verification
 4. **ALWAYS run functions build** - `cd functions && npm run build` must succeed
 5. **NEVER deploy if there are TypeScript errors**
 6. **NEVER deploy untested code** - User must confirm testing is complete
 
-### Deployment Commands (Only run after checklist passes)
+### Deployment Commands - TEST vs PRODUCTION
+
+**DEFAULT = TEST SITE.** Production requires explicit action.
+
+| File | Contains | Purpose |
+|------|----------|---------|
+| `.env.production` | `pickleball-app-test` | Default for all builds (safe) |
+| `.env.productionsite` | `pickleball-app-dev` | Production config (used only by deploy-prod.sh) |
+
+#### Deploy to TEST (default, safe)
 ```bash
-# Deploy functions only
-cd functions && npm run deploy
-
-# Deploy firestore rules and indexes
-firebase deploy --only firestore:rules,firestore:indexes
-
-# Deploy frontend only
-npm run build && firebase deploy --only hosting
-
-# Deploy everything (USE WITH CAUTION)
-firebase deploy
+bash deploy-test.sh
 ```
+
+#### Deploy to PRODUCTION (requires typing "production" to confirm)
+```bash
+bash deploy-prod.sh
+```
+
+#### Functions Deployment
+```bash
+cd functions && firebase use test && npm run deploy   # Test
+cd functions && firebase use prod && npm run deploy   # Production
+```
+
+**IMPORTANT: Always use the deploy scripts.** They verify the correct project ID is in the build before deploying.
+
+#### Firebase Project Aliases (in .firebaserc)
+| Alias | Project ID | Purpose |
+|-------|-----------|---------|
+| `test` / `default` | `pickleball-app-test` | Test environment |
+| `prod` | `pickleball-app-dev` | Production (live site) |
 
 ### Rollback Plan
 If something breaks after deployment:
@@ -207,6 +240,7 @@ If something breaks after deployment:
 - [ ] `.env` has `VITE_USE_EMULATORS` removed or set to `false`
 - [ ] `functions/.runtimeconfig.json` is NOT committed (gitignored)
 - [ ] All sensitive keys are in Firebase Functions config, not in code
+- [ ] Verify correct project before deploy: `firebase use` shows expected alias
 
 ---
 
@@ -255,7 +289,7 @@ import { Header } from './Header';
 - **Storage**: 24-hour format (e.g., `"08:00"`, `"14:30"`)
 - **Display**: 12-hour format with AM/PM (e.g., `"8:00 AM"`, `"2:30 PM"`)
 - **Utility**: Use `utils/timeFormat.ts` for all time formatting
-- **Components**: Use `RollingTimePicker` for time input fields
+- **Components**: Use `ScrollTimePicker` for time input fields
 
 ```typescript
 // Import time utilities
@@ -270,6 +304,70 @@ formatTimeRange('08:00', '17:00')  // "8:00 AM - 5:00 PM"
 // Format timestamp (milliseconds)
 formatTimestamp(1703750400000)  // "8:00 AM"
 ```
+
+### ScrollTimePicker Component
+**ALWAYS use `ScrollTimePicker` for time input fields.** Never use `<input type="time">`.
+
+```typescript
+import { ScrollTimePicker } from '../shared/ScrollTimePicker';
+
+// Usage
+<ScrollTimePicker
+  value={startTime}        // "HH:MM" 24-hour format (e.g., "18:00")
+  onChange={setStartTime}  // Receives "HH:MM" 24-hour format
+  label="Start Time"
+/>
+```
+
+**Features:**
+- Plus/minus buttons for 15-minute increments
+- Displays time in 12-hour format (e.g., "6:00 PM")
+- Stores/returns 24-hour format for consistency
+- Dark theme styling (gray-800, lime-500 accent)
+- Mobile-friendly touch targets
+
+### Price Input Pattern
+**Use plus/minus button controls for price inputs** instead of `<input type="number">`.
+
+```tsx
+// Price picker with $0.50 increments
+<div className="flex items-center gap-2">
+  <button
+    type="button"
+    onClick={() => {
+      const current = parseFloat(price) || 1;
+      const newAmount = Math.max(1, current - 0.5);
+      setPrice(newAmount.toFixed(2));
+    }}
+    className="w-12 h-12 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-2xl font-bold"
+  >
+    −
+  </button>
+  <div className="flex-1 h-12 bg-gray-700 border border-gray-600 rounded-lg flex items-center justify-center">
+    <span className="text-lime-400 text-xl font-bold font-mono">
+      ${parseFloat(price).toFixed(2)}
+    </span>
+  </div>
+  <button
+    type="button"
+    onClick={() => {
+      const current = parseFloat(price) || 1;
+      const newAmount = Math.min(100, current + 0.5);
+      setPrice(newAmount.toFixed(2));
+    }}
+    className="w-12 h-12 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-2xl font-bold"
+  >
+    +
+  </button>
+</div>
+```
+
+**Guidelines:**
+- Use $0.50 increments (configurable based on context)
+- Minimum $1.00, Maximum $100.00 (adjust as needed)
+- Display with 2 decimal places (e.g., "$15.00")
+- Use lime-400 for the displayed amount
+- Dark theme styling consistent with ScrollTimePicker
 
 ### Commit Message Format
 ```

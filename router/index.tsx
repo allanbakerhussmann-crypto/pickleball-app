@@ -29,6 +29,7 @@ import MeetupsPage from '../pages/MeetupsPage';
 import MeetupDetailPage from '../pages/MeetupDetailPage';
 import CreateMeetupPage from '../pages/CreateMeetupPage';
 import EditMeetupPage from '../pages/EditMeetupPage';
+import StandingMeetupPage from '../pages/StandingMeetupPage';
 import PlayersPage from '../pages/PlayersPage';
 import ProfilePage from '../pages/ProfilePage';
 import AdminUsersPage from '../pages/AdminUsersPage';
@@ -172,7 +173,15 @@ export const router = createHashRouter([
           </ProtectedRoute>
         ),
       },
-      
+
+      // ==========================================
+      // WEEKLY MEETUPS (Standing Meetups)
+      // ==========================================
+      {
+        path: 'weekly-meetup/:id',
+        element: <StandingMeetupPage />,
+      },
+
       // ==========================================
       // PLAYERS
       // ==========================================

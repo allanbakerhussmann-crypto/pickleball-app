@@ -21,6 +21,7 @@ import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
 import sgMail from '@sendgrid/mail';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
+import { isTestProject } from './envGuard';
 
 // ============================================
 // SMS CREDITS CONSTANTS
@@ -570,12 +571,15 @@ export async function sendEmail(
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   const provider = getEmailProvider();
 
-  console.log(`Email provider selected: ${provider}`);
+  // Add [TEST] prefix for test environment
+  const finalSubject = isTestProject ? `[TEST] ${subject}` : subject;
+
+  console.log(`Email provider selected: ${provider}${isTestProject ? ' (TEST MODE)' : ''}`);
 
   if (provider === 'ses') {
-    return sendEmailViaSES(to, subject, body, htmlBody);
+    return sendEmailViaSES(to, finalSubject, body, htmlBody);
   } else {
-    return sendEmailViaSendGrid(to, subject, body, htmlBody);
+    return sendEmailViaSendGrid(to, finalSubject, body, htmlBody);
   }
 }
 

@@ -8,15 +8,18 @@
  * - Check-in
  * - Credit issuance
  *
- * @version 07.53
+ * NOTE: Using 1st Gen functions for reliable deployment
+ * (2nd Gen has Container Healthcheck issues in australia-southeast1)
+ *
+ * @version 07.59
  * @file functions/src/standingMeetups.ts
  */
 
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import { HttpsError, onCall, CallableRequest } from 'firebase-functions/v2/https';
-import { onDocumentDeleted } from 'firebase-functions/v2/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import * as crypto from 'crypto';
+import Stripe from 'stripe';
 
 const db = admin.firestore();
 
@@ -54,10 +57,22 @@ interface StandingMeetup {
     currency: 'nzd' | 'aud' | 'usd';
     feesPaidBy: 'organizer' | 'player';
     stripePriceId?: string;
+    perSessionAmount?: number;
   };
   credits: {
     enabled: boolean;
     cancellationCutoffHours: number;
+  };
+  paymentMethods?: {
+    acceptCardPayments: boolean;
+    acceptBankTransfer: boolean;
+    bankDetails?: {
+      bankName: string;
+      accountName: string;
+      accountNumber: string;
+      reference?: string;
+      showToPlayers: boolean;
+    };
   };
   status: 'draft' | 'active' | 'paused' | 'archived';
   visibility: 'public' | 'linkOnly' | 'private';
@@ -103,31 +118,34 @@ interface OccurrenceParticipant {
   updatedAt: number;
 }
 
-interface StandingMeetupSubscription {
+interface StandingMeetupRegistration {
   id: string;
   standingMeetupId: string;
   clubId: string;
-  userId: string;
+  odUserId: string;
   userName: string;
   userEmail: string;
-  stripeAccountId: string;
-  stripeSubscriptionId: string;
-  stripeCustomerId: string;
-  stripeStatus: 'active' | 'past_due' | 'canceled' | 'unpaid';
-  currentPeriodStart: number;
-  currentPeriodEnd: number;
-  billingAmount: number;
-  status: 'active' | 'paused' | 'cancelled' | 'past_due';
-  totalPaid: number;
-  totalCreditsReceived: number;
+  registrationType: 'season_pass' | 'pick_and_pay';
+  selectedSessionIds?: string[];
+  sessionCount: number;
+  paymentStatus: 'pending' | 'paid';
+  paymentMethod: 'stripe' | 'bank_transfer';
+  amount: number;
+  currency: 'nzd' | 'aud' | 'usd';
+  paidAt?: number;
+  stripeCheckoutSessionId?: string;
+  stripePaymentIntentId?: string;
+  bankTransferReference?: string;
+  status: 'active' | 'cancelled';
+  cancelledAt?: number;
   createdAt: number;
   updatedAt: number;
 }
 
 // Constants
-const OCCURRENCE_LOOKAHEAD_DAYS = 56; // 8 weeks
-const PLATFORM_FEE_PERCENT = 0.10;
-const STRIPE_FEE_PERCENT = 0.029;
+const OCCURRENCE_LOOKAHEAD_DAYS = 112; // 16 weeks
+const PLATFORM_FEE_PERCENT = 0.015; // 1.5% standard rate - same as stripe.ts
+const STRIPE_FEE_PERCENT = 0.027;  // NZ Stripe rate: 2.7% + $0.30
 const STRIPE_FIXED_FEE_CENTS = 30;
 
 // Status to counter field mapping
@@ -138,13 +156,22 @@ const STATUS_TO_COUNTER_FIELD: Record<string, string> = {
   no_show: 'noShowCount',
 };
 
+// Stripe initialization
+function getStripeSecretKey(): string | undefined {
+  try {
+    return functions.config().stripe?.secret_key;
+  } catch {
+    return undefined;
+  }
+}
+
+const stripeSecretKey = getStripeSecretKey();
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2024-11-20.acacia' as any }) : null;
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-/**
- * Calculate credit amount (what organizer received after fees)
- */
 function calculateCreditAmount(
   billingAmount: number,
   feesPaidBy: 'organizer' | 'player'
@@ -159,28 +186,21 @@ function calculateCreditAmount(
   }
 }
 
-/**
- * Parse time string to hours and minutes
- */
 function parseTime(timeStr: string): { hours: number; minutes: number } {
   const [hours, minutes] = timeStr.split(':').map(Number);
   return { hours, minutes };
 }
 
-/**
- * Get next occurrence of a day of week from a given date
- */
 function getNextDayOfWeek(
   fromDate: Date,
   dayOfWeek: number,
-  timezone: string
+  _timezone: string
 ): Date {
   const date = new Date(fromDate);
   const currentDay = date.getDay();
   const daysUntilNext = (dayOfWeek - currentDay + 7) % 7;
 
   if (daysUntilNext === 0) {
-    // Today is the day - check if we've passed the time
     return date;
   }
 
@@ -188,9 +208,6 @@ function getNextDayOfWeek(
   return date;
 }
 
-/**
- * Calculate occurrence dates within a window
- */
 function calculateOccurrenceDates(
   meetup: StandingMeetup,
   endTimestamp: number
@@ -199,36 +216,27 @@ function calculateOccurrenceDates(
   const intervalCount = meetup.recurrence.intervalCount || 1;
   const msPerWeek = 7 * 24 * 60 * 60 * 1000 * intervalCount;
 
-  // Start from the meetup's start date or today, whichever is later
   const startDate = new Date(meetup.recurrence.startDate);
   const today = new Date();
   let currentDate = startDate > today ? startDate : today;
 
-  // Find the first occurrence on the correct day of week
   currentDate = getNextDayOfWeek(currentDate, meetup.recurrence.dayOfWeek, meetup.timezone);
 
   while (currentDate.getTime() < endTimestamp) {
-    // Check if we've passed the end date
     if (meetup.recurrence.endDate) {
       const endDate = new Date(meetup.recurrence.endDate);
       if (currentDate > endDate) break;
     }
 
-    // Format as YYYY-MM-DD
     const dateStr = currentDate.toISOString().split('T')[0];
     dates.push(dateStr);
 
-    // Move to next occurrence
     currentDate = new Date(currentDate.getTime() + msPerWeek);
   }
 
   return dates;
 }
 
-/**
- * Calculate timestamp for a date + time in a timezone
- * Note: This is a simplified version - production should use a proper timezone library
- */
 function calculateTimestamp(
   dateStr: string,
   timeStr: string,
@@ -240,10 +248,6 @@ function calculateTimestamp(
   return date.getTime();
 }
 
-/**
- * Update participant status with atomic counter updates
- * CRITICAL: All participant status changes MUST use this function
- */
 async function updateParticipantStatus(
   standingMeetupId: string,
   dateId: string,
@@ -263,7 +267,7 @@ async function updateParticipantStatus(
     const occurrenceSnap = await transaction.get(occurrenceRef);
 
     if (!occurrenceSnap.exists) {
-      throw new HttpsError(
+      throw new functions.https.HttpsError(
         'not-found',
         `Occurrence ${standingMeetupId}/${dateId} not found`
       );
@@ -273,25 +277,21 @@ async function updateParticipantStatus(
       ? (participantSnap.data()?.status as string)
       : null;
 
-    // Skip if already in target status (idempotent)
     if (fromStatus === toStatus) return;
 
-    // Calculate counter deltas using the mapping
     const counterDeltas: Record<string, number> = {};
     if (fromStatus && STATUS_TO_COUNTER_FIELD[fromStatus]) {
       counterDeltas[STATUS_TO_COUNTER_FIELD[fromStatus]] = -1;
     }
     counterDeltas[STATUS_TO_COUNTER_FIELD[toStatus]] = 1;
 
-    // Validate counters won't go negative
     const occData = occurrenceSnap.data() as MeetupOccurrence;
     for (const [key, delta] of Object.entries(counterDeltas)) {
       if (delta < 0 && ((occData as any)[key] || 0) + delta < 0) {
-        throw new HttpsError('failed-precondition', `Counter ${key} would go negative`);
+        throw new functions.https.HttpsError('failed-precondition', `Counter ${key} would go negative`);
       }
     }
 
-    // Update participant
     transaction.set(
       participantRef,
       {
@@ -302,10 +302,9 @@ async function updateParticipantStatus(
       { merge: true }
     );
 
-    // Update occurrence counters atomically
     const counterUpdates: Record<string, admin.firestore.FieldValue> = {};
     for (const [key, delta] of Object.entries(counterDeltas)) {
-      counterUpdates[key] = admin.firestore.FieldValue.increment(delta);
+      counterUpdates[key] = FieldValue.increment(delta);
     }
     counterUpdates['updatedAt'] = admin.firestore.FieldValue.serverTimestamp() as any;
 
@@ -313,9 +312,6 @@ async function updateParticipantStatus(
   });
 }
 
-/**
- * Add credit to user's wallet
- */
 async function addToWallet(
   userId: string,
   clubId: string,
@@ -330,7 +326,6 @@ async function addToWallet(
     const walletSnap = await transaction.get(walletRef);
 
     if (!walletSnap.exists) {
-      // Create wallet if it doesn't exist
       transaction.set(walletRef, {
         userId,
         clubId,
@@ -340,7 +335,7 @@ async function addToWallet(
       });
     } else {
       transaction.update(walletRef, {
-        balance: admin.firestore.FieldValue.increment(amount),
+        balance: FieldValue.increment(amount),
         updatedAt: Date.now(),
       });
     }
@@ -361,61 +356,68 @@ async function addToWallet(
 }
 
 // =============================================================================
-// Occurrence Generation
+// Occurrence Generation (1st Gen - australia-southeast1)
 // =============================================================================
 
-/**
- * Ensure occurrences exist for the lookahead window
- * Safe to call frequently - only creates missing occurrences
- */
-export const standingMeetup_ensureOccurrences = onCall(
-  { region: 'australia-southeast1' },
-  async (request: CallableRequest<{ standingMeetupId: string }>) => {
-    const { standingMeetupId } = request.data;
+export const standingMeetup_ensureOccurrences = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string }, context) => {
+    const { standingMeetupId } = data;
 
     if (!standingMeetupId) {
-      throw new HttpsError('invalid-argument', 'standingMeetupId is required');
+      throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId is required');
     }
 
-    // Get the standing meetup
     const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
     const meetupSnap = await meetupRef.get();
 
     if (!meetupSnap.exists) {
-      throw new HttpsError('not-found', 'Standing meetup not found');
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
 
     const meetup = { id: meetupSnap.id, ...meetupSnap.data() } as StandingMeetup;
     const endTimestamp = Date.now() + OCCURRENCE_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000;
 
-    // Calculate expected occurrence dates
     const expectedDates = calculateOccurrenceDates(meetup, endTimestamp);
 
     if (expectedDates.length === 0) {
       return { created: [], existing: 0 };
     }
 
-    // Build doc refs for all expected dates
     const occurrenceRefs = expectedDates.map((date) =>
       meetupRef.collection('occurrences').doc(date)
     );
 
-    // Use getAll() to batch-check existence
     const snapshots = await db.getAll(...occurrenceRefs);
 
-    const existingSet = new Set<string>();
+    const existingActiveSet = new Set<string>();
+    const cancelledSet = new Set<string>();
+
     snapshots.forEach((snap) => {
       if (snap.exists) {
-        existingSet.add(snap.id);
+        const snapData = snap.data();
+        if (snapData?.status === 'cancelled') {
+          cancelledSet.add(snap.id);
+        } else {
+          existingActiveSet.add(snap.id);
+        }
       }
     });
 
-    // Only create missing occurrences
     const created: string[] = [];
+    const skippedCancelled: string[] = [];
     const batch = db.batch();
 
     for (const date of expectedDates) {
-      if (!existingSet.has(date)) {
+      // SAFEGUARD: Skip cancelled sessions - don't auto-revive them
+      // Organizers must explicitly revive cancelled sessions if needed
+      // This prevents accidentally resetting registrations/participants
+      if (cancelledSet.has(date)) {
+        skippedCancelled.push(date);
+        continue;
+      }
+
+      if (!existingActiveSet.has(date)) {
         const occRef = meetupRef.collection('occurrences').doc(date);
         const indexRef = db
           .collection('meetupOccurrencesIndex')
@@ -447,7 +449,6 @@ export const standingMeetup_ensureOccurrences = onCall(
 
         batch.set(occRef, { id: date, ...occurrence });
 
-        // Also sync to index
         batch.set(indexRef, {
           id: `${standingMeetupId}_${date}`,
           standingMeetupId,
@@ -466,7 +467,7 @@ export const standingMeetup_ensureOccurrences = onCall(
           spotsLeft: meetup.maxPlayers,
           billingAmount: meetup.billing.amount,
           billingInterval: meetup.billing.interval,
-          billingIntervalCount: meetup.billing.intervalCount,
+          billingIntervalCount: meetup.billing.intervalCount ?? 1,
           updatedAt: Date.now(),
         });
 
@@ -480,98 +481,32 @@ export const standingMeetup_ensureOccurrences = onCall(
 
     return {
       created,
-      existing: existingSet.size,
+      skippedCancelled,
+      existing: existingActiveSet.size,
     };
-  }
-);
-
-/**
- * Stamp a subscriber into occurrences within their billing period
- */
-async function stampSubscriberIntoOccurrences(
-  meetup: StandingMeetup,
-  userId: string,
-  userName: string,
-  periodStart: number,
-  periodEnd: number
-): Promise<void> {
-  const now = Date.now();
-
-  // Get occurrences in the window [now, periodEnd]
-  const occurrencesSnap = await db
-    .collection('standingMeetups')
-    .doc(meetup.id)
-    .collection('occurrences')
-    .where('startAt', '>=', now)
-    .where('startAt', '<', periodEnd)
-    .get();
-
-  const batch = db.batch();
-
-  for (const occDoc of occurrencesSnap.docs) {
-    const participantRef = occDoc.ref.collection('participants').doc(userId);
-    const participantSnap = await participantRef.get();
-
-    if (!participantSnap.exists) {
-      batch.set(participantRef, {
-        userName,
-        status: 'expected',
-        creditIssued: false,
-        updatedAt: Date.now(),
-      });
-
-      // Increment expectedCount
-      batch.update(occDoc.ref, {
-        expectedCount: admin.firestore.FieldValue.increment(1),
-        updatedAt: Date.now(),
-      });
-
-      // Update index
-      const indexRef = db
-        .collection('meetupOccurrencesIndex')
-        .doc(`${meetup.id}_${occDoc.id}`);
-      batch.update(indexRef, {
-        expectedCount: admin.firestore.FieldValue.increment(1),
-        spotsLeft: admin.firestore.FieldValue.increment(-1),
-        updatedAt: Date.now(),
-      });
-    }
-  }
-
-  await batch.commit();
-}
+  });
 
 // =============================================================================
-// Check-In
+// Check-In (1st Gen - australia-southeast1)
 // =============================================================================
 
-/**
- * Player check-in via QR code
- */
-export const standingMeetup_checkIn = onCall(
-  { region: 'australia-southeast1' },
-  async (
-    request: CallableRequest<{
-      standingMeetupId: string;
-      dateId: string;
-      token: string;
-    }>
-  ) => {
-    if (!request.auth) {
-      throw new HttpsError('unauthenticated', 'Must be logged in');
+export const standingMeetup_checkIn = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; dateId: string; token: string }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
 
-    const { standingMeetupId, dateId, token } = request.data;
-    const userId = request.auth.uid;
+    const { standingMeetupId, dateId, token } = data;
+    const userId = context.auth.uid;
 
     if (!standingMeetupId || !dateId || !token) {
-      throw new HttpsError(
+      throw new functions.https.HttpsError(
         'invalid-argument',
         'standingMeetupId, dateId, and token are required'
       );
     }
 
-    // Get the occurrence
     const occurrenceRef = db
       .collection('standingMeetups')
       .doc(standingMeetupId)
@@ -580,45 +515,41 @@ export const standingMeetup_checkIn = onCall(
     const occurrenceSnap = await occurrenceRef.get();
 
     if (!occurrenceSnap.exists) {
-      throw new HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
+      throw new functions.https.HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
     }
 
     const occurrence = occurrenceSnap.data() as MeetupOccurrence;
 
-    // Validate occurrence status
     if (!['scheduled', 'in_progress'].includes(occurrence.status)) {
-      throw new HttpsError('failed-precondition', 'SESSION_NOT_ACTIVE');
+      throw new functions.https.HttpsError('failed-precondition', 'SESSION_NOT_ACTIVE');
     }
 
-    // Validate token
     if (!occurrence.checkInEnabled || !occurrence.checkInTokenHash) {
-      throw new HttpsError('failed-precondition', 'Check-in not enabled');
+      throw new functions.https.HttpsError('failed-precondition', 'Check-in not enabled');
     }
 
     if (occurrence.checkInTokenExpiresAt && Date.now() > occurrence.checkInTokenExpiresAt) {
-      throw new HttpsError('failed-precondition', 'TOKEN_EXPIRED');
+      throw new functions.https.HttpsError('failed-precondition', 'TOKEN_EXPIRED');
     }
 
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     if (tokenHash !== occurrence.checkInTokenHash) {
-      throw new HttpsError('permission-denied', 'TOKEN_INVALID');
+      throw new functions.https.HttpsError('permission-denied', 'TOKEN_INVALID');
     }
 
-    // Check if user is a participant
     const participantRef = occurrenceRef.collection('participants').doc(userId);
     const participantSnap = await participantRef.get();
 
     if (!participantSnap.exists) {
-      throw new HttpsError('not-found', 'NOT_PARTICIPANT');
+      throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
     }
 
     const participant = participantSnap.data() as OccurrenceParticipant;
 
     if (participant.status === 'checked_in') {
-      throw new HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+      throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
     }
 
-    // Update participant status
     const checkedInAt = Date.now();
     await updateParticipantStatus(standingMeetupId, dateId, userId, 'checked_in', {
       checkedInAt,
@@ -629,42 +560,32 @@ export const standingMeetup_checkIn = onCall(
       success: true,
       checkedInAt,
     };
-  }
-);
+  });
 
-/**
- * Generate or refresh check-in token for an occurrence
- */
-export const standingMeetup_generateCheckInToken = onCall(
-  { region: 'australia-southeast1' },
-  async (
-    request: CallableRequest<{
-      standingMeetupId: string;
-      dateId: string;
-      expiresInMinutes?: number;
-    }>
-  ) => {
-    if (!request.auth) {
-      throw new HttpsError('unauthenticated', 'Must be logged in');
+// =============================================================================
+// Generate Check-In Token (1st Gen - australia-southeast1)
+// =============================================================================
+
+export const standingMeetup_generateCheckInToken = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; dateId: string; expiresInMinutes?: number }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
 
-    const { standingMeetupId, dateId, expiresInMinutes = 30 } = request.data;
-    const userId = request.auth.uid;
+    const { standingMeetupId, dateId, expiresInMinutes = 30 } = data;
+    const userId = context.auth.uid;
 
-    // Verify user is organizer (check club membership)
     const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
     const meetupSnap = await meetupRef.get();
 
     if (!meetupSnap.exists) {
-      throw new HttpsError('not-found', 'Standing meetup not found');
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
 
     const meetup = meetupSnap.data() as StandingMeetup;
 
-    // TODO: Verify user is organizer of the club
-    // For now, just check if user created the meetup
     if (meetup.createdByUserId !== userId) {
-      // Check if user is club admin
       const clubMemberSnap = await db
         .collection('clubs')
         .doc(meetup.clubId)
@@ -673,21 +594,19 @@ export const standingMeetup_generateCheckInToken = onCall(
         .get();
 
       if (!clubMemberSnap.exists) {
-        throw new HttpsError('permission-denied', 'NOT_AUTHORIZED');
+        throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
 
       const memberRole = clubMemberSnap.data()?.role;
       if (!['owner', 'admin'].includes(memberRole)) {
-        throw new HttpsError('permission-denied', 'NOT_AUTHORIZED');
+        throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
     }
 
-    // Generate token
     const token = crypto.randomBytes(32).toString('hex');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const expiresAt = Date.now() + expiresInMinutes * 60 * 1000;
 
-    // Update occurrence
     const occurrenceRef = meetupRef.collection('occurrences').doc(dateId);
     await occurrenceRef.update({
       checkInEnabled: true,
@@ -701,39 +620,29 @@ export const standingMeetup_generateCheckInToken = onCall(
       token,
       expiresAt,
     };
-  }
-);
+  });
 
 // =============================================================================
-// Attendance Cancellation
+// Cancel Attendance (1st Gen - australia-southeast1)
 // =============================================================================
 
-/**
- * Player cancels attendance for an occurrence
- */
-export const standingMeetup_cancelAttendance = onCall(
-  { region: 'australia-southeast1' },
-  async (
-    request: CallableRequest<{
-      standingMeetupId: string;
-      dateId: string;
-    }>
-  ) => {
-    if (!request.auth) {
-      throw new HttpsError('unauthenticated', 'Must be logged in');
+export const standingMeetup_cancelAttendance = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; dateId: string; odUserId?: string }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
 
-    const { standingMeetupId, dateId } = request.data;
-    const userId = request.auth.uid;
+    const { standingMeetupId, dateId, odUserId } = data;
+    const callerUid = context.auth.uid;
 
     if (!standingMeetupId || !dateId) {
-      throw new HttpsError(
+      throw new functions.https.HttpsError(
         'invalid-argument',
         'standingMeetupId and dateId are required'
       );
     }
 
-    // Get the standing meetup and occurrence
     const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
     const occurrenceRef = meetupRef.collection('occurrences').doc(dateId);
 
@@ -743,36 +652,61 @@ export const standingMeetup_cancelAttendance = onCall(
     ]);
 
     if (!meetupSnap.exists) {
-      throw new HttpsError('not-found', 'MEETUP_NOT_FOUND');
+      throw new functions.https.HttpsError('not-found', 'MEETUP_NOT_FOUND');
     }
 
     if (!occurrenceSnap.exists) {
-      throw new HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
+      throw new functions.https.HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
     }
 
     const meetup = meetupSnap.data() as StandingMeetup;
     const occurrence = occurrenceSnap.data() as MeetupOccurrence;
 
-    // Check if occurrence is in the past
-    if (occurrence.startAt < Date.now()) {
-      throw new HttpsError('failed-precondition', 'OCCURRENCE_PASSED');
+    // Determine target user: if odUserId provided, verify caller is admin
+    let userId = callerUid;
+    if (odUserId && odUserId !== callerUid) {
+      // Admin trying to remove another player - verify permissions
+      const isCreator = meetup.createdByUserId === callerUid;
+      let isClubAdmin = false;
+
+      if (!isCreator) {
+        const clubMemberSnap = await db
+          .collection('clubs')
+          .doc(meetup.clubId)
+          .collection('members')
+          .doc(callerUid)
+          .get();
+
+        if (clubMemberSnap.exists) {
+          const memberRole = clubMemberSnap.data()?.role;
+          isClubAdmin = ['owner', 'admin'].includes(memberRole);
+        }
+      }
+
+      if (!isCreator && !isClubAdmin) {
+        throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
+      }
+
+      userId = odUserId;
     }
 
-    // Check if user is a participant
+    if (occurrence.startAt < Date.now()) {
+      throw new functions.https.HttpsError('failed-precondition', 'OCCURRENCE_PASSED');
+    }
+
     const participantRef = occurrenceRef.collection('participants').doc(userId);
     const participantSnap = await participantRef.get();
 
     if (!participantSnap.exists) {
-      throw new HttpsError('not-found', 'NOT_PARTICIPANT');
+      throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
     }
 
     const participant = participantSnap.data() as OccurrenceParticipant;
 
     if (participant.status === 'cancelled') {
-      throw new HttpsError('already-exists', 'ALREADY_CANCELLED');
+      throw new functions.https.HttpsError('already-exists', 'ALREADY_CANCELLED');
     }
 
-    // Check if eligible for credit (before cutoff)
     const cutoffTimestamp =
       occurrence.startAt - meetup.credits.cancellationCutoffHours * 60 * 60 * 1000;
     const isBeforeCutoff = Date.now() <= cutoffTimestamp;
@@ -787,7 +721,6 @@ export const standingMeetup_cancelAttendance = onCall(
         meetup.billing.feesPaidBy
       );
 
-      // Issue credit to wallet
       walletTransactionId = await addToWallet(userId, meetup.clubId, creditAmount, {
         type: 'standing_meetup_credit',
         standingMeetupId,
@@ -796,25 +729,36 @@ export const standingMeetup_cancelAttendance = onCall(
       });
     }
 
-    // Update participant status
-    await updateParticipantStatus(standingMeetupId, dateId, userId, 'cancelled', {
+    // Build update object without undefined values (Firestore doesn't allow undefined)
+    const participantUpdate: Record<string, any> = {
       creditIssued: shouldIssueCredit,
-      creditIssuedAt: shouldIssueCredit ? Date.now() : undefined,
-      creditAmount,
-      creditReason: shouldIssueCredit ? 'player_cancelled_before_cutoff' : undefined,
-      walletTransactionId,
-    });
+    };
+    if (shouldIssueCredit) {
+      participantUpdate.creditIssuedAt = Date.now();
+      participantUpdate.creditReason = 'player_cancelled_before_cutoff';
+      if (creditAmount !== undefined) {
+        participantUpdate.creditAmount = creditAmount;
+      }
+      if (walletTransactionId !== undefined) {
+        participantUpdate.walletTransactionId = walletTransactionId;
+      }
+    }
 
-    // Update subscription stats if credit was issued
+    await updateParticipantStatus(standingMeetupId, dateId, userId, 'cancelled', participantUpdate);
+
     if (shouldIssueCredit && creditAmount) {
+      // Try to update subscription (old model) - skip if doesn't exist (MVP hybrid model uses registrations)
       const subscriptionId = `${standingMeetupId}_${userId}`;
       const subscriptionRef = db
         .collection('standingMeetupSubscriptions')
         .doc(subscriptionId);
-      await subscriptionRef.update({
-        totalCreditsReceived: admin.firestore.FieldValue.increment(creditAmount),
-        updatedAt: Date.now(),
-      });
+      const subscriptionSnap = await subscriptionRef.get();
+      if (subscriptionSnap.exists) {
+        await subscriptionRef.update({
+          totalCreditsReceived: FieldValue.increment(creditAmount),
+          updatedAt: Date.now(),
+        });
+      }
     }
 
     return {
@@ -822,43 +766,31 @@ export const standingMeetup_cancelAttendance = onCall(
       creditAmount,
       reason: isBeforeCutoff ? 'before_cutoff' : 'after_cutoff',
     };
-  }
-);
+  });
 
 // =============================================================================
-// Organizer Actions
+// Cancel Occurrence (1st Gen - australia-southeast1)
 // =============================================================================
 
-/**
- * Organizer cancels an occurrence (batch credits)
- */
-export const standingMeetup_cancelOccurrence = onCall(
-  { region: 'australia-southeast1' },
-  async (
-    request: CallableRequest<{
-      standingMeetupId: string;
-      dateId: string;
-      reason?: string;
-    }>
-  ) => {
-    if (!request.auth) {
-      throw new HttpsError('unauthenticated', 'Must be logged in');
+export const standingMeetup_cancelOccurrence = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; dateId: string; reason?: string }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
 
-    const { standingMeetupId, dateId, reason } = request.data;
-    const userId = request.auth.uid;
+    const { standingMeetupId, dateId, reason } = data;
+    const userId = context.auth.uid;
 
-    // Get meetup and verify organizer
     const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
     const meetupSnap = await meetupRef.get();
 
     if (!meetupSnap.exists) {
-      throw new HttpsError('not-found', 'Standing meetup not found');
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
 
     const meetup = meetupSnap.data() as StandingMeetup;
 
-    // Verify organizer
     if (meetup.createdByUserId !== userId) {
       const clubMemberSnap = await db
         .collection('clubs')
@@ -868,52 +800,46 @@ export const standingMeetup_cancelOccurrence = onCall(
         .get();
 
       if (!clubMemberSnap.exists) {
-        throw new HttpsError('permission-denied', 'NOT_AUTHORIZED');
+        throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
 
       const memberRole = clubMemberSnap.data()?.role;
       if (!['owner', 'admin'].includes(memberRole)) {
-        throw new HttpsError('permission-denied', 'NOT_AUTHORIZED');
+        throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
     }
 
-    // Get occurrence
     const occurrenceRef = meetupRef.collection('occurrences').doc(dateId);
     const occurrenceSnap = await occurrenceRef.get();
 
     if (!occurrenceSnap.exists) {
-      throw new HttpsError('not-found', 'Occurrence not found');
+      throw new functions.https.HttpsError('not-found', 'Occurrence not found');
     }
 
     const occurrence = occurrenceSnap.data() as MeetupOccurrence;
 
-    // Check if already cancelled
     if (occurrence.status === 'cancelled') {
-      throw new HttpsError('already-exists', 'Occurrence already cancelled');
+      throw new functions.https.HttpsError('already-exists', 'Occurrence already cancelled');
     }
 
-    // Check if credits already issued
     if (occurrence.creditsIssued) {
-      throw new HttpsError('already-exists', 'Credits already issued');
+      throw new functions.https.HttpsError('already-exists', 'Credits already issued');
     }
 
-    // Get all eligible participants (expected or checked_in)
     const participantsSnap = await occurrenceRef.collection('participants').get();
     const eligibleParticipants: Array<{ id: string; data: OccurrenceParticipant }> = [];
 
     participantsSnap.forEach((doc) => {
-      const data = doc.data() as OccurrenceParticipant;
-      if (['expected', 'checked_in'].includes(data.status) && !data.creditIssued) {
-        eligibleParticipants.push({ id: doc.id, data });
+      const docData = doc.data() as OccurrenceParticipant;
+      if (['expected', 'checked_in'].includes(docData.status) && !docData.creditIssued) {
+        eligibleParticipants.push({ id: doc.id, data: docData });
       }
     });
 
-    // Calculate credit amount
     const creditAmount = meetup.credits.enabled
       ? calculateCreditAmount(meetup.billing.amount, meetup.billing.feesPaidBy)
       : 0;
 
-    // Issue credits to each eligible participant
     let totalCreditsIssued = 0;
     const creditResults: Array<{ odUserId: string; creditAmount: number }> = [];
 
@@ -931,7 +857,6 @@ export const standingMeetup_cancelOccurrence = onCall(
           }
         );
 
-        // Update participant
         await occurrenceRef.collection('participants').doc(participant.id).update({
           creditIssued: true,
           creditIssuedAt: Date.now(),
@@ -941,7 +866,6 @@ export const standingMeetup_cancelOccurrence = onCall(
           updatedAt: Date.now(),
         });
 
-        // Update subscription stats
         const subscriptionId = `${standingMeetupId}_${participant.id}`;
         const subscriptionRef = db
           .collection('standingMeetupSubscriptions')
@@ -949,7 +873,7 @@ export const standingMeetup_cancelOccurrence = onCall(
         const subscriptionSnap = await subscriptionRef.get();
         if (subscriptionSnap.exists) {
           await subscriptionRef.update({
-            totalCreditsReceived: admin.firestore.FieldValue.increment(creditAmount),
+            totalCreditsReceived: FieldValue.increment(creditAmount),
             updatedAt: Date.now(),
           });
         }
@@ -959,7 +883,6 @@ export const standingMeetup_cancelOccurrence = onCall(
       }
     }
 
-    // Update occurrence
     await occurrenceRef.update({
       status: 'cancelled',
       cancelledAt: Date.now(),
@@ -969,7 +892,6 @@ export const standingMeetup_cancelOccurrence = onCall(
       updatedAt: Date.now(),
     });
 
-    // Update index
     const indexRef = db
       .collection('meetupOccurrencesIndex')
       .doc(`${standingMeetupId}_${dateId}`);
@@ -984,34 +906,27 @@ export const standingMeetup_cancelOccurrence = onCall(
       totalCreditsIssued,
       creditResults,
     };
-  }
-);
+  });
 
-/**
- * Organizer marks participant as checked in manually
- */
-export const standingMeetup_manualCheckIn = onCall(
-  { region: 'australia-southeast1' },
-  async (
-    request: CallableRequest<{
-      standingMeetupId: string;
-      dateId: string;
-      targetUserId: string;
-    }>
-  ) => {
-    if (!request.auth) {
-      throw new HttpsError('unauthenticated', 'Must be logged in');
+// =============================================================================
+// Manual Check-In (1st Gen - australia-southeast1)
+// =============================================================================
+
+export const standingMeetup_manualCheckIn = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; dateId: string; targetUserId: string }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
 
-    const { standingMeetupId, dateId, targetUserId } = request.data;
-    const userId = request.auth.uid;
+    const { standingMeetupId, dateId, targetUserId } = data;
+    const userId = context.auth.uid;
 
-    // Verify organizer (similar to cancelOccurrence)
     const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
     const meetupSnap = await meetupRef.get();
 
     if (!meetupSnap.exists) {
-      throw new HttpsError('not-found', 'Standing meetup not found');
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
 
     const meetup = meetupSnap.data() as StandingMeetup;
@@ -1025,11 +940,10 @@ export const standingMeetup_manualCheckIn = onCall(
         .get();
 
       if (!clubMemberSnap.exists || !['owner', 'admin'].includes(clubMemberSnap.data()?.role)) {
-        throw new HttpsError('permission-denied', 'NOT_AUTHORIZED');
+        throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
     }
 
-    // Update participant status
     const checkedInAt = Date.now();
     await updateParticipantStatus(standingMeetupId, dateId, targetUserId, 'checked_in', {
       checkedInAt,
@@ -1040,34 +954,27 @@ export const standingMeetup_manualCheckIn = onCall(
       success: true,
       checkedInAt,
     };
-  }
-);
+  });
 
-/**
- * Organizer marks participant as no-show
- */
-export const standingMeetup_markNoShow = onCall(
-  { region: 'australia-southeast1' },
-  async (
-    request: CallableRequest<{
-      standingMeetupId: string;
-      dateId: string;
-      targetUserId: string;
-    }>
-  ) => {
-    if (!request.auth) {
-      throw new HttpsError('unauthenticated', 'Must be logged in');
+// =============================================================================
+// Mark No-Show (1st Gen - australia-southeast1)
+// =============================================================================
+
+export const standingMeetup_markNoShow = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; dateId: string; targetUserId: string }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
 
-    const { standingMeetupId, dateId, targetUserId } = request.data;
-    const userId = request.auth.uid;
+    const { standingMeetupId, dateId, targetUserId } = data;
+    const userId = context.auth.uid;
 
-    // Verify organizer
     const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
     const meetupSnap = await meetupRef.get();
 
     if (!meetupSnap.exists) {
-      throw new HttpsError('not-found', 'Standing meetup not found');
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
 
     const meetup = meetupSnap.data() as StandingMeetup;
@@ -1081,33 +988,26 @@ export const standingMeetup_markNoShow = onCall(
         .get();
 
       if (!clubMemberSnap.exists || !['owner', 'admin'].includes(clubMemberSnap.data()?.role)) {
-        throw new HttpsError('permission-denied', 'NOT_AUTHORIZED');
+        throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
     }
 
-    // Update participant status (no-shows don't get credits)
     await updateParticipantStatus(standingMeetupId, dateId, targetUserId, 'no_show');
 
     return {
       success: true,
     };
-  }
-);
+  });
 
 // =============================================================================
-// Index Sync Trigger
+// Index Sync Trigger (1st Gen - australia-southeast1)
 // =============================================================================
 
-/**
- * When an occurrence is deleted, also delete the index entry
- */
-export const onOccurrenceDeleted = onDocumentDeleted(
-  {
-    document: 'standingMeetups/{standingMeetupId}/occurrences/{dateId}',
-    region: 'australia-southeast1',
-  },
-  async (event) => {
-    const { standingMeetupId, dateId } = event.params;
+export const onOccurrenceDeleted = functions
+  .region('australia-southeast1')
+  .firestore.document('standingMeetups/{standingMeetupId}/occurrences/{dateId}')
+  .onDelete(async (snap, context) => {
+    const { standingMeetupId, dateId } = context.params;
     const indexRef = db
       .collection('meetupOccurrencesIndex')
       .doc(`${standingMeetupId}_${dateId}`);
@@ -1118,5 +1018,253 @@ export const onOccurrenceDeleted = onDocumentDeleted(
     } catch (error) {
       console.error(`Failed to delete index entry: ${error}`);
     }
+  });
+
+// =============================================================================
+// Registration Helper Functions
+// =============================================================================
+
+async function addPlayerToAllFutureOccurrences(
+  standingMeetupId: string,
+  userId: string,
+  userName: string,
+  maxPlayers: number
+): Promise<{ addedTo: string[]; skippedFull: string[] }> {
+  const now = Date.now();
+  const eightWeeksLater = now + 8 * 7 * 24 * 60 * 60 * 1000;
+
+  const occurrencesSnap = await db
+    .collection('standingMeetups')
+    .doc(standingMeetupId)
+    .collection('occurrences')
+    .where('startAt', '>=', now)
+    .where('startAt', '<', eightWeeksLater)
+    .where('status', '==', 'scheduled')
+    .get();
+
+  if (occurrencesSnap.empty) {
+    console.log(`No future occurrences found for meetup ${standingMeetupId}`);
+    return { addedTo: [], skippedFull: [] };
   }
-);
+
+  const addedTo: string[] = [];
+  const skippedFull: string[] = [];
+  const batch = db.batch();
+
+  for (const occDoc of occurrencesSnap.docs) {
+    const occData = occDoc.data();
+
+    const spotsLeft = maxPlayers - (occData.expectedCount || 0);
+    if (spotsLeft <= 0) {
+      skippedFull.push(occDoc.id);
+      continue;
+    }
+
+    const participantRef = occDoc.ref.collection('participants').doc(userId);
+    const participantSnap = await participantRef.get();
+
+    if (!participantSnap.exists) {
+      batch.set(participantRef, {
+        userName,
+        status: 'expected',
+        creditIssued: false,
+        updatedAt: Date.now(),
+      });
+
+      batch.update(occDoc.ref, {
+        expectedCount: FieldValue.increment(1),
+        updatedAt: Date.now(),
+      });
+
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${standingMeetupId}_${occDoc.id}`);
+      batch.update(indexRef, {
+        expectedCount: FieldValue.increment(1),
+        spotsLeft: FieldValue.increment(-1),
+        updatedAt: Date.now(),
+      });
+
+      addedTo.push(occDoc.id);
+    }
+  }
+
+  await batch.commit();
+  console.log(`Season Pass: Added ${userId} to ${addedTo.length} occurrences, skipped ${skippedFull.length} full`);
+
+  return { addedTo, skippedFull };
+}
+
+async function addPlayerToSelectedOccurrences(
+  standingMeetupId: string,
+  userId: string,
+  userName: string,
+  sessionIds: string[],
+  maxPlayers: number
+): Promise<{ addedTo: string[]; failedFull: string[] }> {
+  if (!sessionIds || sessionIds.length === 0) {
+    throw new functions.https.HttpsError('invalid-argument', 'No sessions selected');
+  }
+
+  const addedTo: string[] = [];
+  const failedFull: string[] = [];
+
+  for (const dateId of sessionIds) {
+    const occRef = db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(dateId);
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        const occSnap = await transaction.get(occRef);
+
+        if (!occSnap.exists) {
+          console.warn(`Occurrence ${dateId} not found, skipping`);
+          return;
+        }
+
+        const occData = occSnap.data() as any;
+
+        const spotsLeft = maxPlayers - (occData.expectedCount || 0);
+        if (spotsLeft <= 0) {
+          failedFull.push(dateId);
+          return;
+        }
+
+        const participantRef = occRef.collection('participants').doc(userId);
+        const participantSnap = await transaction.get(participantRef);
+
+        if (!participantSnap.exists) {
+          transaction.set(participantRef, {
+            userName,
+            status: 'expected',
+            creditIssued: false,
+            updatedAt: Date.now(),
+          });
+
+          transaction.update(occRef, {
+            expectedCount: FieldValue.increment(1),
+            updatedAt: Date.now(),
+          });
+
+          const indexRef = db
+            .collection('meetupOccurrencesIndex')
+            .doc(`${standingMeetupId}_${dateId}`);
+          transaction.update(indexRef, {
+            expectedCount: FieldValue.increment(1),
+            spotsLeft: FieldValue.increment(-1),
+            updatedAt: Date.now(),
+          });
+
+          addedTo.push(dateId);
+        }
+      });
+    } catch (err) {
+      console.error(`Failed to add to occurrence ${dateId}:`, err);
+      failedFull.push(dateId);
+    }
+  }
+
+  if (failedFull.length > 0) {
+    console.warn(`Pick-and-Pay: ${failedFull.length} sessions were full: ${failedFull.join(', ')}`);
+  }
+
+  console.log(`Pick-and-Pay: Added ${userId} to ${addedTo.length} selected occurrences`);
+
+  return { addedTo, failedFull };
+}
+
+async function removePlayerFromFutureOccurrences(
+  standingMeetupId: string,
+  userId: string
+): Promise<void> {
+  const now = Date.now();
+
+  const occurrencesSnap = await db
+    .collection('standingMeetups')
+    .doc(standingMeetupId)
+    .collection('occurrences')
+    .where('startAt', '>=', now)
+    .where('status', '==', 'scheduled')
+    .get();
+
+  const batch = db.batch();
+
+  for (const occDoc of occurrencesSnap.docs) {
+    const participantRef = occDoc.ref.collection('participants').doc(userId);
+    const participantSnap = await participantRef.get();
+
+    if (participantSnap.exists && participantSnap.data()?.status === 'expected') {
+      batch.delete(participantRef);
+
+      batch.update(occDoc.ref, {
+        expectedCount: FieldValue.increment(-1),
+        updatedAt: Date.now(),
+      });
+
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${standingMeetupId}_${occDoc.id}`);
+      batch.update(indexRef, {
+        expectedCount: FieldValue.increment(-1),
+        spotsLeft: FieldValue.increment(1),
+        updatedAt: Date.now(),
+      });
+    }
+  }
+
+  await batch.commit();
+}
+
+async function removePlayerFromSelectedOccurrences(
+  standingMeetupId: string,
+  userId: string,
+  sessionIds: string[]
+): Promise<void> {
+  const now = Date.now();
+  const batch = db.batch();
+  let removedCount = 0;
+
+  for (const dateId of sessionIds) {
+    const occRef = db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(dateId);
+
+    const occSnap = await occRef.get();
+    if (!occSnap.exists) continue;
+
+    const occData = occSnap.data() as any;
+
+    if (occData.startAt < now) continue;
+
+    const participantRef = occRef.collection('participants').doc(userId);
+    const participantSnap = await participantRef.get();
+
+    if (participantSnap.exists && participantSnap.data()?.status === 'expected') {
+      batch.delete(participantRef);
+
+      batch.update(occRef, {
+        expectedCount: FieldValue.increment(-1),
+        updatedAt: Date.now(),
+      });
+
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${standingMeetupId}_${dateId}`);
+      batch.update(indexRef, {
+        expectedCount: FieldValue.increment(-1),
+        spotsLeft: FieldValue.increment(1),
+        updatedAt: Date.now(),
+      });
+
+      removedCount++;
+    }
+  }
+
+  await batch.commit();
+  console.log(`Removed ${userId} from ${removedCount} selected occurrences`);
+}

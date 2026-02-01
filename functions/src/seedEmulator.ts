@@ -3,8 +3,10 @@
  *
  * Run with: npx ts-node src/seedEmulator.ts
  *
- * Creates test users, clubs, and standing meetups for local testing.
+ * Creates test users and a club for local testing.
  * Only works when connected to the Firebase Emulator.
+ *
+ * @version 07.57
  */
 
 import * as admin from 'firebase-admin';
@@ -28,10 +30,10 @@ interface TestUser {
   role: 'player' | 'organizer' | 'app_admin';
 }
 
-// Generate test users
-function generateTestUsers(count: number): TestUser[] {
-  const firstNames = ['John', 'Jane', 'Mike', 'Sarah', 'Tom', 'Emily', 'Chris', 'Lisa', 'David', 'Anna'];
-  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Wilson', 'Taylor'];
+// Generate test users: 1 organizer + 12 players
+function generateTestUsers(): TestUser[] {
+  const firstNames = ['John', 'Jane', 'Mike', 'Sarah', 'Tom', 'Emily', 'Chris', 'Lisa', 'David', 'Anna', 'James', 'Kate'];
+  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Wilson', 'Taylor', 'Moore', 'White'];
 
   const users: TestUser[] = [];
 
@@ -43,22 +45,12 @@ function generateTestUsers(count: number): TestUser[] {
     role: 'organizer',
   });
 
-  // Second user is an admin
-  users.push({
-    email: 'admin@test.com',
-    password: 'test123',
-    displayName: 'Test Admin',
-    role: 'app_admin',
-  });
-
-  // Generate remaining players
-  for (let i = 0; i < count - 2; i++) {
-    const firstName = firstNames[i % firstNames.length];
-    const lastName = lastNames[Math.floor(i / firstNames.length) % lastNames.length];
+  // Generate 12 players
+  for (let i = 0; i < 12; i++) {
     users.push({
       email: `player${i + 1}@test.com`,
       password: 'test123',
-      displayName: `${firstName} ${lastName}`,
+      displayName: `${firstNames[i]} ${lastNames[i]}`,
       role: 'player',
     });
   }
@@ -113,15 +105,18 @@ async function seedClub(organizerId: string): Promise<string> {
   const clubRef = db.collection('clubs').doc();
   await clubRef.set({
     name: 'Test Pickleball Club',
-    description: 'A club for testing the Standing Meetup feature',
+    description: 'A club for testing Weekly Meetups',
     location: 'Christchurch, NZ',
     ownerId: organizerId,
+    createdByUserId: organizerId,
+    members: [organizerId],
+    admins: [organizerId],
     stripeAccountId: 'acct_test123', // Fake Stripe account for testing
     stripeAccountStatus: 'active',
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  // Add organizer as club member
+  // Also add to members subcollection
   await clubRef.collection('members').doc(organizerId).set({
     userId: organizerId,
     role: 'owner',
@@ -132,76 +127,35 @@ async function seedClub(organizerId: string): Promise<string> {
   return clubRef.id;
 }
 
-async function seedStandingMeetup(clubId: string, organizerId: string): Promise<string> {
-  console.log('\n Creating test standing meetup...');
-
-  // Calculate next Monday
-  const now = new Date();
-  const daysUntilMonday = (8 - now.getDay()) % 7 || 7;
-  const nextMonday = new Date(now);
-  nextMonday.setDate(now.getDate() + daysUntilMonday);
-  nextMonday.setHours(18, 0, 0, 0);
-
-  const meetupRef = db.collection('standingMeetups').doc();
-  await meetupRef.set({
-    name: 'Monday Night Pickleball',
-    description: 'Weekly competitive play every Monday evening',
-    clubId: clubId,
-    organizerId: organizerId,
-    recurrence: 'weekly',
-    dayOfWeek: 1, // Monday
-    startTime: '18:00',
-    endTime: '20:00',
-    timezone: 'Pacific/Auckland',
-    venue: {
-      name: 'Test Sports Centre',
-      address: '123 Test Street, Christchurch',
-    },
-    capacity: 16,
-    pricing: {
-      type: 'subscription',
-      weeklyAmount: 1500, // $15.00 NZD
-      currency: 'nzd',
-    },
-    stripePriceId: 'price_test123', // Fake Stripe price for testing
-    status: 'active',
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    nextOccurrence: admin.firestore.Timestamp.fromDate(nextMonday),
-  });
-
-  console.log(`  ✓ Created standing meetup: ${meetupRef.id}`);
-  return meetupRef.id;
-}
-
 async function main() {
   console.log('='.repeat(50));
-  console.log(' FIREBASE EMULATOR SEED SCRIPT');
+  console.log(' FIREBASE EMULATOR SEED SCRIPT (Simple)');
   console.log('='.repeat(50));
   console.log('\nConnecting to emulators:');
   console.log('  - Firestore: 127.0.0.1:8080');
   console.log('  - Auth: 127.0.0.1:9099');
 
   try {
-    // Generate and seed users
-    const testUsers = generateTestUsers(20);
+    // Generate and seed users (1 organizer + 12 players)
+    const testUsers = generateTestUsers();
     const userIds = await seedUsers(testUsers);
 
     // Get organizer ID (first user)
     const organizerId = userIds[0];
 
-    // Seed club
-    const clubId = await seedClub(organizerId);
-
-    // Seed standing meetup
-    await seedStandingMeetup(clubId, organizerId);
+    // Seed club for the organizer
+    await seedClub(organizerId);
 
     console.log('\n' + '='.repeat(50));
     console.log(' SEED COMPLETE!');
     console.log('='.repeat(50));
     console.log('\nTest Credentials:');
     console.log('  Organizer: organizer@test.com / test123');
-    console.log('  Admin: admin@test.com / test123');
-    console.log('  Players: player1@test.com ... player18@test.com / test123');
+    console.log('  Players:   player1@test.com ... player12@test.com / test123');
+    console.log('\nNext Steps:');
+    console.log('  1. Login as organizer@test.com');
+    console.log('  2. Go to the club and create a Weekly Meetup');
+    console.log('  3. Login as player1@test.com to test registration');
     console.log('\nView data at: http://127.0.0.1:4000');
 
   } catch (error) {

@@ -23,6 +23,7 @@ import {
 } from '../../services/firebase';
 import { getAccountStatusV2 } from '../../services/stripe';
 import type { League, LeagueMember, BankDetails, UserProfile } from '../../types';
+import { PaymentMethodsPanel, PendingPaymentsList } from '../payments';
 
 // ============================================
 // TYPES
@@ -96,7 +97,7 @@ const getStatusBadge = (status: string, method?: string) => {
 export const LeagueFinanceTab: React.FC<LeagueFinanceTabProps> = ({
   league,
   members,
-  currentUserId,
+  currentUserId: _currentUserId,
   userProfile,
   onLeagueUpdate,
 }) => {
@@ -408,146 +409,21 @@ export const LeagueFinanceTab: React.FC<LeagueFinanceTabProps> = ({
         </div>
       )}
 
-      {/* Payment Settings Section */}
+      {/* Payment Settings Section - Using shared component */}
       {pricing && pricing.paymentMode !== 'free' && (
-        <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <svg className="w-5 h-5 text-lime-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-            </svg>
-            Payment Methods
-          </h3>
-
-          <div className="space-y-4">
-            {/* Stripe Toggle */}
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allowStripe}
-                onChange={(e) => setAllowStripe(e.target.checked)}
-                className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500 focus:ring-offset-gray-900"
-              />
-              <div>
-                <div className="text-white font-medium">Accept card payments (Stripe)</div>
-                <div className="text-sm text-gray-400">Players pay online with instant confirmation</div>
-              </div>
-            </label>
-
-            {/* Bank Transfer Toggle */}
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allowBankTransfer}
-                onChange={(e) => setAllowBankTransfer(e.target.checked)}
-                className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500 focus:ring-offset-gray-900"
-              />
-              <div>
-                <div className="text-white font-medium">Accept bank transfers</div>
-                <div className="text-sm text-gray-400">You manually confirm payments after checking your account</div>
-              </div>
-            </label>
-
-            {/* Bank Details (shown when bank transfer enabled) */}
-            {allowBankTransfer && (
-              <div className="mt-4 p-4 bg-gray-700/50 rounded-lg border border-gray-600 space-y-4">
-                <h4 className="text-white font-medium flex items-center gap-2">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                  </svg>
-                  Bank Details
-                </h4>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Bank Name</label>
-                    <input
-                      type="text"
-                      value={bankDetails.bankName}
-                      onChange={(e) => setBankDetails(prev => ({ ...prev, bankName: e.target.value }))}
-                      placeholder="e.g., ANZ Bank"
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-lime-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Account Name</label>
-                    <input
-                      type="text"
-                      value={bankDetails.accountName}
-                      onChange={(e) => setBankDetails(prev => ({ ...prev, accountName: e.target.value }))}
-                      placeholder="e.g., Monday Night League"
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-lime-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Account Number</label>
-                    <input
-                      type="text"
-                      value={bankDetails.accountNumber}
-                      onChange={(e) => setBankDetails(prev => ({ ...prev, accountNumber: e.target.value }))}
-                      placeholder="e.g., 12-3456-7890123-00"
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-lime-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Reference Instructions</label>
-                    <input
-                      type="text"
-                      value={bankDetails.reference}
-                      onChange={(e) => setBankDetails(prev => ({ ...prev, reference: e.target.value }))}
-                      placeholder="e.g., Use your team name"
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-lime-500"
-                    />
-                  </div>
-                </div>
-
-                {/* Show bank details toggle */}
-                <label className="flex items-center gap-3 cursor-pointer pt-2">
-                  <input
-                    type="checkbox"
-                    checked={showBankDetails}
-                    onChange={(e) => setShowBankDetails(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-lime-500 focus:ring-lime-500 focus:ring-offset-gray-900"
-                  />
-                  <span className="text-sm text-gray-300">Show bank details to players in registration</span>
-                </label>
-              </div>
-            )}
-
-            {/* Validation warning */}
-            {!allowStripe && !allowBankTransfer && (
-              <div className="p-3 bg-yellow-900/30 border border-yellow-700/50 rounded-lg text-yellow-300 text-sm flex items-start gap-2">
-                <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <span>At least one payment method should be enabled for players to register.</span>
-              </div>
-            )}
-
-            {/* Save button */}
-            <div className="pt-2">
-              <button
-                onClick={handleSaveSettings}
-                disabled={savingSettings || !settingsChanged}
-                className="px-4 py-2 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                {savingSettings ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Saving...
-                  </>
-                ) : (
-                  'Save Changes'
-                )}
-              </button>
-              {!settingsChanged && !savingSettings && (
-                <span className="ml-3 text-sm text-gray-500">No changes to save</span>
-              )}
-            </div>
-          </div>
-        </div>
+        <PaymentMethodsPanel
+          acceptCardPayments={allowStripe}
+          setAcceptCardPayments={setAllowStripe}
+          acceptBankTransfer={allowBankTransfer}
+          setAcceptBankTransfer={setAllowBankTransfer}
+          bankDetails={bankDetails}
+          setBankDetails={setBankDetails}
+          showBankDetails={showBankDetails}
+          setShowBankDetails={setShowBankDetails}
+          onSave={handleSaveSettings}
+          saving={savingSettings}
+          hasChanges={settingsChanged}
+        />
       )}
 
       {/* Stripe Account Status - Show if card payments are enabled */}
@@ -673,61 +549,21 @@ export const LeagueFinanceTab: React.FC<LeagueFinanceTabProps> = ({
         </div>
       </div>
 
-      {/* Pending Payments (Action Required) */}
-      {pendingMembers.length > 0 && (
-        <div className="bg-gray-800 rounded-xl p-5 border border-yellow-500/30">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Pending Payments ({pendingMembers.length})
-          </h3>
-          <div className="space-y-2">
-            {pendingMembers.map(({ member, slot, displayName, amount, reference }) => {
-              const key = `${member.id}-${slot}`;
-              const isMarking = markingPaid === key;
-              return (
-                <div
-                  key={key}
-                  className="flex items-center justify-between bg-gray-700/50 rounded-lg p-3"
-                >
-                  <div>
-                    <div className="text-white font-medium">{displayName}</div>
-                    <div className="text-sm text-gray-400">
-                      {formatCents(amount)}
-                      {reference && (
-                        <span className="ml-2 text-gray-500">Ref: {reference}</span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleMarkAsPaid(member.id, slot, amount)}
-                    disabled={isMarking}
-                    className="px-4 py-2 bg-lime-600 hover:bg-lime-500 disabled:bg-gray-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-                  >
-                    {isMarking ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Marking...
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        Mark as Paid
-                      </>
-                    )}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* Pending Payments (Action Required) - Using shared component */}
+      <PendingPaymentsList
+        items={pendingMembers.map(({ member, slot, displayName, amount, reference }) => ({
+          id: `${member.id}-${slot}`,
+          displayName,
+          amount,
+          reference,
+        }))}
+        onMarkAsPaid={async (id, amount) => {
+          const [memberId, slot] = id.split('-') as [string, 'primary' | 'partner'];
+          await handleMarkAsPaid(memberId, slot, amount);
+        }}
+        markingPaidId={markingPaid}
+        formatCurrency={formatCents}
+      />
 
       {/* All Members Payment Status */}
       <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">

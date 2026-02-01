@@ -321,9 +321,10 @@ export const stripe_createAccountLinkV2 = functions.https.onCall(async (data, co
 
   try {
     // Build URLs - use provided or construct defaults
+    // Return to /clubs/:id with stripe param - ClubDetailPage handles switching to settings tab
     const baseUrl = functions.config().app?.url || 'https://pickleballdirector.co.nz';
-    const finalReturnUrl = returnUrl || `${baseUrl}/#/clubs/${clubId}/settings?stripe=success`;
-    const finalRefreshUrl = refreshUrl || `${baseUrl}/#/clubs/${clubId}/settings?stripe=refresh`;
+    const finalReturnUrl = returnUrl || `${baseUrl}/#/clubs/${clubId}?stripe=success`;
+    const finalRefreshUrl = refreshUrl || `${baseUrl}/#/clubs/${clubId}?stripe=refresh`;
 
     // Create standard account link for onboarding
     const accountLink = await stripe.accountLinks.create({
@@ -1415,7 +1416,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
           type: 'payment',
           status: 'processing', // NOT completed yet - wait for charge.succeeded
           referenceType: paymentType || 'unknown',
-          referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || '',
+          referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.standingMeetupId || '',
           referenceName: metadata.eventName || '',
           amount: session.amount_total || 0,
           currency: (session.currency || 'nzd').toUpperCase(),
@@ -1459,6 +1460,10 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
 
       case 'sms_bundle':
         await handleSMSBundlePayment(session, metadata);
+        break;
+
+      case 'standing_meetup_registration':
+        await handleStandingMeetupRegistrationPayment(session, metadata);
         break;
 
       default:
@@ -1646,7 +1651,7 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
         type: 'payment',
         status: 'completed', // Already completed since charge succeeded
         referenceType: metadata.type || 'unknown',
-        referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || '',
+        referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.standingMeetupId || '',
         referenceName: metadata.eventName || '',
         amount: charge.amount,
         currency: (charge.currency || 'nzd').toUpperCase(),
@@ -2299,6 +2304,301 @@ async function handleSMSBundlePayment(
     console.error('Error processing SMS bundle payment:', error);
     throw error;
   }
+}
+
+// ============================================
+// STANDING MEETUP REGISTRATION PAYMENT HANDLER (V07.57)
+// ============================================
+
+/**
+ * Handle standing meetup registration payment (Stripe checkout success)
+ *
+ * CRITICAL: For Stripe payments, the registration doc does NOT exist yet!
+ * We CREATE it here from the metadata, not update it.
+ *
+ * Hybrid Model:
+ * - season_pass: Add to ALL future sessions
+ * - pick_and_pay: Add to SELECTED sessions only
+ */
+async function handleStandingMeetupRegistrationPayment(
+  session: Stripe.Checkout.Session,
+  metadata: Record<string, string>
+) {
+  const {
+    standingMeetupId,
+    odUserId,
+    registrationType,
+    selectedSessionIds: selectedSessionIdsJson,
+    clubId,
+    userName,
+    userEmail,
+    amount,
+    sessionCount,
+    maxPlayers,
+  } = metadata;
+
+  // Validate required fields
+  if (!standingMeetupId || !odUserId) {
+    console.error('Standing meetup registration missing required metadata:', {
+      standingMeetupId,
+      odUserId,
+      registrationType,
+    });
+    return;
+  }
+
+  const db = admin.firestore();
+  const now = Date.now();
+
+  // Build deterministic registration ID
+  const registrationId = `${standingMeetupId}_${odUserId}`;
+
+  // Parse selectedSessionIds if present
+  const selectedSessionIds = selectedSessionIdsJson ? JSON.parse(selectedSessionIdsJson) : undefined;
+
+  try {
+    // Idempotency check: if registration already exists and is paid, skip
+    const regRef = db.collection('standingMeetupRegistrations').doc(registrationId);
+    const existingReg = await regRef.get();
+
+    if (existingReg.exists && existingReg.data()?.paymentStatus === 'paid') {
+      console.log(`Registration ${registrationId} already paid, skipping (idempotency)`);
+      return;
+    }
+
+    // Get meetup for title and maxPlayers validation
+    const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
+    const meetupSnap = await meetupRef.get();
+
+    if (!meetupSnap.exists) {
+      console.error(`Standing meetup not found: ${standingMeetupId}`);
+      return;
+    }
+
+    const meetup = meetupSnap.data()!;
+    const meetupMaxPlayers = parseInt(maxPlayers || '0') || meetup.maxPlayers || 20;
+
+    // CREATE registration doc (Stripe path - doc doesn't exist yet!)
+    const registration = {
+      id: registrationId,
+      standingMeetupId,
+      clubId: clubId || meetup.clubId,
+      odUserId,
+      userName: userName || 'Player',
+      userEmail: userEmail || '',
+      registrationType: registrationType || 'season_pass',
+      // Only include selectedSessionIds if defined (Firestore doesn't allow undefined)
+      ...(selectedSessionIds ? { selectedSessionIds } : {}),
+      sessionCount: parseInt(sessionCount || '0'),
+      paymentStatus: 'paid',
+      paymentMethod: 'stripe',
+      amount: parseInt(amount || '0'),
+      currency: (session.currency || 'nzd').toLowerCase(),
+      paidAt: now,
+      stripeCheckoutSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent as string,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    // Use transaction to create registration and increment subscriber count
+    await db.runTransaction(async (transaction) => {
+      transaction.set(regRef, registration);
+
+      transaction.update(meetupRef, {
+        subscriberCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: now,
+      });
+    });
+
+    console.log(`✅ Created registration ${registrationId} from Stripe webhook`);
+
+    // Add player to occurrences based on registration type
+    if (registrationType === 'pick_and_pay' && selectedSessionIds?.length > 0) {
+      // Pick-and-Pay: Add to selected sessions only
+      await addPlayerToSelectedOccurrences(
+        standingMeetupId,
+        odUserId,
+        userName || 'Player',
+        selectedSessionIds,
+        meetupMaxPlayers
+      );
+    } else {
+      // Season Pass: Add to all future sessions
+      await addPlayerToAllFutureOccurrences(
+        standingMeetupId,
+        odUserId,
+        userName || 'Player',
+        meetupMaxPlayers
+      );
+    }
+
+    console.log(`✅ Standing meetup registration confirmed: ${registrationId}, meetup=${meetup.title || standingMeetupId}, type=${registrationType}`);
+
+  } catch (error) {
+    console.error('Error processing standing meetup registration payment:', error);
+    throw error;
+  }
+}
+
+/**
+ * Add a registered player to all future occurrences of a standing meetup
+ */
+/**
+ * Add player to ALL future occurrences with available capacity (for Season Pass)
+ */
+async function addPlayerToAllFutureOccurrences(
+  standingMeetupId: string,
+  userId: string,
+  userName: string,
+  maxPlayers: number
+): Promise<{ addedTo: string[]; skippedFull: string[] }> {
+  const db = admin.firestore();
+  const now = Date.now();
+  const eightWeeksLater = now + 8 * 7 * 24 * 60 * 60 * 1000;
+
+  const occurrencesSnap = await db
+    .collection('standingMeetups')
+    .doc(standingMeetupId)
+    .collection('occurrences')
+    .where('startAt', '>=', now)
+    .where('startAt', '<', eightWeeksLater)
+    .where('status', '==', 'scheduled')
+    .get();
+
+  if (occurrencesSnap.empty) {
+    console.log(`No future occurrences found for meetup ${standingMeetupId}`);
+    return { addedTo: [], skippedFull: [] };
+  }
+
+  const addedTo: string[] = [];
+  const skippedFull: string[] = [];
+  const batch = db.batch();
+
+  for (const occDoc of occurrencesSnap.docs) {
+    const occData = occDoc.data();
+
+    // Check capacity
+    const spotsLeft = maxPlayers - (occData.expectedCount || 0);
+    if (spotsLeft <= 0) {
+      skippedFull.push(occDoc.id);
+      continue;
+    }
+
+    const participantRef = occDoc.ref.collection('participants').doc(userId);
+    const participantSnap = await participantRef.get();
+
+    if (!participantSnap.exists) {
+      batch.set(participantRef, {
+        userName,
+        status: 'expected',
+        creditIssued: false,
+        updatedAt: now,
+      });
+
+      batch.update(occDoc.ref, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: now,
+      });
+
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${standingMeetupId}_${occDoc.id}`);
+      batch.update(indexRef, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        spotsLeft: admin.firestore.FieldValue.increment(-1),
+        updatedAt: now,
+      });
+
+      addedTo.push(occDoc.id);
+    }
+  }
+
+  await batch.commit();
+  console.log(`Season Pass: Added ${userName} to ${addedTo.length} occurrences, skipped ${skippedFull.length} full`);
+
+  return { addedTo, skippedFull };
+}
+
+/**
+ * Add player to SELECTED occurrences only (for Pick-and-Pay)
+ */
+async function addPlayerToSelectedOccurrences(
+  standingMeetupId: string,
+  userId: string,
+  userName: string,
+  sessionIds: string[],
+  maxPlayers: number
+): Promise<{ addedTo: string[]; failedFull: string[] }> {
+  const db = admin.firestore();
+  const now = Date.now();
+
+  if (!sessionIds || sessionIds.length === 0) {
+    console.warn('addPlayerToSelectedOccurrences: No sessions selected');
+    return { addedTo: [], failedFull: [] };
+  }
+
+  const addedTo: string[] = [];
+  const failedFull: string[] = [];
+  const batch = db.batch();
+
+  for (const dateId of sessionIds) {
+    const occRef = db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(dateId);
+
+    const occSnap = await occRef.get();
+
+    if (!occSnap.exists) {
+      console.warn(`Occurrence ${dateId} not found, skipping`);
+      continue;
+    }
+
+    const occData = occSnap.data()!;
+
+    // Check capacity
+    const spotsLeft = maxPlayers - (occData.expectedCount || 0);
+    if (spotsLeft <= 0) {
+      failedFull.push(dateId);
+      continue;
+    }
+
+    const participantRef = occRef.collection('participants').doc(userId);
+    const participantSnap = await participantRef.get();
+
+    if (!participantSnap.exists) {
+      batch.set(participantRef, {
+        userName,
+        status: 'expected',
+        creditIssued: false,
+        updatedAt: now,
+      });
+
+      batch.update(occRef, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: now,
+      });
+
+      const indexRef = db
+        .collection('meetupOccurrencesIndex')
+        .doc(`${standingMeetupId}_${dateId}`);
+      batch.update(indexRef, {
+        expectedCount: admin.firestore.FieldValue.increment(1),
+        spotsLeft: admin.firestore.FieldValue.increment(-1),
+        updatedAt: now,
+      });
+
+      addedTo.push(dateId);
+    }
+  }
+
+  await batch.commit();
+  console.log(`Pick-and-Pay: Added ${userName} to ${addedTo.length} selected occurrences`);
+
+  return { addedTo, failedFull };
 }
 
 // ============================================
