@@ -6,6 +6,7 @@ import { ROUTES } from '../../router/routes';
 import type { UserRole } from '../../types';
 import { isFirebaseConfigured } from '../../services/firebase';
 import { PhoneInput } from '../shared/PhoneInput';
+import { ModalShell } from '../shared/ModalShell';
 
 interface LoginModalProps {
   onClose: () => void;
@@ -171,16 +172,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
   };
 
   return (
-    <div 
-      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center"
-      aria-modal="true"
-      role="dialog"
-      onClick={onClose}
-    >
-      <div 
-        className="bg-gray-800 rounded-lg shadow-xl p-8 w-full max-w-md m-4 relative border border-gray-700"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalShell isOpen={true} onClose={onClose}>
+        <div className="p-6 sm:p-8 relative">
         <button
           onClick={onClose}
           className="absolute top-3 right-3 text-gray-400 hover:text-white text-2xl"
@@ -379,8 +372,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onClose, onOpenConfig })
             {isLoginView ? 'Sign Up' : 'Login'}
           </button>
         </p>
-      </div>
-
-    </div>
+        </div>
+    </ModalShell>
   );
 };

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import type { SocialEvent } from '../../types';
 import { createSocialEvent } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import { ModalShell } from '../shared/ModalShell';
 
 interface CreateSocialPlayModalProps {
     onClose: () => void;
@@ -48,8 +49,7 @@ export const CreateSocialPlayModal: React.FC<CreateSocialPlayModalProps> = ({ on
     };
 
     return (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg border border-gray-700 flex flex-col max-h-[90vh]">
+        <ModalShell isOpen={true} onClose={onClose} maxWidth="max-w-lg" className="flex flex-col max-h-[90dvh]">
                 <div className="p-6 border-b border-gray-700 flex justify-between items-center">
                     <h2 className="text-xl font-bold text-white">Host Social Play</h2>
                     <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl">&times;</button>
@@ -135,7 +135,6 @@ export const CreateSocialPlayModal: React.FC<CreateSocialPlayModalProps> = ({ on
                         </button>
                     </div>
                 </form>
-            </div>
-        </div>
+        </ModalShell>
     );
 };

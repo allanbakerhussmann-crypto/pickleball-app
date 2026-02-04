@@ -38,8 +38,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.league_join = exports.dupr_updateMySubscriptions = exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_testConnection = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.stripe_seedSMSBundles = exports.stripe_purchaseSMSBundle = exports.stripe_createRefund = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_v2_webhook = exports.stripe_createUserAccountLinkV2 = exports.stripe_createUserAccountV2 = exports.stripe_getAccountStatusV2 = exports.stripe_createAccountLinkV2 = exports.stripe_createAccountV2 = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
-exports.platform_exportTransactions = exports.platform_addMissingTransaction = exports.platform_runReconciliation = exports.platform_getAccountPayouts = exports.platform_getAccountBalances = exports.receipt_resend = exports.comms_processLeagueQueue = exports.comms_processQueue = void 0;
+exports.league_join = exports.dupr_updateMySubscriptions = exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_testConnection = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.standingMeetup_createQuickRegisterCheckoutSession = exports.standingMeetup_createGuestCheckoutSession = exports.stripe_cancelStandingMeetupSubscription = exports.stripe_createStandingMeetupSubscription = exports.stripe_seedSMSBundles = exports.stripe_purchaseSMSBundle = exports.stripe_createRefund = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_v2_webhook = exports.stripe_createUserAccountLinkV2 = exports.stripe_createUserAccountV2 = exports.stripe_getAccountStatusV2 = exports.stripe_createAccountLinkV2 = exports.stripe_createAccountV2 = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
+exports.seed_clearTestData = exports.seed_testData = exports.guest_unsubscribe = exports.guest_onGuestCreated = exports.standingMeetup_unregister = exports.standingMeetup_cancelUnpaidBankRegistration = exports.standingMeetup_confirmBankPayment = exports.standingMeetup_register = exports.standingMeetup_checkInPlayer = exports.standingMeetup_closeSession = exports.standingMeetup_addCashGuest = exports.standingMeetup_checkInSelf = exports.onOccurrenceDeleted = exports.standingMeetup_markNoShow = exports.standingMeetup_manualCheckIn = exports.standingMeetup_cancelOccurrence = exports.standingMeetup_cancelAttendance = exports.standingMeetup_generateCheckInToken = exports.standingMeetup_checkIn = exports.standingMeetup_ensureOccurrences = exports.user_deleteAccount = exports.platform_exportTransactions = exports.platform_addMissingTransaction = exports.platform_runReconciliation = exports.platform_getAccountPayouts = exports.platform_getAccountBalances = exports.receipt_resend = exports.comms_processLeagueQueue = exports.comms_processQueue = exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.league_markMemberAsPaid = void 0;
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -70,6 +70,13 @@ Object.defineProperty(exports, "stripe_createRefund", { enumerable: true, get: f
 // SMS Bundles
 Object.defineProperty(exports, "stripe_purchaseSMSBundle", { enumerable: true, get: function () { return stripe_1.stripe_purchaseSMSBundle; } });
 Object.defineProperty(exports, "stripe_seedSMSBundles", { enumerable: true, get: function () { return stripe_1.stripe_seedSMSBundles; } });
+// Standing Meetup Subscriptions (V07.53)
+Object.defineProperty(exports, "stripe_createStandingMeetupSubscription", { enumerable: true, get: function () { return stripe_1.stripe_createStandingMeetupSubscription; } });
+Object.defineProperty(exports, "stripe_cancelStandingMeetupSubscription", { enumerable: true, get: function () { return stripe_1.stripe_cancelStandingMeetupSubscription; } });
+// Standing Meetup Guest Checkout (V07.59)
+Object.defineProperty(exports, "standingMeetup_createGuestCheckoutSession", { enumerable: true, get: function () { return stripe_1.standingMeetup_createGuestCheckoutSession; } });
+// Standing Meetup Quick Register at door (V07.59)
+Object.defineProperty(exports, "standingMeetup_createQuickRegisterCheckoutSession", { enumerable: true, get: function () { return stripe_1.standingMeetup_createQuickRegisterCheckoutSession; } });
 // ============================================
 // ADMIN FUNCTIONS
 // ============================================
@@ -126,10 +133,11 @@ Object.defineProperty(exports, "dupr_onUserDuprLinked", { enumerable: true, get:
 // DUPR+ subscription (V07.50)
 Object.defineProperty(exports, "dupr_updateMySubscriptions", { enumerable: true, get: function () { return dupr_1.dupr_updateMySubscriptions; } });
 // ============================================
-// LEAGUE FUNCTIONS (V07.50)
+// LEAGUE FUNCTIONS (V07.53)
 // ============================================
 var leagues_1 = require("./leagues");
 Object.defineProperty(exports, "league_join", { enumerable: true, get: function () { return leagues_1.league_join; } });
+Object.defineProperty(exports, "league_markMemberAsPaid", { enumerable: true, get: function () { return leagues_1.league_markMemberAsPaid; } });
 // ============================================
 // MIGRATION FUNCTIONS (V07.04)
 // ============================================
@@ -162,4 +170,46 @@ Object.defineProperty(exports, "platform_getAccountPayouts", { enumerable: true,
 Object.defineProperty(exports, "platform_runReconciliation", { enumerable: true, get: function () { return platformFinance_1.platform_runReconciliation; } });
 Object.defineProperty(exports, "platform_addMissingTransaction", { enumerable: true, get: function () { return platformFinance_1.platform_addMissingTransaction; } });
 Object.defineProperty(exports, "platform_exportTransactions", { enumerable: true, get: function () { return platformFinance_1.platform_exportTransactions; } });
+// ============================================
+// USER ACCOUNT FUNCTIONS (V07.53)
+// ============================================
+var userAccount_1 = require("./userAccount");
+Object.defineProperty(exports, "user_deleteAccount", { enumerable: true, get: function () { return userAccount_1.user_deleteAccount; } });
+// ============================================
+// STANDING MEETUP FUNCTIONS (V07.58) - Hybrid Model
+// ============================================
+// Core functions (1st Gen - australia-southeast1)
+var standingMeetups_1 = require("./standingMeetups");
+Object.defineProperty(exports, "standingMeetup_ensureOccurrences", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_ensureOccurrences; } });
+Object.defineProperty(exports, "standingMeetup_checkIn", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_checkIn; } });
+Object.defineProperty(exports, "standingMeetup_generateCheckInToken", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_generateCheckInToken; } });
+Object.defineProperty(exports, "standingMeetup_cancelAttendance", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_cancelAttendance; } });
+Object.defineProperty(exports, "standingMeetup_cancelOccurrence", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_cancelOccurrence; } });
+Object.defineProperty(exports, "standingMeetup_manualCheckIn", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_manualCheckIn; } });
+Object.defineProperty(exports, "standingMeetup_markNoShow", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_markNoShow; } });
+Object.defineProperty(exports, "onOccurrenceDeleted", { enumerable: true, get: function () { return standingMeetups_1.onOccurrenceDeleted; } });
+// Check-in & Guest Management (V07.59)
+Object.defineProperty(exports, "standingMeetup_checkInSelf", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_checkInSelf; } });
+Object.defineProperty(exports, "standingMeetup_addCashGuest", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_addCashGuest; } });
+Object.defineProperty(exports, "standingMeetup_closeSession", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_closeSession; } });
+// QR Scanner Check-in (V07.60)
+Object.defineProperty(exports, "standingMeetup_checkInPlayer", { enumerable: true, get: function () { return standingMeetups_1.standingMeetup_checkInPlayer; } });
+// Registration functions (1st Gen - us-central1)
+var standingMeetupRegistration_1 = require("./standingMeetupRegistration");
+Object.defineProperty(exports, "standingMeetup_register", { enumerable: true, get: function () { return standingMeetupRegistration_1.standingMeetup_register; } });
+Object.defineProperty(exports, "standingMeetup_confirmBankPayment", { enumerable: true, get: function () { return standingMeetupRegistration_1.standingMeetup_confirmBankPayment; } });
+Object.defineProperty(exports, "standingMeetup_cancelUnpaidBankRegistration", { enumerable: true, get: function () { return standingMeetupRegistration_1.standingMeetup_cancelUnpaidBankRegistration; } });
+Object.defineProperty(exports, "standingMeetup_unregister", { enumerable: true, get: function () { return standingMeetupRegistration_1.standingMeetup_unregister; } });
+// ============================================
+// GUEST MARKETING FUNCTIONS (V07.61)
+// ============================================
+var guestMarketing_1 = require("./guestMarketing");
+Object.defineProperty(exports, "guest_onGuestCreated", { enumerable: true, get: function () { return guestMarketing_1.guest_onGuestCreated; } });
+Object.defineProperty(exports, "guest_unsubscribe", { enumerable: true, get: function () { return guestMarketing_1.guest_unsubscribe; } });
+// ============================================
+// TEST DATA SEEDING (V07.57) - TEST PROJECT ONLY
+// ============================================
+var seedTestData_1 = require("./seedTestData");
+Object.defineProperty(exports, "seed_testData", { enumerable: true, get: function () { return seedTestData_1.seed_testData; } });
+Object.defineProperty(exports, "seed_clearTestData", { enumerable: true, get: function () { return seedTestData_1.seed_clearTestData; } });
 //# sourceMappingURL=index.js.map

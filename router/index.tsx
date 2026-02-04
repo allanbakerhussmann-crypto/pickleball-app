@@ -57,6 +57,10 @@ import EventResultsPage from '../pages/EventResultsPage';
 // Team League Public View (V07.53)
 import { TeamLeaguePublicView } from '../components/teamLeague';
 
+// Check-In and Guest Pay Pages (V07.58)
+import CheckInPage from '../pages/CheckInPage';
+import GuestPayPage from '../pages/GuestPayPage';
+
 // Legal / Privacy Pages (V06.04)
 import PrivacyPolicyPage from '../pages/PrivacyPolicyPage';
 import TermsOfServicePage from '../pages/TermsOfServicePage';
@@ -180,6 +184,26 @@ export const router = createHashRouter([
       {
         path: 'weekly-meetup/:id',
         element: <StandingMeetupPage />,
+      },
+
+      // ==========================================
+      // MEETUP CHECK-IN & GUEST PAY (V07.58)
+      // ==========================================
+
+      // Player self-check-in (scans session QR, must be logged in + registered)
+      {
+        path: 'checkin/:standingMeetupId/:occurrenceId',
+        element: (
+          <ProtectedRoute>
+            <CheckInPage />
+          </ProtectedRoute>
+        ),
+      },
+
+      // Guest card payment (public - no login required, creates guest record)
+      {
+        path: 'guest-pay/:standingMeetupId/:occurrenceId',
+        element: <GuestPayPage />,
       },
 
       // ==========================================

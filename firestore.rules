@@ -1059,20 +1059,20 @@ service cloud.firestore {
 
     // Standing Meetups - organizers/admins/owners can write, anyone can read public
     match /standingMeetups/{standingMeetupId} {
-      allow read: if resource.data.visibility == 'public' ||
-                     isClubMember(resource.data.clubId) ||
-                     isClubOwnerOrAdmin(resource.data.clubId) ||
-                     isAppAdmin();
+      // Allow read for any authenticated user
+      // Security is via write rules (only admins can modify) and payment (must pay to participate)
+      // V07.59: Allow all authenticated users to read for check-in QR flow
+      allow read: if isAuthenticated() ||
+                     resource.data.visibility == 'public';
       allow create: if isClubOwnerOrAdmin(request.resource.data.clubId) || isAppAdmin();
       allow update: if isClubOwnerOrAdmin(resource.data.clubId) || isAppAdmin();
       allow delete: if isClubOwnerOrAdmin(resource.data.clubId) || isAppAdmin();
 
       // Occurrences - Cloud Functions write only
       match /occurrences/{dateId} {
-        allow read: if get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.visibility == 'public' ||
-                       isClubMember(get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.clubId) ||
-                       isClubAdmin(get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.clubId) ||
-                       isAppAdmin();
+        // V07.59: Allow all authenticated users to read for check-in QR flow
+        allow read: if isAuthenticated() ||
+                       get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.visibility == 'public';
         allow write: if false; // Cloud Functions only
 
         // Participants - authenticated users can read (social feature: see who's coming)
@@ -1081,7 +1081,29 @@ service cloud.firestore {
           allow read: if isAuthenticated();
           allow write: if false; // Cloud Functions only
         }
+
+        // Guests - walk-ins added at door (cash or card payment)
+        // V07.59: Club admins/organizers can read guests for attendance tracking
+        match /guests/{guestId} {
+          allow read: if isAuthenticated() && (
+            isClubOwnerOrAdmin(get(/databases/$(database)/documents/standingMeetups/$(standingMeetupId)).data.clubId) ||
+            isAppAdmin()
+          );
+          allow write: if false; // Cloud Functions only
+        }
       }
+    }
+
+    // ============================================
+    // V07.61: GUEST PROFILES (Marketing)
+    // ============================================
+
+    // Guest Profiles - Written by Cloud Functions only, readable by authenticated users
+    // Document ID is the guest's email address (hashed or normalized)
+    // Phase 1: Any authenticated user can read; will tighten to organizer-only later
+    match /guestProfiles/{email} {
+      allow read: if request.auth != null;
+      allow write: if false; // Cloud Functions only (uses admin SDK)
     }
 
     // Meetup Occurrence Index - read-only for clients, Cloud Functions write

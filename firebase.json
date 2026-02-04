@@ -49,6 +49,10 @@
         "function": "stripe_v2_webhook"
       },
       {
+        "source": "/api/guest/unsubscribe",
+        "function": "guest_unsubscribe"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

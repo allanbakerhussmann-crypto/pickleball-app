@@ -6,9 +6,10 @@
  *
  * Functions:
  * - league_join: Join a league with server-side DUPR+ gate enforcement
+ * - league_markMemberAsPaid: Mark a league member's payment as paid (organizer only)
  *
  * FILE LOCATION: functions/src/leagues.ts
- * VERSION: V07.50
+ * VERSION: V07.53
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -44,7 +45,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.league_join = void 0;
+exports.league_markMemberAsPaid = exports.league_join = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const logger = functions.logger;
@@ -167,5 +168,96 @@ exports.league_join = functions.https.onCall(async (data, context) => {
         return { memberId: memberRef.id };
     });
     return { success: true, memberId: result.memberId };
+});
+// ============================================
+// Callable Function: Mark Member as Paid
+// ============================================
+/**
+ * Mark a league member's payment as paid (manual/bank transfer)
+ *
+ * Server-authoritative - only organizers can mark payments as paid.
+ * This prevents players from marking their own payments.
+ *
+ * @param leagueId - The league ID
+ * @param memberId - The member document ID
+ * @param slot - 'primary' (default) or 'partner' for per-player doubles
+ * @param amount - The entry fee amount in cents
+ */
+exports.league_markMemberAsPaid = functions.https.onCall(async (data, context) => {
+    // Verify authentication
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const { leagueId, memberId, amount } = data;
+    const slot = data.slot || 'primary'; // Default to 'primary'
+    const organizerId = context.auth.uid;
+    logger.info('[League Mark Paid] Called', { leagueId, memberId, slot, amount, organizerId });
+    // Validate input
+    if (!leagueId) {
+        throw new functions.https.HttpsError('invalid-argument', 'leagueId is required');
+    }
+    if (!memberId) {
+        throw new functions.https.HttpsError('invalid-argument', 'memberId is required');
+    }
+    if (typeof amount !== 'number' || amount < 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'amount must be a non-negative number');
+    }
+    // Verify caller is league organizer
+    const leagueDoc = await db.collection('leagues').doc(leagueId).get();
+    if (!leagueDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'League not found');
+    }
+    const league = leagueDoc.data();
+    // Check if user is authorized to mark payments
+    // TODO: Support league admins/delegates when that feature exists
+    // For now, only the creator can mark payments
+    const isOrganizer = league.createdByUserId === organizerId;
+    // Future: || league.admins?.includes(organizerId) || league.delegates?.includes(organizerId)
+    if (!isOrganizer) {
+        throw new functions.https.HttpsError('permission-denied', 'Only league organizers can mark payments as paid');
+    }
+    // Verify member exists
+    const memberRef = db.collection('leagues').doc(leagueId).collection('members').doc(memberId);
+    const memberDoc = await memberRef.get();
+    if (!memberDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Member not found');
+    }
+    const now = Date.now();
+    // Update the correct payment slot
+    if (slot === 'partner') {
+        // Partner payment - only nested (no flat equivalent for partner)
+        await memberRef.update({
+            'partnerPayment.status': 'paid',
+            'partnerPayment.method': 'bank_transfer',
+            'partnerPayment.amountPaid': amount,
+            'partnerPayment.paidAt': now,
+            'partnerPayment.paidMarkedBy': organizerId,
+            updatedAt: now,
+        });
+    }
+    else {
+        // Primary payment - write BOTH nested AND flat for backwards compat
+        await memberRef.update({
+            // Nested format (new)
+            'payment.status': 'paid',
+            'payment.method': 'bank_transfer',
+            'payment.amountPaid': amount,
+            'payment.paidAt': now,
+            'payment.paidMarkedBy': organizerId,
+            // Flat format (backwards compat)
+            paymentStatus: 'paid',
+            amountPaid: amount,
+            paidAt: now,
+            updatedAt: now,
+        });
+    }
+    logger.info('[League Mark Paid] Success', {
+        leagueId,
+        memberId,
+        slot,
+        amount,
+        markedBy: organizerId,
+    });
+    return { success: true };
 });
 //# sourceMappingURL=leagues.js.map

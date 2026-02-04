@@ -17,6 +17,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
 import { sendReceiptEmail, sendRefundReceiptEmail } from './receiptEmail';
+import { sendEmail } from './comms';
 
 // Initialize Firebase Admin if not already
 if (!admin.apps.length) {
@@ -1375,6 +1376,41 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
   const odUserId = metadata.odUserId;
   const clubId = metadata.clubId;
 
+  // Guest payments don't have odUserId - they're unauthenticated
+  // Handle them separately to avoid early return
+  if (paymentType === 'guest_session_payment') {
+    console.log(`Processing guest_session_payment for session ${session.id}`);
+    if (session.payment_status !== 'paid') {
+      console.log(`Guest session ${session.id} completed but not paid (status: ${session.payment_status}), skipping`);
+      return;
+    }
+    try {
+      await handleGuestSessionPayment(session, metadata);
+    } catch (error) {
+      console.error('Error handling guest session payment:', error);
+      throw error; // Re-throw to mark event as failed for retry
+    }
+    return;
+  }
+
+  // Member quick registration at the door (Phase 7)
+  // Member scans check-in QR but isn't registered -> pays to register + auto check-in
+  if (paymentType === 'member_session_registration') {
+    console.log(`Processing member_session_registration for session ${session.id}, user ${metadata.odUserId}`);
+    if (session.payment_status !== 'paid') {
+      console.log(`Member registration session ${session.id} completed but not paid (status: ${session.payment_status}), skipping`);
+      return;
+    }
+    try {
+      await handleMemberSessionRegistration(session, metadata);
+    } catch (error) {
+      console.error('Error handling member session registration:', error);
+      throw error; // Re-throw to mark event as failed for retry
+    }
+    return;
+  }
+
+  // For all other payment types, odUserId is required
   if (!odUserId) {
     console.error('Missing odUserId in session metadata');
     return;
@@ -1465,6 +1501,8 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
       case 'standing_meetup_registration':
         await handleStandingMeetupRegistrationPayment(session, metadata);
         break;
+
+      // Note: guest_session_payment is handled before this switch (no odUserId required)
 
       default:
         // Legacy: court booking without type
@@ -2602,6 +2640,345 @@ async function addPlayerToSelectedOccurrences(
 }
 
 // ============================================
+// GUEST SESSION PAYMENT HANDLER
+// ============================================
+
+/**
+ * Handle guest_session_payment checkout completion
+ * Creates OccurrenceGuest document and updates occurrence counters
+ */
+async function handleGuestSessionPayment(
+  session: Stripe.Checkout.Session,
+  metadata: Record<string, string>
+) {
+  const { standingMeetupId, occurrenceId, guestName, guestEmail } = metadata;
+
+  // Validate required fields
+  if (!standingMeetupId || !occurrenceId || !guestName || !guestEmail) {
+    console.error('Guest session payment missing required metadata:', {
+      standingMeetupId,
+      occurrenceId,
+      guestName,
+      guestEmail,
+    });
+    return;
+  }
+
+  const db = admin.firestore();
+  const now = Date.now();
+
+  try {
+    // Get references
+    const occurrenceRef = db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(occurrenceId);
+
+    // Check if occurrence exists
+    const occurrenceSnap = await occurrenceRef.get();
+    if (!occurrenceSnap.exists) {
+      console.error(`Guest payment: Occurrence ${occurrenceId} not found for meetup ${standingMeetupId}`);
+      // Don't throw - webhook should succeed to avoid retries for data that won't exist
+      return;
+    }
+
+    // Idempotency check: Look for existing guest with same checkout session
+    const existingGuestSnap = await occurrenceRef
+      .collection('guests')
+      .where('stripeCheckoutSessionId', '==', session.id)
+      .limit(1)
+      .get();
+
+    if (!existingGuestSnap.empty) {
+      console.log(`Guest already exists for session ${session.id}, skipping (idempotency)`);
+      return;
+    }
+
+    // Use a transaction to atomically create guest and update occurrence counters
+    await db.runTransaction(async (transaction) => {
+      // Re-read occurrence in transaction
+      const occDoc = await transaction.get(occurrenceRef);
+      if (!occDoc.exists) {
+        throw new Error('Occurrence not found in transaction');
+      }
+
+      // Create the guest document
+      const guestRef = occurrenceRef.collection('guests').doc();
+      const guestData = {
+        id: guestRef.id,
+        name: guestName,
+        email: guestEmail,
+        amount: session.amount_total || 0,
+        paymentMethod: 'stripe',
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId: session.payment_intent as string || null,
+        createdAt: now,
+        createdBy: 'stripe_webhook',
+      };
+
+      transaction.set(guestRef, guestData);
+
+      // Atomically increment guestCount and guestRevenue on the occurrence
+      // FieldValue.increment handles the case where fields don't exist (treats as 0)
+      transaction.update(occurrenceRef, {
+        guestCount: admin.firestore.FieldValue.increment(1),
+        guestRevenue: admin.firestore.FieldValue.increment(session.amount_total || 0),
+        updatedAt: now,
+      });
+    });
+
+    console.log(`✅ Guest payment processed: ${guestName} (${guestEmail}) for occurrence ${occurrenceId}`);
+
+    // Send receipt email to guest (best-effort, never breaks webhook)
+    try {
+      // Fetch meetup title for the email
+      const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+      const meetupTitle = meetupDoc.exists ? (meetupDoc.data()?.title || 'Pickleball Session') : 'Pickleball Session';
+      const amountCents = session.amount_total || 0;
+      const amountFormatted = `$${(amountCents / 100).toFixed(2)}`;
+      const currency = (session.currency || 'nzd').toUpperCase();
+
+      const subject = `Payment Receipt - ${meetupTitle}`;
+      const textBody = [
+        `Hi ${guestName},`,
+        '',
+        `Thank you for your payment!`,
+        '',
+        `Event: ${meetupTitle}`,
+        `Session: ${occurrenceId}`,
+        `Amount: ${amountFormatted} ${currency}`,
+        `Payment method: Card`,
+        '',
+        `Want to track your sessions and get notified about upcoming events?`,
+        `Create your free account: https://pickleballdirector.co.nz`,
+        '',
+        `Thanks for playing!`,
+        `Pickleball Director`,
+      ].join('\n');
+
+      const htmlBody = `
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head>
+<body style="margin:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:24px;">
+    <div style="background:#030712;color:#fff;border-radius:14px;padding:24px;">
+      <div style="font-size:20px;font-weight:700;">Pickleball Director</div>
+      <div style="margin-top:6px;color:#84cc16;font-size:14px;">Payment Receipt</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;margin-top:14px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,0.05);">
+      <div style="font-size:16px;color:#111;">Hi ${guestName},</div>
+      <div style="margin-top:12px;color:#374151;">Thank you for your payment!</div>
+      <div style="margin-top:18px;padding:16px;background:#f9fafb;border-radius:10px;">
+        <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Event</div>
+        <div style="font-size:16px;font-weight:600;margin-top:4px;">${meetupTitle}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Session</div>
+        <div style="font-size:14px;font-weight:500;margin-top:4px;">${occurrenceId}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Amount Paid</div>
+        <div style="font-size:20px;font-weight:700;color:#84cc16;margin-top:4px;">${amountFormatted} ${currency}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Payment Method</div>
+        <div style="font-size:14px;margin-top:4px;">Card</div>
+      </div>
+      <div style="margin-top:24px;padding:16px;background:#030712;border-radius:10px;text-align:center;">
+        <div style="color:#d1d5db;font-size:14px;">Want to track your sessions?</div>
+        <a href="https://pickleballdirector.co.nz" style="display:inline-block;margin-top:10px;padding:10px 24px;background:#84cc16;color:#030712;font-weight:700;text-decoration:none;border-radius:8px;font-size:14px;">Create Free Account</a>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:16px;color:#9ca3af;font-size:12px;">
+      Pickleball Director &mdash; pickleballdirector.co.nz
+    </div>
+  </div>
+</body>
+</html>`;
+
+      const emailResult = await sendEmail(guestEmail, subject, textBody, htmlBody);
+      if (emailResult.success) {
+        console.log(`Receipt email sent to guest ${guestEmail} for session ${session.id}`);
+      } else {
+        console.warn(`Receipt email failed for guest ${guestEmail}: ${emailResult.error}`);
+      }
+    } catch (emailError) {
+      // Never let email failure break the webhook
+      console.warn('Guest receipt email failed (non-fatal):', emailError);
+    }
+  } catch (error) {
+    console.error('Error handling guest session payment:', error);
+    throw error; // Re-throw to mark webhook as failed for retry
+  }
+}
+
+// ============================================
+// MEMBER SESSION REGISTRATION HANDLER (Phase 7)
+// ============================================
+
+/**
+ * Handle member_session_registration checkout completion
+ * Creates OccurrenceParticipant document with checked_in status
+ * This is for when a logged-in member scans check-in QR but wasn't registered
+ */
+async function handleMemberSessionRegistration(
+  session: Stripe.Checkout.Session,
+  metadata: Record<string, string>
+) {
+  const { standingMeetupId, occurrenceId, odUserId, memberName, memberEmail } = metadata;
+
+  // Validate required fields
+  if (!standingMeetupId || !occurrenceId || !odUserId) {
+    console.error('Member session registration missing required metadata:', {
+      standingMeetupId,
+      occurrenceId,
+      odUserId,
+    });
+    return;
+  }
+
+  const db = admin.firestore();
+  const now = Date.now();
+
+  try {
+    // Get references
+    const occurrenceRef = db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(occurrenceId);
+
+    const participantRef = occurrenceRef.collection('participants').doc(odUserId);
+
+    // Check if occurrence exists
+    const occurrenceSnap = await occurrenceRef.get();
+    if (!occurrenceSnap.exists) {
+      console.error(`Member registration: Occurrence ${occurrenceId} not found for meetup ${standingMeetupId}`);
+      return;
+    }
+
+    // Idempotency check: If participant already exists, skip
+    const existingParticipantSnap = await participantRef.get();
+    if (existingParticipantSnap.exists) {
+      console.log(`Participant ${odUserId} already exists for occurrence ${occurrenceId}, skipping (idempotency)`);
+      return;
+    }
+
+    // Use a transaction to atomically create participant and update counters
+    await db.runTransaction(async (transaction) => {
+      // Re-read occurrence in transaction
+      const occDoc = await transaction.get(occurrenceRef);
+      if (!occDoc.exists) {
+        throw new Error('Occurrence not found in transaction');
+      }
+
+      // Create the participant document with checked_in status
+      // The participant is paying at the door, so they're physically present
+      const participantData = {
+        odUserId,
+        userName: memberName || 'Member',  // Must be userName to match UI expectations
+        email: memberEmail || null,
+        status: 'checked_in', // Auto-checked in since they're at the door paying
+        checkedInAt: now,
+        checkedInBy: 'stripe_webhook', // Auto check-in on payment
+        registeredAt: now,
+        paymentMethod: 'stripe',
+        paymentStatus: 'paid',
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId: session.payment_intent as string || null,
+        amountPaid: session.amount_total || 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      transaction.set(participantRef, participantData);
+
+      // Atomically increment both expected count AND checked-in count
+      // Since they're registering AND checking in at the same time
+      // We only increment checkedInCount (not expectedCount) because:
+      // - expectedCount is for "waiting to arrive"
+      // - checkedInCount is for "physically arrived"
+      // They go straight to checkedInCount since they're already at the door
+      transaction.update(occurrenceRef, {
+        checkedInCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: now,
+      });
+    });
+
+    console.log(`✅ Member registration + check-in processed: ${memberName || odUserId} for occurrence ${occurrenceId}`);
+
+    // Send confirmation email to member (best-effort, never breaks webhook)
+    if (memberEmail) {
+      try {
+        // Fetch meetup title for the email
+        const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+        const meetupTitle = meetupDoc.exists ? (meetupDoc.data()?.title || 'Pickleball Session') : 'Pickleball Session';
+        const amountCents = session.amount_total || 0;
+        const amountFormatted = `$${(amountCents / 100).toFixed(2)}`;
+        const currency = (session.currency || 'nzd').toUpperCase();
+        const displayName = memberName || 'there';
+
+        const subject = `Registered & Checked In - ${meetupTitle}`;
+        const textBody = [
+          `Hi ${displayName},`,
+          '',
+          `You're registered and checked in!`,
+          '',
+          `Event: ${meetupTitle}`,
+          `Session: ${occurrenceId}`,
+          `Amount: ${amountFormatted} ${currency}`,
+          `Status: Checked In`,
+          '',
+          `Have a great session!`,
+          `Pickleball Director`,
+        ].join('\n');
+
+        const htmlBody = `
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head>
+<body style="margin:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:24px;">
+    <div style="background:#030712;color:#fff;border-radius:14px;padding:24px;">
+      <div style="font-size:20px;font-weight:700;">Pickleball Director</div>
+      <div style="margin-top:6px;color:#84cc16;font-size:14px;">Registration Confirmation</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;margin-top:14px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,0.05);">
+      <div style="font-size:16px;color:#111;">Hi ${displayName},</div>
+      <div style="margin-top:12px;color:#374151;">You're registered and checked in!</div>
+      <div style="margin-top:18px;padding:16px;background:#f9fafb;border-radius:10px;">
+        <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Event</div>
+        <div style="font-size:16px;font-weight:600;margin-top:4px;">${meetupTitle}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Session</div>
+        <div style="font-size:14px;font-weight:500;margin-top:4px;">${occurrenceId}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Amount Paid</div>
+        <div style="font-size:20px;font-weight:700;color:#84cc16;margin-top:4px;">${amountFormatted} ${currency}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Status</div>
+        <div style="display:inline-block;margin-top:4px;padding:4px 12px;background:#dcfce7;color:#166534;font-weight:600;border-radius:20px;font-size:13px;">Checked In</div>
+      </div>
+      <div style="margin-top:18px;color:#6b7280;font-size:13px;">Have a great session!</div>
+    </div>
+    <div style="text-align:center;margin-top:16px;color:#9ca3af;font-size:12px;">
+      Pickleball Director &mdash; pickleballdirector.co.nz
+    </div>
+  </div>
+</body>
+</html>`;
+
+        const emailResult = await sendEmail(memberEmail, subject, textBody, htmlBody);
+        if (emailResult.success) {
+          console.log(`Confirmation email sent to member ${memberEmail} for session ${session.id}`);
+        } else {
+          console.warn(`Confirmation email failed for member ${memberEmail}: ${emailResult.error}`);
+        }
+      } catch (emailError) {
+        // Never let email failure break the webhook
+        console.warn('Member confirmation email failed (non-fatal):', emailError);
+      }
+    }
+  } catch (error) {
+    console.error('Error handling member session registration:', error);
+    throw error; // Re-throw to mark webhook as failed for retry
+  }
+}
+
+// ============================================
 // ACCOUNT UPDATED HANDLER (Connect Onboarding)
 // ============================================
 
@@ -3037,6 +3414,418 @@ async function handleDisputeClosed(dispute: Stripe.Dispute, event: Stripe.Event)
 
   console.log(`✅ Dispute ${dispute.id} closed with status: ${dispute.status} (${won ? 'WON' : lost ? 'LOST' : 'OTHER'})`);
 }
+
+// ============================================
+// STANDING MEETUP GUEST CHECKOUT
+// ============================================
+
+// Fee constants for guest checkout calculations
+// NZ Stripe standard rate: 2.9% + $0.30
+// Note: Link/international cards may be higher, but this covers most domestic cards
+const GUEST_STRIPE_FEE_PERCENT = 0.029;
+const GUEST_STRIPE_FIXED_FEE_CENTS = 30;
+const GUEST_PLATFORM_FEE_PERCENT = 0.015; // 1.5% platform fee
+
+/**
+ * Create a Checkout Session for a guest (walk-in) at a standing meetup.
+ * The guest pays by card and the payment goes to the organizer's connected account.
+ *
+ * This function does NOT require authentication - guests don't have accounts.
+ * Security is provided by:
+ * - The meetup must be active
+ * - The occurrence must exist and not be closed
+ * - Card payments must be enabled for the meetup
+ *
+ * @region australia-southeast1
+ */
+export const standingMeetup_createGuestCheckoutSession = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: {
+    standingMeetupId: string;
+    occurrenceId: string;
+    name: string;
+    email: string;
+    returnUrl: string;
+  }) => {
+    const { standingMeetupId, occurrenceId, name, email, returnUrl } = data;
+
+    // Input validation
+    if (!standingMeetupId) {
+      throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId is required');
+    }
+    if (!occurrenceId) {
+      throw new functions.https.HttpsError('invalid-argument', 'occurrenceId is required');
+    }
+    if (!name || name.trim().length === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'Guest name is required');
+    }
+    if (!email || !email.includes('@')) {
+      throw new functions.https.HttpsError('invalid-argument', 'Valid email is required');
+    }
+    if (!returnUrl) {
+      throw new functions.https.HttpsError('invalid-argument', 'returnUrl is required');
+    }
+
+    const db = admin.firestore();
+
+    // Get the standing meetup
+    const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+    if (!meetupDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
+    }
+
+    const meetup = meetupDoc.data() as {
+      id: string;
+      title: string;
+      clubName: string;
+      clubId: string;
+      createdByUserId: string;
+      organizerStripeAccountId: string;
+      status: string;
+      billing: {
+        perSessionAmount?: number;
+        amount: number;
+        currency: 'nzd' | 'aud' | 'usd';
+        feesPaidBy: 'organizer' | 'player';
+      };
+      paymentMethods?: {
+        acceptCardPayments: boolean;
+      };
+    };
+
+    // Verify meetup is active
+    if (meetup.status !== 'active') {
+      throw new functions.https.HttpsError('failed-precondition', 'Meetup is not active');
+    }
+
+    // Verify card payments are enabled
+    if (!meetup.paymentMethods?.acceptCardPayments) {
+      throw new functions.https.HttpsError('failed-precondition', 'Card payments are not enabled for this meetup');
+    }
+
+    // Verify organizer has Stripe connected
+    if (!meetup.organizerStripeAccountId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Organizer has not connected Stripe');
+    }
+
+    // Get the occurrence to verify it exists and is not closed
+    const occurrenceDoc = await db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(occurrenceId)
+      .get();
+
+    if (!occurrenceDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Occurrence not found');
+    }
+
+    const occurrence = occurrenceDoc.data() as {
+      status: string;
+      closedAt?: number;
+    };
+
+    // Check occurrence is not cancelled or closed
+    if (occurrence.status === 'cancelled') {
+      throw new functions.https.HttpsError('failed-precondition', 'This session has been cancelled');
+    }
+    if (occurrence.closedAt) {
+      throw new functions.https.HttpsError('failed-precondition', 'This session has been closed');
+    }
+
+    // Get the per-session amount
+    const baseAmount = meetup.billing.perSessionAmount || meetup.billing.amount;
+    if (!baseAmount || baseAmount <= 0) {
+      throw new functions.https.HttpsError('failed-precondition', 'Invalid session price');
+    }
+
+    // Calculate the amount to charge (gross up if player pays fees)
+    let chargedAmount = baseAmount;
+    if (meetup.billing.feesPaidBy === 'player') {
+      // Gross up: amount / (1 - stripe_fee - platform_fee)
+      const divisor = 1 - GUEST_STRIPE_FEE_PERCENT - GUEST_PLATFORM_FEE_PERCENT;
+      chargedAmount = Math.ceil((baseAmount + GUEST_STRIPE_FIXED_FEE_CENTS) / divisor);
+    }
+
+    // Calculate platform fee (1.5% of charged amount)
+    const platformFee = Math.round(chargedAmount * GUEST_PLATFORM_FEE_PERCENT);
+
+    // Build success and cancel URLs
+    const successUrl = `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}success=true`;
+    const cancelUrl = returnUrl;
+
+    // Create Stripe Checkout Session
+    const sessionMetadata = {
+      type: 'guest_session_payment',
+      standingMeetupId,
+      occurrenceId,
+      guestName: name.trim(),
+      guestEmail: email.trim().toLowerCase(),
+      clubId: meetup.clubId || '',
+      organizerUserId: meetup.createdByUserId || '',
+      payerName: name.trim(),
+      payerEmail: email.trim().toLowerCase(),
+      eventName: meetup.title || '',
+    };
+
+    try {
+      const session = await stripe.checkout.sessions.create(
+        {
+          mode: 'payment',
+          customer_email: email.trim().toLowerCase(),
+          line_items: [
+            {
+              price_data: {
+                currency: meetup.billing.currency,
+                product_data: {
+                  name: meetup.title,
+                  description: `Guest session - ${meetup.clubName}`,
+                },
+                unit_amount: chargedAmount,
+              },
+              quantity: 1,
+            },
+          ],
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+          metadata: sessionMetadata,
+          payment_intent_data: {
+            application_fee_amount: platformFee,
+            metadata: sessionMetadata,
+          },
+        },
+        {
+          stripeAccount: meetup.organizerStripeAccountId,
+        }
+      );
+
+      console.log(`✅ Created guest checkout session ${session.id} for ${name} at ${meetup.title}`);
+
+      return {
+        checkoutUrl: session.url,
+        checkoutSessionId: session.id,
+      };
+    } catch (error: any) {
+      console.error('Failed to create guest checkout session:', error);
+      throw new functions.https.HttpsError('internal', error.message || 'Failed to create checkout session');
+    }
+  });
+
+// ============================================
+// STANDING MEETUP QUICK REGISTER (Member at door)
+// ============================================
+
+/**
+ * Create a Checkout Session for a member to register and pay for a session at the door.
+ * This is for the scenario where a logged-in member scans the check-in QR but hasn't
+ * registered for the session. They can pay and register in one step.
+ *
+ * Key differences from guest checkout:
+ * - Requires authentication (member must be logged in)
+ * - Uses member's profile data (name, email)
+ * - Creates OccurrenceParticipant (not OccurrenceGuest)
+ * - Auto-checks-in on payment success (they're physically at the door)
+ *
+ * @region australia-southeast1
+ */
+export const standingMeetup_createQuickRegisterCheckoutSession = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: {
+    standingMeetupId: string;
+    occurrenceId: string;
+    successUrl: string;
+    cancelUrl: string;
+  }, context) => {
+    // Require authentication - this is for members only
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in to register');
+    }
+
+    const userId = context.auth.uid;
+    const { standingMeetupId, occurrenceId, successUrl, cancelUrl } = data;
+
+    // Input validation
+    if (!standingMeetupId) {
+      throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId is required');
+    }
+    if (!occurrenceId) {
+      throw new functions.https.HttpsError('invalid-argument', 'occurrenceId is required');
+    }
+    if (!successUrl || !cancelUrl) {
+      throw new functions.https.HttpsError('invalid-argument', 'successUrl and cancelUrl are required');
+    }
+
+    const db = admin.firestore();
+
+    // Get user profile
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'User profile not found');
+    }
+
+    const userProfile = userDoc.data() as {
+      displayName: string;
+      email: string;
+    };
+
+    if (!userProfile.email) {
+      throw new functions.https.HttpsError('failed-precondition', 'User email is required');
+    }
+
+    // Get the standing meetup
+    const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+    if (!meetupDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
+    }
+
+    const meetup = meetupDoc.data() as {
+      id: string;
+      title: string;
+      clubName: string;
+      clubId: string;
+      createdByUserId: string;
+      organizerStripeAccountId: string;
+      status: string;
+      billing: {
+        perSessionAmount?: number;
+        amount: number;
+        currency: 'nzd' | 'aud' | 'usd';
+        feesPaidBy: 'organizer' | 'player';
+      };
+      paymentMethods?: {
+        acceptCardPayments: boolean;
+      };
+    };
+
+    // Verify meetup is active
+    if (meetup.status !== 'active') {
+      throw new functions.https.HttpsError('failed-precondition', 'Meetup is not active');
+    }
+
+    // Verify card payments are enabled
+    if (!meetup.paymentMethods?.acceptCardPayments) {
+      throw new functions.https.HttpsError('failed-precondition', 'Card payments are not enabled for this meetup');
+    }
+
+    // Verify organizer has Stripe connected
+    if (!meetup.organizerStripeAccountId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Organizer has not connected Stripe');
+    }
+
+    // Get the occurrence
+    const occurrenceDoc = await db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(occurrenceId)
+      .get();
+
+    if (!occurrenceDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Occurrence not found');
+    }
+
+    const occurrence = occurrenceDoc.data() as {
+      status: string;
+      closedAt?: number;
+      expectedCount: number;
+    };
+
+    // Check occurrence is not cancelled or closed
+    if (occurrence.status === 'cancelled') {
+      throw new functions.https.HttpsError('failed-precondition', 'This session has been cancelled');
+    }
+    if (occurrence.closedAt) {
+      throw new functions.https.HttpsError('failed-precondition', 'This session has been closed');
+    }
+
+    // Check if user is already registered
+    const participantDoc = await db
+      .collection('standingMeetups')
+      .doc(standingMeetupId)
+      .collection('occurrences')
+      .doc(occurrenceId)
+      .collection('participants')
+      .doc(userId)
+      .get();
+
+    if (participantDoc.exists) {
+      throw new functions.https.HttpsError('already-exists', 'You are already registered for this session');
+    }
+
+    // Get the per-session amount
+    const baseAmount = meetup.billing.perSessionAmount || meetup.billing.amount;
+    if (!baseAmount || baseAmount <= 0) {
+      throw new functions.https.HttpsError('failed-precondition', 'Invalid session price');
+    }
+
+    // Calculate the amount to charge (gross up if player pays fees)
+    let chargedAmount = baseAmount;
+    if (meetup.billing.feesPaidBy === 'player') {
+      // Gross up: amount / (1 - stripe_fee - platform_fee)
+      const divisor = 1 - GUEST_STRIPE_FEE_PERCENT - GUEST_PLATFORM_FEE_PERCENT;
+      chargedAmount = Math.ceil((baseAmount + GUEST_STRIPE_FIXED_FEE_CENTS) / divisor);
+    }
+
+    // Calculate platform fee (1.5% of charged amount)
+    const platformFee = Math.round(chargedAmount * GUEST_PLATFORM_FEE_PERCENT);
+
+    // Create Stripe Checkout Session
+    const sessionMetadata = {
+      type: 'member_session_registration',
+      standingMeetupId,
+      occurrenceId,
+      odUserId: userId,
+      memberName: userProfile.displayName || 'Member',
+      memberEmail: userProfile.email,
+      clubId: meetup.clubId,
+      organizerUserId: meetup.createdByUserId || '',
+      payerName: userProfile.displayName || 'Member',
+      payerEmail: userProfile.email || '',
+      eventName: meetup.title || '',
+    };
+
+    try {
+      const session = await stripe.checkout.sessions.create(
+        {
+          mode: 'payment',
+          customer_email: userProfile.email,
+          line_items: [
+            {
+              price_data: {
+                currency: meetup.billing.currency,
+                product_data: {
+                  name: meetup.title,
+                  description: `Session registration - ${meetup.clubName}`,
+                },
+                unit_amount: chargedAmount,
+              },
+              quantity: 1,
+            },
+          ],
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+          metadata: sessionMetadata,
+          payment_intent_data: {
+            application_fee_amount: platformFee,
+            metadata: sessionMetadata,
+          },
+        },
+        {
+          stripeAccount: meetup.organizerStripeAccountId,
+        }
+      );
+
+      console.log(`✅ Created quick register checkout session ${session.id} for ${userProfile.displayName} at ${meetup.title}`);
+
+      return {
+        checkoutUrl: session.url,
+        checkoutSessionId: session.id,
+      };
+    } catch (error: any) {
+      console.error('Failed to create quick register checkout session:', error);
+      throw new functions.https.HttpsError('internal', error.message || 'Failed to create checkout session');
+    }
+  });
 
 // ============================================
 // STANDING MEETUP SUBSCRIPTIONS

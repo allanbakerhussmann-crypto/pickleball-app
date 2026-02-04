@@ -8,6 +8,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { ModalShell } from '../../shared/ModalShell';
 import type { PlannerDivision, TournamentPaymentMode, GenderCategory } from '../../../types';
 import type { CompetitionFormat } from '../../../types/formats';
 import { generateDivisionId, calculateMatchesForFormat } from '../../../services/plannerCalculations';
@@ -166,8 +167,7 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+    <ModalShell isOpen={true} onClose={onClose} maxWidth="max-w-lg" className="max-h-[90dvh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
           <h2 className="text-lg font-bold text-white">
@@ -525,8 +525,7 @@ export const AddDivisionModal: React.FC<AddDivisionModalProps> = ({
             {isEditing ? 'Save Changes' : 'Add Division'}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

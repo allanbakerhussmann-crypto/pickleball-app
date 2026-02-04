@@ -181,6 +181,15 @@ export interface MeetupOccurrence {
   checkInTokenExpiresAt?: number;
   checkInLastRotatedAt?: number;
 
+  // Guest counters (derived - maintained by Cloud Functions, NOT clients)
+  // Source of truth = guest documents in subcollection
+  guestCount: number;       // count(guests) - updated by Cloud Functions
+  guestRevenue: number;     // sum(guest.amount) in cents - updated by Cloud Functions
+
+  // Session finalization
+  closedAt?: number;        // When organizer closed session (freezes totals)
+  closedBy?: string;        // userId who closed
+
   createdAt: number;
   updatedAt: number;
 }
@@ -209,6 +218,7 @@ export interface OccurrenceParticipant {
   // Check-in tracking
   checkedInAt?: number;
   checkInMethod?: 'qr' | 'organizer' | 'manual';
+  checkedInBy?: string; // userId of organizer who scanned QR (for QR check-in)
 
   // Credit tracking (with idempotency)
   creditIssued: boolean;
@@ -221,6 +231,41 @@ export interface OccurrenceParticipant {
 }
 
 export type ParticipantStatus = OccurrenceParticipant['status'];
+
+// =============================================================================
+// Occurrence Guest (Walk-in at door)
+// =============================================================================
+
+/**
+ * Occurrence Guest - Walk-in/guest added at the door
+ * Collection: standingMeetups/{id}/occurrences/{dateId}/guests/{guestId}
+ *
+ * Guests are always counted as "attended" - they're physically at the door.
+ * UI Label: "Guest (Cash)" or "Guest (Card)"
+ * Code uses "guest" throughout, not "walk-in".
+ */
+export interface OccurrenceGuest {
+  id: string;
+  name: string;
+  email?: string;              // Optional for cash, collected during Stripe checkout
+  emailConsent?: boolean;      // Whether guest consented to marketing emails
+
+  // Payment
+  amount: number;              // Paid in cents
+  paymentMethod: 'cash' | 'stripe';
+
+  // Stripe fields (if card payment)
+  stripeCheckoutSessionId?: string;
+  stripePaymentIntentId?: string;
+
+  // Cash fields (if cash)
+  receivedBy?: string;         // Organizer userId who received cash
+  notes?: string;
+
+  // Always counted as attended (they're at the door)
+  createdAt: number;
+  createdBy: string;           // Organizer userId who added them
+}
 
 // =============================================================================
 // Meetup Occurrence Index (Flat Collection for Discovery)
@@ -399,6 +444,74 @@ export function calculateChargedAmount(
 }
 
 // =============================================================================
+// Guest Profile (Marketing / Conversion Tracking)
+// =============================================================================
+
+/**
+ * GuestProfile - Centralized guest record across all meetups/clubs
+ * Collection: guestProfiles/{normalizedEmail}
+ *
+ * Aggregates guest visit data from OccurrenceGuest documents.
+ * Used for conversion tracking (guest → member) and optional email outreach.
+ * Created/updated by Cloud Function trigger on OccurrenceGuest creation.
+ *
+ * Document ID = normalized email (lowercase, trimmed).
+ * Guests without email are tracked only in OccurrenceGuest subcollections.
+ *
+ * @version 07.61
+ */
+export interface GuestProfile {
+  email: string;                    // Normalized (lowercase)
+  names: string[];                  // All names used across visits (deduped)
+  primaryName: string;              // Most recent name used
+
+  // Visit stats
+  totalVisits: number;
+  totalSpend: number;               // In cents (sum of all guest payments)
+  firstVisitAt: number;             // Timestamp of first visit
+  lastVisitAt: number;              // Timestamp of most recent visit
+
+  // Recent visits (last 10 for quick display)
+  recentVisits: GuestVisitSummary[];
+
+  // Clubs/meetups visited
+  clubIds: string[];                // Unique club IDs visited
+  meetupIds: string[];              // Unique standing meetup IDs visited
+
+  // Payment breakdown
+  cashVisits: number;
+  stripeVisits: number;
+
+  // Conversion tracking
+  conversionStatus: 'guest' | 'invited' | 'signed_up';
+  convertedUserId?: string;         // If they created an account
+  convertedAt?: number;
+
+  // Email consent (Privacy Act 2020 compliance)
+  emailConsent: boolean;            // Must be true for any marketing emails
+  emailConsentAt?: number;          // When consent was given
+  unsubscribeToken: string;         // For one-click unsubscribe
+  emailsSent: string[];             // Marketing emails sent: ['welcome', 'regular', 'convert']
+
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * GuestVisitSummary - Summary of a single guest visit
+ * Stored as array in GuestProfile.recentVisits (last 10)
+ */
+export interface GuestVisitSummary {
+  standingMeetupId: string;
+  occurrenceId: string;             // "YYYY-MM-DD"
+  clubId: string;
+  meetupTitle: string;
+  amount: number;                   // In cents
+  paymentMethod: 'cash' | 'stripe';
+  visitedAt: number;                // Timestamp
+}
+
+// =============================================================================
 // Callable Function Input/Output Types
 // =============================================================================
 
@@ -436,7 +549,20 @@ export interface EnsureOccurrencesOutput {
   existing: number; // Count of occurrences that already existed
 }
 
-// standingMeetup_checkIn
+// standingMeetup_checkInSelf (auth-based, no token - player scans static session QR)
+export interface CheckInSelfInput {
+  standingMeetupId: string;
+  occurrenceId: string; // "YYYY-MM-DD" (dateId)
+}
+
+export interface CheckInSelfOutput {
+  success: true;
+  checkedInAt: number;
+  sessionDate: string;    // "Monday 3 Feb 2025" for confirmation display
+  meetupTitle: string;    // For confirmation display
+}
+
+// standingMeetup_checkIn (legacy token-based - kept for backwards compat)
 export interface CheckInInput {
   standingMeetupId: string;
   dateId: string; // "YYYY-MM-DD"
@@ -446,6 +572,54 @@ export interface CheckInInput {
 export interface CheckInOutput {
   success: true;
   checkedInAt: number;
+}
+
+// standingMeetup_addCashGuest
+export interface AddCashGuestInput {
+  standingMeetupId: string;
+  occurrenceId: string;   // "YYYY-MM-DD"
+  name: string;
+  email?: string;
+  amount: number;         // In cents
+  notes?: string;
+  emailConsent?: boolean; // Whether organizer obtained marketing email consent
+}
+
+export interface AddCashGuestOutput {
+  success: true;
+  guestId: string;
+  guestCount: number;     // Updated count
+}
+
+// standingMeetup_createGuestCheckoutSession
+export interface CreateGuestCheckoutSessionInput {
+  standingMeetupId: string;
+  occurrenceId: string;   // "YYYY-MM-DD"
+  name: string;
+  email: string;
+  returnUrl: string;      // Redirect after payment
+}
+
+export interface CreateGuestCheckoutSessionOutput {
+  checkoutUrl: string;
+  checkoutSessionId: string;
+}
+
+// standingMeetup_closeSession
+export interface CloseSessionInput {
+  standingMeetupId: string;
+  occurrenceId: string;   // "YYYY-MM-DD"
+}
+
+export interface CloseSessionOutput {
+  success: true;
+  closedAt: number;
+  finalCounts: {
+    checkedIn: number;
+    guests: number;
+    noShows: number;      // Players marked as no-show on close
+    totalPlayed: number;  // checkedIn + guests
+  };
 }
 
 // standingMeetup_cancelAttendance
@@ -579,6 +753,20 @@ export interface UnregisterOutput {
   removedFromSessions: string[];  // List of occurrence dateIds player was removed from
 }
 
+// standingMeetup_checkInPlayer (organizer scans player QR code)
+export interface CheckInPlayerInput {
+  standingMeetupId: string;
+  occurrenceId: string;   // "YYYY-MM-DD"
+  playerUserId: string;   // User ID from scanned QR code
+}
+
+export interface CheckInPlayerOutput {
+  success: true;
+  checkedInAt: number;
+  playerUserId: string;
+  playerName: string;     // For confirmation display
+}
+
 // =============================================================================
 // Error Codes
 // =============================================================================
@@ -608,4 +796,8 @@ export type StandingMeetupErrorCode =
   | 'SESSION_NOT_ACTIVE'
   | 'OCCURRENCE_PASSED'
   | 'INVALID_REGISTRATION_TYPE'  // registrationType must be season_pass or pick_and_pay
-  | 'MISSING_SESSION_SELECTION'; // pick_and_pay requires selectedSessionIds
+  | 'MISSING_SESSION_SELECTION'  // pick_and_pay requires selectedSessionIds
+  | 'SESSION_ALREADY_CLOSED'     // Cannot modify closed session
+  | 'NOT_CLUB_ADMIN'             // Only club admins can add guests/close sessions
+  | 'GUEST_NAME_REQUIRED'        // Guest name is required
+  | 'INVALID_AMOUNT';            // Amount must be positive

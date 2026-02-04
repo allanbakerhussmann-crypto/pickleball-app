@@ -26,6 +26,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { GameScore } from '../../types';
 import type { DuprReviewModalData } from '../../types/duprPanel';
 import type { GameSettings } from '../../types/game/gameSettings';
+import { ModalShell } from './ModalShell';
 
 interface DuprReviewModalProps {
   isOpen: boolean;
@@ -213,9 +214,8 @@ export function DuprReviewModal({
   // V07.50: Permission check - show read-only view for non-organizers
   if (!isOrganizer) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-        <div className="relative w-full max-w-md bg-gray-900 rounded-2xl border border-gray-700 shadow-xl p-6">
+      <ModalShell isOpen={true} onClose={onClose}>
+        <div className="p-6">
           <div className="text-center">
             <svg className="w-12 h-12 mx-auto text-red-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -230,7 +230,7 @@ export function DuprReviewModal({
             </button>
           </div>
         </div>
-      </div>
+      </ModalShell>
     );
   }
 
@@ -315,15 +315,7 @@ export function DuprReviewModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
-      <div className="relative w-full max-w-2xl bg-gray-900 rounded-2xl border border-gray-700 shadow-xl overflow-hidden">
+    <ModalShell isOpen={true} onClose={onClose} maxWidth="max-w-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
           <h2 className="text-lg font-semibold text-white">
@@ -340,7 +332,7 @@ export function DuprReviewModal({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+        <div className="p-6 space-y-6 max-h-[70dvh] overflow-y-auto">
           {/* Teams */}
           <div className="grid grid-cols-2 gap-4">
             <div className={`p-4 rounded-xl border ${winnerId === sideAId ? 'border-lime-500 bg-lime-500/10' : 'border-gray-700 bg-gray-800/50'}`}>
@@ -598,8 +590,7 @@ export function DuprReviewModal({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      </ModalShell>
   );
 }
 

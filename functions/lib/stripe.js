@@ -51,11 +51,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.stripe_createRefund = exports.stripe_seedSMSBundles = exports.stripe_webhook = exports.stripe_v2_webhook = exports.stripe_purchaseSMSBundle = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createUserAccountLinkV2 = exports.stripe_createUserAccountV2 = exports.stripe_getAccountStatusV2 = exports.stripe_createAccountLinkV2 = exports.stripe_createAccountV2 = exports.stripe_createUserConnectAccount = exports.stripe_createConnectAccount = void 0;
+exports.stripe_cancelStandingMeetupSubscription = exports.stripe_createStandingMeetupSubscription = exports.standingMeetup_createQuickRegisterCheckoutSession = exports.standingMeetup_createGuestCheckoutSession = exports.stripe_createRefund = exports.stripe_seedSMSBundles = exports.stripe_webhook = exports.stripe_v2_webhook = exports.stripe_purchaseSMSBundle = exports.stripe_createCheckoutSession = exports.stripe_createUserConnectLoginLink = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createUserAccountLinkV2 = exports.stripe_createUserAccountV2 = exports.stripe_getAccountStatusV2 = exports.stripe_createAccountLinkV2 = exports.stripe_createAccountV2 = exports.stripe_createUserConnectAccount = exports.stripe_createConnectAccount = void 0;
+exports.handleStandingMeetupSubscriptionWebhook = handleStandingMeetupSubscriptionWebhook;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const stripe_1 = __importDefault(require("stripe"));
 const receiptEmail_1 = require("./receiptEmail");
+const comms_1 = require("./comms");
 // Initialize Firebase Admin if not already
 if (!admin.apps.length) {
     admin.initializeApp();
@@ -322,9 +324,10 @@ exports.stripe_createAccountLinkV2 = functions.https.onCall(async (data, context
     }
     try {
         // Build URLs - use provided or construct defaults
+        // Return to /clubs/:id with stripe param - ClubDetailPage handles switching to settings tab
         const baseUrl = ((_a = functions.config().app) === null || _a === void 0 ? void 0 : _a.url) || 'https://pickleballdirector.co.nz';
-        const finalReturnUrl = returnUrl || `${baseUrl}/#/clubs/${clubId}/settings?stripe=success`;
-        const finalRefreshUrl = refreshUrl || `${baseUrl}/#/clubs/${clubId}/settings?stripe=refresh`;
+        const finalReturnUrl = returnUrl || `${baseUrl}/#/clubs/${clubId}?stripe=success`;
+        const finalRefreshUrl = refreshUrl || `${baseUrl}/#/clubs/${clubId}?stripe=refresh`;
         // Create standard account link for onboarding
         const accountLink = await stripe.accountLinks.create({
             account: accountId,
@@ -602,11 +605,15 @@ exports.stripe_createUserConnectLoginLink = functions.https.onCall(async (data, 
 // Supports both V1 (destination charges) and V2 (direct charges)
 // ============================================
 exports.stripe_createCheckoutSession = functions.https.onCall(async (data, context) => {
+    var _a, _b;
     if (!context.auth) {
         throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
     }
-    const { items, customerEmail, successUrl, cancelUrl, clubId, organizerUserId, // For user-based organizer accounts
+    const { items, customerEmail, successUrl, cancelUrl, leagueId, // V07.54: Highest priority - routes to league.organizerStripeAccountId
+    clubId, organizerUserId, // For user-based organizer accounts (fallback)
     metadata = {}, } = data;
+    // V07.54: Debug logging for routing
+    console.log('[Checkout] Input params:', { leagueId, clubId, organizerUserId, metadataType: metadata === null || metadata === void 0 ? void 0 : metadata.type });
     if (!items || items.length === 0) {
         throw new functions.https.HttpsError('invalid-argument', 'Items required');
     }
@@ -619,26 +626,91 @@ exports.stripe_createCheckoutSession = functions.https.onCall(async (data, conte
         let connectedAccountId = null;
         let accountVersion = null;
         let currency = 'nzd'; // Default
-        // Try club first, then organizer user
-        if (clubId) {
+        let routingSource = 'none'; // Track which routing path was used
+        // V07.54: Priority order for routing:
+        // 1. leagueId -> league.organizerStripeAccountId (highest priority - fixes stale user account issue)
+        // 2. clubId -> club.stripeConnectedAccountId
+        // 3. organizerUserId -> user.stripeConnectedAccountId (fallback)
+        if (leagueId) {
+            console.log(`[Checkout] Attempting league routing for leagueId=${leagueId}`);
+            const leagueDoc = await db.collection('leagues').doc(leagueId).get();
+            if (leagueDoc.exists) {
+                const leagueData = leagueDoc.data();
+                console.log(`[Checkout] League found. organizerStripeAccountId=${leagueData === null || leagueData === void 0 ? void 0 : leagueData.organizerStripeAccountId}, clubId=${leagueData === null || leagueData === void 0 ? void 0 : leagueData.clubId}, createdByUserId=${leagueData === null || leagueData === void 0 ? void 0 : leagueData.createdByUserId}`);
+                connectedAccountId = (leagueData === null || leagueData === void 0 ? void 0 : leagueData.organizerStripeAccountId) || null;
+                routingSource = 'league';
+                // Derive currency from league's club if available, otherwise use creator's country
+                if (leagueData === null || leagueData === void 0 ? void 0 : leagueData.clubId) {
+                    const clubDoc = await db.collection('clubs').doc(leagueData.clubId).get();
+                    if (clubDoc.exists) {
+                        const clubData = clubDoc.data();
+                        const country = (clubData === null || clubData === void 0 ? void 0 : clubData.stripeAccountCountry) || 'NZ';
+                        currency = getCurrencyForCountry(country);
+                    }
+                }
+                else if (leagueData === null || leagueData === void 0 ? void 0 : leagueData.createdByUserId) {
+                    const userDoc = await db.collection('users').doc(leagueData.createdByUserId).get();
+                    if (userDoc.exists) {
+                        const userData = userDoc.data();
+                        const country = (userData === null || userData === void 0 ? void 0 : userData.stripeAccountCountry) || 'NZ';
+                        currency = getCurrencyForCountry(country);
+                    }
+                }
+                console.log(`[Checkout] League routing result: connectedAccount=${connectedAccountId}, currency=${currency}`);
+            }
+            else {
+                console.log(`[Checkout] League not found for leagueId=${leagueId}`);
+            }
+        }
+        // Fallback to club if no league or league had no connected account
+        if (!connectedAccountId && clubId) {
+            console.log(`[Checkout] Falling back to club routing for clubId=${clubId}`);
             const clubDoc = await db.collection('clubs').doc(clubId).get();
             if (clubDoc.exists) {
                 const clubData = clubDoc.data();
                 connectedAccountId = (clubData === null || clubData === void 0 ? void 0 : clubData.stripeConnectedAccountId) || null;
                 accountVersion = (clubData === null || clubData === void 0 ? void 0 : clubData.stripeAccountVersion) || null;
+                routingSource = 'club';
                 // Get currency from country (UPPERCASE in DB)
                 const country = (clubData === null || clubData === void 0 ? void 0 : clubData.stripeAccountCountry) || 'NZ';
                 currency = getCurrencyForCountry(country);
+                console.log(`[Checkout] Club routing result: connectedAccount=${connectedAccountId}`);
             }
         }
-        else if (organizerUserId) {
+        // Fallback to organizer user if no club account found
+        if (!connectedAccountId && organizerUserId) {
+            console.log(`[Checkout] Falling back to user routing for organizerUserId=${organizerUserId}`);
             const userDoc = await db.collection('users').doc(organizerUserId).get();
             if (userDoc.exists) {
                 const userData = userDoc.data();
                 connectedAccountId = (userData === null || userData === void 0 ? void 0 : userData.stripeConnectedAccountId) || null;
                 accountVersion = (userData === null || userData === void 0 ? void 0 : userData.stripeAccountVersion) || null;
+                routingSource = 'user';
                 const country = (userData === null || userData === void 0 ? void 0 : userData.stripeAccountCountry) || 'NZ';
                 currency = getCurrencyForCountry(country);
+                console.log(`[Checkout] User routing result: connectedAccount=${connectedAccountId}`);
+            }
+        }
+        console.log(`[Checkout] Final routing: source=${routingSource}, connectedAccountId=${connectedAccountId}, currency=${currency}`);
+        // V07.54: Detect test/live mode mismatch
+        // Test accounts start with acct_1 and have 18 chars, live accounts are longer
+        // More reliable: check if we're using a live key (starts with sk_live_) vs test key (sk_test_)
+        const stripeKey = ((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.secret_key) || process.env.STRIPE_SECRET_KEY || '';
+        const isLiveMode = stripeKey.startsWith('sk_live_') || stripeKey.startsWith('rk_live_');
+        if (connectedAccountId && isLiveMode) {
+            // In live mode, verify the account is not a test account by checking a simple API call
+            // Test accounts will fail with "The account was created with a testmode key"
+            // We catch this early to give a better error message
+            try {
+                await stripe.accounts.retrieve(connectedAccountId);
+            }
+            catch (accountError) {
+                if ((_b = accountError.message) === null || _b === void 0 ? void 0 : _b.includes('testmode')) {
+                    console.error(`[Checkout] Test account detected in live mode: ${connectedAccountId}`);
+                    throw new functions.https.HttpsError('failed-precondition', `The organizer's Stripe account is a test account and cannot process live payments. Please ask the organizer to reconnect their Stripe account.`);
+                }
+                // Other errors - let them proceed and fail at checkout creation
+                console.warn(`[Checkout] Account check warning:`, accountError.message);
             }
         }
         // Build line items
@@ -653,68 +725,88 @@ exports.stripe_createCheckoutSession = functions.https.onCall(async (data, conte
             },
             quantity: item.quantity,
         }));
-        // Build payment metadata - used at BOTH session and payment_intent levels
-        const paymentMetadata = Object.assign({ clubId: clubId || '', odUserId: context.auth.uid, type: metadata.type || '', referenceId: metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.bookingKey || '', eventName: metadata.eventName || '', payerName: metadata.payerName || '' }, metadata);
-        // For V2 accounts, use DIRECT CHARGES (stripeAccount header)
-        if (accountVersion === 'v2' && connectedAccountId) {
-            console.log(`Creating V2 direct charge session on account ${connectedAccountId}`);
+        // Build payment metadata - MUST be flat string map (Stripe requirement)
+        // Stringify all values to ensure no objects/arrays/numbers
+        const paymentMetadata = {
+            clubId: clubId || '',
+            organizerUserId: organizerUserId || '',
+            odUserId: context.auth.uid,
+            type: String(metadata.type || ''),
+            referenceId: String(metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.bookingKey || ''),
+            meetupId: String(metadata.meetupId || ''),
+            tournamentId: String(metadata.tournamentId || ''),
+            leagueId: String(metadata.leagueId || ''),
+            bookingKey: String(metadata.bookingKey || ''),
+            eventName: String(metadata.eventName || ''),
+            payerName: String(metadata.payerName || ''),
+            payerEmail: String(customerEmail || ''),
+            headcount: String(metadata.headcount || '1'),
+            includeSelf: String(metadata.includeSelf || 'true'),
+        };
+        // Add optional guest/member info if present (already strings from client)
+        if (metadata.guestNames)
+            paymentMetadata.guestNames = String(metadata.guestNames);
+        if (metadata.guestRelationships)
+            paymentMetadata.guestRelationships = String(metadata.guestRelationships);
+        if (metadata.memberIds)
+            paymentMetadata.memberIds = String(metadata.memberIds);
+        if (metadata.memberNames)
+            paymentMetadata.memberNames = String(metadata.memberNames);
+        // V07.54: League payment fields (for webhook to update correct member)
+        if (metadata.memberId)
+            paymentMetadata.memberId = String(metadata.memberId);
+        if (metadata.slot)
+            paymentMetadata.slot = String(metadata.slot);
+        // GATE: If leagueId, clubId or organizerUserId is provided, we MUST have a connected account
+        // This catches organizer-owned events that should have Stripe Connect set up
+        // Platform-owned events (no routing params) are allowed to proceed without connected account
+        if ((leagueId || clubId || organizerUserId) && !connectedAccountId) {
+            console.error(`Payment rejected: No connected account. LeagueId: ${leagueId}, ClubId: ${clubId}, OrganizerUserId: ${organizerUserId}`);
+            throw new functions.https.HttpsError('failed-precondition', 'Payment cannot be processed: The organizer has not connected their Stripe account. Please contact the organizer.');
+        }
+        // ALL connected account payments use DIRECT CHARGES
+        if (connectedAccountId) {
+            console.log(`Creating direct charge session on account ${connectedAccountId}`);
             const session = await stripe.checkout.sessions.create({
                 mode: 'payment',
                 customer_email: customerEmail,
                 line_items: lineItems,
                 success_url: successUrl,
                 cancel_url: cancelUrl,
-                // Session-level metadata (easy access from session events)
+                // Session-level metadata (for checkout.session.completed webhook)
                 metadata: paymentMetadata,
                 payment_intent_data: {
-                    application_fee_amount: platformFee, // Platform receives this
-                    // Same metadata on PI (for charge events)
+                    application_fee_amount: platformFee, // Platform receives this as "Collected fee"
+                    // Same metadata on PaymentIntent (for charge.succeeded webhook)
                     metadata: paymentMetadata,
                 },
             }, {
-                stripeAccount: connectedAccountId, // DIRECT CHARGE - execute ON connected account
+                stripeAccount: connectedAccountId, // DIRECT CHARGE - charge created ON connected account
             });
-            console.log(`✅ Created V2 direct charge session ${session.id}`);
+            console.log(`✅ Created direct charge session ${session.id} on account ${connectedAccountId}`);
             return {
                 sessionId: session.id,
                 url: session.url,
                 chargeModel: 'direct',
             };
         }
-        // CRITICAL: If this is a meetup/tournament/league payment, we MUST have a connected account
-        // Otherwise payments would incorrectly go to the platform instead of the organizer
-        const requiresConnectedAccount = metadata.type === 'meetup' || metadata.type === 'tournament' ||
-            metadata.type === 'league' || metadata.type === 'court_booking';
-        if (requiresConnectedAccount && !connectedAccountId) {
-            console.error(`Payment rejected: No connected account for ${metadata.type} payment. ClubId: ${clubId}, OrganizerUserId: ${organizerUserId}`);
-            throw new functions.https.HttpsError('failed-precondition', 'Payment cannot be processed: The organizer has not connected their Stripe account. Please contact the organizer.');
-        }
-        // For V1 accounts, use DESTINATION CHARGES
-        const sessionConfig = {
+        // Platform-only payment (no connected account - e.g., SMS bundles, platform-owned events)
+        const session = await stripe.checkout.sessions.create({
             mode: 'payment',
             customer_email: customerEmail,
             line_items: lineItems,
             success_url: successUrl,
             cancel_url: cancelUrl,
             metadata: paymentMetadata,
-        };
-        // If connected account (V1), split the payment with destination charge
-        if (connectedAccountId) {
-            sessionConfig.payment_intent_data = {
-                application_fee_amount: platformFee,
-                transfer_data: {
-                    destination: connectedAccountId,
-                },
+            payment_intent_data: {
                 metadata: paymentMetadata,
-            };
-        }
-        // Create Checkout Session
-        const session = await stripe.checkout.sessions.create(sessionConfig);
-        console.log(`✅ Created ${connectedAccountId ? 'V1 destination charge' : 'platform'} session ${session.id}`);
+            },
+        });
+        console.log(`✅ Created platform session ${session.id}`);
         return {
             sessionId: session.id,
             url: session.url,
-            chargeModel: connectedAccountId ? 'destination' : 'platform',
+            chargeModel: 'platform',
         };
     }
     catch (error) {
@@ -977,29 +1069,40 @@ async function handleV2AccountUpdate(event) {
 // ============================================
 // STRIPE WEBHOOK HANDLER (Standard)
 // For checkout.session.completed, account.updated, charges, refunds
-// Uses ONE webhook secret (Connect application type recommended)
+// Supports TWO webhook secrets:
+// - stripe.webhook_secret = Account webhook (platform events)
+// - stripe.connect_webhook_secret = Connect webhook (connected account events)
 // ============================================
 exports.stripe_webhook = functions.https.onRequest(async (req, res) => {
-    var _a;
+    var _a, _b;
     const sig = req.headers['stripe-signature'];
-    const webhookSecret = ((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.webhook_secret) || process.env.STRIPE_WEBHOOK_SECRET;
+    // Support multiple webhook secrets (Account + Connect webhooks use different secrets)
+    const accountWebhookSecret = ((_a = functions.config().stripe) === null || _a === void 0 ? void 0 : _a.webhook_secret) || process.env.STRIPE_WEBHOOK_SECRET;
+    const connectWebhookSecret = ((_b = functions.config().stripe) === null || _b === void 0 ? void 0 : _b.connect_webhook_secret) || process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
     if (!sig) {
         console.error('Missing stripe-signature header');
         res.status(400).send('Missing signature');
         return;
     }
-    if (!webhookSecret) {
-        console.error('Webhook secret not configured');
+    if (!accountWebhookSecret && !connectWebhookSecret) {
+        console.error('No webhook secrets configured');
         res.status(500).send('Webhook not configured');
         return;
     }
-    // 1. Verify signature - return 400 only for verification failures
-    let event;
-    try {
-        event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+    // 1. Verify signature - try both secrets (Account and Connect webhooks have different secrets)
+    let event = null;
+    const secrets = [accountWebhookSecret, connectWebhookSecret].filter(Boolean);
+    for (const secret of secrets) {
+        try {
+            event = stripe.webhooks.constructEvent(req.rawBody, sig, secret);
+            break; // Success - exit loop
+        }
+        catch (err) {
+            // Continue to try next secret
+        }
     }
-    catch (err) {
-        console.error('Webhook signature verification failed:', err.message);
+    if (!event) {
+        console.error('Webhook signature verification failed with all secrets');
         res.status(400).send('Signature verification failed');
         return;
     }
@@ -1073,6 +1176,34 @@ exports.stripe_webhook = functions.https.onRequest(async (req, res) => {
                 // Optional: track status changes
                 break;
             }
+            // Standing Meetup Subscription Events
+            case 'invoice.paid': {
+                const invoice = event.data.object;
+                const connectedAccountId = event.account;
+                if (connectedAccountId && invoice.subscription) {
+                    console.log('Processing invoice.paid for subscription:', invoice.subscription);
+                    await handleStandingMeetupInvoicePaid(invoice, connectedAccountId);
+                }
+                break;
+            }
+            case 'invoice.payment_failed': {
+                const invoice = event.data.object;
+                const connectedAccountId = event.account;
+                if (connectedAccountId && invoice.subscription) {
+                    console.log('Processing invoice.payment_failed for subscription:', invoice.subscription);
+                    await handleStandingMeetupPaymentFailed(invoice, connectedAccountId);
+                }
+                break;
+            }
+            case 'customer.subscription.deleted': {
+                const subscription = event.data.object;
+                const connectedAccountId = event.account;
+                if (connectedAccountId) {
+                    console.log('Processing customer.subscription.deleted:', subscription.id);
+                    await handleStandingMeetupSubscriptionDeleted(subscription, connectedAccountId);
+                }
+                break;
+            }
             default:
                 console.log(`Unhandled event type: ${event.type}`);
         }
@@ -1099,6 +1230,41 @@ async function handleCheckoutComplete(session, event) {
     const paymentType = metadata.type;
     const odUserId = metadata.odUserId;
     const clubId = metadata.clubId;
+    // Guest payments don't have odUserId - they're unauthenticated
+    // Handle them separately to avoid early return
+    if (paymentType === 'guest_session_payment') {
+        console.log(`Processing guest_session_payment for session ${session.id}`);
+        if (session.payment_status !== 'paid') {
+            console.log(`Guest session ${session.id} completed but not paid (status: ${session.payment_status}), skipping`);
+            return;
+        }
+        try {
+            await handleGuestSessionPayment(session, metadata);
+        }
+        catch (error) {
+            console.error('Error handling guest session payment:', error);
+            throw error; // Re-throw to mark event as failed for retry
+        }
+        return;
+    }
+    // Member quick registration at the door (Phase 7)
+    // Member scans check-in QR but isn't registered -> pays to register + auto check-in
+    if (paymentType === 'member_session_registration') {
+        console.log(`Processing member_session_registration for session ${session.id}, user ${metadata.odUserId}`);
+        if (session.payment_status !== 'paid') {
+            console.log(`Member registration session ${session.id} completed but not paid (status: ${session.payment_status}), skipping`);
+            return;
+        }
+        try {
+            await handleMemberSessionRegistration(session, metadata);
+        }
+        catch (error) {
+            console.error('Error handling member session registration:', error);
+            throw error; // Re-throw to mark event as failed for retry
+        }
+        return;
+    }
+    // For all other payment types, odUserId is required
     if (!odUserId) {
         console.error('Missing odUserId in session metadata');
         return;
@@ -1114,7 +1280,7 @@ async function handleCheckoutComplete(session, event) {
         // Create Finance transaction in 'processing' state (for Connect payments)
         // For direct charges, event.account contains the connected account ID
         const connectedAccountId = event.account;
-        if (connectedAccountId && clubId && paymentType !== 'sms_bundle') {
+        if (connectedAccountId && (clubId || metadata.organizerUserId) && paymentType !== 'sms_bundle') {
             // Secondary idempotency: check if transaction already exists for this PaymentIntent
             const existingTx = await db.collection('transactions')
                 .where('stripe.paymentIntentId', '==', session.payment_intent)
@@ -1130,12 +1296,13 @@ async function handleCheckoutComplete(session, event) {
                 await txRef.set({
                     id: txRef.id, // ID matches Firestore doc ID
                     schemaVersion: 1,
-                    odClubId: clubId,
+                    odClubId: clubId || '',
                     odUserId: odUserId,
+                    organizerUserId: metadata.organizerUserId || '',
                     type: 'payment',
                     status: 'processing', // NOT completed yet - wait for charge.succeeded
                     referenceType: paymentType || 'unknown',
-                    referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || '',
+                    referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.standingMeetupId || '',
                     referenceName: metadata.eventName || '',
                     amount: session.amount_total || 0,
                     currency: (session.currency || 'nzd').toUpperCase(),
@@ -1157,6 +1324,7 @@ async function handleCheckoutComplete(session, event) {
             }
         }
         // Route to appropriate handler based on payment type (existing logic for RSVPs, bookings, etc.)
+        console.log(`🔀 Routing payment type: "${paymentType}" for session ${session.id}`);
         switch (paymentType) {
             case 'meetup':
                 await handleMeetupPayment(session, metadata);
@@ -1173,6 +1341,10 @@ async function handleCheckoutComplete(session, event) {
             case 'sms_bundle':
                 await handleSMSBundlePayment(session, metadata);
                 break;
+            case 'standing_meetup_registration':
+                await handleStandingMeetupRegistrationPayment(session, metadata);
+                break;
+            // Note: guest_session_payment is handled before this switch (no odUserId required)
             default:
                 // Legacy: court booking without type
                 if (metadata.slots) {
@@ -1193,7 +1365,7 @@ async function handleCheckoutComplete(session, event) {
  * Phase 2 of two-phase recording: enriches and completes Finance transaction
  */
 async function handleChargeSucceeded(charge, event) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
     const db = admin.firestore();
     // Guard: check this is a Connect charge
     const connectedAccountId = event.account;
@@ -1203,13 +1375,23 @@ async function handleChargeSucceeded(charge, event) {
         return;
     }
     const paymentIntentId = charge.payment_intent;
-    console.log(`Processing charge.succeeded for PI ${paymentIntentId} on account ${connectedAccountId}`);
-    // Find the processing transaction
-    const txSnap = await db.collection('transactions')
+    console.log(`Processing charge.succeeded for PI ${paymentIntentId} on account ${connectedAccountId}, chargeId=${charge.id}`);
+    // Find the processing transaction - try by paymentIntentId first
+    let txSnap = await db.collection('transactions')
         .where('stripe.paymentIntentId', '==', paymentIntentId)
         .where('type', '==', 'payment')
         .limit(1)
         .get();
+    console.log(`charge.succeeded: Query by PI found ${txSnap.size} transactions`);
+    // Fallback: try by chargeId if PI lookup failed (in case checkout stored chargeId differently)
+    if (txSnap.empty && charge.id) {
+        txSnap = await db.collection('transactions')
+            .where('stripe.chargeId', '==', charge.id)
+            .where('type', '==', 'payment')
+            .limit(1)
+            .get();
+        console.log(`charge.succeeded: Fallback query by chargeId found ${txSnap.size} transactions`);
+    }
     // Get actual fees and net from balance_transaction (source of truth for what club receives)
     let platformFee = charge.application_fee_amount || 0;
     let balanceTransactionId = charge.balance_transaction;
@@ -1250,8 +1432,9 @@ async function handleChargeSucceeded(charge, event) {
         // Update existing transaction to completed
         const txDoc = txSnap.docs[0];
         const existingTx = txDoc.data();
+        console.log(`charge.succeeded: Found transaction ${txDoc.id} with status=${existingTx.status}, PI=${(_b = existingTx.stripe) === null || _b === void 0 ? void 0 : _b.paymentIntentId}`);
         // Verify accountId matches (detect webhook routing issues)
-        if (((_b = existingTx.stripe) === null || _b === void 0 ? void 0 : _b.accountId) && existingTx.stripe.accountId !== connectedAccountId) {
+        if (((_c = existingTx.stripe) === null || _c === void 0 ? void 0 : _c.accountId) && existingTx.stripe.accountId !== connectedAccountId) {
             console.error(`⚠️ Account mismatch: transaction has ${existingTx.stripe.accountId}, event has ${connectedAccountId}`);
         }
         await txDoc.ref.update({
@@ -1268,7 +1451,7 @@ async function handleChargeSucceeded(charge, event) {
             'stripe.totalFee': totalFees,
             'stripe.accountId': connectedAccountId,
             'stripe.mode': event.livemode ? 'live' : 'test',
-            'stripe.paymentMethodType': (_c = charge.payment_method_details) === null || _c === void 0 ? void 0 : _c.type,
+            'stripe.paymentMethodType': (_d = charge.payment_method_details) === null || _d === void 0 ? void 0 : _d.type,
         });
         console.log(`✅ Completed Finance transaction ${txDoc.id}: platformFee=${platformFee}, totalFees=${totalFees}, net=${netAmount}`);
         // Send receipt email (non-blocking)
@@ -1278,7 +1461,7 @@ async function handleChargeSucceeded(charge, event) {
             if (!userEmail && metadata.odUserId) {
                 try {
                     const userDoc = await db.collection('users').doc(metadata.odUserId).get();
-                    userEmail = (_d = userDoc.data()) === null || _d === void 0 ? void 0 : _d.email;
+                    userEmail = (_e = userDoc.data()) === null || _e === void 0 ? void 0 : _e.email;
                 }
                 catch (err) {
                     console.warn('Failed to fetch user email for receipt:', err);
@@ -1295,7 +1478,7 @@ async function handleChargeSucceeded(charge, event) {
                     currency: charge.currency.toUpperCase(),
                     eventName: metadata.eventName || '',
                     clubId: metadata.clubId,
-                    cardLast4: ((_f = (_e = charge.payment_method_details) === null || _e === void 0 ? void 0 : _e.card) === null || _f === void 0 ? void 0 : _f.last4) || undefined,
+                    cardLast4: ((_g = (_f = charge.payment_method_details) === null || _f === void 0 ? void 0 : _f.card) === null || _g === void 0 ? void 0 : _g.last4) || undefined,
                 }).catch(err => console.error('Receipt email failed:', err));
             }
             else {
@@ -1318,17 +1501,18 @@ async function handleChargeSucceeded(charge, event) {
                 console.error(`Failed to fetch PI ${paymentIntentId}:`, err);
             }
         }
-        if (metadata.clubId) {
+        if (metadata.clubId || metadata.organizerUserId) {
             const txRef = db.collection('transactions').doc();
             await txRef.set({
                 id: txRef.id,
                 schemaVersion: 1,
-                odClubId: metadata.clubId,
+                odClubId: metadata.clubId || '',
                 odUserId: metadata.odUserId || '',
+                organizerUserId: metadata.organizerUserId || '',
                 type: 'payment',
                 status: 'completed', // Already completed since charge succeeded
                 referenceType: metadata.type || 'unknown',
-                referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || '',
+                referenceId: metadata.referenceId || metadata.meetupId || metadata.tournamentId || metadata.leagueId || metadata.standingMeetupId || '',
                 referenceName: metadata.eventName || '',
                 amount: charge.amount,
                 currency: (charge.currency || 'nzd').toUpperCase(),
@@ -1347,7 +1531,7 @@ async function handleChargeSucceeded(charge, event) {
                     totalFee: totalFees,
                     webhookEventId: event.id,
                     mode: event.livemode ? 'live' : 'test',
-                    paymentMethodType: (_g = charge.payment_method_details) === null || _g === void 0 ? void 0 : _g.type,
+                    paymentMethodType: (_h = charge.payment_method_details) === null || _h === void 0 ? void 0 : _h.type,
                 },
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
@@ -1360,7 +1544,7 @@ async function handleChargeSucceeded(charge, event) {
                 if (!userEmail && metadata.odUserId) {
                     try {
                         const userDoc = await db.collection('users').doc(metadata.odUserId).get();
-                        userEmail = (_h = userDoc.data()) === null || _h === void 0 ? void 0 : _h.email;
+                        userEmail = (_j = userDoc.data()) === null || _j === void 0 ? void 0 : _j.email;
                     }
                     catch (err) {
                         console.warn('Failed to fetch user email for receipt:', err);
@@ -1377,7 +1561,7 @@ async function handleChargeSucceeded(charge, event) {
                         currency: (charge.currency || 'nzd').toUpperCase(),
                         eventName: metadata.eventName || '',
                         clubId: metadata.clubId,
-                        cardLast4: ((_k = (_j = charge.payment_method_details) === null || _j === void 0 ? void 0 : _j.card) === null || _k === void 0 ? void 0 : _k.last4) || undefined,
+                        cardLast4: ((_l = (_k = charge.payment_method_details) === null || _k === void 0 ? void 0 : _k.card) === null || _l === void 0 ? void 0 : _l.last4) || undefined,
                     }).catch(err => console.error('Receipt email failed:', err));
                 }
             }
@@ -1486,6 +1670,7 @@ async function handleChargeRefunded(charge, event) {
                 schemaVersion: 1,
                 odClubId: original.odClubId,
                 odUserId: original.odUserId,
+                organizerUserId: original.organizerUserId || '',
                 type: 'refund',
                 status: 'completed',
                 parentTransactionId: original.id,
@@ -1771,16 +1956,69 @@ async function handleTournamentPayment(session, metadata) {
     }
 }
 // ============================================
-// LEAGUE PAYMENT HANDLER (Placeholder)
+// LEAGUE PAYMENT HANDLER (V07.53)
 // ============================================
 async function handleLeaguePayment(session, metadata) {
-    const leagueId = metadata.leagueId;
-    const odUserId = metadata.odUserId;
-    console.log(`League payment: league=${leagueId}, user=${odUserId}`);
-    // TODO: Implement league membership payment handling
-    // 1. Update membership status to 'paid'
-    // 2. Add user to league members
-    // 3. Send confirmation email
+    var _a, _b;
+    console.log(`🏆 handleLeaguePayment called with metadata:`, JSON.stringify(metadata));
+    const { leagueId, memberId } = metadata;
+    const slot = metadata.slot || 'primary'; // Default to 'primary' if omitted
+    // Validate required fields - log and return if missing (never throw)
+    if (!leagueId || !memberId) {
+        console.error('League payment missing required metadata:', { leagueId, memberId, slot });
+        return;
+    }
+    const db = admin.firestore();
+    const memberRef = db.collection('leagues').doc(leagueId).collection('members').doc(memberId);
+    const memberDoc = await memberRef.get();
+    if (!memberDoc.exists) {
+        console.error(`League member not found: ${leagueId}/members/${memberId}`);
+        return;
+    }
+    const now = Date.now();
+    const member = memberDoc.data();
+    // Update correct slot (defaults to 'primary')
+    // NOTE: Firestore will create partnerPayment map if it doesn't exist
+    // UI should only show partner payment status when entryFeeType === 'per_player'
+    try {
+        if (slot === 'partner') {
+            // Use amountDue from member doc (set at join time), NOT session.amount_total
+            const amountDue = ((_a = member === null || member === void 0 ? void 0 : member.partnerPayment) === null || _a === void 0 ? void 0 : _a.amountDue) || 0;
+            await memberRef.update({
+                'partnerPayment.status': 'paid',
+                'partnerPayment.method': 'stripe',
+                'partnerPayment.amountPaid': amountDue, // Match the entry fee, not Stripe total
+                'partnerPayment.totalCharged': session.amount_total, // Audit: actual charge incl fees
+                'partnerPayment.paidAt': now,
+                'partnerPayment.stripeSessionId': session.id,
+                updatedAt: now,
+            });
+        }
+        else {
+            // Use amountDue from member doc (set at join time), NOT session.amount_total
+            const amountDue = ((_b = member === null || member === void 0 ? void 0 : member.payment) === null || _b === void 0 ? void 0 : _b.amountDue) || 0;
+            // Primary - write BOTH nested AND flat for backwards compat
+            await memberRef.update({
+                'payment.status': 'paid',
+                'payment.method': 'stripe',
+                'payment.amountPaid': amountDue, // Match the entry fee, not Stripe total
+                'payment.totalCharged': session.amount_total, // Audit: actual charge incl fees
+                'payment.paidAt': now,
+                'payment.stripeSessionId': session.id,
+                // Flat format (backwards compat)
+                paymentStatus: 'paid',
+                amountPaid: amountDue,
+                paidAt: now,
+                stripeSessionId: session.id,
+                updatedAt: now,
+            });
+        }
+        console.log(`✅ League payment confirmed: league=${leagueId}, member=${memberId}, slot=${slot}`);
+    }
+    catch (updateError) {
+        console.error(`❌ Failed to update league member payment status:`, updateError);
+        throw updateError;
+    }
 }
 // ============================================
 // SMS BUNDLE PAYMENT HANDLER
@@ -1849,6 +2087,508 @@ async function handleSMSBundlePayment(session, metadata) {
     catch (error) {
         console.error('Error processing SMS bundle payment:', error);
         throw error;
+    }
+}
+// ============================================
+// STANDING MEETUP REGISTRATION PAYMENT HANDLER (V07.57)
+// ============================================
+/**
+ * Handle standing meetup registration payment (Stripe checkout success)
+ *
+ * CRITICAL: For Stripe payments, the registration doc does NOT exist yet!
+ * We CREATE it here from the metadata, not update it.
+ *
+ * Hybrid Model:
+ * - season_pass: Add to ALL future sessions
+ * - pick_and_pay: Add to SELECTED sessions only
+ */
+async function handleStandingMeetupRegistrationPayment(session, metadata) {
+    var _a;
+    const { standingMeetupId, odUserId, registrationType, selectedSessionIds: selectedSessionIdsJson, clubId, userName, userEmail, amount, sessionCount, maxPlayers, } = metadata;
+    // Validate required fields
+    if (!standingMeetupId || !odUserId) {
+        console.error('Standing meetup registration missing required metadata:', {
+            standingMeetupId,
+            odUserId,
+            registrationType,
+        });
+        return;
+    }
+    const db = admin.firestore();
+    const now = Date.now();
+    // Build deterministic registration ID
+    const registrationId = `${standingMeetupId}_${odUserId}`;
+    // Parse selectedSessionIds if present
+    const selectedSessionIds = selectedSessionIdsJson ? JSON.parse(selectedSessionIdsJson) : undefined;
+    try {
+        // Idempotency check: if registration already exists and is paid, skip
+        const regRef = db.collection('standingMeetupRegistrations').doc(registrationId);
+        const existingReg = await regRef.get();
+        if (existingReg.exists && ((_a = existingReg.data()) === null || _a === void 0 ? void 0 : _a.paymentStatus) === 'paid') {
+            console.log(`Registration ${registrationId} already paid, skipping (idempotency)`);
+            return;
+        }
+        // Get meetup for title and maxPlayers validation
+        const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
+        const meetupSnap = await meetupRef.get();
+        if (!meetupSnap.exists) {
+            console.error(`Standing meetup not found: ${standingMeetupId}`);
+            return;
+        }
+        const meetup = meetupSnap.data();
+        const meetupMaxPlayers = parseInt(maxPlayers || '0') || meetup.maxPlayers || 20;
+        // CREATE registration doc (Stripe path - doc doesn't exist yet!)
+        const registration = Object.assign(Object.assign({ id: registrationId, standingMeetupId, clubId: clubId || meetup.clubId, odUserId, userName: userName || 'Player', userEmail: userEmail || '', registrationType: registrationType || 'season_pass' }, (selectedSessionIds ? { selectedSessionIds } : {})), { sessionCount: parseInt(sessionCount || '0'), paymentStatus: 'paid', paymentMethod: 'stripe', amount: parseInt(amount || '0'), currency: (session.currency || 'nzd').toLowerCase(), paidAt: now, stripeCheckoutSessionId: session.id, stripePaymentIntentId: session.payment_intent, status: 'active', createdAt: now, updatedAt: now });
+        // Use transaction to create registration and increment subscriber count
+        await db.runTransaction(async (transaction) => {
+            transaction.set(regRef, registration);
+            transaction.update(meetupRef, {
+                subscriberCount: admin.firestore.FieldValue.increment(1),
+                updatedAt: now,
+            });
+        });
+        console.log(`✅ Created registration ${registrationId} from Stripe webhook`);
+        // Add player to occurrences based on registration type
+        if (registrationType === 'pick_and_pay' && (selectedSessionIds === null || selectedSessionIds === void 0 ? void 0 : selectedSessionIds.length) > 0) {
+            // Pick-and-Pay: Add to selected sessions only
+            await addPlayerToSelectedOccurrences(standingMeetupId, odUserId, userName || 'Player', selectedSessionIds, meetupMaxPlayers);
+        }
+        else {
+            // Season Pass: Add to all future sessions
+            await addPlayerToAllFutureOccurrences(standingMeetupId, odUserId, userName || 'Player', meetupMaxPlayers);
+        }
+        console.log(`✅ Standing meetup registration confirmed: ${registrationId}, meetup=${meetup.title || standingMeetupId}, type=${registrationType}`);
+    }
+    catch (error) {
+        console.error('Error processing standing meetup registration payment:', error);
+        throw error;
+    }
+}
+/**
+ * Add a registered player to all future occurrences of a standing meetup
+ */
+/**
+ * Add player to ALL future occurrences with available capacity (for Season Pass)
+ */
+async function addPlayerToAllFutureOccurrences(standingMeetupId, userId, userName, maxPlayers) {
+    const db = admin.firestore();
+    const now = Date.now();
+    const eightWeeksLater = now + 8 * 7 * 24 * 60 * 60 * 1000;
+    const occurrencesSnap = await db
+        .collection('standingMeetups')
+        .doc(standingMeetupId)
+        .collection('occurrences')
+        .where('startAt', '>=', now)
+        .where('startAt', '<', eightWeeksLater)
+        .where('status', '==', 'scheduled')
+        .get();
+    if (occurrencesSnap.empty) {
+        console.log(`No future occurrences found for meetup ${standingMeetupId}`);
+        return { addedTo: [], skippedFull: [] };
+    }
+    const addedTo = [];
+    const skippedFull = [];
+    const batch = db.batch();
+    for (const occDoc of occurrencesSnap.docs) {
+        const occData = occDoc.data();
+        // Check capacity
+        const spotsLeft = maxPlayers - (occData.expectedCount || 0);
+        if (spotsLeft <= 0) {
+            skippedFull.push(occDoc.id);
+            continue;
+        }
+        const participantRef = occDoc.ref.collection('participants').doc(userId);
+        const participantSnap = await participantRef.get();
+        if (!participantSnap.exists) {
+            batch.set(participantRef, {
+                userName,
+                status: 'expected',
+                creditIssued: false,
+                updatedAt: now,
+            });
+            batch.update(occDoc.ref, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                updatedAt: now,
+            });
+            const indexRef = db
+                .collection('meetupOccurrencesIndex')
+                .doc(`${standingMeetupId}_${occDoc.id}`);
+            batch.update(indexRef, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                spotsLeft: admin.firestore.FieldValue.increment(-1),
+                updatedAt: now,
+            });
+            addedTo.push(occDoc.id);
+        }
+    }
+    await batch.commit();
+    console.log(`Season Pass: Added ${userName} to ${addedTo.length} occurrences, skipped ${skippedFull.length} full`);
+    return { addedTo, skippedFull };
+}
+/**
+ * Add player to SELECTED occurrences only (for Pick-and-Pay)
+ */
+async function addPlayerToSelectedOccurrences(standingMeetupId, userId, userName, sessionIds, maxPlayers) {
+    const db = admin.firestore();
+    const now = Date.now();
+    if (!sessionIds || sessionIds.length === 0) {
+        console.warn('addPlayerToSelectedOccurrences: No sessions selected');
+        return { addedTo: [], failedFull: [] };
+    }
+    const addedTo = [];
+    const failedFull = [];
+    const batch = db.batch();
+    for (const dateId of sessionIds) {
+        const occRef = db
+            .collection('standingMeetups')
+            .doc(standingMeetupId)
+            .collection('occurrences')
+            .doc(dateId);
+        const occSnap = await occRef.get();
+        if (!occSnap.exists) {
+            console.warn(`Occurrence ${dateId} not found, skipping`);
+            continue;
+        }
+        const occData = occSnap.data();
+        // Check capacity
+        const spotsLeft = maxPlayers - (occData.expectedCount || 0);
+        if (spotsLeft <= 0) {
+            failedFull.push(dateId);
+            continue;
+        }
+        const participantRef = occRef.collection('participants').doc(userId);
+        const participantSnap = await participantRef.get();
+        if (!participantSnap.exists) {
+            batch.set(participantRef, {
+                userName,
+                status: 'expected',
+                creditIssued: false,
+                updatedAt: now,
+            });
+            batch.update(occRef, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                updatedAt: now,
+            });
+            const indexRef = db
+                .collection('meetupOccurrencesIndex')
+                .doc(`${standingMeetupId}_${dateId}`);
+            batch.update(indexRef, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                spotsLeft: admin.firestore.FieldValue.increment(-1),
+                updatedAt: now,
+            });
+            addedTo.push(dateId);
+        }
+    }
+    await batch.commit();
+    console.log(`Pick-and-Pay: Added ${userName} to ${addedTo.length} selected occurrences`);
+    return { addedTo, failedFull };
+}
+// ============================================
+// GUEST SESSION PAYMENT HANDLER
+// ============================================
+/**
+ * Handle guest_session_payment checkout completion
+ * Creates OccurrenceGuest document and updates occurrence counters
+ */
+async function handleGuestSessionPayment(session, metadata) {
+    var _a;
+    const { standingMeetupId, occurrenceId, guestName, guestEmail } = metadata;
+    // Validate required fields
+    if (!standingMeetupId || !occurrenceId || !guestName || !guestEmail) {
+        console.error('Guest session payment missing required metadata:', {
+            standingMeetupId,
+            occurrenceId,
+            guestName,
+            guestEmail,
+        });
+        return;
+    }
+    const db = admin.firestore();
+    const now = Date.now();
+    try {
+        // Get references
+        const occurrenceRef = db
+            .collection('standingMeetups')
+            .doc(standingMeetupId)
+            .collection('occurrences')
+            .doc(occurrenceId);
+        // Check if occurrence exists
+        const occurrenceSnap = await occurrenceRef.get();
+        if (!occurrenceSnap.exists) {
+            console.error(`Guest payment: Occurrence ${occurrenceId} not found for meetup ${standingMeetupId}`);
+            // Don't throw - webhook should succeed to avoid retries for data that won't exist
+            return;
+        }
+        // Idempotency check: Look for existing guest with same checkout session
+        const existingGuestSnap = await occurrenceRef
+            .collection('guests')
+            .where('stripeCheckoutSessionId', '==', session.id)
+            .limit(1)
+            .get();
+        if (!existingGuestSnap.empty) {
+            console.log(`Guest already exists for session ${session.id}, skipping (idempotency)`);
+            return;
+        }
+        // Use a transaction to atomically create guest and update occurrence counters
+        await db.runTransaction(async (transaction) => {
+            // Re-read occurrence in transaction
+            const occDoc = await transaction.get(occurrenceRef);
+            if (!occDoc.exists) {
+                throw new Error('Occurrence not found in transaction');
+            }
+            // Create the guest document
+            const guestRef = occurrenceRef.collection('guests').doc();
+            const guestData = {
+                id: guestRef.id,
+                name: guestName,
+                email: guestEmail,
+                amount: session.amount_total || 0,
+                paymentMethod: 'stripe',
+                stripeCheckoutSessionId: session.id,
+                stripePaymentIntentId: session.payment_intent || null,
+                createdAt: now,
+                createdBy: 'stripe_webhook',
+            };
+            transaction.set(guestRef, guestData);
+            // Atomically increment guestCount and guestRevenue on the occurrence
+            // FieldValue.increment handles the case where fields don't exist (treats as 0)
+            transaction.update(occurrenceRef, {
+                guestCount: admin.firestore.FieldValue.increment(1),
+                guestRevenue: admin.firestore.FieldValue.increment(session.amount_total || 0),
+                updatedAt: now,
+            });
+        });
+        console.log(`✅ Guest payment processed: ${guestName} (${guestEmail}) for occurrence ${occurrenceId}`);
+        // Send receipt email to guest (best-effort, never breaks webhook)
+        try {
+            // Fetch meetup title for the email
+            const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+            const meetupTitle = meetupDoc.exists ? (((_a = meetupDoc.data()) === null || _a === void 0 ? void 0 : _a.title) || 'Pickleball Session') : 'Pickleball Session';
+            const amountCents = session.amount_total || 0;
+            const amountFormatted = `$${(amountCents / 100).toFixed(2)}`;
+            const currency = (session.currency || 'nzd').toUpperCase();
+            const subject = `Payment Receipt - ${meetupTitle}`;
+            const textBody = [
+                `Hi ${guestName},`,
+                '',
+                `Thank you for your payment!`,
+                '',
+                `Event: ${meetupTitle}`,
+                `Session: ${occurrenceId}`,
+                `Amount: ${amountFormatted} ${currency}`,
+                `Payment method: Card`,
+                '',
+                `Want to track your sessions and get notified about upcoming events?`,
+                `Create your free account: https://pickleballdirector.co.nz`,
+                '',
+                `Thanks for playing!`,
+                `Pickleball Director`,
+            ].join('\n');
+            const htmlBody = `
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head>
+<body style="margin:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:24px;">
+    <div style="background:#030712;color:#fff;border-radius:14px;padding:24px;">
+      <div style="font-size:20px;font-weight:700;">Pickleball Director</div>
+      <div style="margin-top:6px;color:#84cc16;font-size:14px;">Payment Receipt</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;margin-top:14px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,0.05);">
+      <div style="font-size:16px;color:#111;">Hi ${guestName},</div>
+      <div style="margin-top:12px;color:#374151;">Thank you for your payment!</div>
+      <div style="margin-top:18px;padding:16px;background:#f9fafb;border-radius:10px;">
+        <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Event</div>
+        <div style="font-size:16px;font-weight:600;margin-top:4px;">${meetupTitle}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Session</div>
+        <div style="font-size:14px;font-weight:500;margin-top:4px;">${occurrenceId}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Amount Paid</div>
+        <div style="font-size:20px;font-weight:700;color:#84cc16;margin-top:4px;">${amountFormatted} ${currency}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Payment Method</div>
+        <div style="font-size:14px;margin-top:4px;">Card</div>
+      </div>
+      <div style="margin-top:24px;padding:16px;background:#030712;border-radius:10px;text-align:center;">
+        <div style="color:#d1d5db;font-size:14px;">Want to track your sessions?</div>
+        <a href="https://pickleballdirector.co.nz" style="display:inline-block;margin-top:10px;padding:10px 24px;background:#84cc16;color:#030712;font-weight:700;text-decoration:none;border-radius:8px;font-size:14px;">Create Free Account</a>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:16px;color:#9ca3af;font-size:12px;">
+      Pickleball Director &mdash; pickleballdirector.co.nz
+    </div>
+  </div>
+</body>
+</html>`;
+            const emailResult = await (0, comms_1.sendEmail)(guestEmail, subject, textBody, htmlBody);
+            if (emailResult.success) {
+                console.log(`Receipt email sent to guest ${guestEmail} for session ${session.id}`);
+            }
+            else {
+                console.warn(`Receipt email failed for guest ${guestEmail}: ${emailResult.error}`);
+            }
+        }
+        catch (emailError) {
+            // Never let email failure break the webhook
+            console.warn('Guest receipt email failed (non-fatal):', emailError);
+        }
+    }
+    catch (error) {
+        console.error('Error handling guest session payment:', error);
+        throw error; // Re-throw to mark webhook as failed for retry
+    }
+}
+// ============================================
+// MEMBER SESSION REGISTRATION HANDLER (Phase 7)
+// ============================================
+/**
+ * Handle member_session_registration checkout completion
+ * Creates OccurrenceParticipant document with checked_in status
+ * This is for when a logged-in member scans check-in QR but wasn't registered
+ */
+async function handleMemberSessionRegistration(session, metadata) {
+    var _a;
+    const { standingMeetupId, occurrenceId, odUserId, memberName, memberEmail } = metadata;
+    // Validate required fields
+    if (!standingMeetupId || !occurrenceId || !odUserId) {
+        console.error('Member session registration missing required metadata:', {
+            standingMeetupId,
+            occurrenceId,
+            odUserId,
+        });
+        return;
+    }
+    const db = admin.firestore();
+    const now = Date.now();
+    try {
+        // Get references
+        const occurrenceRef = db
+            .collection('standingMeetups')
+            .doc(standingMeetupId)
+            .collection('occurrences')
+            .doc(occurrenceId);
+        const participantRef = occurrenceRef.collection('participants').doc(odUserId);
+        // Check if occurrence exists
+        const occurrenceSnap = await occurrenceRef.get();
+        if (!occurrenceSnap.exists) {
+            console.error(`Member registration: Occurrence ${occurrenceId} not found for meetup ${standingMeetupId}`);
+            return;
+        }
+        // Idempotency check: If participant already exists, skip
+        const existingParticipantSnap = await participantRef.get();
+        if (existingParticipantSnap.exists) {
+            console.log(`Participant ${odUserId} already exists for occurrence ${occurrenceId}, skipping (idempotency)`);
+            return;
+        }
+        // Use a transaction to atomically create participant and update counters
+        await db.runTransaction(async (transaction) => {
+            // Re-read occurrence in transaction
+            const occDoc = await transaction.get(occurrenceRef);
+            if (!occDoc.exists) {
+                throw new Error('Occurrence not found in transaction');
+            }
+            // Create the participant document with checked_in status
+            // The participant is paying at the door, so they're physically present
+            const participantData = {
+                odUserId,
+                userName: memberName || 'Member', // Must be userName to match UI expectations
+                email: memberEmail || null,
+                status: 'checked_in', // Auto-checked in since they're at the door paying
+                checkedInAt: now,
+                checkedInBy: 'stripe_webhook', // Auto check-in on payment
+                registeredAt: now,
+                paymentMethod: 'stripe',
+                paymentStatus: 'paid',
+                stripeCheckoutSessionId: session.id,
+                stripePaymentIntentId: session.payment_intent || null,
+                amountPaid: session.amount_total || 0,
+                createdAt: now,
+                updatedAt: now,
+            };
+            transaction.set(participantRef, participantData);
+            // Atomically increment both expected count AND checked-in count
+            // Since they're registering AND checking in at the same time
+            // We only increment checkedInCount (not expectedCount) because:
+            // - expectedCount is for "waiting to arrive"
+            // - checkedInCount is for "physically arrived"
+            // They go straight to checkedInCount since they're already at the door
+            transaction.update(occurrenceRef, {
+                checkedInCount: admin.firestore.FieldValue.increment(1),
+                updatedAt: now,
+            });
+        });
+        console.log(`✅ Member registration + check-in processed: ${memberName || odUserId} for occurrence ${occurrenceId}`);
+        // Send confirmation email to member (best-effort, never breaks webhook)
+        if (memberEmail) {
+            try {
+                // Fetch meetup title for the email
+                const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+                const meetupTitle = meetupDoc.exists ? (((_a = meetupDoc.data()) === null || _a === void 0 ? void 0 : _a.title) || 'Pickleball Session') : 'Pickleball Session';
+                const amountCents = session.amount_total || 0;
+                const amountFormatted = `$${(amountCents / 100).toFixed(2)}`;
+                const currency = (session.currency || 'nzd').toUpperCase();
+                const displayName = memberName || 'there';
+                const subject = `Registered & Checked In - ${meetupTitle}`;
+                const textBody = [
+                    `Hi ${displayName},`,
+                    '',
+                    `You're registered and checked in!`,
+                    '',
+                    `Event: ${meetupTitle}`,
+                    `Session: ${occurrenceId}`,
+                    `Amount: ${amountFormatted} ${currency}`,
+                    `Status: Checked In`,
+                    '',
+                    `Have a great session!`,
+                    `Pickleball Director`,
+                ].join('\n');
+                const htmlBody = `
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head>
+<body style="margin:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;padding:24px;">
+    <div style="background:#030712;color:#fff;border-radius:14px;padding:24px;">
+      <div style="font-size:20px;font-weight:700;">Pickleball Director</div>
+      <div style="margin-top:6px;color:#84cc16;font-size:14px;">Registration Confirmation</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;margin-top:14px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,0.05);">
+      <div style="font-size:16px;color:#111;">Hi ${displayName},</div>
+      <div style="margin-top:12px;color:#374151;">You're registered and checked in!</div>
+      <div style="margin-top:18px;padding:16px;background:#f9fafb;border-radius:10px;">
+        <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Event</div>
+        <div style="font-size:16px;font-weight:600;margin-top:4px;">${meetupTitle}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Session</div>
+        <div style="font-size:14px;font-weight:500;margin-top:4px;">${occurrenceId}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Amount Paid</div>
+        <div style="font-size:20px;font-weight:700;color:#84cc16;margin-top:4px;">${amountFormatted} ${currency}</div>
+        <div style="margin-top:12px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Status</div>
+        <div style="display:inline-block;margin-top:4px;padding:4px 12px;background:#dcfce7;color:#166534;font-weight:600;border-radius:20px;font-size:13px;">Checked In</div>
+      </div>
+      <div style="margin-top:18px;color:#6b7280;font-size:13px;">Have a great session!</div>
+    </div>
+    <div style="text-align:center;margin-top:16px;color:#9ca3af;font-size:12px;">
+      Pickleball Director &mdash; pickleballdirector.co.nz
+    </div>
+  </div>
+</body>
+</html>`;
+                const emailResult = await (0, comms_1.sendEmail)(memberEmail, subject, textBody, htmlBody);
+                if (emailResult.success) {
+                    console.log(`Confirmation email sent to member ${memberEmail} for session ${session.id}`);
+                }
+                else {
+                    console.warn(`Confirmation email failed for member ${memberEmail}: ${emailResult.error}`);
+                }
+            }
+            catch (emailError) {
+                // Never let email failure break the webhook
+                console.warn('Member confirmation email failed (non-fatal):', emailError);
+            }
+        }
+    }
+    catch (error) {
+        console.error('Error handling member session registration:', error);
+        throw error; // Re-throw to mark webhook as failed for retry
     }
 }
 // ============================================
@@ -2029,13 +2769,16 @@ exports.stripe_createRefund = functions.https.onCall(async (data, context) => {
         if (!((_b = tx.stripe) === null || _b === void 0 ? void 0 : _b.accountId)) {
             throw new functions.https.HttpsError('failed-precondition', 'Transaction has no connected account');
         }
-        // Validate refund amount
-        const refundAmount = amount || tx.amount; // Full refund if not specified
+        // Validate refund amount - default to NET amount (what organizer actually received)
+        // clubNetAmount is the TRUE net from Stripe's balance_transaction (set by charge.succeeded webhook)
+        const netAmount = tx.clubNetAmount || tx.organizerNetAmount || (tx.amount - (tx.totalFeeAmount || tx.platformFeeAmount || 0));
+        console.log(`Refund calculation: original=${tx.amount}, totalFees=${tx.totalFeeAmount}, platformFee=${tx.platformFeeAmount}, net=${netAmount}`);
+        const refundAmount = amount || netAmount; // Refund net amount if not specified
         if (refundAmount <= 0) {
             throw new functions.https.HttpsError('invalid-argument', 'Refund amount must be positive');
         }
-        if (refundAmount > tx.amount) {
-            throw new functions.https.HttpsError('invalid-argument', 'Refund amount cannot exceed original amount');
+        if (refundAmount > netAmount) {
+            throw new functions.https.HttpsError('invalid-argument', `Refund amount (${refundAmount}) cannot exceed net amount (${netAmount})`);
         }
         // 2. Create Stripe refund on connected account
         const refund = await stripe.refunds.create({
@@ -2053,6 +2796,7 @@ exports.stripe_createRefund = functions.https.onCall(async (data, context) => {
             schemaVersion: 1,
             odClubId: tx.odClubId,
             odUserId: tx.odUserId,
+            organizerUserId: tx.organizerUserId || '',
             type: 'refund',
             status: 'processing', // Webhook will complete
             parentTransactionId: transactionId,
@@ -2224,5 +2968,802 @@ async function handleDisputeClosed(dispute, event) {
         }
     }
     console.log(`✅ Dispute ${dispute.id} closed with status: ${dispute.status} (${won ? 'WON' : lost ? 'LOST' : 'OTHER'})`);
+}
+// ============================================
+// STANDING MEETUP GUEST CHECKOUT
+// ============================================
+// Fee constants for guest checkout calculations
+// NZ Stripe standard rate: 2.9% + $0.30
+// Note: Link/international cards may be higher, but this covers most domestic cards
+const GUEST_STRIPE_FEE_PERCENT = 0.029;
+const GUEST_STRIPE_FIXED_FEE_CENTS = 30;
+const GUEST_PLATFORM_FEE_PERCENT = 0.015; // 1.5% platform fee
+/**
+ * Create a Checkout Session for a guest (walk-in) at a standing meetup.
+ * The guest pays by card and the payment goes to the organizer's connected account.
+ *
+ * This function does NOT require authentication - guests don't have accounts.
+ * Security is provided by:
+ * - The meetup must be active
+ * - The occurrence must exist and not be closed
+ * - Card payments must be enabled for the meetup
+ *
+ * @region australia-southeast1
+ */
+exports.standingMeetup_createGuestCheckoutSession = functions
+    .region('australia-southeast1')
+    .https.onCall(async (data) => {
+    var _a;
+    const { standingMeetupId, occurrenceId, name, email, returnUrl } = data;
+    // Input validation
+    if (!standingMeetupId) {
+        throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId is required');
+    }
+    if (!occurrenceId) {
+        throw new functions.https.HttpsError('invalid-argument', 'occurrenceId is required');
+    }
+    if (!name || name.trim().length === 0) {
+        throw new functions.https.HttpsError('invalid-argument', 'Guest name is required');
+    }
+    if (!email || !email.includes('@')) {
+        throw new functions.https.HttpsError('invalid-argument', 'Valid email is required');
+    }
+    if (!returnUrl) {
+        throw new functions.https.HttpsError('invalid-argument', 'returnUrl is required');
+    }
+    const db = admin.firestore();
+    // Get the standing meetup
+    const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+    if (!meetupDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
+    }
+    const meetup = meetupDoc.data();
+    // Verify meetup is active
+    if (meetup.status !== 'active') {
+        throw new functions.https.HttpsError('failed-precondition', 'Meetup is not active');
+    }
+    // Verify card payments are enabled
+    if (!((_a = meetup.paymentMethods) === null || _a === void 0 ? void 0 : _a.acceptCardPayments)) {
+        throw new functions.https.HttpsError('failed-precondition', 'Card payments are not enabled for this meetup');
+    }
+    // Verify organizer has Stripe connected
+    if (!meetup.organizerStripeAccountId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Organizer has not connected Stripe');
+    }
+    // Get the occurrence to verify it exists and is not closed
+    const occurrenceDoc = await db
+        .collection('standingMeetups')
+        .doc(standingMeetupId)
+        .collection('occurrences')
+        .doc(occurrenceId)
+        .get();
+    if (!occurrenceDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Occurrence not found');
+    }
+    const occurrence = occurrenceDoc.data();
+    // Check occurrence is not cancelled or closed
+    if (occurrence.status === 'cancelled') {
+        throw new functions.https.HttpsError('failed-precondition', 'This session has been cancelled');
+    }
+    if (occurrence.closedAt) {
+        throw new functions.https.HttpsError('failed-precondition', 'This session has been closed');
+    }
+    // Get the per-session amount
+    const baseAmount = meetup.billing.perSessionAmount || meetup.billing.amount;
+    if (!baseAmount || baseAmount <= 0) {
+        throw new functions.https.HttpsError('failed-precondition', 'Invalid session price');
+    }
+    // Calculate the amount to charge (gross up if player pays fees)
+    let chargedAmount = baseAmount;
+    if (meetup.billing.feesPaidBy === 'player') {
+        // Gross up: amount / (1 - stripe_fee - platform_fee)
+        const divisor = 1 - GUEST_STRIPE_FEE_PERCENT - GUEST_PLATFORM_FEE_PERCENT;
+        chargedAmount = Math.ceil((baseAmount + GUEST_STRIPE_FIXED_FEE_CENTS) / divisor);
+    }
+    // Calculate platform fee (1.5% of charged amount)
+    const platformFee = Math.round(chargedAmount * GUEST_PLATFORM_FEE_PERCENT);
+    // Build success and cancel URLs
+    const successUrl = `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}success=true`;
+    const cancelUrl = returnUrl;
+    // Create Stripe Checkout Session
+    const sessionMetadata = {
+        type: 'guest_session_payment',
+        standingMeetupId,
+        occurrenceId,
+        guestName: name.trim(),
+        guestEmail: email.trim().toLowerCase(),
+        clubId: meetup.clubId || '',
+        organizerUserId: meetup.createdByUserId || '',
+        payerName: name.trim(),
+        payerEmail: email.trim().toLowerCase(),
+        eventName: meetup.title || '',
+    };
+    try {
+        const session = await stripe.checkout.sessions.create({
+            mode: 'payment',
+            customer_email: email.trim().toLowerCase(),
+            line_items: [
+                {
+                    price_data: {
+                        currency: meetup.billing.currency,
+                        product_data: {
+                            name: meetup.title,
+                            description: `Guest session - ${meetup.clubName}`,
+                        },
+                        unit_amount: chargedAmount,
+                    },
+                    quantity: 1,
+                },
+            ],
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            metadata: sessionMetadata,
+            payment_intent_data: {
+                application_fee_amount: platformFee,
+                metadata: sessionMetadata,
+            },
+        }, {
+            stripeAccount: meetup.organizerStripeAccountId,
+        });
+        console.log(`✅ Created guest checkout session ${session.id} for ${name} at ${meetup.title}`);
+        return {
+            checkoutUrl: session.url,
+            checkoutSessionId: session.id,
+        };
+    }
+    catch (error) {
+        console.error('Failed to create guest checkout session:', error);
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to create checkout session');
+    }
+});
+// ============================================
+// STANDING MEETUP QUICK REGISTER (Member at door)
+// ============================================
+/**
+ * Create a Checkout Session for a member to register and pay for a session at the door.
+ * This is for the scenario where a logged-in member scans the check-in QR but hasn't
+ * registered for the session. They can pay and register in one step.
+ *
+ * Key differences from guest checkout:
+ * - Requires authentication (member must be logged in)
+ * - Uses member's profile data (name, email)
+ * - Creates OccurrenceParticipant (not OccurrenceGuest)
+ * - Auto-checks-in on payment success (they're physically at the door)
+ *
+ * @region australia-southeast1
+ */
+exports.standingMeetup_createQuickRegisterCheckoutSession = functions
+    .region('australia-southeast1')
+    .https.onCall(async (data, context) => {
+    var _a;
+    // Require authentication - this is for members only
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in to register');
+    }
+    const userId = context.auth.uid;
+    const { standingMeetupId, occurrenceId, successUrl, cancelUrl } = data;
+    // Input validation
+    if (!standingMeetupId) {
+        throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId is required');
+    }
+    if (!occurrenceId) {
+        throw new functions.https.HttpsError('invalid-argument', 'occurrenceId is required');
+    }
+    if (!successUrl || !cancelUrl) {
+        throw new functions.https.HttpsError('invalid-argument', 'successUrl and cancelUrl are required');
+    }
+    const db = admin.firestore();
+    // Get user profile
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'User profile not found');
+    }
+    const userProfile = userDoc.data();
+    if (!userProfile.email) {
+        throw new functions.https.HttpsError('failed-precondition', 'User email is required');
+    }
+    // Get the standing meetup
+    const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+    if (!meetupDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
+    }
+    const meetup = meetupDoc.data();
+    // Verify meetup is active
+    if (meetup.status !== 'active') {
+        throw new functions.https.HttpsError('failed-precondition', 'Meetup is not active');
+    }
+    // Verify card payments are enabled
+    if (!((_a = meetup.paymentMethods) === null || _a === void 0 ? void 0 : _a.acceptCardPayments)) {
+        throw new functions.https.HttpsError('failed-precondition', 'Card payments are not enabled for this meetup');
+    }
+    // Verify organizer has Stripe connected
+    if (!meetup.organizerStripeAccountId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Organizer has not connected Stripe');
+    }
+    // Get the occurrence
+    const occurrenceDoc = await db
+        .collection('standingMeetups')
+        .doc(standingMeetupId)
+        .collection('occurrences')
+        .doc(occurrenceId)
+        .get();
+    if (!occurrenceDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Occurrence not found');
+    }
+    const occurrence = occurrenceDoc.data();
+    // Check occurrence is not cancelled or closed
+    if (occurrence.status === 'cancelled') {
+        throw new functions.https.HttpsError('failed-precondition', 'This session has been cancelled');
+    }
+    if (occurrence.closedAt) {
+        throw new functions.https.HttpsError('failed-precondition', 'This session has been closed');
+    }
+    // Check if user is already registered
+    const participantDoc = await db
+        .collection('standingMeetups')
+        .doc(standingMeetupId)
+        .collection('occurrences')
+        .doc(occurrenceId)
+        .collection('participants')
+        .doc(userId)
+        .get();
+    if (participantDoc.exists) {
+        throw new functions.https.HttpsError('already-exists', 'You are already registered for this session');
+    }
+    // Get the per-session amount
+    const baseAmount = meetup.billing.perSessionAmount || meetup.billing.amount;
+    if (!baseAmount || baseAmount <= 0) {
+        throw new functions.https.HttpsError('failed-precondition', 'Invalid session price');
+    }
+    // Calculate the amount to charge (gross up if player pays fees)
+    let chargedAmount = baseAmount;
+    if (meetup.billing.feesPaidBy === 'player') {
+        // Gross up: amount / (1 - stripe_fee - platform_fee)
+        const divisor = 1 - GUEST_STRIPE_FEE_PERCENT - GUEST_PLATFORM_FEE_PERCENT;
+        chargedAmount = Math.ceil((baseAmount + GUEST_STRIPE_FIXED_FEE_CENTS) / divisor);
+    }
+    // Calculate platform fee (1.5% of charged amount)
+    const platformFee = Math.round(chargedAmount * GUEST_PLATFORM_FEE_PERCENT);
+    // Create Stripe Checkout Session
+    const sessionMetadata = {
+        type: 'member_session_registration',
+        standingMeetupId,
+        occurrenceId,
+        odUserId: userId,
+        memberName: userProfile.displayName || 'Member',
+        memberEmail: userProfile.email,
+        clubId: meetup.clubId,
+        organizerUserId: meetup.createdByUserId || '',
+        payerName: userProfile.displayName || 'Member',
+        payerEmail: userProfile.email || '',
+        eventName: meetup.title || '',
+    };
+    try {
+        const session = await stripe.checkout.sessions.create({
+            mode: 'payment',
+            customer_email: userProfile.email,
+            line_items: [
+                {
+                    price_data: {
+                        currency: meetup.billing.currency,
+                        product_data: {
+                            name: meetup.title,
+                            description: `Session registration - ${meetup.clubName}`,
+                        },
+                        unit_amount: chargedAmount,
+                    },
+                    quantity: 1,
+                },
+            ],
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            metadata: sessionMetadata,
+            payment_intent_data: {
+                application_fee_amount: platformFee,
+                metadata: sessionMetadata,
+            },
+        }, {
+            stripeAccount: meetup.organizerStripeAccountId,
+        });
+        console.log(`✅ Created quick register checkout session ${session.id} for ${userProfile.displayName} at ${meetup.title}`);
+        return {
+            checkoutUrl: session.url,
+            checkoutSessionId: session.id,
+        };
+    }
+    catch (error) {
+        console.error('Failed to create quick register checkout session:', error);
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to create checkout session');
+    }
+});
+// ============================================
+// STANDING MEETUP SUBSCRIPTIONS
+// ============================================
+/**
+ * Create a subscription for a standing meetup
+ * Uses Direct Charges - subscription on connected account
+ */
+exports.stripe_createStandingMeetupSubscription = functions.https.onCall(async (data, context) => {
+    var _a, _b;
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const { standingMeetupId, paymentMethodId } = data;
+    const userId = context.auth.uid;
+    if (!standingMeetupId || !paymentMethodId) {
+        throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId and paymentMethodId are required');
+    }
+    const db = admin.firestore();
+    // Get standing meetup
+    const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+    if (!meetupDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'MEETUP_NOT_FOUND');
+    }
+    const meetup = meetupDoc.data();
+    // Validate meetup is active
+    if (meetup.status !== 'active') {
+        throw new functions.https.HttpsError('failed-precondition', 'MEETUP_NOT_ACTIVE');
+    }
+    // CAPACITY CHECK FIRST - before any Stripe API calls
+    if (meetup.subscriberCount >= meetup.maxPlayers) {
+        throw new functions.https.HttpsError('failed-precondition', 'CAPACITY_FULL');
+    }
+    // Check if already subscribed
+    const subscriptionId = `${standingMeetupId}_${userId}`;
+    const existingSubDoc = await db.collection('standingMeetupSubscriptions').doc(subscriptionId).get();
+    if (existingSubDoc.exists && ((_a = existingSubDoc.data()) === null || _a === void 0 ? void 0 : _a.status) === 'active') {
+        throw new functions.https.HttpsError('already-exists', 'ALREADY_SUBSCRIBED');
+    }
+    // Get user info
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'User not found');
+    }
+    const user = userDoc.data();
+    const connectedAccountId = meetup.organizerStripeAccountId;
+    if (!connectedAccountId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Organizer has no Stripe account');
+    }
+    try {
+        // STEP 1: Create/get customer on CONNECTED account (not platform)
+        // IMPORTANT: Customers are per-account in Stripe Connect
+        let customerId;
+        // Check if user has a customer ID for this connected account
+        const customerMapping = (_b = user.stripeCustomers) === null || _b === void 0 ? void 0 : _b[connectedAccountId];
+        if (customerMapping) {
+            customerId = customerMapping;
+        }
+        else {
+            // Create customer on connected account
+            const customer = await stripe.customers.create({
+                email: user.email,
+                name: user.displayName || user.email,
+                metadata: {
+                    userId,
+                    platform: 'pickleball-director',
+                },
+            }, { stripeAccount: connectedAccountId });
+            customerId = customer.id;
+            // Store customer mapping for future use
+            await db.collection('users').doc(userId).update({
+                [`stripeCustomers.${connectedAccountId}`]: customerId,
+                updatedAt: Date.now(),
+            });
+        }
+        // STEP 2: Attach payment method to customer on connected account
+        await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId }, { stripeAccount: connectedAccountId });
+        // Set as default payment method
+        await stripe.customers.update(customerId, { invoice_settings: { default_payment_method: paymentMethodId } }, { stripeAccount: connectedAccountId });
+        // STEP 3: Get or create price on connected account
+        let priceId = meetup.billing.stripePriceId;
+        if (!priceId) {
+            // Map our interval to Stripe's interval
+            const stripeInterval = meetup.billing.interval === 'weekly' ? 'week' : 'month';
+            const price = await stripe.prices.create({
+                unit_amount: meetup.billing.amount,
+                currency: meetup.billing.currency,
+                recurring: {
+                    interval: stripeInterval,
+                    interval_count: meetup.billing.intervalCount || 1,
+                },
+                product_data: {
+                    name: `${meetup.title} Subscription`,
+                },
+            }, { stripeAccount: connectedAccountId });
+            priceId = price.id;
+            // Store price ID for reuse
+            await db.collection('standingMeetups').doc(standingMeetupId).update({
+                'billing.stripePriceId': priceId,
+                updatedAt: Date.now(),
+            });
+        }
+        // STEP 4: Calculate billing anchor (next meetup day)
+        // If today is meetup day and past start time, use next week
+        const now = new Date();
+        const dayOfWeek = meetup.recurrence.dayOfWeek;
+        const currentDay = now.getDay();
+        let daysUntilMeetup = (dayOfWeek - currentDay + 7) % 7;
+        // Parse start time
+        const [startHour, startMinute] = meetup.recurrence.startTime.split(':').map(Number);
+        const todaysMeetupTime = new Date(now);
+        todaysMeetupTime.setHours(startHour, startMinute, 0, 0);
+        // If today is meetup day but past start time, use next occurrence
+        if (daysUntilMeetup === 0 && now > todaysMeetupTime) {
+            daysUntilMeetup = 7 * (meetup.recurrence.intervalCount || 1);
+        }
+        const nextMeetupDate = new Date(now);
+        nextMeetupDate.setDate(now.getDate() + daysUntilMeetup);
+        nextMeetupDate.setHours(startHour, startMinute, 0, 0);
+        const billingAnchor = Math.floor(nextMeetupDate.getTime() / 1000);
+        // STEP 5: Create subscription with billing anchor
+        const subscription = await stripe.subscriptions.create({
+            customer: customerId,
+            items: [{ price: priceId }],
+            billing_cycle_anchor: billingAnchor,
+            proration_behavior: 'create_prorations',
+            payment_settings: {
+                payment_method_types: ['card'],
+                save_default_payment_method: 'on_subscription',
+            },
+            metadata: {
+                type: 'standing_meetup_subscription',
+                standingMeetupId,
+                clubId: meetup.clubId,
+                userId,
+                platform: 'pickleball-director',
+            },
+            // Apply platform fee as application_fee_percent
+            application_fee_percent: PLATFORM_FEE_PERCENT,
+        }, { stripeAccount: connectedAccountId });
+        // STEP 6: Create subscription document in Firestore
+        const subscriptionData = {
+            id: subscriptionId,
+            standingMeetupId,
+            clubId: meetup.clubId,
+            userId,
+            userName: user.displayName || user.email,
+            userEmail: user.email,
+            stripeAccountId: connectedAccountId,
+            stripeSubscriptionId: subscription.id,
+            stripeCustomerId: customerId,
+            stripeStatus: subscription.status,
+            currentPeriodStart: subscription.current_period_start * 1000,
+            currentPeriodEnd: subscription.current_period_end * 1000,
+            billingAmount: meetup.billing.amount,
+            status: 'active',
+            totalPaid: 0,
+            totalCreditsReceived: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        };
+        await db.collection('standingMeetupSubscriptions').doc(subscriptionId).set(subscriptionData);
+        // STEP 7: Increment subscriber count on standing meetup
+        await db.collection('standingMeetups').doc(standingMeetupId).update({
+            subscriberCount: admin.firestore.FieldValue.increment(1),
+            updatedAt: Date.now(),
+        });
+        // STEP 8: Stamp subscriber into occurrences in window [now, currentPeriodEnd]
+        // This is done via Cloud Function standingMeetup_ensureOccurrences
+        // Call it to ensure occurrences exist, then stamp the subscriber
+        const periodEnd = subscription.current_period_end * 1000;
+        const occurrencesSnap = await db
+            .collection('standingMeetups')
+            .doc(standingMeetupId)
+            .collection('occurrences')
+            .where('startAt', '>=', Date.now())
+            .where('startAt', '<', periodEnd)
+            .get();
+        const batch = db.batch();
+        let firstOccurrenceDate = '';
+        for (const occDoc of occurrencesSnap.docs) {
+            if (!firstOccurrenceDate) {
+                firstOccurrenceDate = occDoc.id;
+            }
+            const participantRef = occDoc.ref.collection('participants').doc(userId);
+            batch.set(participantRef, {
+                userName: user.displayName || user.email,
+                status: 'expected',
+                creditIssued: false,
+                updatedAt: Date.now(),
+            });
+            // Increment expectedCount
+            batch.update(occDoc.ref, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                updatedAt: Date.now(),
+            });
+            // Update index
+            const indexRef = db
+                .collection('meetupOccurrencesIndex')
+                .doc(`${standingMeetupId}_${occDoc.id}`);
+            batch.update(indexRef, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                spotsLeft: admin.firestore.FieldValue.increment(-1),
+                updatedAt: Date.now(),
+            });
+        }
+        await batch.commit();
+        console.log(`✅ Created standing meetup subscription ${subscriptionId} for user ${userId}`);
+        return {
+            subscriptionId,
+            stripeSubscriptionId: subscription.id,
+            currentPeriodEnd: subscription.current_period_end * 1000,
+            firstOccurrenceDate: firstOccurrenceDate || nextMeetupDate.toISOString().split('T')[0],
+        };
+    }
+    catch (error) {
+        console.error('Error creating standing meetup subscription:', error);
+        if (error.type === 'StripeCardError') {
+            throw new functions.https.HttpsError('failed-precondition', 'PAYMENT_FAILED');
+        }
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to create subscription');
+    }
+});
+/**
+ * Cancel a standing meetup subscription
+ * Cancels at period end (subscriber keeps access until billing period ends)
+ */
+exports.stripe_cancelStandingMeetupSubscription = functions.https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+    const { subscriptionId } = data;
+    const userId = context.auth.uid;
+    if (!subscriptionId) {
+        throw new functions.https.HttpsError('invalid-argument', 'subscriptionId is required');
+    }
+    const db = admin.firestore();
+    // Get subscription
+    const subDoc = await db.collection('standingMeetupSubscriptions').doc(subscriptionId).get();
+    if (!subDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'SUBSCRIPTION_NOT_FOUND');
+    }
+    const subscription = subDoc.data();
+    // Verify ownership
+    if (subscription.userId !== userId) {
+        throw new functions.https.HttpsError('permission-denied', 'NOT_OWNER');
+    }
+    // Check if already cancelled
+    if (subscription.status === 'cancelled') {
+        throw new functions.https.HttpsError('already-exists', 'ALREADY_CANCELLED');
+    }
+    try {
+        // Cancel on Stripe (at period end)
+        const stripeSubscription = await stripe.subscriptions.update(subscription.stripeSubscriptionId, { cancel_at_period_end: true }, { stripeAccount: subscription.stripeAccountId });
+        const cancelledAt = Date.now();
+        // Update Firestore subscription
+        await subDoc.ref.update({
+            status: 'cancelled',
+            cancelledAt,
+            stripeStatus: stripeSubscription.status,
+            updatedAt: Date.now(),
+        });
+        // Note: We don't decrement subscriberCount or remove from occurrences yet
+        // That happens when the subscription actually ends (via webhook)
+        console.log(`✅ Cancelled standing meetup subscription ${subscriptionId}`);
+        return {
+            cancelledAt,
+            effectiveEndDate: subscription.currentPeriodEnd,
+        };
+    }
+    catch (error) {
+        console.error('Error cancelling standing meetup subscription:', error);
+        throw new functions.https.HttpsError('internal', error.message || 'Failed to cancel subscription');
+    }
+});
+/**
+ * Handle standing meetup subscription webhooks
+ * Called by the main webhook handler for subscription-related events
+ */
+async function handleStandingMeetupSubscriptionWebhook(event) {
+    const db = admin.firestore();
+    const connectedAccountId = event.account;
+    // Only process events from connected accounts
+    if (!connectedAccountId) {
+        return;
+    }
+    // 2-STEP LOCK PATTERN: Acquire lock FIRST
+    const lockRef = db.collection('stripeEvents').doc(event.id);
+    let alreadyProcessed = false;
+    await db.runTransaction(async (transaction) => {
+        const lockSnap = await transaction.get(lockRef);
+        if (lockSnap.exists) {
+            alreadyProcessed = true;
+            return;
+        }
+        transaction.set(lockRef, {
+            eventType: event.type,
+            status: 'processing',
+            startedAt: Date.now(),
+            accountId: connectedAccountId,
+        });
+    });
+    if (alreadyProcessed) {
+        console.log(`Event ${event.id} already processed, skipping`);
+        return;
+    }
+    try {
+        // Process event OUTSIDE the transaction
+        switch (event.type) {
+            case 'invoice.paid':
+                await handleStandingMeetupInvoicePaid(event.data.object, connectedAccountId);
+                break;
+            case 'invoice.payment_failed':
+                await handleStandingMeetupPaymentFailed(event.data.object, connectedAccountId);
+                break;
+            case 'customer.subscription.deleted':
+                await handleStandingMeetupSubscriptionDeleted(event.data.object, connectedAccountId);
+                break;
+        }
+        // Mark lock as done
+        await lockRef.update({
+            status: 'done',
+            completedAt: Date.now(),
+        });
+    }
+    catch (error) {
+        // Mark lock as failed
+        await lockRef.update({
+            status: 'failed',
+            error: error.message,
+            failedAt: Date.now(),
+        });
+        throw error;
+    }
+}
+/**
+ * Handle invoice.paid for standing meetup subscriptions
+ */
+async function handleStandingMeetupInvoicePaid(invoice, connectedAccountId) {
+    var _a, _b;
+    const db = admin.firestore();
+    // Check if this is a standing meetup subscription
+    const subscription = invoice.subscription;
+    if (!subscription)
+        return;
+    // Get subscription by Stripe ID
+    const subsSnap = await db.collection('standingMeetupSubscriptions')
+        .where('stripeSubscriptionId', '==', subscription)
+        .where('stripeAccountId', '==', connectedAccountId)
+        .limit(1)
+        .get();
+    if (subsSnap.empty) {
+        // Not a standing meetup subscription
+        return;
+    }
+    const subDoc = subsSnap.docs[0];
+    const subData = subDoc.data();
+    // Update subscription with new period
+    const stripeSubscription = await stripe.subscriptions.retrieve(subscription, { stripeAccount: connectedAccountId });
+    await subDoc.ref.update({
+        currentPeriodStart: stripeSubscription.current_period_start * 1000,
+        currentPeriodEnd: stripeSubscription.current_period_end * 1000,
+        stripeStatus: stripeSubscription.status,
+        totalPaid: admin.firestore.FieldValue.increment(invoice.amount_paid),
+        updatedAt: Date.now(),
+    });
+    // Stamp subscriber into new occurrences for the new period
+    const periodEnd = stripeSubscription.current_period_end * 1000;
+    const periodStart = stripeSubscription.current_period_start * 1000;
+    const occurrencesSnap = await db
+        .collection('standingMeetups')
+        .doc(subData.standingMeetupId)
+        .collection('occurrences')
+        .where('startAt', '>=', periodStart)
+        .where('startAt', '<', periodEnd)
+        .get();
+    // Get user info
+    const userDoc = await db.collection('users').doc(subData.userId).get();
+    const userName = ((_a = userDoc.data()) === null || _a === void 0 ? void 0 : _a.displayName) || ((_b = userDoc.data()) === null || _b === void 0 ? void 0 : _b.email) || 'Unknown';
+    const batch = db.batch();
+    for (const occDoc of occurrencesSnap.docs) {
+        const participantRef = occDoc.ref.collection('participants').doc(subData.userId);
+        const participantSnap = await participantRef.get();
+        if (!participantSnap.exists) {
+            batch.set(participantRef, {
+                userName,
+                status: 'expected',
+                creditIssued: false,
+                updatedAt: Date.now(),
+            });
+            batch.update(occDoc.ref, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                updatedAt: Date.now(),
+            });
+            const indexRef = db
+                .collection('meetupOccurrencesIndex')
+                .doc(`${subData.standingMeetupId}_${occDoc.id}`);
+            batch.update(indexRef, {
+                expectedCount: admin.firestore.FieldValue.increment(1),
+                spotsLeft: admin.firestore.FieldValue.increment(-1),
+                updatedAt: Date.now(),
+            });
+        }
+    }
+    await batch.commit();
+    console.log(`✅ Processed invoice.paid for subscription ${subDoc.id}`);
+}
+/**
+ * Handle invoice.payment_failed for standing meetup subscriptions
+ */
+async function handleStandingMeetupPaymentFailed(invoice, connectedAccountId) {
+    const db = admin.firestore();
+    const subscription = invoice.subscription;
+    if (!subscription)
+        return;
+    // Get subscription by Stripe ID
+    const subsSnap = await db.collection('standingMeetupSubscriptions')
+        .where('stripeSubscriptionId', '==', subscription)
+        .where('stripeAccountId', '==', connectedAccountId)
+        .limit(1)
+        .get();
+    if (subsSnap.empty)
+        return;
+    const subDoc = subsSnap.docs[0];
+    // Update status to past_due
+    await subDoc.ref.update({
+        status: 'past_due',
+        stripeStatus: 'past_due',
+        updatedAt: Date.now(),
+    });
+    // TODO: Send SMS notification to player about payment failure
+    console.log(`✅ Marked subscription ${subDoc.id} as past_due`);
+}
+/**
+ * Handle customer.subscription.deleted for standing meetup subscriptions
+ */
+async function handleStandingMeetupSubscriptionDeleted(subscription, connectedAccountId) {
+    var _a;
+    const db = admin.firestore();
+    // Get subscription by Stripe ID
+    const subsSnap = await db.collection('standingMeetupSubscriptions')
+        .where('stripeSubscriptionId', '==', subscription.id)
+        .where('stripeAccountId', '==', connectedAccountId)
+        .limit(1)
+        .get();
+    if (subsSnap.empty)
+        return;
+    const subDoc = subsSnap.docs[0];
+    const subData = subDoc.data();
+    // Mark as cancelled (final)
+    await subDoc.ref.update({
+        status: 'cancelled',
+        stripeStatus: 'canceled',
+        updatedAt: Date.now(),
+    });
+    // Decrement subscriber count
+    await db.collection('standingMeetups').doc(subData.standingMeetupId).update({
+        subscriberCount: admin.firestore.FieldValue.increment(-1),
+        updatedAt: Date.now(),
+    });
+    // Remove from future occurrences
+    const now = Date.now();
+    const occurrencesSnap = await db
+        .collection('standingMeetups')
+        .doc(subData.standingMeetupId)
+        .collection('occurrences')
+        .where('startAt', '>', now)
+        .get();
+    const batch = db.batch();
+    for (const occDoc of occurrencesSnap.docs) {
+        const participantRef = occDoc.ref.collection('participants').doc(subData.userId);
+        const participantSnap = await participantRef.get();
+        if (participantSnap.exists && ((_a = participantSnap.data()) === null || _a === void 0 ? void 0 : _a.status) === 'expected') {
+            batch.delete(participantRef);
+            batch.update(occDoc.ref, {
+                expectedCount: admin.firestore.FieldValue.increment(-1),
+                updatedAt: Date.now(),
+            });
+            const indexRef = db
+                .collection('meetupOccurrencesIndex')
+                .doc(`${subData.standingMeetupId}_${occDoc.id}`);
+            batch.update(indexRef, {
+                expectedCount: admin.firestore.FieldValue.increment(-1),
+                spotsLeft: admin.firestore.FieldValue.increment(1),
+                updatedAt: Date.now(),
+            });
+        }
+    }
+    await batch.commit();
+    console.log(`✅ Processed subscription.deleted for ${subDoc.id}`);
 }
 //# sourceMappingURL=stripe.js.map

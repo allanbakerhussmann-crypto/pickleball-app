@@ -45,6 +45,7 @@ exports.sendBulkSMS = exports.sendSMS = void 0;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const crypto = __importStar(require("crypto"));
+const envGuard_1 = require("./envGuard");
 // ============================================
 // SMSGLOBAL CONFIG
 // ============================================
@@ -146,8 +147,10 @@ exports.sendSMS = functions.firestore
     }
     try {
         const smsConfig = getSMSGlobalConfig();
-        console.log(`SMS ${messageId}: Sending to ${message.to} via SMSGlobal`);
-        const result = await sendViaSMSGlobal(message.to, message.body, smsConfig.apiKey, smsConfig.apiSecret, smsConfig.origin);
+        // Add [TEST] prefix for test environment
+        const messageBody = envGuard_1.isTestProject ? `[TEST] ${message.body}` : message.body;
+        console.log(`SMS ${messageId}: Sending to ${message.to} via SMSGlobal${envGuard_1.isTestProject ? ' (TEST MODE)' : ''}`);
+        const result = await sendViaSMSGlobal(message.to, messageBody, smsConfig.apiKey, smsConfig.apiSecret, smsConfig.origin);
         if (result.success) {
             console.log(`SMS ${messageId}: Sent successfully. SMSGlobal ID: ${result.messageId}`);
             await snap.ref.update({
@@ -217,12 +220,13 @@ exports.sendBulkSMS = functions.https.onCall(async (data, context) => {
     }
     if (validCount > 0) {
         await batch.commit();
+        console.log(`Bulk SMS: Queued ${validCount} messages${envGuard_1.isTestProject ? ' (TEST MODE - will have [TEST] prefix)' : ''}`);
     }
     return {
         success: true,
         sent: validCount,
         invalid: invalidCount,
-        message: `Queued ${validCount} SMS messages for delivery`,
+        message: `Queued ${validCount} SMS messages for delivery${envGuard_1.isTestProject ? ' (TEST MODE)' : ''}`,
     };
 });
 //# sourceMappingURL=sms.js.map

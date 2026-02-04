@@ -29,6 +29,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { ModalShell } from './ModalShell';
 import { useAuth } from '../../contexts/AuthContext';
 import { useEventScoringState } from '../../hooks/useEventScoringState';
 import { confirmScore } from '../../services/firebase/confirmScore';
@@ -428,8 +429,7 @@ export const EventScoreEntryModal: React.FC<EventScoreEntryModalProps> = ({
   // ============================================
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
-      <div className="bg-gray-800 w-full max-w-md rounded-xl border border-gray-700 overflow-hidden">
+    <ModalShell isOpen={true} onClose={onClose}>
         {/* Header */}
         <ScoreHeader
           state={state}
@@ -598,8 +598,7 @@ export const EventScoreEntryModal: React.FC<EventScoreEntryModalProps> = ({
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

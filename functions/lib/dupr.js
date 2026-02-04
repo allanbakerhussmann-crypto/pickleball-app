@@ -1723,7 +1723,7 @@ exports.dupr_subscribeToRatings = functions
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ duprIds }),
+            body: JSON.stringify(duprIds),
         });
         const responseData = await response.json();
         if (!response.ok) {

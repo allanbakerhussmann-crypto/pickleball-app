@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { ModalShell } from '../shared/ModalShell';
 import { enterBoxLeagueScore } from '../../services/firebase/boxLeague';
 import {
   confirmMatchScore,
@@ -102,8 +103,6 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
       setError(null);
     }
   }, [isOpen, match]);
-
-  if (!isOpen) return null;
 
   const gamesTo = settings.gamesTo;
   const winBy = settings.winBy;
@@ -198,8 +197,7 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
   const winningTeam = team1Score > team2Score ? 1 : team2Score > team1Score ? 2 : null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-      <div className="bg-gray-800 rounded-xl border border-gray-700 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+    <ModalShell isOpen={isOpen} onClose={onClose} maxWidth="max-w-lg">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-700 bg-gray-900">
           <div className="flex items-center justify-between">
@@ -269,7 +267,7 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setTeam1Score(Math.max(0, team1Score - 1))}
-                    className="w-10 h-10 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
+                    className="w-12 h-12 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
                   >
                     -
                   </button>
@@ -283,7 +281,7 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
                   />
                   <button
                     onClick={() => setTeam1Score(team1Score + 1)}
-                    className="w-10 h-10 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
+                    className="w-12 h-12 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
                   >
                     +
                   </button>
@@ -324,7 +322,7 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setTeam2Score(Math.max(0, team2Score - 1))}
-                    className="w-10 h-10 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
+                    className="w-12 h-12 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
                   >
                     -
                   </button>
@@ -338,7 +336,7 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
                   />
                   <button
                     onClick={() => setTeam2Score(team2Score + 1)}
-                    className="w-10 h-10 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
+                    className="w-12 h-12 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-bold text-xl"
                   >
                     +
                   </button>
@@ -490,8 +488,6 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
             )}
           </div>
         </div>
-      </div>
-
       {/* Dispute Modal */}
       <DisputeScoreModal
         isOpen={showDisputeModal}
@@ -507,7 +503,7 @@ export const BoxLeagueScoreModal: React.FC<BoxLeagueScoreModalProps> = ({
           setShowDisputeModal(false);
         }}
       />
-    </div>
+    </ModalShell>
   );
 };
 

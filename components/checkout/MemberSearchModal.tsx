@@ -11,6 +11,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { collection, query, getDocs, limit } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import type { PaymentForMember } from '../../types/payForOthers';
+import { ModalShell } from '../shared/ModalShell';
 
 // ============================================
 // TYPES
@@ -137,14 +138,8 @@ export const MemberSearchModal: React.FC<MemberSearchModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div 
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div 
-        className="bg-gray-800 rounded-xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col border border-gray-700"
-        onClick={e => e.stopPropagation()}
-      >
+    <ModalShell isOpen={isOpen} onClose={onClose}>
+      <div className="max-h-[80dvh] flex flex-col">
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700">
           <h3 className="text-lg font-bold text-white">Find Member</h3>
@@ -255,7 +250,7 @@ export const MemberSearchModal: React.FC<MemberSearchModalProps> = ({
           </p>
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 };
 

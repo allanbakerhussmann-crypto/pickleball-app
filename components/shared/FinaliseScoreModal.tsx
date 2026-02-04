@@ -15,6 +15,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { ModalShell } from './ModalShell';
 import type { Match, GameScore } from '../../types';
 import type { GameSettings } from '../../types/game/gameSettings';
 import { DEFAULT_GAME_SETTINGS } from '../../types/game/gameSettings';
@@ -350,21 +351,11 @@ export const FinaliseScoreModal: React.FC<FinaliseScoreModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   const hasProposal = !!match.scoreProposal;
   const isAlreadySubmittedToDupr = match.dupr?.submitted === true;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
-      <div className="relative w-full max-w-lg bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 overflow-hidden">
+    <ModalShell isOpen={isOpen} onClose={onClose} maxWidth="max-w-lg">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-800 bg-gray-900/50">
           <div className="flex items-center justify-between">
@@ -391,7 +382,7 @@ export const FinaliseScoreModal: React.FC<FinaliseScoreModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 max-h-[70vh] overflow-y-auto">
+        <div className="p-6 max-h-[70dvh] overflow-y-auto">
           {/* Proposal Banner */}
           {hasProposal && <ProposalBanner match={match} />}
 
@@ -573,8 +564,7 @@ export const FinaliseScoreModal: React.FC<FinaliseScoreModalProps> = ({
             )}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

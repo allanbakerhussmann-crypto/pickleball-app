@@ -1,4 +1,5 @@
 import React from 'react';
+import { ModalShell } from './shared/ModalShell';
 
 interface HelpModalProps {
   onClose: () => void;
@@ -6,14 +7,7 @@ interface HelpModalProps {
 
 export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
   return (
-    <div 
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
-      onClick={onClose}
-    >
-      <div 
-        className="bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col border border-gray-700"
-        onClick={e => e.stopPropagation()}
-      >
+    <ModalShell isOpen={true} onClose={onClose} maxWidth="max-w-2xl" className="flex flex-col max-h-[85dvh]">
         {/* Header */}
         <div className="flex justify-between items-center p-6 border-b border-gray-700 bg-gray-850 rounded-t-xl">
           <h2 className="text-2xl font-bold text-white flex items-center gap-2">
@@ -187,7 +181,6 @@ export const HelpModal: React.FC<HelpModalProps> = ({ onClose }) => {
             Got it
           </button>
         </div>
-      </div>
-    </div>
+      </ModalShell>
   );
 };

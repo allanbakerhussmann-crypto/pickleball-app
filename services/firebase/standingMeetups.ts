@@ -30,6 +30,7 @@ import {
   MeetupOccurrence,
   MeetupOccurrenceIndex,
   OccurrenceParticipant,
+  OccurrenceGuest,
 } from '../../types/standingMeetup';
 
 // =============================================================================
@@ -39,6 +40,7 @@ import {
 const STANDING_MEETUPS_COLLECTION = 'standingMeetups';
 const OCCURRENCES_SUBCOLLECTION = 'occurrences';
 const PARTICIPANTS_SUBCOLLECTION = 'participants';
+const GUESTS_SUBCOLLECTION = 'guests';
 const INDEX_COLLECTION = 'meetupOccurrencesIndex';
 
 // =============================================================================
@@ -261,6 +263,32 @@ export async function getOccurrence(
 }
 
 /**
+ * Subscribe to a single occurrence document for real-time updates.
+ * Used by OccurrenceManager to keep attendance counters live.
+ */
+export function subscribeToOccurrence(
+  standingMeetupId: string,
+  dateId: string,
+  callback: (occurrence: MeetupOccurrence | null) => void
+): Unsubscribe {
+  const docRef = doc(
+    db,
+    STANDING_MEETUPS_COLLECTION,
+    standingMeetupId,
+    OCCURRENCES_SUBCOLLECTION,
+    dateId
+  );
+
+  return onSnapshot(docRef, (docSnap) => {
+    if (!docSnap.exists()) {
+      callback(null);
+      return;
+    }
+    callback({ id: docSnap.id, ...docSnap.data() } as MeetupOccurrence);
+  });
+}
+
+/**
  * Get upcoming occurrences for a standing meetup
  */
 export async function getUpcomingOccurrences(
@@ -321,30 +349,23 @@ export async function getPastOccurrences(
 export function subscribeToOccurrences(
   standingMeetupId: string,
   callback: (occurrences: MeetupOccurrence[]) => void,
-  options?: { upcoming?: boolean; limit?: number }
+  options?: { upcoming?: boolean; past?: boolean; limit?: number }
 ): Unsubscribe {
   const now = Date.now();
-  let q = query(
-    collection(
-      db,
-      STANDING_MEETUPS_COLLECTION,
-      standingMeetupId,
-      OCCURRENCES_SUBCOLLECTION
-    ),
-    orderBy('startAt', options?.upcoming ? 'asc' : 'desc')
+  const col = collection(
+    db,
+    STANDING_MEETUPS_COLLECTION,
+    standingMeetupId,
+    OCCURRENCES_SUBCOLLECTION
   );
 
+  let q;
   if (options?.upcoming) {
-    q = query(
-      collection(
-        db,
-        STANDING_MEETUPS_COLLECTION,
-        standingMeetupId,
-        OCCURRENCES_SUBCOLLECTION
-      ),
-      where('startAt', '>=', now),
-      orderBy('startAt', 'asc')
-    );
+    q = query(col, where('startAt', '>=', now), orderBy('startAt', 'asc'));
+  } else if (options?.past) {
+    q = query(col, where('startAt', '<', now), orderBy('startAt', 'desc'));
+  } else {
+    q = query(col, orderBy('startAt', 'desc'));
   }
 
   if (options?.limit) {
@@ -453,6 +474,42 @@ export function subscribeToOccurrenceParticipants(
     (error) => {
       // Handle Firestore SDK errors gracefully (known bug in v12.6.0)
       console.debug('Occurrence participants subscription error (safe to ignore):', error.message);
+      callback([]);
+    }
+  );
+}
+
+/**
+ * Subscribe to guests for an occurrence (walk-ins added at door)
+ */
+export function subscribeToOccurrenceGuests(
+  standingMeetupId: string,
+  dateId: string,
+  callback: (guests: OccurrenceGuest[]) => void
+): Unsubscribe {
+  // Simple collection reference without orderBy to avoid index requirement
+  const colRef = collection(
+    db,
+    STANDING_MEETUPS_COLLECTION,
+    standingMeetupId,
+    OCCURRENCES_SUBCOLLECTION,
+    dateId,
+    GUESTS_SUBCOLLECTION
+  );
+
+  return onSnapshot(
+    colRef,
+    (snapshot) => {
+      const guests = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...(doc.data() as Omit<OccurrenceGuest, 'id'>),
+      }));
+      // Sort by createdAt descending on client side
+      guests.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      callback(guests);
+    },
+    (error) => {
+      console.error('Occurrence guests subscription error:', error.message);
       callback([]);
     }
   );

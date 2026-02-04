@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { ModalShell } from '../shared/ModalShell';
 import { useAuth } from '../../contexts/AuthContext';
 import type { TeamLeague, TeamLeagueFeeConfig } from '../../types/teamLeague';
 
@@ -88,8 +89,6 @@ export const TeamRegistrationModal: React.FC<TeamRegistrationModalProps> = ({
     }
   }, [isOpen, userProfile?.phone]);
 
-  if (!isOpen) return null;
-
   // Construct fees from flattened TeamLeague properties
   const fees: TeamLeagueFeeConfig | undefined = teamLeague.entryFeeType !== 'none' || teamLeague.venueFeeEnabled
     ? {
@@ -134,8 +133,7 @@ export const TeamRegistrationModal: React.FC<TeamRegistrationModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-      <div className="bg-gray-900 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+    <ModalShell isOpen={isOpen} onClose={onClose} maxWidth="max-w-lg">
         {/* Header */}
         <div className="sticky top-0 bg-gray-900 border-b border-gray-700 p-4 flex items-center justify-between">
           <div>
@@ -374,8 +372,7 @@ export const TeamRegistrationModal: React.FC<TeamRegistrationModalProps> = ({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

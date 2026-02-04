@@ -323,6 +323,7 @@ export {
   startLeague,
   completeLeague,
   cancelLeague,
+  revertToDraft,
 
   // Auto-Registration (NEW V05.44)
   checkAndUpdateLeagueStatus,

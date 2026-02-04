@@ -8,6 +8,7 @@
  */
 
 import React, { useState } from 'react';
+import { ModalShell } from '../shared/ModalShell';
 import { useAuth } from '../../contexts/AuthContext';
 import { createChallenge, respondToChallenge } from '../../services/firebase';
 import type { LeagueMember, LeagueChallenge } from '../../types';
@@ -443,8 +444,7 @@ export const ChallengeModal: React.FC<ChallengeModalProps> = ({
   // ============================================
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
-      <div className="bg-gray-800 w-full max-w-md rounded-xl border border-gray-700 overflow-hidden">
+    <ModalShell isOpen={true} onClose={onClose}>
         {/* Header */}
         <div className="bg-gray-900 px-6 py-4 border-b border-gray-700">
           <div className="flex items-center justify-between">
@@ -461,8 +461,7 @@ export const ChallengeModal: React.FC<ChallengeModalProps> = ({
 
         {/* Content */}
         {mode === 'create' ? renderCreateMode() : renderRespondMode()}
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

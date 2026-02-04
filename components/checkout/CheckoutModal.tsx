@@ -17,13 +17,14 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { doc, getDoc } from '@firebase/firestore';
 import { db } from '../../services/firebase';
-import { 
-  createCheckoutSession, 
+import {
+  createCheckoutSession,
   redirectToCheckout,
   PLATFORM_FEE_PERCENT,
 } from '../../services/stripe';
 import type { PriceCalculation } from '../../services/firebase/pricing';
 import { formatTime } from '../../utils/timeFormat';
+import { ModalShell } from '../shared/ModalShell';
 
 // ============================================
 // TYPES (inline to avoid import issues)
@@ -343,14 +344,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const slotCount = allSlots?.length || 1;
 
   return (
-    <div 
-      className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div 
-        className="bg-gray-800 rounded-xl max-w-md w-full border border-gray-700 shadow-2xl overflow-hidden"
-        onClick={e => e.stopPropagation()}
-      >
+    <ModalShell isOpen={isOpen} onClose={onClose}>
         {/* Header */}
         <div className="bg-gray-900 px-6 py-4 border-b border-gray-700">
           <div className="flex items-center justify-between">
@@ -500,8 +494,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </p>
           )}
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

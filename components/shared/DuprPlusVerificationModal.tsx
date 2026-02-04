@@ -15,6 +15,7 @@ import {
   getDuprPremiumLoginIframeUrl,
   parseDuprPremiumLoginEvent,
 } from '../../services/dupr';
+import { ModalShell } from './ModalShell';
 
 interface DuprPlusVerificationModalProps {
   /** Called when modal should close (user cancelled or verification complete) */
@@ -71,8 +72,8 @@ const DuprPlusVerificationModal: React.FC<DuprPlusVerificationModalProps> = ({
   }, [onVerified]);
 
   return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl max-w-md w-full overflow-hidden relative">
+    <ModalShell isOpen={true} onClose={onClose}>
+      <div className="relative">
         {/* Close button */}
         <button
           onClick={onClose}
@@ -136,7 +137,7 @@ const DuprPlusVerificationModal: React.FC<DuprPlusVerificationModalProps> = ({
           </p>
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 };
 

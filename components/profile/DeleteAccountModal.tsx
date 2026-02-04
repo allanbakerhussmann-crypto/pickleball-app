@@ -11,6 +11,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deleteAccount } from '../../services/firebase/accountDeletion';
+import { ModalShell } from '../shared/ModalShell';
 
 interface DeleteAccountModalProps {
   onClose: () => void;
@@ -56,14 +57,7 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalShell isOpen={true} onClose={onClose}>
         {/* Header */}
         <div className="p-6 border-b border-gray-700">
           <div className="flex items-center gap-3">
@@ -228,7 +222,6 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({
             </button>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 };

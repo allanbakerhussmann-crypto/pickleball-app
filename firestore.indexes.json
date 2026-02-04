@@ -734,6 +734,31 @@
         { "fieldPath": "verified", "order": "ASCENDING" },
         { "fieldPath": "expiresAt", "order": "DESCENDING" }
       ]
+    },
+
+    {
+      "collectionGroup": "guestProfiles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clubIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "lastVisitAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "guestProfiles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "conversionStatus", "order": "ASCENDING" },
+        { "fieldPath": "lastVisitAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "guestProfiles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "emailConsent", "order": "ASCENDING" },
+        { "fieldPath": "totalVisits", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

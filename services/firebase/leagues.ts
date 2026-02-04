@@ -1618,6 +1618,14 @@ export const cancelLeague = async (leagueId: string): Promise<void> => {
   await updateLeague(leagueId, { status: 'cancelled' });
 };
 
+/**
+ * Revert a league back to draft status
+ * This allows organizers to make changes before re-opening registration
+ */
+export const revertToDraft = async (leagueId: string): Promise<void> => {
+  await updateLeague(leagueId, { status: 'draft' });
+};
+
 // ============================================
 // AUTO-REGISTRATION CHECK (NEW V05.44)
 // ============================================

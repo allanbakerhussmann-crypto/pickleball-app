@@ -20,6 +20,7 @@ import { db } from '../../services/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { StandingMeetup, MeetupOccurrence, StandingMeetupRegistration } from '../../types/standingMeetup';
 import { formatTime } from '../../utils/timeFormat';
+import { ModalShell } from '../shared/ModalShell';
 
 // Get functions instance for us-central1 region (registration functions deployed there)
 const functionsUS = getFunctions(getApp(), 'us-central1');
@@ -344,8 +345,8 @@ export const JoinMeetupModal: React.FC<JoinMeetupModalProps> = ({
   // Bank Transfer Success View
   if (bankTransferSuccess && bankDetails) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-        <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full border border-gray-700">
+      <ModalShell isOpen={true} onClose={onClose}>
+          <div className="p-6">
           <div className="text-center mb-6">
             <div className="w-16 h-16 bg-green-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
               <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -395,13 +396,12 @@ export const JoinMeetupModal: React.FC<JoinMeetupModalProps> = ({
             Done
           </button>
         </div>
-      </div>
+      </ModalShell>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-gray-800 rounded-xl max-w-lg w-full border border-gray-700 max-h-[90vh] overflow-hidden flex flex-col">
+    <ModalShell isOpen={true} onClose={onClose} maxWidth="max-w-lg" className="flex flex-col">
         {/* Header */}
         <div className="p-6 border-b border-gray-700">
           <div className="flex items-center justify-between">
@@ -673,8 +673,7 @@ export const JoinMeetupModal: React.FC<JoinMeetupModalProps> = ({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      </ModalShell>
   );
 };
 

@@ -16,6 +16,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ORGANIZER_AGREEMENT } from '../../constants/organizerAgreement';
 import type { OrganizerAgreement } from '../../types';
+import { ModalShell } from './ModalShell';
 
 interface OrganizerAgreementModalProps {
   isOpen: boolean;
@@ -77,11 +78,8 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
     onAccept(agreement);
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-      <div className="bg-gray-900 rounded-xl max-w-3xl w-full max-h-[95vh] sm:max-h-[90vh] flex flex-col border border-gray-700 overflow-hidden my-auto">
+    <ModalShell isOpen={isOpen} onClose={onClose} maxWidth="max-w-3xl" className="flex flex-col">
         {/* Header */}
         <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-700 flex-shrink-0">
           <div className="flex items-center justify-between">
@@ -146,7 +144,7 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
         </div>
 
         {/* Checkboxes and Accept Button */}
-        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-700 flex-shrink-0 space-y-3 sm:space-y-4 bg-gray-800/50 max-h-[45vh] overflow-y-auto">
+        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-700 flex-shrink-0 space-y-3 sm:space-y-4 bg-gray-800/50 max-h-[55dvh] overflow-y-auto">
           {/* Main Acceptance */}
           <label className="flex items-start gap-3 cursor-pointer group">
             <div className="pt-0.5">
@@ -224,8 +222,7 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
             Effective: {ORGANIZER_AGREEMENT.effectiveDate} • v{ORGANIZER_AGREEMENT.version}
           </p>
         </div>
-      </div>
-    </div>
+      </ModalShell>
   );
 };
 

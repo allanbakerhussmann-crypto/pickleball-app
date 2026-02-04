@@ -18,6 +18,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { ModalShell } from '../shared/ModalShell';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   notifyScoreConfirmation,
@@ -607,8 +608,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
   const winThreshold = Math.ceil(bestOf / 2);
 
   return (
-    <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
-      <div className="bg-gray-800 w-full max-w-md rounded-xl border border-gray-700 overflow-hidden">
+    <ModalShell isOpen={true} onClose={onClose}>
         {/* Header */}
         <div className="bg-gray-900 px-6 py-4 border-b border-gray-700">
           <div className="flex items-center justify-between">
@@ -730,7 +730,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                                 if (current > 0) handleGameChange(index, 'scoreA', String(current - 1));
                               }}
                               disabled={(hasScore && !isEditMode) || (parseInt(game.scoreA) || 0) <= 0}
-                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                              className="w-12 h-12 flex items-center justify-center bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
                             >
                               −
                             </button>
@@ -744,7 +744,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                                 handleGameChange(index, 'scoreA', String(current + 1));
                               }}
                               disabled={hasScore && !isEditMode}
-                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-lime-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                              className="w-12 h-12 flex items-center justify-center bg-gray-700 hover:bg-lime-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
                             >
                               +
                             </button>
@@ -759,7 +759,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                                 if (current > 0) handleGameChange(index, 'scoreB', String(current - 1));
                               }}
                               disabled={(hasScore && !isEditMode) || (parseInt(game.scoreB) || 0) <= 0}
-                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                              className="w-12 h-12 flex items-center justify-center bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
                             >
                               −
                             </button>
@@ -773,7 +773,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
                                 handleGameChange(index, 'scoreB', String(current + 1));
                               }}
                               disabled={hasScore && !isEditMode}
-                              className="w-9 h-9 flex items-center justify-center bg-gray-700 hover:bg-lime-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
+                              className="w-12 h-12 flex items-center justify-center bg-gray-700 hover:bg-lime-600 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg text-xl font-bold transition-colors"
                             >
                               +
                             </button>
@@ -992,8 +992,6 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
             )}
           </div>
         </div>
-      </div>
-
       {/* Dispute Modal */}
       <DisputeScoreModal
         isOpen={showDisputeModal}
@@ -1013,7 +1011,7 @@ export const LeagueScoreEntryModal: React.FC<LeagueScoreEntryModalProps> = ({
         }}
       />
 
-    </div>
+    </ModalShell>
   );
 };
 

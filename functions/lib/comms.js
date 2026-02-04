@@ -49,13 +49,18 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.comms_processLeagueQueue = exports.comms_processQueue = void 0;
 exports.sendEmail = sendEmail;
 const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const crypto = __importStar(require("crypto"));
+const mail_1 = __importDefault(require("@sendgrid/mail"));
 const client_ses_1 = require("@aws-sdk/client-ses");
+const envGuard_1 = require("./envGuard");
 // ============================================
 // SMS CREDITS CONSTANTS
 // ============================================
@@ -93,13 +98,27 @@ const getSMSGlobalConfig = () => {
     };
 };
 // ============================================
+// SENDGRID CONFIG (Functions v1)
+// ============================================
+const getSendGridConfig = () => {
+    var _a;
+    const config = functions.config();
+    if (!((_a = config.sendgrid) === null || _a === void 0 ? void 0 : _a.api_key)) {
+        return null; // SendGrid not configured, will fall back to SES
+    }
+    return {
+        apiKey: config.sendgrid.api_key,
+        fromEmail: config.sendgrid.from_email || 'noreply@pickleballdirector.co.nz',
+    };
+};
+// ============================================
 // AMAZON SES CONFIG (Functions v1)
 // ============================================
 const getSESConfig = () => {
     var _a, _b, _c;
     const config = functions.config();
     if (!((_a = config.ses) === null || _a === void 0 ? void 0 : _a.region) || !((_b = config.ses) === null || _b === void 0 ? void 0 : _b.access_key_id) || !((_c = config.ses) === null || _c === void 0 ? void 0 : _c.secret_access_key)) {
-        throw new Error('SES credentials not configured. Run: firebase functions:config:set ses.region="ap-southeast-2" ses.access_key_id="..." ses.secret_access_key="..." ses.from_email="..."');
+        return null; // SES not configured
     }
     return {
         region: config.ses.region,
@@ -107,6 +126,19 @@ const getSESConfig = () => {
         secretAccessKey: config.ses.secret_access_key,
         fromEmail: config.ses.from_email || 'noreply@pickleballdirector.co.nz',
     };
+};
+const getEmailProvider = () => {
+    var _a, _b;
+    const config = functions.config();
+    // Check if provider is explicitly set
+    if (((_a = config.email) === null || _a === void 0 ? void 0 : _a.provider) === 'ses') {
+        return 'ses';
+    }
+    // Default to SendGrid if configured, otherwise SES
+    if ((_b = config.sendgrid) === null || _b === void 0 ? void 0 : _b.api_key) {
+        return 'sendgrid';
+    }
+    return 'ses';
 };
 // ============================================
 // SMSGLOBAL MAC AUTHENTICATION
@@ -283,11 +315,51 @@ async function sendSMSViaSMSGlobal(to, body, apiKey, apiSecret, origin) {
     }
 }
 // ============================================
+// HELPER: Send Email via SendGrid
+// ============================================
+async function sendEmailViaSendGrid(to, subject, body, htmlBody) {
+    var _a, _b, _c, _d;
+    try {
+        const sendGridConfig = getSendGridConfig();
+        if (!sendGridConfig) {
+            return { success: false, error: 'SendGrid not configured' };
+        }
+        // Set API key
+        mail_1.default.setApiKey(sendGridConfig.apiKey);
+        console.log(`Sending email to ${to} via SendGrid (from: ${sendGridConfig.fromEmail})`);
+        const msg = Object.assign({ to, from: sendGridConfig.fromEmail, subject, text: body }, (htmlBody ? { html: htmlBody } : {}));
+        const response = await mail_1.default.send(msg);
+        const messageId = ((_b = (_a = response[0]) === null || _a === void 0 ? void 0 : _a.headers) === null || _b === void 0 ? void 0 : _b['x-message-id']) || 'sent';
+        console.log(`Email sent via SendGrid. Message ID: ${messageId}`);
+        return { success: true, messageId };
+    }
+    catch (error) {
+        console.error('SendGrid error:', error.message);
+        // Handle specific SendGrid errors
+        if (error.response) {
+            const { body: errorBody } = error.response;
+            console.error('SendGrid error details:', JSON.stringify(errorBody));
+            if (error.code === 401) {
+                return { success: false, error: 'SendGrid authentication failed. Check API key.' };
+            }
+            if (error.code === 403) {
+                return { success: false, error: 'SendGrid forbidden. Check sender verification or permissions.' };
+            }
+            const errorMessage = ((_d = (_c = errorBody === null || errorBody === void 0 ? void 0 : errorBody.errors) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.message) || error.message;
+            return { success: false, error: `SendGrid error: ${errorMessage}` };
+        }
+        return { success: false, error: error.message || 'Unknown SendGrid error' };
+    }
+}
+// ============================================
 // HELPER: Send Email via Amazon SES
 // ============================================
-async function sendEmail(to, subject, body, htmlBody) {
+async function sendEmailViaSES(to, subject, body, htmlBody) {
     try {
         const sesConfig = getSESConfig();
+        if (!sesConfig) {
+            return { success: false, error: 'SES not configured. Run: firebase functions:config:set ses.region="ap-southeast-2" ses.access_key_id="..." ses.secret_access_key="..." ses.from_email="..."' };
+        }
         const client = new client_ses_1.SESClient({
             region: sesConfig.region,
             credentials: {
@@ -332,6 +404,32 @@ async function sendEmail(to, subject, body, htmlBody) {
             return { success: false, error: `Invalid email parameter: ${error.message}` };
         }
         return { success: false, error: error.message || 'Unknown SES error' };
+    }
+}
+// ============================================
+// UNIFIED EMAIL SENDER (auto-selects provider)
+// ============================================
+/**
+ * Send email using the configured provider.
+ *
+ * Provider selection:
+ * 1. If email.provider is set to 'ses', use SES
+ * 2. If SendGrid is configured, use SendGrid (default)
+ * 3. Fall back to SES
+ *
+ * To switch to SES later when verified, run:
+ * firebase functions:config:set email.provider="ses" ses.region="ap-southeast-2" ses.access_key_id="..." ses.secret_access_key="..."
+ */
+async function sendEmail(to, subject, body, htmlBody) {
+    const provider = getEmailProvider();
+    // Add [TEST] prefix for test environment
+    const finalSubject = envGuard_1.isTestProject ? `[TEST] ${subject}` : subject;
+    console.log(`Email provider selected: ${provider}${envGuard_1.isTestProject ? ' (TEST MODE)' : ''}`);
+    if (provider === 'ses') {
+        return sendEmailViaSES(to, finalSubject, body, htmlBody);
+    }
+    else {
+        return sendEmailViaSendGrid(to, finalSubject, body, htmlBody);
     }
 }
 // ============================================

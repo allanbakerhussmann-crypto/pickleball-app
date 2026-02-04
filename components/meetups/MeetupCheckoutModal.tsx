@@ -12,13 +12,14 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { PayForOthersSection } from '../checkout/PayForOthersSection';
-import { 
-  createCheckoutSession, 
+import {
+  createCheckoutSession,
   redirectToCheckout,
   PLATFORM_FEE_PERCENT,
 } from '../../services/stripe';
 import type { PayForOthersData } from '../../types/payForOthers';
 import { calculatePaymentSummary } from '../../types/payForOthers';
+import { ModalShell } from '../shared/ModalShell';
 
 // ============================================
 // TYPES
@@ -179,14 +180,7 @@ export const MeetupCheckoutModal: React.FC<MeetupCheckoutModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div 
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div 
-        className="bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col border border-gray-700"
-        onClick={e => e.stopPropagation()}
-      >
+    <ModalShell isOpen={isOpen} onClose={onClose} maxWidth="max-w-lg" className="flex flex-col">
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-xl">
           <div>
@@ -326,8 +320,7 @@ export const MeetupCheckoutModal: React.FC<MeetupCheckoutModalProps> = ({
             Cancel
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

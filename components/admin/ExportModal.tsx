@@ -22,6 +22,7 @@ import {
 } from '../../services/firebase/payments/platformFinanceTypes';
 import { FinanceTransactionType } from '../../services/firebase/payments/types';
 import { exportTransactions } from '../../services/firebase/payments/platformFinance';
+import { ModalShell } from '../shared/ModalShell';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -137,11 +138,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 border border-gray-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+    <ModalShell isOpen={isOpen} onClose={onClose} maxWidth="max-w-lg">
+      <div className="max-h-[90dvh] overflow-y-auto">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Export Transactions</h2>
@@ -412,7 +411,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 };
 

@@ -15,6 +15,7 @@ import {
   verifyPhoneCode,
 } from '../../services/firebase/phoneVerification';
 import { PhoneInput } from '../shared/PhoneInput';
+import { ModalShell } from '../shared/ModalShell';
 
 interface PhoneVerificationModalProps {
   onClose: () => void;
@@ -167,16 +168,8 @@ export const PhoneVerificationModal: React.FC<PhoneVerificationModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center"
-      aria-modal="true"
-      role="dialog"
-      onClick={onClose}
-    >
-      <div
-        className="bg-gray-800 rounded-lg shadow-xl p-8 w-full max-w-md m-4 relative border border-gray-700"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalShell isOpen={true} onClose={onClose}>
+        <div className="p-6 sm:p-8 relative">
         <button
           onClick={onClose}
           className="absolute top-3 right-3 text-gray-400 hover:text-white text-2xl"
@@ -313,7 +306,7 @@ export const PhoneVerificationModal: React.FC<PhoneVerificationModalProps> = ({
             )}
           </div>
         )}
-      </div>
-    </div>
+        </div>
+    </ModalShell>
   );
 };

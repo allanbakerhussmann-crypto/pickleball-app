@@ -1627,6 +1627,65 @@ export const LeagueDetail: React.FC<LeagueDetailProps> = ({ leagueId, onBack }) 
                 ❌ Cancel League
               </button>
             )}
+
+            {/* Revert to Draft (available when registration is open/closed or active) */}
+            {(league.status === 'registration' || league.status === 'registration_closed' || league.status === 'active') && (
+              <button
+                onClick={async () => {
+                  const warnings = [];
+                  if (league.status === 'active') {
+                    warnings.push('The league is currently active. Match progress will be preserved but the league will become invisible to players.');
+                  }
+                  if (members.length > 0) {
+                    warnings.push(`${members.length} player${members.length !== 1 ? 's are' : ' is'} registered.`);
+                  }
+                  const confirmMsg = warnings.length > 0
+                    ? `Revert to draft?\n\n${warnings.join('\n')}\n\nPlayers won't be removed but they won't see the league until you re-open registration.`
+                    : 'Revert to draft? The league will become invisible to players until you re-open registration.';
+
+                  if (confirm(confirmMsg)) {
+                    const { revertToDraft } = await import('../../services/firebase');
+                    await revertToDraft(leagueId);
+                    const updated = await getLeague(leagueId);
+                    if (updated) setLeague(updated);
+                  }
+                }}
+                className="bg-amber-600/20 border border-amber-600 text-amber-400 hover:bg-amber-600/30 px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                ↩️ Revert to Draft
+              </button>
+            )}
+
+            {/* Delete League (available for draft/cancelled, or registration with warnings) */}
+            {(league.status === 'draft' || league.status === 'cancelled' || league.status === 'registration' || league.status === 'registration_closed') && (
+              <button
+                onClick={async () => {
+                  const warnings = [];
+                  if (members.length > 0) {
+                    warnings.push(`⚠️ ${members.length} player${members.length !== 1 ? 's' : ''} will lose their registration.`);
+                  }
+                  if (league.status === 'registration' || league.status === 'registration_closed') {
+                    warnings.push('⚠️ Registration is already open/closed.');
+                  }
+
+                  const confirmMsg = warnings.length > 0
+                    ? `DELETE this league?\n\n${warnings.join('\n')}\n\nThis will permanently delete the league and ALL data (members, matches, etc.).\n\nType "DELETE" to confirm:`
+                    : 'DELETE this league?\n\nThis will permanently delete the league and all data.\n\nType "DELETE" to confirm:';
+
+                  const input = prompt(confirmMsg);
+                  if (input === 'DELETE') {
+                    const { deleteLeague } = await import('../../services/firebase');
+                    await deleteLeague(leagueId);
+                    onBack(); // Navigate back to leagues list
+                  } else if (input !== null) {
+                    alert('Deletion cancelled. You must type "DELETE" exactly to confirm.');
+                  }
+                }}
+                className="bg-red-900/30 border border-red-800 text-red-500 hover:bg-red-900/50 px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+              >
+                🗑️ Delete League
+              </button>
+            )}
             
             {/* Edit League - available until registration deadline */}
             {(() => {

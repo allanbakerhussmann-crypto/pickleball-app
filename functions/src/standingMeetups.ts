@@ -101,6 +101,12 @@ interface MeetupOccurrence {
   checkInEnabled: boolean;
   checkInTokenHash?: string;
   checkInTokenExpiresAt?: number;
+  // Guest tracking (V07.59)
+  guestCount?: number;
+  guestRevenue?: number;
+  // Session finalization (V07.59)
+  closedAt?: number;
+  closedBy?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -110,6 +116,7 @@ interface OccurrenceParticipant {
   status: 'expected' | 'cancelled' | 'checked_in' | 'no_show';
   checkedInAt?: number;
   checkInMethod?: 'qr' | 'organizer' | 'manual';
+  checkedInBy?: string; // userId of organizer who scanned QR (for QR check-in)
   creditIssued: boolean;
   creditIssuedAt?: number;
   creditAmount?: number;
@@ -1268,3 +1275,488 @@ async function removePlayerFromSelectedOccurrences(
   await batch.commit();
   console.log(`Removed ${userId} from ${removedCount} selected occurrences`);
 }
+
+// =============================================================================
+// Helper: Format Session Date for Display
+// =============================================================================
+
+function formatSessionDate(dateStr: string): string {
+  const date = new Date(dateStr + 'T00:00:00');
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const dayName = days[date.getDay()];
+  const day = date.getDate();
+  const month = months[date.getMonth()];
+  const year = date.getFullYear();
+
+  return `${dayName} ${day} ${month} ${year}`;
+}
+
+// =============================================================================
+// Helper: Check if User is Club Admin or Meetup Organizer
+// =============================================================================
+
+async function isOrganizerOrClubAdmin(
+  userId: string,
+  meetup: StandingMeetup
+): Promise<boolean> {
+  // Check if user is the meetup creator
+  if (meetup.createdByUserId === userId) {
+    return true;
+  }
+
+  // Check if user is a club admin/owner
+  const clubMemberSnap = await db
+    .collection('clubs')
+    .doc(meetup.clubId)
+    .collection('members')
+    .doc(userId)
+    .get();
+
+  if (clubMemberSnap.exists) {
+    const memberRole = clubMemberSnap.data()?.role;
+    if (['owner', 'admin'].includes(memberRole)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// =============================================================================
+// Self Check-In (Auth-based, no token - player scans static session QR)
+// =============================================================================
+
+export const standingMeetup_checkInSelf = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; occurrenceId: string }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const { standingMeetupId, occurrenceId } = data;
+    const userId = context.auth.uid;
+
+    if (!standingMeetupId || !occurrenceId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'standingMeetupId and occurrenceId are required'
+      );
+    }
+
+    // Get the meetup for title
+    const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
+    const meetupSnap = await meetupRef.get();
+
+    if (!meetupSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'MEETUP_NOT_FOUND');
+    }
+
+    const meetup = meetupSnap.data() as StandingMeetup;
+
+    // Get the occurrence
+    const occurrenceRef = meetupRef.collection('occurrences').doc(occurrenceId);
+    const occurrenceSnap = await occurrenceRef.get();
+
+    if (!occurrenceSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
+    }
+
+    const occurrence = occurrenceSnap.data() as MeetupOccurrence;
+
+    // Check occurrence status is valid for check-in
+    if (!['scheduled', 'in_progress'].includes(occurrence.status)) {
+      throw new functions.https.HttpsError('failed-precondition', 'SESSION_NOT_ACTIVE');
+    }
+
+    // Check session is not closed
+    if (occurrence.closedAt) {
+      throw new functions.https.HttpsError('failed-precondition', 'SESSION_ALREADY_CLOSED');
+    }
+
+    // Check user is a participant
+    const participantRef = occurrenceRef.collection('participants').doc(userId);
+    const participantSnap = await participantRef.get();
+
+    if (!participantSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
+    }
+
+    const participant = participantSnap.data() as OccurrenceParticipant;
+
+    // Check not already checked in
+    if (participant.status === 'checked_in') {
+      throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+
+    // Perform check-in using existing helper
+    const checkedInAt = Date.now();
+    await updateParticipantStatus(standingMeetupId, occurrenceId, userId, 'checked_in', {
+      checkedInAt,
+      checkInMethod: 'qr',
+    });
+
+    return {
+      success: true,
+      checkedInAt,
+      sessionDate: formatSessionDate(occurrence.date),
+      meetupTitle: meetup.title,
+    };
+  });
+
+// =============================================================================
+// Add Cash Guest (Organizer only)
+// =============================================================================
+
+interface OccurrenceGuest {
+  id: string;
+  name: string;
+  email?: string;
+  emailConsent?: boolean;
+  amount: number;
+  paymentMethod: 'cash' | 'stripe';
+  stripeCheckoutSessionId?: string;
+  stripePaymentIntentId?: string;
+  receivedBy?: string;
+  notes?: string;
+  createdAt: number;
+  createdBy: string;
+}
+
+export const standingMeetup_addCashGuest = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: {
+    standingMeetupId: string;
+    occurrenceId: string;
+    name: string;
+    email?: string;
+    amount: number;
+    notes?: string;
+    emailConsent?: boolean;
+  }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const { standingMeetupId, occurrenceId, name, email, amount, notes, emailConsent } = data;
+    const userId = context.auth.uid;
+
+    // Validate required fields
+    if (!standingMeetupId || !occurrenceId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'standingMeetupId and occurrenceId are required'
+      );
+    }
+
+    if (!name || name.trim().length === 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'GUEST_NAME_REQUIRED');
+    }
+
+    if (typeof amount !== 'number' || amount < 0) {
+      throw new functions.https.HttpsError('invalid-argument', 'INVALID_AMOUNT');
+    }
+
+    // Get the meetup
+    const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
+    const meetupSnap = await meetupRef.get();
+
+    if (!meetupSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'MEETUP_NOT_FOUND');
+    }
+
+    const meetup = meetupSnap.data() as StandingMeetup;
+
+    // Check authorization
+    const isAuthorized = await isOrganizerOrClubAdmin(userId, meetup);
+    if (!isAuthorized) {
+      throw new functions.https.HttpsError('permission-denied', 'NOT_CLUB_ADMIN');
+    }
+
+    // Get the occurrence
+    const occurrenceRef = meetupRef.collection('occurrences').doc(occurrenceId);
+    const occurrenceSnap = await occurrenceRef.get();
+
+    if (!occurrenceSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
+    }
+
+    const occurrence = occurrenceSnap.data() as MeetupOccurrence;
+
+    // Check session is not closed
+    if (occurrence.closedAt) {
+      throw new functions.https.HttpsError('failed-precondition', 'SESSION_ALREADY_CLOSED');
+    }
+
+    // Create guest document and update counters atomically
+    const guestRef = occurrenceRef.collection('guests').doc();
+    const guestId = guestRef.id;
+
+    // Build guest data, omitting optional fields that are empty
+    // Firestore rejects undefined values, so we only add fields that have values
+    const guestData: OccurrenceGuest = {
+      id: guestId,
+      name: name.trim(),
+      amount,
+      paymentMethod: 'cash',
+      receivedBy: userId,
+      createdAt: Date.now(),
+      createdBy: userId,
+      ...(email?.trim() && { email: email.trim() }),
+      ...(notes?.trim() && { notes: notes.trim() }),
+      ...(typeof emailConsent === 'boolean' && { emailConsent }),
+    };
+
+    // Use transaction to atomically create guest and update counters
+    const result = await db.runTransaction(async (transaction) => {
+      // Re-read occurrence in transaction
+      const occSnap = await transaction.get(occurrenceRef);
+      if (!occSnap.exists) {
+        throw new functions.https.HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
+      }
+
+      const occData = occSnap.data() as MeetupOccurrence;
+
+      // Check again session is not closed (in transaction)
+      if (occData.closedAt) {
+        throw new functions.https.HttpsError('failed-precondition', 'SESSION_ALREADY_CLOSED');
+      }
+
+      // Create guest document
+      transaction.set(guestRef, guestData);
+
+      // Update occurrence counters
+      const newGuestCount = (occData.guestCount || 0) + 1;
+      const newGuestRevenue = (occData.guestRevenue || 0) + amount;
+
+      transaction.update(occurrenceRef, {
+        guestCount: FieldValue.increment(1),
+        guestRevenue: FieldValue.increment(amount),
+        updatedAt: Date.now(),
+      });
+
+      return { guestCount: newGuestCount };
+    });
+
+    return {
+      success: true,
+      guestId,
+      guestCount: result.guestCount,
+    };
+  });
+
+// =============================================================================
+// Close Session (Organizer only)
+// =============================================================================
+
+export const standingMeetup_closeSession = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: { standingMeetupId: string; occurrenceId: string }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const { standingMeetupId, occurrenceId } = data;
+    const userId = context.auth.uid;
+
+    if (!standingMeetupId || !occurrenceId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'standingMeetupId and occurrenceId are required'
+      );
+    }
+
+    // Get the meetup
+    const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
+    const meetupSnap = await meetupRef.get();
+
+    if (!meetupSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'MEETUP_NOT_FOUND');
+    }
+
+    const meetup = meetupSnap.data() as StandingMeetup;
+
+    // Check authorization
+    const isAuthorized = await isOrganizerOrClubAdmin(userId, meetup);
+    if (!isAuthorized) {
+      throw new functions.https.HttpsError('permission-denied', 'NOT_CLUB_ADMIN');
+    }
+
+    // Get the occurrence
+    const occurrenceRef = meetupRef.collection('occurrences').doc(occurrenceId);
+    const occurrenceSnap = await occurrenceRef.get();
+
+    if (!occurrenceSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
+    }
+
+    const occurrence = occurrenceSnap.data() as MeetupOccurrence;
+
+    // Check session is not already closed
+    if (occurrence.closedAt) {
+      throw new functions.https.HttpsError('failed-precondition', 'SESSION_ALREADY_CLOSED');
+    }
+
+    // Get all participants with status='expected' and mark them as no-show
+    const participantsSnap = await occurrenceRef
+      .collection('participants')
+      .where('status', '==', 'expected')
+      .get();
+
+    const noShowCount = participantsSnap.size;
+    const closedAt = Date.now();
+
+    // Use batch for atomic updates
+    const batch = db.batch();
+
+    // Update each expected participant to no_show
+    for (const participantDoc of participantsSnap.docs) {
+      batch.update(participantDoc.ref, {
+        status: 'no_show',
+        updatedAt: closedAt,
+      });
+    }
+
+    // Update occurrence: counters, closedAt, closedBy
+    batch.update(occurrenceRef, {
+      noShowCount: FieldValue.increment(noShowCount),
+      expectedCount: 0, // All expected are now no_shows
+      closedAt,
+      closedBy: userId,
+      status: 'completed',
+      updatedAt: closedAt,
+    });
+
+    // Update index
+    const indexRef = db
+      .collection('meetupOccurrencesIndex')
+      .doc(`${standingMeetupId}_${occurrenceId}`);
+    batch.update(indexRef, {
+      status: 'completed',
+      updatedAt: closedAt,
+    });
+
+    await batch.commit();
+
+    // Calculate final counts
+    const finalCounts = {
+      checkedIn: occurrence.checkedInCount || 0,
+      guests: occurrence.guestCount || 0,
+      noShows: (occurrence.noShowCount || 0) + noShowCount,
+      totalPlayed: (occurrence.checkedInCount || 0) + (occurrence.guestCount || 0),
+    };
+
+    return {
+      success: true,
+      closedAt,
+      finalCounts,
+    };
+  });
+
+// =============================================================================
+// Check-In Player via QR Scan (Organizer Only)
+// =============================================================================
+
+/**
+ * Check in a player by scanning their QR code (organizer action)
+ * This is different from standingMeetup_checkInSelf (player self-check-in)
+ * and standingMeetup_manualCheckIn (organizer selects from list)
+ *
+ * Input: { standingMeetupId, occurrenceId, playerUserId }
+ * - Verifies caller is organizer/admin of the meetup
+ * - Checks the player is registered for this occurrence
+ * - Updates their registration to checked_in status
+ * - Increments checkedInCount on the occurrence
+ */
+export const standingMeetup_checkInPlayer = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: {
+    standingMeetupId: string;
+    occurrenceId: string;
+    playerUserId: string;
+  }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be logged in');
+    }
+
+    const { standingMeetupId, occurrenceId, playerUserId } = data;
+    const callerUserId = context.auth.uid;
+
+    // Validate required fields
+    if (!standingMeetupId || !occurrenceId || !playerUserId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'standingMeetupId, occurrenceId, and playerUserId are required'
+      );
+    }
+
+    // Get the meetup
+    const meetupRef = db.collection('standingMeetups').doc(standingMeetupId);
+    const meetupSnap = await meetupRef.get();
+
+    if (!meetupSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'MEETUP_NOT_FOUND');
+    }
+
+    const meetup = meetupSnap.data() as StandingMeetup;
+
+    // Check authorization - must be organizer or club admin
+    const isAuthorized = await isOrganizerOrClubAdmin(callerUserId, meetup);
+    if (!isAuthorized) {
+      throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
+    }
+
+    // Get the occurrence
+    const occurrenceRef = meetupRef.collection('occurrences').doc(occurrenceId);
+    const occurrenceSnap = await occurrenceRef.get();
+
+    if (!occurrenceSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'OCCURRENCE_NOT_FOUND');
+    }
+
+    const occurrence = occurrenceSnap.data() as MeetupOccurrence;
+
+    // Check occurrence status is valid for check-in
+    if (!['scheduled', 'in_progress'].includes(occurrence.status)) {
+      throw new functions.https.HttpsError('failed-precondition', 'SESSION_NOT_ACTIVE');
+    }
+
+    // Check session is not closed
+    if (occurrence.closedAt) {
+      throw new functions.https.HttpsError('failed-precondition', 'SESSION_ALREADY_CLOSED');
+    }
+
+    // Check user is a participant
+    const participantRef = occurrenceRef.collection('participants').doc(playerUserId);
+    const participantSnap = await participantRef.get();
+
+    if (!participantSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
+    }
+
+    const participant = participantSnap.data() as OccurrenceParticipant;
+
+    // Check not already checked in
+    if (participant.status === 'checked_in') {
+      throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+
+    // Perform check-in using existing helper
+    const checkedInAt = Date.now();
+    await updateParticipantStatus(standingMeetupId, occurrenceId, playerUserId, 'checked_in', {
+      checkedInAt,
+      checkInMethod: 'qr', // Via QR scan
+      checkedInBy: callerUserId, // Track who scanned
+    });
+
+    // Get player name for response
+    const playerName = participant.userName || 'Player';
+
+    return {
+      success: true,
+      checkedInAt,
+      playerUserId,
+      playerName,
+    };
+  });

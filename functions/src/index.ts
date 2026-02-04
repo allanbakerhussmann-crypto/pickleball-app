@@ -47,6 +47,11 @@ export {
   // Standing Meetup Subscriptions (V07.53)
   stripe_createStandingMeetupSubscription,
   stripe_cancelStandingMeetupSubscription,
+
+  // Standing Meetup Guest Checkout (V07.59)
+  standingMeetup_createGuestCheckoutSession,
+  // Standing Meetup Quick Register at door (V07.59)
+  standingMeetup_createQuickRegisterCheckoutSession,
 } from './stripe';
 
 // ============================================
@@ -189,7 +194,7 @@ export {
 // STANDING MEETUP FUNCTIONS (V07.58) - Hybrid Model
 // ============================================
 
-// Core functions (2nd Gen - australia-southeast1)
+// Core functions (1st Gen - australia-southeast1)
 export {
   standingMeetup_ensureOccurrences,
   standingMeetup_checkIn,
@@ -199,6 +204,12 @@ export {
   standingMeetup_manualCheckIn,
   standingMeetup_markNoShow,
   onOccurrenceDeleted,
+  // Check-in & Guest Management (V07.59)
+  standingMeetup_checkInSelf,
+  standingMeetup_addCashGuest,
+  standingMeetup_closeSession,
+  // QR Scanner Check-in (V07.60)
+  standingMeetup_checkInPlayer,
 } from './standingMeetups';
 
 // Registration functions (1st Gen - us-central1)
@@ -208,6 +219,15 @@ export {
   standingMeetup_cancelUnpaidBankRegistration,
   standingMeetup_unregister,
 } from './standingMeetupRegistration';
+
+// ============================================
+// GUEST MARKETING FUNCTIONS (V07.61)
+// ============================================
+
+export {
+  guest_onGuestCreated,
+  guest_unsubscribe,
+} from './guestMarketing';
 
 // ============================================
 // TEST DATA SEEDING (V07.57) - TEST PROJECT ONLY

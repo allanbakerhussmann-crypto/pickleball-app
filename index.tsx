@@ -4,6 +4,7 @@ import App from './App';
 import { AuthProvider } from './contexts/AuthContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './src/styles/leaflet-dark.css';
+import './src/styles/mobile.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

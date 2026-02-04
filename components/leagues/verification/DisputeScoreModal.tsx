@@ -10,6 +10,7 @@
  */
 
 import React, { useState } from 'react';
+import { ModalShell } from '../../shared/ModalShell';
 import type { DisputeReason } from '../../../types';
 import type { VerifiableEventType } from '../../../services/firebase/scoreVerification';
 import { disputeMatchScore } from '../../../services/firebase';
@@ -63,8 +64,6 @@ export const DisputeScoreModal: React.FC<DisputeScoreModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!isOpen) return null;
-
   const handleSubmit = async () => {
     if (!reason) {
       setError('Please select a reason');
@@ -105,8 +104,7 @@ export const DisputeScoreModal: React.FC<DisputeScoreModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-      <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full border border-gray-700">
+    <ModalShell isOpen={isOpen} onClose={handleClose} className="p-6">
         {/* Header */}
         <div className="mb-4">
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -205,8 +203,7 @@ export const DisputeScoreModal: React.FC<DisputeScoreModalProps> = ({
             {submitting ? 'Submitting...' : 'Submit Dispute'}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 };
 

@@ -11,6 +11,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { PhoneInput } from './PhoneInput';
+import { ModalShell } from './ModalShell';
 
 interface PhoneRequiredModalProps {
   isOpen: boolean;
@@ -29,8 +30,6 @@ export const PhoneRequiredModal: React.FC<PhoneRequiredModalProps> = ({
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (!isOpen) return null;
 
   const contextText = context === 'league' ? 'league' : 'tournament';
 
@@ -59,16 +58,8 @@ export const PhoneRequiredModal: React.FC<PhoneRequiredModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center"
-      aria-modal="true"
-      role="dialog"
-      onClick={onClose}
-    >
-      <div
-        className="bg-gray-800 rounded-lg shadow-xl p-8 w-full max-w-md m-4 relative border border-gray-700"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalShell isOpen={isOpen} onClose={onClose}>
+      <div className="p-8 relative">
         <button
           onClick={onClose}
           className="absolute top-3 right-3 text-gray-400 hover:text-white text-2xl"
@@ -121,6 +112,6 @@ export const PhoneRequiredModal: React.FC<PhoneRequiredModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </ModalShell>
   );
 };

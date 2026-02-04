@@ -43,6 +43,7 @@ import { formatTime } from '../../utils/timeFormat';
 import { OccurrenceManager } from './OccurrenceManager';
 import { EditStandingMeetup } from './EditStandingMeetup';
 import { JoinMeetupModal } from './JoinMeetupModal';
+import { SessionHistory } from './SessionHistory';
 
 interface StandingMeetupDetailProps {
   standingMeetupId: string;
@@ -73,6 +74,9 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinModalType, setJoinModalType] = useState<'season_pass' | 'pick_and_pay'>('pick_and_pay');
+
+  // Session history state
+  const [showHistory, setShowHistory] = useState(false);
 
   // Multi-select session cancellation state
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
@@ -470,6 +474,8 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
         occurrence={selectedOccurrence}
         meetupTitle={meetup.title}
         onBack={() => setSelectedOccurrence(null)}
+        perSessionAmount={meetup.billing.perSessionAmount}
+        currency={meetup.billing.currency}
       />
     );
   }
@@ -1030,6 +1036,16 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
               </svg>
               View Subscribers
             </button>
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              aria-expanded={showHistory}
+              className={`px-4 py-2 ${showHistory ? 'bg-lime-600 hover:bg-lime-500' : 'bg-gray-700 hover:bg-gray-600'} text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {showHistory ? 'Hide History' : 'Session History'}
+            </button>
             {meetup.status === 'active' ? (
               <button
                 onClick={() => {/* TODO: Archive meetup */}}
@@ -1047,6 +1063,17 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* Session History (admin only, lazy loaded) */}
+      {isAdmin && showHistory && meetup && (
+        <SessionHistory
+          standingMeetupId={standingMeetupId}
+          meetupTitle={meetup.title}
+          currency={meetup.billing.currency}
+          perSessionAmount={meetup.billing.perSessionAmount}
+          onSelectOccurrence={(occurrence) => setSelectedOccurrence(occurrence)}
+        />
       )}
 
       {/* Edit Modal */}

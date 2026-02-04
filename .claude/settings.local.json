@@ -28,7 +28,9 @@
       "Bash(findstr:*)",
       "Bash(firebase functions:log:*)",
       "Bash(firebase functions:config:set:*)",
-      "Read(//c/Users/allan/.claude/plans/**)"
+      "Read(//c/Users/allan/.claude/plans/**)",
+      "Read(//c/**)",
+      "Bash(bash:*)"
     ]
   }
 }
