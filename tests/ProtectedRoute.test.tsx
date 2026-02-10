@@ -47,14 +47,16 @@ describe('ProtectedRoute', () => {
       isAppAdmin: false,
     } as any);
 
-    renderWithRouter(
+    const { container } = renderWithRouter(
       <ProtectedRoute>
         <div>Protected Content</div>
       </ProtectedRoute>
     );
 
-    // Should show loading spinner (check for animation class)
-    expect(screen.getByText('Protected Content')).not.toBeInTheDocument;
+    // Should show loading spinner, not protected content
+    expect(screen.queryByText('Protected Content')).not.toBeInTheDocument();
+    // Check for spinner animation class
+    expect(container.querySelector('.animate-spin')).toBeInTheDocument();
   });
 
   it('renders children when user is authenticated', () => {

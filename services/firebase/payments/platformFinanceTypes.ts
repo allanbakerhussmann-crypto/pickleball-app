@@ -68,6 +68,32 @@ export interface ClubFinanceBreakdown {
   disputeCount: number;
 }
 
+/**
+ * Per-organizer finance breakdown
+ * For organizers who run events independently (not tied to a club)
+ */
+export interface OrganizerFinanceBreakdown {
+  organizerId: string;
+  organizerName: string;
+  organizerEmail: string;
+  stripeConnectedAccountId?: string;
+  // Derive status from actual Stripe fields:
+  // - ready = chargesEnabled && detailsSubmitted
+  // - pending = connected but not charges enabled
+  // - none = no stripeConnectedAccountId
+  stripeStatus: 'ready' | 'pending' | 'none';
+
+  // Volume (all in cents)
+  grossVolume: number;
+  platformFees: number;
+  stripeFees: number; // Estimated
+  netToOrganizer: number;
+
+  // Counts
+  transactionCount: number;
+  refundCount: number;
+}
+
 // ============================================
 // ACCOUNT BALANCE TYPES
 // ============================================
@@ -133,6 +159,7 @@ export type ReconciliationDiscrepancyType =
   | 'missing_in_firestore' // Stripe has charge, Firestore doesn't
   | 'missing_in_stripe' // Firestore has transaction, Stripe doesn't
   | 'amount_mismatch' // Both exist but amounts differ
+  | 'club_mismatch' // Transaction exists but recorded under different club
   | 'status_mismatch'; // Both exist but status differs
 
 /**
@@ -148,6 +175,7 @@ export interface ReconciliationDiscrepancy {
   createdAt: number;
   description: string;
   canAutoFix: boolean; // True if we can create missing transaction
+  actualClubId?: string; // For club_mismatch: which club the transaction is actually in
 }
 
 /**
@@ -170,6 +198,7 @@ export interface ReconciliationResult {
     missingInFirestore: number;
     missingInStripe: number;
     amountMismatches: number;
+    clubMismatches: number; // Transaction exists but in different club
     matchRate: number; // 0-100 percentage
   };
 
@@ -351,13 +380,65 @@ export interface GetAccountPayoutsInput {
 }
 
 /**
- * Input for reconciliation function
+ * Input for reconciliation function (club)
  */
 export interface RunReconciliationInput {
   stripeAccountId: string;
   clubId: string;
   startDate: number;
   endDate: number;
+}
+
+/**
+ * Input for organizer reconciliation function
+ */
+export interface RunOrganizerReconciliationInput {
+  organizerId: string;
+  startDate: number;
+  endDate: number;
+}
+
+/**
+ * Organizer reconciliation discrepancy
+ */
+export interface OrganizerReconciliationDiscrepancy {
+  type: 'missing_in_firestore' | 'missing_in_stripe' | 'amount_mismatch';
+  stripeId?: string;
+  firestoreId?: string;
+  stripeAmount?: number;
+  firestoreAmount?: number;
+  diff?: number;
+  description?: string;
+}
+
+/**
+ * Result of organizer reconciliation
+ */
+export interface OrganizerReconciliationResult {
+  organizerId: string;
+  organizerName: string;
+  stripeAccountId: string;
+  period: {
+    startDate: number;
+    endDate: number;
+  };
+
+  summary: {
+    firestoreTotal: number;
+    stripeTotal: number;
+    difference: number;
+    matched: number;
+    discrepancyCount: number;
+    matchRate: string;
+    // Show ignored Stripe transaction types (payouts, fees, etc.)
+    ignoredCount: number;
+    ignoredTypes: Record<string, number>;
+  };
+
+  discrepancies: OrganizerReconciliationDiscrepancy[];
+
+  runAt: number;
+  runByUserId: string;
 }
 
 /**

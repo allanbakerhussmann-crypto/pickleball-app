@@ -6,6 +6,7 @@ import type {
   TournamentRegistration,
   UserProfile,
 } from '../../types';
+import { maskEmail } from '../../utils/privacy';
 import {
   getOpenTeamsForDivision,
   searchEligiblePartners,
@@ -350,7 +351,7 @@ export const DoublesPartnerStep: React.FC<DoublesPartnerStepProps> = ({
                                 <div>
                                   <div className="font-semibold text-white">{u.displayName || u.email}</div>
                                   <div className="text-xs text-gray-400">
-                                    {u.email}
+                                    {maskEmail(u.email)}
                                     {unavailableReason && <span className="text-red-400"> · {unavailableReason}</span>}
                                     {duprBlocked && !unavailableReason && <span className="text-red-400"> · No DUPR linked</span>}
                                   </div>

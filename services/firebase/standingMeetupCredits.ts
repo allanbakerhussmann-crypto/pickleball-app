@@ -15,7 +15,7 @@ import {
   orderBy,
   getDocs,
   limit,
-} from 'firebase/firestore';
+} from '@firebase/firestore';
 import { db } from './index';
 import {
   calculateCreditAmount,

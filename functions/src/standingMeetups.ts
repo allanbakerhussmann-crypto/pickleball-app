@@ -24,6 +24,18 @@ import Stripe from 'stripe';
 const db = admin.firestore();
 
 // =============================================================================
+// Auth Helpers
+// =============================================================================
+
+async function isAppAdmin(userId: string): Promise<boolean> {
+  const userDoc = await db.collection('users').doc(userId).get();
+  const userData = userDoc.data();
+  return userData?.isAppAdmin === true ||
+    userData?.role === 'app_admin' ||
+    (Array.isArray(userData?.roles) && userData.roles.includes('app_admin'));
+}
+
+// =============================================================================
 // Types (duplicated from types/standingMeetup.ts for Cloud Functions)
 // =============================================================================
 
@@ -556,6 +568,9 @@ export const standingMeetup_checkIn = functions
     if (participant.status === 'checked_in') {
       throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
     }
+    if (participant.status !== 'expected') {
+      throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
+    }
 
     const checkedInAt = Date.now();
     await updateParticipantStatus(standingMeetupId, dateId, userId, 'checked_in', {
@@ -592,7 +607,7 @@ export const standingMeetup_generateCheckInToken = functions
 
     const meetup = meetupSnap.data() as StandingMeetup;
 
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
       const clubMemberSnap = await db
         .collection('clubs')
         .doc(meetup.clubId)
@@ -690,7 +705,7 @@ export const standingMeetup_cancelAttendance = functions
         }
       }
 
-      if (!isCreator && !isClubAdmin) {
+      if (!isCreator && !isClubAdmin && !(await isAppAdmin(callerUid))) {
         throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
 
@@ -798,7 +813,7 @@ export const standingMeetup_cancelOccurrence = functions
 
     const meetup = meetupSnap.data() as StandingMeetup;
 
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
       const clubMemberSnap = await db
         .collection('clubs')
         .doc(meetup.clubId)
@@ -938,7 +953,7 @@ export const standingMeetup_manualCheckIn = functions
 
     const meetup = meetupSnap.data() as StandingMeetup;
 
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
       const clubMemberSnap = await db
         .collection('clubs')
         .doc(meetup.clubId)
@@ -949,6 +964,24 @@ export const standingMeetup_manualCheckIn = functions
       if (!clubMemberSnap.exists || !['owner', 'admin'].includes(clubMemberSnap.data()?.role)) {
         throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
       }
+    }
+
+    // Verify participant exists and has valid status
+    const occurrenceRef = meetupRef.collection('occurrences').doc(dateId);
+    const participantRef = occurrenceRef.collection('participants').doc(targetUserId);
+    const participantSnap = await participantRef.get();
+
+    if (!participantSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
+    }
+
+    const participant = participantSnap.data() as OccurrenceParticipant;
+
+    if (participant.status === 'checked_in') {
+      throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+    if (participant.status !== 'expected') {
+      throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
     }
 
     const checkedInAt = Date.now();
@@ -986,7 +1019,7 @@ export const standingMeetup_markNoShow = functions
 
     const meetup = meetupSnap.data() as StandingMeetup;
 
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
       const clubMemberSnap = await db
         .collection('clubs')
         .doc(meetup.clubId)
@@ -1321,6 +1354,11 @@ async function isOrganizerOrClubAdmin(
     }
   }
 
+  // Check if user is an app admin
+  if (await isAppAdmin(userId)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -1385,9 +1423,12 @@ export const standingMeetup_checkInSelf = functions
 
     const participant = participantSnap.data() as OccurrenceParticipant;
 
-    // Check not already checked in
+    // Only allow check-in for participants with 'expected' status
     if (participant.status === 'checked_in') {
       throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+    if (participant.status !== 'expected') {
+      throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
     }
 
     // Perform check-in using existing helper
@@ -1737,9 +1778,12 @@ export const standingMeetup_checkInPlayer = functions
 
     const participant = participantSnap.data() as OccurrenceParticipant;
 
-    // Check not already checked in
+    // Only allow check-in for participants with 'expected' status
     if (participant.status === 'checked_in') {
       throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+    if (participant.status !== 'expected') {
+      throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
     }
 
     // Perform check-in using existing helper

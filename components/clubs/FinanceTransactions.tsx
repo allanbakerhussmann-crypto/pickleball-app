@@ -114,9 +114,10 @@ export const FinanceTransactions: React.FC<FinanceTransactionsProps> = ({
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Date</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Description</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Type</th>
-              <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Gross</th>
-              <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Fee</th>
-              <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Net</th>
+              <th className="px-3 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Gross</th>
+              <th className="px-3 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider" title="Platform Fee (1.5%)">PD Fee</th>
+              <th className="px-3 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider" title="Stripe Processing Fee">Stripe</th>
+              <th className="px-3 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Net</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-700/50">
@@ -138,6 +139,11 @@ export const FinanceTransactions: React.FC<FinanceTransactionsProps> = ({
                     <div className="text-xs text-gray-400 flex items-center gap-1">
                       {getTypeIcon(tx)} {tx.payerDisplayName || 'Unknown'}
                     </div>
+                    {(tx as any).payerEmail && (
+                      <div className="text-xs text-gray-500 truncate max-w-[180px]" title={(tx as any).payerEmail}>
+                        {(tx as any).payerEmail}
+                      </div>
+                    )}
                   </div>
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
@@ -145,22 +151,31 @@ export const FinanceTransactions: React.FC<FinanceTransactionsProps> = ({
                     {formatReferenceType(tx.referenceType)}
                   </span>
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap text-right">
+                <td className="px-3 py-3 whitespace-nowrap text-right">
                   <span className={tx.type === 'refund' ? 'text-red-400' : 'text-white'}>
                     {tx.type === 'refund' ? '-' : ''}
                     {formatFinanceCurrency(Math.abs(tx.amount), tx.currency)}
                   </span>
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap text-right">
+                <td className="px-3 py-3 whitespace-nowrap text-right">
                   {tx.type === 'refund' && tx.platformFeeRefundEstimated ? (
                     <span className="text-gray-500 text-xs">(est.)</span>
                   ) : (
-                    <span className="text-yellow-400">
-                      -{formatFinanceCurrency((tx as any).totalFeeAmount || tx.platformFeeAmount || 0, tx.currency)}
+                    <span className="text-yellow-400 text-sm">
+                      -{formatFinanceCurrency(tx.platformFeeAmount || 0, tx.currency)}
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap text-right">
+                <td className="px-3 py-3 whitespace-nowrap text-right">
+                  {tx.type === 'refund' ? (
+                    <span className="text-gray-500 text-xs">-</span>
+                  ) : (
+                    <span className="text-orange-400 text-sm">
+                      -{formatFinanceCurrency((tx as any).stripeFeeAmount || 0, tx.currency)}
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-3 whitespace-nowrap text-right">
                   <span className={tx.type === 'refund' ? 'text-red-400' : 'text-lime-400'}>
                     {tx.type === 'refund' ? '-' : ''}
                     {formatFinanceCurrency(Math.abs(tx.clubNetAmount), tx.currency)}

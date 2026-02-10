@@ -32,6 +32,60 @@ import {
 } from '../../services/firebase/payments/types';
 import { createConnectLoginLink, createUserConnectLoginLink } from '../../services/stripe';
 
+// ============================================
+// CSV & Export Helper Functions
+// ============================================
+
+/**
+ * Properly escape a value for CSV output
+ * - Handles commas, quotes, newlines
+ * - Protects against Excel formula injection (=, +, -, @)
+ */
+const csvCell = (v: any): string => {
+  if (v === null || v === undefined) return '';
+  let s = String(v);
+
+  // Excel formula injection protection - prefix with single quote
+  if (/^[=+\-@]/.test(s)) {
+    s = "'" + s;
+  }
+
+  // Wrap in quotes if contains comma, quote, or newline
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+};
+
+/**
+ * Get Stripe fee - use stored value if available, otherwise calculate
+ * Handles payments vs refunds differently
+ */
+const getStripeFee = (tx: FinanceTransaction): number => {
+  // Prefer explicit field if stored
+  if ((tx as any).stripeFeeAmount !== undefined) {
+    return (tx as any).stripeFeeAmount;
+  }
+
+  const inferred = tx.amount - tx.clubNetAmount - tx.platformFeeAmount;
+
+  // For payments: clamp to 0 to prevent negative pennies from rounding
+  if (tx.type === 'payment') return Math.max(0, inferred);
+
+  // For refunds: inferred can be 0 or negative - keep as-is
+  if (tx.type === 'refund') return inferred;
+
+  // Others (future: payout, adjustment, etc.): don't clamp
+  return inferred;
+};
+
+/**
+ * Sanitize string for fixed-width text report (NOT CSV)
+ * Removes newlines and extra whitespace for table alignment
+ */
+const cleanForReport = (s: any): string =>
+  String(s ?? '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+
 interface FinanceTabProps {
   /** Club ID for club finance view */
   clubId?: string;
@@ -54,6 +108,7 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, organizerId, str
   const [hasMore, setHasMore] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<FinanceTransaction | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   // Filters
   const [typeFilter, setTypeFilter] = useState<'all' | 'payment' | 'refund'>('all');
@@ -146,29 +201,229 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, organizerId, str
     }
   };
 
-  // Export CSV
+  // Export CSV - Standard format with all fields
   const handleExportCSV = () => {
     if (transactions.length === 0) return;
+    setExportMenuOpen(false);
 
-    const headers = ['Date', 'Description', 'Payer', 'Type', 'Gross', 'Fee', 'Net', 'Status'];
-    const rows = transactions.map((tx) => [
-      new Date(tx.createdAt).toLocaleDateString(),
-      tx.referenceName || tx.referenceType,
-      tx.payerDisplayName,
-      tx.type,
-      (tx.amount / 100).toFixed(2),
-      (tx.platformFeeAmount / 100).toFixed(2),
-      (tx.clubNetAmount / 100).toFixed(2),
-      tx.status,
-    ]);
+    const headers = [
+      'Date', 'Time', 'Description', 'Payer', 'Email', 'Type',
+      'Gross', 'Platform Fee', 'Stripe Fee', 'Net', 'Status',
+      'Reference Type', 'Reference ID', 'Reference Name',
+      'Charge ID', 'Payment Intent ID', 'Balance Txn ID',
+      'Session ID', 'Refund ID', 'Stripe Account ID',
+      'Payment Method', 'Currency'
+    ];
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n');
+    const rows = transactions.map((tx) => {
+      const date = new Date(tx.createdAt);
+      const stripeFee = getStripeFee(tx);
+
+      // Build row with raw values, then map ALL through csvCell
+      const rawRow = [
+        date.toLocaleDateString(),
+        date.toLocaleTimeString(),
+        tx.referenceName || tx.referenceType || '',
+        tx.payerDisplayName,
+        (tx as any).payerEmail || '',
+        tx.type,
+        (tx.amount / 100).toFixed(2),
+        (tx.platformFeeAmount / 100).toFixed(2),
+        (stripeFee / 100).toFixed(2),
+        (tx.clubNetAmount / 100).toFixed(2),
+        tx.status,
+        tx.referenceType || '',
+        tx.referenceId || '',
+        tx.referenceName || '',
+        tx.stripe?.chargeId || '',
+        tx.stripe?.paymentIntentId || '',
+        tx.stripe?.balanceTransactionId || '',
+        tx.stripe?.sessionId || '',
+        tx.stripe?.refundIds?.[0] || '',
+        tx.stripe?.accountId || '',
+        tx.stripe?.paymentMethodType || '',
+        tx.currency || 'NZD'
+      ];
+
+      // Apply csvCell to EVERY field for safety
+      return rawRow.map(csvCell);
+    });
+
+    // Build CSV
+    const csv = [
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     const prefix = isOrganizerMode ? 'organizer-finance' : 'club-finance';
     a.download = `${prefix}-${entityId}-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Export grouped finance report - Human-readable format with subtotals
+  const handleExportGroupedReport = () => {
+    if (transactions.length === 0) return;
+    setExportMenuOpen(false);
+
+    // Group transactions by referenceId + UTC date (for recurring meetups)
+    const grouped: Record<string, {
+      name: string;
+      type: string;
+      utcDate: string;
+      localDate: string;
+      referenceId: string;
+      transactions: FinanceTransaction[];
+    }> = {};
+
+    transactions.forEach(tx => {
+      // Create composite key using UTC date for stable cross-timezone grouping
+      const utcDay = new Date(tx.createdAt).toISOString().slice(0, 10);
+      const key = `${tx.referenceId || 'uncategorized'}_${utcDay}`;
+
+      if (!grouped[key]) {
+        grouped[key] = {
+          name: tx.referenceName || tx.referenceId || 'Uncategorized',
+          type: tx.referenceType || 'unknown',
+          utcDate: utcDay,
+          localDate: new Date(tx.createdAt).toLocaleDateString(),
+          referenceId: tx.referenceId || '',
+          transactions: []
+        };
+      }
+      grouped[key].transactions.push(tx);
+    });
+
+    // Build human-readable report
+    let report = `Finance Report - Generated ${new Date().toLocaleString()}\n`;
+    report += `Entity: ${isOrganizerMode ? 'Organizer' : 'Club'} ${entityId}\n`;
+    report += '='.repeat(60) + '\n\n';
+
+    let grandTotalPayments = { count: 0, gross: 0, platformFee: 0, stripeFee: 0, net: 0 };
+    let grandTotalRefunds = { count: 0, amount: 0, net: 0 };
+    let grandTotalOther = { count: 0, amount: 0 };
+
+    const tableHeaders = 'Date       | Time     | Payer                    | Type    | Gross    | Fees     | Net      | Status';
+    const separator = '-'.repeat(tableHeaders.length);
+
+    Object.entries(grouped)
+      .sort((a, b) => b[1].transactions[0].createdAt - a[1].transactions[0].createdAt)
+      .forEach(([_key, group]) => {
+        // Event header
+        report += `\n===== ${cleanForReport(group.name)} =====\n`;
+        report += `Date: ${group.localDate}\n`;
+        report += `Event ID: ${group.referenceId}\n`;
+        report += `Type: ${group.type}\n\n`;
+        report += tableHeaders + '\n';
+        report += separator + '\n';
+
+        // Calculate subtotals - explicit type checking
+        let paymentSubtotal = { count: 0, gross: 0, platformFee: 0, stripeFee: 0, net: 0 };
+        let refundSubtotal = { count: 0, amount: 0, net: 0 };
+        let otherSubtotal = { count: 0, amount: 0 };
+
+        // Transaction rows
+        group.transactions
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .forEach(tx => {
+            const date = new Date(tx.createdAt);
+            const stripeFee = getStripeFee(tx);
+            const totalFees = tx.platformFeeAmount + Math.abs(stripeFee);
+
+            // Format row with fixed-width columns - use cleanForReport NOT csvCell
+            const row = [
+              date.toLocaleDateString().padEnd(10),
+              date.toLocaleTimeString().substring(0, 8).padEnd(8),
+              cleanForReport(tx.payerDisplayName).substring(0, 24).padEnd(24),
+              tx.type.padEnd(7),
+              `$${(tx.amount / 100).toFixed(2)}`.padStart(8),
+              `$${(totalFees / 100).toFixed(2)}`.padStart(8),
+              `$${(tx.clubNetAmount / 100).toFixed(2)}`.padStart(8),
+              tx.status
+            ].join(' | ');
+            report += row + '\n';
+
+            // Accumulate totals - EXPLICIT type checking
+            if (tx.type === 'payment') {
+              paymentSubtotal.count++;
+              paymentSubtotal.gross += tx.amount;
+              paymentSubtotal.platformFee += tx.platformFeeAmount;
+              paymentSubtotal.stripeFee += Math.abs(stripeFee);
+              paymentSubtotal.net += tx.clubNetAmount;
+            } else if (tx.type === 'refund') {
+              refundSubtotal.count++;
+              refundSubtotal.amount += Math.abs(tx.amount);
+              refundSubtotal.net += tx.clubNetAmount;
+            } else {
+              otherSubtotal.count++;
+              otherSubtotal.amount += tx.amount;
+            }
+          });
+
+        // Subtotal rows
+        report += separator + '\n';
+        if (paymentSubtotal.count > 0) {
+          report += `PAYMENTS: ${paymentSubtotal.count} | `;
+          report += `Gross: $${(paymentSubtotal.gross / 100).toFixed(2)} | `;
+          report += `Platform: $${(paymentSubtotal.platformFee / 100).toFixed(2)} | `;
+          report += `Stripe: $${(paymentSubtotal.stripeFee / 100).toFixed(2)} | `;
+          report += `Net: $${(paymentSubtotal.net / 100).toFixed(2)}\n`;
+        }
+        if (refundSubtotal.count > 0) {
+          report += `REFUNDS:  ${refundSubtotal.count} | `;
+          report += `Amount: -$${(refundSubtotal.amount / 100).toFixed(2)} | `;
+          report += `Net Impact: $${(refundSubtotal.net / 100).toFixed(2)}\n`;
+        }
+        if (otherSubtotal.count > 0) {
+          report += `OTHER:    ${otherSubtotal.count} | `;
+          report += `Amount: $${(otherSubtotal.amount / 100).toFixed(2)}\n`;
+        }
+        const eventNet = (paymentSubtotal.net + refundSubtotal.net) / 100;
+        report += `EVENT NET: $${eventNet.toFixed(2)}\n`;
+
+        // Accumulate grand totals
+        grandTotalPayments.count += paymentSubtotal.count;
+        grandTotalPayments.gross += paymentSubtotal.gross;
+        grandTotalPayments.platformFee += paymentSubtotal.platformFee;
+        grandTotalPayments.stripeFee += paymentSubtotal.stripeFee;
+        grandTotalPayments.net += paymentSubtotal.net;
+        grandTotalRefunds.count += refundSubtotal.count;
+        grandTotalRefunds.amount += refundSubtotal.amount;
+        grandTotalRefunds.net += refundSubtotal.net;
+        grandTotalOther.count += otherSubtotal.count;
+        grandTotalOther.amount += otherSubtotal.amount;
+      });
+
+    // Grand total section
+    report += '\n' + '='.repeat(60) + '\n';
+    report += 'GRAND TOTAL\n';
+    report += '='.repeat(60) + '\n';
+    report += `Payments: ${grandTotalPayments.count} transactions\n`;
+    report += `  Gross:        $${(grandTotalPayments.gross / 100).toFixed(2)}\n`;
+    report += `  Platform Fee: $${(grandTotalPayments.platformFee / 100).toFixed(2)}\n`;
+    report += `  Stripe Fee:   $${(grandTotalPayments.stripeFee / 100).toFixed(2)}\n`;
+    report += `  Net:          $${(grandTotalPayments.net / 100).toFixed(2)}\n\n`;
+    report += `Refunds: ${grandTotalRefunds.count} transactions\n`;
+    report += `  Amount:       -$${(grandTotalRefunds.amount / 100).toFixed(2)}\n`;
+    report += `  Net Impact:   $${(grandTotalRefunds.net / 100).toFixed(2)}\n\n`;
+    if (grandTotalOther.count > 0) {
+      report += `Other: ${grandTotalOther.count} transactions\n`;
+      report += `  Amount:       $${(grandTotalOther.amount / 100).toFixed(2)}\n\n`;
+    }
+    const netRevenue = (grandTotalPayments.net + grandTotalRefunds.net) / 100;
+    report += `NET REVENUE: $${netRevenue.toFixed(2)}\n`;
+
+    // Download as .txt (human-readable, not machine-parseable)
+    const blob = new Blob([report], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const prefix = isOrganizerMode ? 'organizer-finance-report' : 'club-finance-report';
+    a.download = `${prefix}-${entityId}-${new Date().toISOString().split('T')[0]}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -261,17 +516,60 @@ export const FinanceTab: React.FC<FinanceTabProps> = ({ clubId, organizerId, str
           <option value="all">All time</option>
         </select>
 
-        {/* Export Button */}
-        <button
-          onClick={handleExportCSV}
-          disabled={transactions.length === 0}
-          className="ml-auto px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg flex items-center gap-2 transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          Export CSV
-        </button>
+        {/* Export Dropdown */}
+        <div className="relative ml-auto">
+          <button
+            onClick={() => setExportMenuOpen(!exportMenuOpen)}
+            disabled={transactions.length === 0}
+            className="px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg flex items-center gap-2 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Export
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {exportMenuOpen && (
+            <>
+              {/* Backdrop to close menu */}
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setExportMenuOpen(false)}
+              />
+
+              {/* Dropdown menu */}
+              <div className="absolute right-0 mt-2 w-72 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-20">
+                <button
+                  onClick={handleExportCSV}
+                  className="w-full px-4 py-3 text-left text-sm text-white hover:bg-gray-700 rounded-t-lg flex items-center gap-3"
+                >
+                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <div>
+                    <div className="font-medium">Export CSV</div>
+                    <div className="text-xs text-gray-400">All fields, machine-readable (.csv)</div>
+                  </div>
+                </button>
+                <button
+                  onClick={handleExportGroupedReport}
+                  className="w-full px-4 py-3 text-left text-sm text-white hover:bg-gray-700 rounded-b-lg flex items-center gap-3 border-t border-gray-700"
+                >
+                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <div>
+                    <div className="font-medium">Finance Report</div>
+                    <div className="text-xs text-gray-400">Grouped by event with subtotals (.txt)</div>
+                  </div>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Transactions Table */}

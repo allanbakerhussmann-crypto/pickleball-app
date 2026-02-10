@@ -347,7 +347,7 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
   const getWithdrawCreditInfo = (occurrence: MeetupOccurrence): { canGetCredit: boolean; cutoffTime: Date } => {
     const cutoffHours = meetup?.credits.cancellationCutoffHours || 24;
     const cutoffTime = new Date(occurrence.startAt - cutoffHours * 60 * 60 * 1000);
-    const canGetCredit = meetup?.credits.enabled && Date.now() <= cutoffTime.getTime();
+    const canGetCredit = Boolean(meetup?.credits.enabled) && Date.now() <= cutoffTime.getTime();
     return { canGetCredit, cutoffTime };
   };
 
@@ -688,16 +688,35 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
             <div>
               <h3 className="text-lg font-semibold text-white mb-4">Join This Weekly Meetup</h3>
 
-              {/* Check if spots available */}
-              {meetup.subscriberCount >= meetup.maxPlayers ? (
-                <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 text-center">
-                  <p className="text-red-400 font-medium">This meetup is currently full</p>
-                  <p className="text-gray-500 text-sm mt-1">{meetup.subscriberCount}/{meetup.maxPlayers} subscribers</p>
-                </div>
-              ) : (
+              {/* Check if spots available for any registration type */}
+              {(() => {
+                const seasonPassFull = meetup.subscriberCount >= meetup.maxPlayers;
+                const anySessionHasSpace = upcomingOccurrences.some(
+                  o => (o.expectedCount || 0) < (meetup.maxPlayers || 16)
+                );
+                const isCompletelyFull = seasonPassFull && !anySessionHasSpace;
+
+                if (isCompletelyFull) {
+                  return (
+                    <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 text-center">
+                      <p className="text-red-400 font-medium">This meetup is currently full</p>
+                      <p className="text-gray-500 text-sm mt-1">All sessions are at capacity</p>
+                    </div>
+                  );
+                }
+
+                return (
                 <div className="space-y-3">
-                  {/* Season Pass Option (if enabled) */}
-                  {meetup.billing.amount > 0 && (
+                  {/* Season Pass Option - only show if:
+                      1. Season pass pricing is set (amount > 0)
+                      2. At least 6 sessions remaining (worth a season pass)
+                      3. Early bird period hasn't ended (use createdAt + 2 weeks as cutoff)
+                      4. Subscriber slots still available (not at maxPlayers)
+                  */}
+                  {!seasonPassFull &&
+                   meetup.billing.amount > 0 &&
+                   upcomingOccurrences.length >= 6 &&
+                   (meetup.createdAt ? Date.now() < meetup.createdAt + (14 * 24 * 60 * 60 * 1000) : true) && (
                     <button
                       onClick={() => {
                         setJoinModalType('season_pass');
@@ -727,6 +746,14 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
                         </svg>
                       </div>
                     </button>
+                  )}
+
+                  {/* Season Pass Full Notice - show when subscriber spots are taken but sessions have space */}
+                  {seasonPassFull && anySessionHasSpace && (
+                    <div className="bg-amber-900/20 border border-amber-600/30 rounded-lg p-3 text-center">
+                      <p className="text-amber-400 text-sm font-medium">Season Pass subscriptions are full</p>
+                      <p className="text-gray-400 text-xs mt-1">You can still register for individual sessions below</p>
+                    </div>
                   )}
 
                   {/* Pay Per Session Option - show if perSessionAmount OR amount is set (backwards compat) */}
@@ -767,7 +794,8 @@ export const StandingMeetupDetail: React.FC<StandingMeetupDetailProps> = ({
                     </div>
                   )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           )}
         </div>

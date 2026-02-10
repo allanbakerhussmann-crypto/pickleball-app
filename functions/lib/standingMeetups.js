@@ -59,6 +59,16 @@ const firestore_1 = require("firebase-admin/firestore");
 const crypto = __importStar(require("crypto"));
 const stripe_1 = __importDefault(require("stripe"));
 const db = admin.firestore();
+// =============================================================================
+// Auth Helpers
+// =============================================================================
+async function isAppAdmin(userId) {
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    return (userData === null || userData === void 0 ? void 0 : userData.isAppAdmin) === true ||
+        (userData === null || userData === void 0 ? void 0 : userData.role) === 'app_admin' ||
+        (Array.isArray(userData === null || userData === void 0 ? void 0 : userData.roles) && userData.roles.includes('app_admin'));
+}
 // Constants
 const OCCURRENCE_LOOKAHEAD_DAYS = 112; // 16 weeks
 const PLATFORM_FEE_PERCENT = 0.015; // 1.5% standard rate - same as stripe.ts
@@ -364,6 +374,9 @@ exports.standingMeetup_checkIn = functions
     if (participant.status === 'checked_in') {
         throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
     }
+    if (participant.status !== 'expected') {
+        throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
+    }
     const checkedInAt = Date.now();
     await updateParticipantStatus(standingMeetupId, dateId, userId, 'checked_in', {
         checkedInAt,
@@ -392,7 +405,7 @@ exports.standingMeetup_generateCheckInToken = functions
         throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
     const meetup = meetupSnap.data();
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
         const clubMemberSnap = await db
             .collection('clubs')
             .doc(meetup.clubId)
@@ -470,7 +483,7 @@ exports.standingMeetup_cancelAttendance = functions
                 isClubAdmin = ['owner', 'admin'].includes(memberRole);
             }
         }
-        if (!isCreator && !isClubAdmin) {
+        if (!isCreator && !isClubAdmin && !(await isAppAdmin(callerUid))) {
             throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
         }
         userId = odUserId;
@@ -554,7 +567,7 @@ exports.standingMeetup_cancelOccurrence = functions
         throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
     const meetup = meetupSnap.data();
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
         const clubMemberSnap = await db
             .collection('clubs')
             .doc(meetup.clubId)
@@ -665,7 +678,7 @@ exports.standingMeetup_manualCheckIn = functions
         throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
     const meetup = meetupSnap.data();
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
         const clubMemberSnap = await db
             .collection('clubs')
             .doc(meetup.clubId)
@@ -675,6 +688,20 @@ exports.standingMeetup_manualCheckIn = functions
         if (!clubMemberSnap.exists || !['owner', 'admin'].includes((_a = clubMemberSnap.data()) === null || _a === void 0 ? void 0 : _a.role)) {
             throw new functions.https.HttpsError('permission-denied', 'NOT_AUTHORIZED');
         }
+    }
+    // Verify participant exists and has valid status
+    const occurrenceRef = meetupRef.collection('occurrences').doc(dateId);
+    const participantRef = occurrenceRef.collection('participants').doc(targetUserId);
+    const participantSnap = await participantRef.get();
+    if (!participantSnap.exists) {
+        throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
+    }
+    const participant = participantSnap.data();
+    if (participant.status === 'checked_in') {
+        throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+    if (participant.status !== 'expected') {
+        throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
     }
     const checkedInAt = Date.now();
     await updateParticipantStatus(standingMeetupId, dateId, targetUserId, 'checked_in', {
@@ -704,7 +731,7 @@ exports.standingMeetup_markNoShow = functions
         throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
     }
     const meetup = meetupSnap.data();
-    if (meetup.createdByUserId !== userId) {
+    if (meetup.createdByUserId !== userId && !(await isAppAdmin(userId))) {
         const clubMemberSnap = await db
             .collection('clubs')
             .doc(meetup.clubId)
@@ -962,6 +989,10 @@ async function isOrganizerOrClubAdmin(userId, meetup) {
             return true;
         }
     }
+    // Check if user is an app admin
+    if (await isAppAdmin(userId)) {
+        return true;
+    }
     return false;
 }
 // =============================================================================
@@ -1007,9 +1038,12 @@ exports.standingMeetup_checkInSelf = functions
         throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
     }
     const participant = participantSnap.data();
-    // Check not already checked in
+    // Only allow check-in for participants with 'expected' status
     if (participant.status === 'checked_in') {
         throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+    if (participant.status !== 'expected') {
+        throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
     }
     // Perform check-in using existing helper
     const checkedInAt = Date.now();
@@ -1245,9 +1279,12 @@ exports.standingMeetup_checkInPlayer = functions
         throw new functions.https.HttpsError('not-found', 'NOT_PARTICIPANT');
     }
     const participant = participantSnap.data();
-    // Check not already checked in
+    // Only allow check-in for participants with 'expected' status
     if (participant.status === 'checked_in') {
         throw new functions.https.HttpsError('already-exists', 'ALREADY_CHECKED_IN');
+    }
+    if (participant.status !== 'expected') {
+        throw new functions.https.HttpsError('failed-precondition', 'REGISTRATION_CANCELLED');
     }
     // Perform check-in using existing helper
     const checkedInAt = Date.now();

@@ -4,11 +4,11 @@
  * Admin-only dashboard showing:
  * - Platform-wide financial overview
  * - All transactions across clubs
- * - Per-club breakdown
- * - Reconciliation tools
+ * - Per-club and per-organizer breakdown
+ * - Reconciliation tools (clubs and organizers)
  * - Account balances and payouts
  *
- * @version 07.50
+ * @version 07.61
  * @file components/admin/PlatformFinanceTab.tsx
  */
 
@@ -24,11 +24,13 @@ import {
   getPlatformFinanceOverview,
   getPlatformTransactions,
   getClubFinanceBreakdown,
+  getOrganizerFinanceBreakdown,
 } from '../../services/firebase/payments/platformFinance';
 import {
   PlatformFinanceOverview,
   PlatformFinanceTab as TabType,
   ClubFinanceBreakdown,
+  OrganizerFinanceBreakdown,
   getDateRangeFromPreset,
   DateRangePreset,
 } from '../../services/firebase/payments/platformFinanceTypes';
@@ -43,6 +45,7 @@ export const PlatformFinanceTab: React.FC = () => {
   const [overview, setOverview] = useState<PlatformFinanceOverview | null>(null);
   const [transactions, setTransactions] = useState<FinanceTransaction[]>([]);
   const [clubBreakdown, setClubBreakdown] = useState<ClubFinanceBreakdown[]>([]);
+  const [organizerBreakdown, setOrganizerBreakdown] = useState<OrganizerFinanceBreakdown[]>([]);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
@@ -76,6 +79,14 @@ export const PlatformFinanceTab: React.FC = () => {
       } else if (activeTab === 'clubs') {
         const breakdownData = await getClubFinanceBreakdown(dateRange.start, dateRange.end);
         setClubBreakdown(breakdownData);
+      } else if (activeTab === 'reconciliation') {
+        // Load both club and organizer data for reconciliation
+        const [breakdownData, organizerData] = await Promise.all([
+          getClubFinanceBreakdown(dateRange.start, dateRange.end),
+          getOrganizerFinanceBreakdown(dateRange.start, dateRange.end),
+        ]);
+        setClubBreakdown(breakdownData);
+        setOrganizerBreakdown(organizerData);
       }
     } catch (error) {
       console.error('Error loading platform finance data:', error);
@@ -220,7 +231,12 @@ export const PlatformFinanceTab: React.FC = () => {
         )}
 
         {!loading && activeTab === 'reconciliation' && (
-          <ReconciliationPanel clubs={clubBreakdown} startDate={dateRange.start} endDate={dateRange.end} />
+          <ReconciliationPanel
+            clubs={clubBreakdown}
+            organizers={organizerBreakdown}
+            startDate={dateRange.start}
+            endDate={dateRange.end}
+          />
         )}
 
         {!loading && activeTab === 'payouts' && (

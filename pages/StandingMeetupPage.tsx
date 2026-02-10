@@ -133,7 +133,14 @@ export const StandingMeetupPage: React.FC = () => {
       <div className="bg-gray-900 border-b border-gray-800">
         <div className="max-w-4xl mx-auto px-4 py-4">
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => {
+              // Navigate to club page if we have clubId, otherwise go to meetups list
+              if (meetup?.clubId) {
+                navigate(`/clubs/${meetup.clubId}?tab=standingMeetups`);
+              } else {
+                navigate('/meetups');
+              }
+            }}
             className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-4"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -146,12 +153,17 @@ export const StandingMeetupPage: React.FC = () => {
               <h1 className="text-2xl font-bold text-white">{meetup.title}</h1>
               <p className="text-gray-400">{meetup.clubName}</p>
             </div>
-            <div className="text-right">
-              <div className="text-2xl font-bold text-lime-400">
-                {formatCurrency(meetup.billing.amount)}
+            {/* Only show price in header if not registered */}
+            {!isPaid && (
+              <div className="text-right">
+                <div className="text-2xl font-bold text-lime-400">
+                  {formatCurrency(meetup.billing.perSessionAmount || meetup.billing.amount)}
+                </div>
+                <div className="text-sm text-gray-500">
+                  {meetup.billing.perSessionAmount ? 'per session' : 'one-time registration'}
+                </div>
               </div>
-              <div className="text-sm text-gray-500">one-time registration</div>
-            </div>
+            )}
           </div>
         </div>
       </div>
@@ -172,7 +184,11 @@ export const StandingMeetupPage: React.FC = () => {
                   </svg>
                   <div>
                     <p className="text-lime-400 font-medium">You're Registered!</p>
-                    <p className="text-lime-400/70 text-sm">You have access to all upcoming sessions.</p>
+                    <p className="text-lime-400/70 text-sm">
+                      {registration?.registrationType === 'season_pass'
+                        ? 'You have a Season Pass - access to all sessions!'
+                        : `You're registered for ${registration?.sessionCount || 0} session${(registration?.sessionCount || 0) !== 1 ? 's' : ''}.`}
+                    </p>
                   </div>
                 </>
               ) : (
@@ -325,15 +341,17 @@ export const StandingMeetupPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Price */}
-              <div className="mb-6">
-                <div className="text-3xl font-bold text-white mb-1">
-                  {formatCurrency(meetup.billing.amount)}
+              {/* Price - only show if not already registered */}
+              {!isPaid && (
+                <div className="mb-6">
+                  <div className="text-3xl font-bold text-white mb-1">
+                    {formatCurrency(meetup.billing.perSessionAmount || meetup.billing.amount)}
+                  </div>
+                  <p className="text-gray-500 text-sm">
+                    {meetup.billing.perSessionAmount ? 'Per session' : 'One-time registration fee'}
+                  </p>
                 </div>
-                <p className="text-gray-500 text-sm">
-                  One-time registration fee for unlimited sessions
-                </p>
-              </div>
+              )}
 
               {/* Registration Button */}
               {registrationLoading ? (
@@ -341,13 +359,37 @@ export const StandingMeetupPage: React.FC = () => {
                   <div className="animate-spin h-6 w-6 border-2 border-lime-500 border-t-transparent rounded-full" />
                 </div>
               ) : isPaid ? (
-                <div className="text-center py-4">
-                  <div className="inline-flex items-center gap-2 px-4 py-2 bg-lime-600/20 text-lime-400 rounded-lg">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    Registered
+                <div className="space-y-4">
+                  <div className="text-center py-4">
+                    <div className="inline-flex items-center gap-2 px-4 py-2 bg-lime-600/20 text-lime-400 rounded-lg">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Registered
+                    </div>
                   </div>
+                  {/* Show paid amount and "Add More Sessions" for pick-and-pay */}
+                  {registration?.registrationType === 'pick_and_pay' && (
+                    <>
+                      <p className="text-center text-gray-500 text-sm">
+                        Amount paid: {formatCurrency(registration.amount)}
+                      </p>
+                      <button
+                        onClick={() => {
+                          // Navigate to club page to add more sessions
+                          if (meetup?.clubId) {
+                            navigate(`/clubs/${meetup.clubId}?tab=standingMeetups`);
+                          }
+                        }}
+                        className="w-full bg-lime-600 hover:bg-lime-500 text-white py-2 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        </svg>
+                        Add More Sessions
+                      </button>
+                    </>
+                  )}
                 </div>
               ) : isPending ? (
                 <div className="text-center py-4">

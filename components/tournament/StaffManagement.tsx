@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { collection, query, getDocs, limit } from '@firebase/firestore';
 import { db } from '../../services/firebase';
+import { maskEmail } from '../../utils/privacy';
 import {
   addTournamentStaff,
   removeTournamentStaff,
@@ -242,7 +243,7 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <p className="text-white font-medium truncate">{user.displayName}</p>
-                    <p className="text-gray-500 text-sm truncate">{user.email}</p>
+                    <p className="text-gray-500 text-sm truncate">{maskEmail(user.email)}</p>
                   </div>
 
                   {/* Add button */}
@@ -303,7 +304,7 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <p className="text-white font-medium truncate">{staff.displayName}</p>
-                  <p className="text-gray-500 text-sm truncate">{staff.email}</p>
+                  <p className="text-gray-500 text-sm truncate">{maskEmail(staff.email)}</p>
                 </div>
 
                 {/* Staff badge */}

@@ -759,6 +759,49 @@
         { "fieldPath": "emailConsent", "order": "ASCENDING" },
         { "fieldPath": "totalVisits", "order": "DESCENDING" }
       ]
+    },
+
+    {
+      "collectionGroup": "meetups",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "visibility", "order": "ASCENDING" },
+        { "fieldPath": "when", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "meetups",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "visibility", "order": "ASCENDING" },
+        { "fieldPath": "invitedUserIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "when", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "meetups",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "visibility", "order": "ASCENDING" },
+        { "fieldPath": "createdByUserId", "order": "ASCENDING" },
+        { "fieldPath": "when", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "meetupInvites",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "invitedUserId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "meetupInvites",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "meetupId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

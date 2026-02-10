@@ -34,6 +34,7 @@ import type {
   StandingMeetupRegistration,
 } from '../../types/standingMeetup';
 import { formatTime } from '../../utils/timeFormat';
+import { maskEmail } from '../../utils/privacy';
 import { SessionCheckInQR } from './SessionCheckInQR';
 import { GuestPayQR } from './GuestPayQR';
 import { AddCashGuestModal } from './AddCashGuestModal';
@@ -407,7 +408,7 @@ export const OccurrenceManager: React.FC<OccurrenceManagerProps> = ({
       />
 
       {/* Participants List */}
-      <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+      <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700">
         <h3 className="text-lg font-semibold text-white mb-4">Participants</h3>
 
         {loading ? (
@@ -426,76 +427,76 @@ export const OccurrenceManager: React.FC<OccurrenceManagerProps> = ({
             {participants.map((participant) => (
               <div
                 key={participant.odUserId}
-                className="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg border border-gray-700"
+                className="p-3 sm:p-4 bg-gray-900/50 rounded-lg border border-gray-700"
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-gray-700 rounded-full flex items-center justify-center">
-                    <span className="text-white font-medium">
-                      {(participant.userName || '?').charAt(0).toUpperCase()}
-                    </span>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gray-700 rounded-full flex items-center justify-center flex-shrink-0">
+                      <span className="text-white font-medium text-sm sm:text-base">
+                        {(participant.userName || '?').charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-white font-medium truncate">{participant.userName || 'Unknown'}</p>
+                      {participant.checkedInAt && (
+                        <p className="text-gray-500 text-xs">
+                          Checked in at {new Date(participant.checkedInAt).toLocaleTimeString()}
+                        </p>
+                      )}
+                      {participant.creditIssued && (
+                        <p className="text-green-500 text-xs">
+                          Credit issued: ${((participant.creditAmount || 0) / 100).toFixed(2)}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-white font-medium">{participant.userName || 'Unknown'}</p>
-                    {participant.checkedInAt && (
-                      <p className="text-gray-500 text-xs">
-                        Checked in at {new Date(participant.checkedInAt).toLocaleTimeString()}
-                      </p>
-                    )}
-                    {participant.creditIssued && (
-                      <p className="text-green-500 text-xs">
-                        Credit issued: ${((participant.creditAmount || 0) / 100).toFixed(2)}
-                      </p>
-                    )}
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-3">
-                  <span className={`px-2 py-1 rounded-lg text-xs font-medium ${getStatusColor(participant.status)}`}>
+                  <span className={`px-2 py-1 rounded-lg text-xs font-medium whitespace-nowrap flex-shrink-0 ${getStatusColor(participant.status)}`}>
                     {getStatusLabel(participant.status)}
                   </span>
-
-                  {/* Action buttons - only show for expected status and non-cancelled sessions */}
-                  {participant.status === 'expected' && !isCancelled && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleCheckIn(participant.odUserId)}
-                        disabled={actionLoading === participant.odUserId}
-                        className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading === participant.odUserId ? (
-                          <span className="flex items-center gap-1">
-                            <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            ...
-                          </span>
-                        ) : (
-                          'Check In'
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleMarkNoShow(participant.odUserId)}
-                        disabled={actionLoading === participant.odUserId}
-                        className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        No Show
-                      </button>
-                      <button
-                        onClick={() => {
-                          setRemovePlayerTarget(participant);
-                          setShowRemovePlayerModal(true);
-                          setRemovePlayerError(null);
-                        }}
-                        disabled={actionLoading === participant.odUserId}
-                        className="px-3 py-1.5 bg-gray-600/20 hover:bg-gray-600/30 text-gray-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Remove player from session"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  )}
                 </div>
+
+                {/* Action buttons - only show for expected status and non-cancelled sessions */}
+                {participant.status === 'expected' && !isCancelled && (
+                  <div className="flex items-center gap-2 mt-3 pl-12 sm:pl-13">
+                    <button
+                      onClick={() => handleCheckIn(participant.odUserId)}
+                      disabled={actionLoading === participant.odUserId}
+                      className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {actionLoading === participant.odUserId ? (
+                        <span className="flex items-center gap-1">
+                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          ...
+                        </span>
+                      ) : (
+                        'Check In'
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleMarkNoShow(participant.odUserId)}
+                      disabled={actionLoading === participant.odUserId}
+                      className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      No Show
+                    </button>
+                    <button
+                      onClick={() => {
+                        setRemovePlayerTarget(participant);
+                        setShowRemovePlayerModal(true);
+                        setRemovePlayerError(null);
+                      }}
+                      disabled={actionLoading === participant.odUserId}
+                      className="px-3 py-1.5 bg-gray-600/20 hover:bg-gray-600/30 text-gray-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Remove player from session"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -504,7 +505,7 @@ export const OccurrenceManager: React.FC<OccurrenceManagerProps> = ({
 
       {/* Guests (Walk-ins) */}
       {guests.length > 0 && (
-        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+        <div className="bg-gray-800 rounded-xl p-4 sm:p-6 border border-gray-700">
           <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
             <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
@@ -519,17 +520,22 @@ export const OccurrenceManager: React.FC<OccurrenceManagerProps> = ({
             {guests.map((guest) => (
               <div
                 key={guest.id}
-                className="flex items-center justify-between p-4 bg-cyan-900/20 rounded-lg border border-cyan-700/50"
+                className="p-3 sm:p-4 bg-cyan-900/20 rounded-lg border border-cyan-700/50"
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-cyan-600/30 rounded-full flex items-center justify-center">
-                    <span className="text-cyan-400 font-medium">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 bg-cyan-600/30 rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-cyan-400 font-medium text-sm sm:text-base">
                       {(guest.name || 'G').charAt(0).toUpperCase()}
                     </span>
                   </div>
-                  <div>
-                    <p className="text-white font-medium">{guest.name || 'Guest'}</p>
-                    <div className="flex items-center gap-2 text-gray-500 text-xs">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-white font-medium truncate">{guest.name || 'Guest'}</p>
+                      <p className="text-cyan-400 font-semibold whitespace-nowrap">
+                        ${(guest.amount / 100).toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-xs flex-wrap">
                       <span className={`px-1.5 py-0.5 rounded ${
                         guest.paymentMethod === 'stripe'
                           ? 'bg-purple-600/20 text-purple-400'
@@ -537,33 +543,63 @@ export const OccurrenceManager: React.FC<OccurrenceManagerProps> = ({
                       }`}>
                         {guest.paymentMethod === 'stripe' ? 'Card' : 'Cash'}
                       </span>
-                      <span>${(guest.amount / 100).toFixed(2)}</span>
-                      {guest.email && <span>• {guest.email}</span>}
+                      <span className="text-gray-500">
+                        {new Date(guest.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      {guest.email && (
+                        <span className="text-gray-500 truncate max-w-[160px]">{maskEmail(guest.email)}</span>
+                      )}
                     </div>
                     {guest.notes && (
-                      <p className="text-gray-500 text-xs mt-1 italic">"{guest.notes}"</p>
+                      <p className="text-gray-500 text-xs mt-1 italic truncate">"{guest.notes}"</p>
                     )}
                   </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-cyan-400 font-medium">
-                    ${(guest.amount / 100).toFixed(2)}
-                  </p>
-                  <p className="text-gray-500 text-xs">
-                    {new Date(guest.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Guest Revenue Summary */}
-          <div className="mt-4 pt-4 border-t border-cyan-700/30 flex justify-between items-center">
-            <span className="text-gray-400 text-sm">Total Guest Revenue</span>
-            <span className="text-cyan-400 font-bold text-lg">
-              ${(guests.reduce((sum, g) => sum + g.amount, 0) / 100).toFixed(2)}
-            </span>
-          </div>
+          {/* Guest Revenue Summary - Show NET (what organizer receives) */}
+          {(() => {
+            // Calculate estimated NET revenue
+            // Cash: full amount (no fees)
+            // Stripe: gross - Stripe fee (~2.9% + 30c + 15% GST) - platform fee (1.5%)
+            const grossTotal = guests.reduce((sum, g) => sum + g.amount, 0);
+            const netTotal = guests.reduce((sum, g) => {
+              if (g.paymentMethod === 'cash') {
+                // Cash: organizer keeps full amount
+                return sum + g.amount;
+              } else {
+                // Stripe: estimate net after fees
+                // Stripe fee: 2.9% + 30c base, plus 15% GST (NZ)
+                const stripeFeeBase = Math.round(g.amount * 0.029) + 30;
+                const stripeFee = Math.round(stripeFeeBase * 1.15);
+                // Platform fee: 1.5%
+                const platformFee = Math.round(g.amount * 0.015);
+                const net = g.amount - stripeFee - platformFee;
+                return sum + Math.max(0, net);
+              }
+            }, 0);
+
+            return (
+              <div className="mt-4 pt-4 border-t border-cyan-700/30">
+                <div className="flex justify-between items-baseline gap-2">
+                  <div className="text-sm">
+                    <span className="text-gray-400">Your Revenue</span>
+                    <span className="text-gray-500 text-xs ml-1">(after fees)</span>
+                  </div>
+                  <span className="text-cyan-400 font-bold text-xl">
+                    ${(netTotal / 100).toFixed(2)}
+                  </span>
+                </div>
+                {grossTotal !== netTotal && (
+                  <p className="text-gray-500 text-xs mt-1 text-right">
+                    Gross: ${(grossTotal / 100).toFixed(2)} &middot; Fees: ${((grossTotal - netTotal) / 100).toFixed(2)}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 

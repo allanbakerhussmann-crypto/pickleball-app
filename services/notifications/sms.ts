@@ -1,15 +1,15 @@
 /**
  * SMS Notification Service
  *
- * Frontend service for sending SMS notifications via Twilio.
- * Works by writing to Firestore, which triggers a Cloud Function to send via Twilio.
+ * Frontend service for sending SMS notifications via SMSGlobal.
+ * Works by writing to Firestore, which triggers a Cloud Function to send via SMSGlobal.
  *
  * FILE LOCATION: services/notifications/sms.ts
  * VERSION: 06.17
  */
 
-import { collection, addDoc, serverTimestamp, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { collection, addDoc, serverTimestamp, getDocs, query, where, orderBy, limit } from '@firebase/firestore';
+import { httpsCallable } from '@firebase/functions';
 import { db, functions } from '../firebase/config';
 import type { SMSMessage, SMSNotificationType } from '../../types';
 

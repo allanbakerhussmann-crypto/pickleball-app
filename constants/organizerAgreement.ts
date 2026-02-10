@@ -8,8 +8,8 @@
  */
 
 // Current agreement version - update when agreement changes
-export const CURRENT_ORGANIZER_AGREEMENT_VERSION = 'V1.7';
-export const ORGANIZER_AGREEMENT_EFFECTIVE_DATE = '2026-01-03';
+export const CURRENT_ORGANIZER_AGREEMENT_VERSION = 'V1.8';
+export const ORGANIZER_AGREEMENT_EFFECTIVE_DATE = '2026-02-08';
 
 // Agreement section structure
 export interface AgreementSection {
@@ -57,7 +57,20 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '3. Definitions',
+      title: '3. Platform Fees',
+      content: [
+        '3.1 Organiser Stripe Account Fee',
+        'If you connect a Stripe account to receive payments through Pickleball Director, a monthly platform fee of NZ$2.00 (or local currency equivalent) applies. This fee:',
+        '• Recovers Stripe Connect infrastructure costs incurred by the Platform',
+        '• Is automatically deducted from your first qualifying payment each calendar month',
+        '• Only applies to payments of $3.00 or more',
+        '• Will be deferred to the next qualifying payment if your first payment is below the threshold',
+        '3.2 This fee is separate from Stripe\'s own processing fees (approximately 2.7% + $0.30 per transaction) which are also deducted from payments you receive.',
+        '3.3 The Platform may adjust these fees from time to time with reasonable notice. Continued use of payment features after fee changes constitutes acceptance.',
+      ],
+    },
+    {
+      title: '4. Definitions',
       content: [
         'For the purposes of this Agreement:',
         '• Match – A scheduled or recorded pickleball match created or managed within Pickleball Director.',
@@ -70,7 +83,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '4. Eligibility and Verification',
+      title: '5. Eligibility and Verification',
       content: [
         '4.1 You confirm that you are at least 18 years old (or the age of majority in your jurisdiction).',
         '4.2 You agree to provide accurate, complete, and current information when requesting organiser access and to keep that information up to date.',
@@ -79,7 +92,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '5. Core Organiser Responsibilities',
+      title: '6. Core Organiser Responsibilities',
       content: [
         'As an Organiser, you agree to:',
         '5.1 Act honestly, fairly, and in good faith at all times.',
@@ -96,7 +109,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '6. Non-Self-Reporting Rule (Critical)',
+      title: '7. Non-Self-Reporting Rule (Critical)',
       content: [
         '6.1 Pickleball Director enforces a strict non-self-reporting model. Players may submit Score Proposals only. Players cannot:',
         '• Finalise matches',
@@ -110,7 +123,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '7. Score Proposal, Dispute, and Finalisation Workflow',
+      title: '8. Score Proposal, Dispute, and Finalisation Workflow',
       content: [
         '7.1 Score Proposals',
         '• Players may submit Score Proposals for organiser review.',
@@ -134,7 +147,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '8. DUPR and Rating Service Submission Rules',
+      title: '9. DUPR and Rating Service Submission Rules',
       content: [
         '8.1 Where DUPR or another Rating Service is enabled, you agree to submit results only when:',
         '• The Match was legitimately played',
@@ -151,7 +164,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '9. Accuracy and Verification Duty',
+      title: '10. Accuracy and Verification Duty',
       content: [
         '9.1 You agree to take reasonable steps to verify match accuracy before finalisation.',
         '9.2 Reasonable verification includes, at minimum:',
@@ -161,7 +174,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '10. Corrections, Reversals, and Audit Trail',
+      title: '11. Corrections, Reversals, and Audit Trail',
       content: [
         '10.1 You must correct errors promptly once identified.',
         '10.2 If a result has already been submitted to a Rating Service and requires correction:',
@@ -176,7 +189,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '11. Data Protection and Privacy',
+      title: '12. Data Protection and Privacy',
       content: [
         '11.1 You must handle Personal Information accessed through organiser features responsibly and only for legitimate event administration.',
         '11.2 You must not:',
@@ -189,7 +202,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '12. Security and Account Use',
+      title: '13. Security and Account Use',
       content: [
         '12.1 You are responsible for maintaining the security of your account.',
         '12.2 You must not share organiser credentials or allow others to act on your behalf.',
@@ -197,7 +210,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '13. Enforcement, Suspension, and Revocation',
+      title: '14. Enforcement, Suspension, and Revocation',
       content: [
         '13.1 Pickleball Director may monitor organiser activity to ensure integrity and compliance.',
         '13.2 We may suspend or revoke organiser access immediately if we reasonably believe you have:',
@@ -210,7 +223,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '14. Disclaimers',
+      title: '15. Disclaimers',
       content: [
         '14.1 Pickleball Director provides tools to assist organisers but does not guarantee:',
         '• Rating outcomes',
@@ -221,7 +234,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '15. Limitation of Liability',
+      title: '16. Limitation of Liability',
       content: [
         'To the maximum extent permitted by law:',
         '15.1 Pickleball Director is not liable for:',
@@ -233,7 +246,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '16. Changes to This Agreement',
+      title: '17. Changes to This Agreement',
       content: [
         '16.1 We may update this Agreement from time to time.',
         '16.2 Material changes will be communicated where reasonably practicable.',
@@ -241,7 +254,7 @@ export const ORGANIZER_AGREEMENT: OrganizerAgreementContent = {
       ],
     },
     {
-      title: '17. Contact',
+      title: '18. Contact',
       content: [
         'For questions regarding organiser responsibilities or compliance, contact:',
         'support@pickleballdirector.co.nz',

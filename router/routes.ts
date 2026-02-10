@@ -30,7 +30,7 @@ export const ROUTES = {
   // Leagues
   LEAGUES: '/leagues',
   LEAGUE_DETAIL: '/leagues/:id',
-  LEAGUE_MATCH: '/leagues/:leagueId/matches/:matchId',  // V07.49
+  LEAGUE_MATCH: '/leagues/:id/matches/:matchId',  // V07.49
   MY_LEAGUES: '/my-leagues',
   TEAM_LEAGUES: '/team-leagues',
   TEAM_LEAGUE_CREATE: '/team-leagues/create',
@@ -48,11 +48,35 @@ export const ROUTES = {
   RESULTS: '/results',
   MY_RESULTS: '/my-results',
   
+  // Meetup Edit
+  MEETUP_EDIT: '/meetups/:id/edit',
+
+  // Standing Meetups
+  WEEKLY_MEETUP: '/weekly-meetup/:id',
+  CHECKIN: '/checkin/:standingMeetupId/:occurrenceId',
+  GUEST_PAY: '/guest-pay/:standingMeetupId/:occurrenceId',
+
+  // Scoring
+  SCORING_DASHBOARD: '/dashboard/score',
+  SCORE_LIVE: '/score/live/:id',
+  SCORE_WATCH: '/score/watch/:id',
+  SCOREBOARD: '/scoreboard/:eventId',
+  EVENT_RESULTS: '/results/:eventId',
+
+  // Team League Public
+  TEAM_LEAGUE_PUBLIC: '/team-league/:leagueId',
+
   // Admin
+  ADMIN: '/admin',
   ADMIN_USERS: '/admin/users',
   ADMIN_ORGANIZER_REQUESTS: '/admin/organizer-requests',
   ADMIN_TEST_PAYMENTS: '/admin/test-payments',
   ADMIN_BREACH_MANAGEMENT: '/admin/privacy-security',
+  ADMIN_FINANCE: '/admin/finance',
+
+  // Debug
+  PAYMENT_DEMO: '/payment-demo',
+  DEBUG_STRIPE: '/debug/stripe',
 
   // Legal / Privacy
   PRIVACY_POLICY: '/privacy-policy',
@@ -70,8 +94,19 @@ export const getRoute = {
   leagueDetail: (id: string) => `/leagues/${id}`,
   leagueMatch: (leagueId: string, matchId: string) => `/leagues/${leagueId}/matches/${matchId}`,  // V07.49
   leaguesList: () => '/leagues',  // V07.49
-  teamLeagueDetail: (id: string) => `/team-leagues/${id}`,  // V07.54
-  teamLeaguesList: () => '/team-leagues',  // V07.54
+  meetupEdit: (id: string) => `/meetups/${id}/edit`,
+  weeklyMeetup: (id: string) => `/weekly-meetup/${id}`,
+  checkin: (standingMeetupId: string, occurrenceId: string) =>
+    `/checkin/${standingMeetupId}/${occurrenceId}`,
+  guestPay: (standingMeetupId: string, occurrenceId: string) =>
+    `/guest-pay/${standingMeetupId}/${occurrenceId}`,
+  scoreLive: (id: string) => `/score/live/${id}`,
+  scoreWatch: (id: string) => `/score/watch/${id}`,
+  scoreboard: (eventId: string) => `/scoreboard/${eventId}`,
+  eventResults: (eventId: string) => `/results/${eventId}`,
+  teamLeagueDetail: (id: string) => `/team-leagues/${id}`,
+  teamLeaguePublic: (leagueId: string) => `/team-league/${leagueId}`,
+  teamLeaguesList: () => '/team-leagues',
 };
 
 /**

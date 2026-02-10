@@ -43,7 +43,7 @@ import type { PoolPlayMedalsSettings } from '../../../types/formats/formatTypes'
 import type { GameSettings } from '../../../types/game/gameSettings';
 import type { GameScore } from '../../../types/game/match';
 import {
-  createTeamServer,
+  ensureTeamExists,
   deleteTeam,
   generatePoolsSchedule,
   generateBracketSchedule,
@@ -153,14 +153,13 @@ export const useMatchActions = ({
     }
     
     try {
-      const res = await createTeamServer({
+      const data = await ensureTeamExists(
         tournamentId,
-        divisionId: activeDivision.id,
+        activeDivision.id,
         playerIds,
-        teamName: name || null,
-      });
-
-      const data = res as { existed: boolean; teamId: string };
+        name || null,
+        currentUserId || playerIds[0],
+      );
 
       if (data?.existed) {
         console.info('Team already existed:', data.teamId);

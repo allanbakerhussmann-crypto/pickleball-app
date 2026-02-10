@@ -214,6 +214,14 @@ export interface UserProfile {
   stripeOnboardingComplete?: boolean;
   stripeChargesEnabled?: boolean;
   stripePayoutsEnabled?: boolean;
+  // Stripe Connect account fee tracking (server-only fields)
+  stripeAccountFeeLastChargedMonth?: string;      // "YYYY-MM" format
+  stripeAccountFeeLastChargedAt?: number;         // Epoch ms when claimed
+  stripeAccountFeeLockId?: string;                // UUID for this claim
+  stripeAccountFeeLockExpiresAt?: number;         // Epoch ms - lock expires after this
+  stripeAccountFeeChargeStatus?: 'pending' | 'confirmed';
+  stripeAccountFeeConfirmedAt?: number;           // Epoch ms when webhook confirmed
+  stripeAccountFeeExempt?: boolean;               // Optional waiver
   // DUPR Integration
   duprId?: string;
   duprAccessToken?: string;
@@ -272,6 +280,7 @@ export type NotificationType =
   | 'registration'        // Registration confirmed, cancelled, etc.
   | 'partner_invite'      // Partner invite received
   | 'challenge'           // Ladder challenge received
+  | 'meetup_invite'       // Private meetup invitation
   | 'general';            // General notification
 
 export interface Notification {
@@ -312,7 +321,7 @@ export interface SMSMessage {
   body: string;            // Message content
   createdAt: number;
   status: SMSStatus;
-  twilioSid?: string;      // Twilio message SID after sending
+  messageSid?: string;     // SMS provider message SID after sending
   sentAt?: number;
   error?: string;          // Error message if failed
 
@@ -374,6 +383,14 @@ export interface Club {
   stripeOnboardingComplete?: boolean;
   stripeChargesEnabled?: boolean;
   stripePayoutsEnabled?: boolean;
+  // Stripe Connect account fee tracking (server-only fields)
+  stripeAccountFeeLastChargedMonth?: string;      // "YYYY-MM" format
+  stripeAccountFeeLastChargedAt?: number;         // Epoch ms when claimed
+  stripeAccountFeeLockId?: string;                // UUID for this claim
+  stripeAccountFeeLockExpiresAt?: number;         // Epoch ms - lock expires after this
+  stripeAccountFeeChargeStatus?: 'pending' | 'confirmed';
+  stripeAccountFeeConfirmedAt?: number;           // Epoch ms when webhook confirmed
+  stripeAccountFeeExempt?: boolean;               // Optional waiver
   bookingSettings?: ClubBookingSettings;
   courts?: ClubCourt[];
   // Additional fields for ClubDetailPage
@@ -1049,22 +1066,128 @@ export interface StandingsEntry {
 
 export type AttendeePaymentStatus = 'not_required' | 'pending' | 'paid' | 'refunded' | 'failed';
 
+// ---- RSVP State Machine ----
+export type MeetupRsvpStatus = 'confirmed' | 'waitlisted' | 'cancelled' | 'no_show';
+export type MeetupPaymentStatus = 'not_required' | 'pending' | 'paid' | 'refunded' | 'failed' | 'expired';
+
+// ---- RSVP Settings ----
+export interface MeetupRsvpSettings {
+  requirePayment: boolean;       // Pay-to-play: payment gates RSVP
+  autoConfirm: boolean;          // Auto-confirm free RSVPs (vs organizer approval)
+  refundDeadlineHours?: number;  // e.g. 24 = refund if cancelled 24h before
+}
+
+// ---- Cancellation Policy ----
+export interface MeetupCancellationPolicy {
+  refundDeadlineHours: number;
+  noRefundAfterDeadline: boolean;    // true = no money back after deadline
+  creditInsteadOfRefund?: boolean;   // wallet credit instead of Stripe refund
+}
+
+// ---- Recurrence (V2) ----
+export interface MeetupRecurrence {
+  interval: 'weekly' | 'biweekly';
+  dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  startTime: string;     // "18:00"
+  endTime: string;       // "21:00"
+  startDate: string;     // "2026-02-10"
+  endDate?: string;
+  totalSessions?: number;
+}
+
+// ---- Occurrence (recurring only, V2) ----
+export interface MeetupOccurrence {
+  id: string;              // "YYYY-MM-DD"
+  meetupId: string;
+  date: string;
+  startAt: number;         // timestamp
+  endAt: number;           // timestamp
+  status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+  // Counters (derived from RSVPs, maintained by Cloud Functions)
+  confirmedCount: number;
+  checkedInCount: number;
+  cancelledCount: number;
+  noShowCount: number;
+  guestCount: number;
+  guestRevenue: number;
+  // Session management
+  closedAt?: number;
+  closedBy?: string;
+  cancelledAt?: number;
+  cancelReason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ---- Guest (separate from RSVP, lives in /guests subcollection) ----
+export interface MeetupGuest {
+  id: string;
+  name: string;
+  email?: string;
+  emailConsent?: boolean;
+  amount: number;               // cents
+  paymentMethod: 'cash' | 'stripe';
+  stripeCheckoutSessionId?: string;
+  stripePaymentIntentId?: string;
+  notes?: string;
+  createdAt: number;
+  createdBy: string;            // organizer userId
+}
+
+// ---- Court Rotation / Sit-outs ----
+export interface MeetupRotationSettings {
+  courts: number;              // e.g. 2
+  playersPerCourt: number;     // usually 4
+  rotationType: 'round_robin'; // future-proof
+  trackSitOuts?: boolean;      // default false
+}
+
+export interface MeetupSitOut {
+  id: string;
+  userId: string;
+  userName: string;
+  round: number;
+  createdAt: number;
+  createdBy: string;           // organizer
+}
+
+// ---- Meetup Invite (Private meetups) ----
+export interface MeetupInvite {
+  id: string;
+  meetupId: string;
+  meetupTitle: string;
+  inviterId: string;
+  inviterName: string;
+  invitedUserId: string;
+  invitedUserName: string;
+  invitedUserEmail?: string;
+  createdAt: number;
+  meetupDate?: number;      // when field, for display
+  meetupLocation?: string;  // locationName, for display
+}
+
 export interface Meetup {
   id: string;
   title: string;
   description: string;
-  date: number;
-  when?: string;  // Display-friendly date/time string
+  date?: number;              // Legacy field
+  when: number;               // Timestamp (primary field used by CreateMeetup)
+  endTime?: number;           // End timestamp
   endDate?: number;
-  location: string;
+  location?: { lat: number; lng: number };
+  locationName: string;       // Human-readable location name
   venueDetails?: string;
-  maxAttendees?: number;
-  currentAttendees: number;
-  hostId: string;
-  hostName: string;
+  maxAttendees?: number;      // Legacy field
+  maxPlayers: number;         // Primary field used by CreateMeetup
+  currentAttendees?: number;
+  hostId?: string;
+  hostName?: string;
+  createdByUserId?: string;   // Creator userId (used by CreateMeetup)
+  organizerName?: string;
+  organizerStripeAccountId?: string;
   clubId?: string;
   clubName?: string;
-  status: 'upcoming' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'active' | 'upcoming' | 'in_progress' | 'completed' | 'cancelled';
   createdAt: number;
   updatedAt: number;
   attendeeIds?: string[];
@@ -1074,11 +1197,56 @@ export interface Meetup {
   totalCollected?: number;
   competitionType?: MeetupCompetitionType;
   competitionSettings?: MeetupCompetitionSettings;
+  competition?: {
+    managedInApp: boolean;
+    type: string;
+    settings?: MeetupCompetitionSettings;
+  };
   region?: string;
   duprClubId?: string;
+  hostedBy?: string;
+  cancelledAt?: number;
+  cancelReason?: string;
   // Map coordinates
   lat?: number;
   lng?: number;
+
+  // ---- RSVP & Attendance (MVP) ----
+  rsvpSettings?: MeetupRsvpSettings;
+  waitlistEnabled?: boolean;
+  cancellationPolicy?: MeetupCancellationPolicy;
+  checkInEnabled?: boolean;
+
+  // Counters (one-off meetups only; recurring uses occurrence counters)
+  confirmedCount?: number;
+  waitlistCount?: number;
+  checkedInCount?: number;
+  cancelledCount?: number;
+  noShowCount?: number;
+  guestCount?: number;
+  guestRevenue?: number;
+
+  // ---- Co-hosts (MVP) ----
+  coHostIds?: string[];
+
+  // ---- Private invitations (MVP) ----
+  invitedUserIds?: string[];  // Denormalized for Firestore rules enforcement
+
+  // ---- Recurrence (V2, null = one-off) ----
+  isRecurring?: boolean;
+  recurrence?: MeetupRecurrence;
+  timezone?: string;
+  nextOccurrenceAt?: number;    // For listing speed only
+
+  // ---- Session management (one-off only, MVP) ----
+  closedAt?: number;
+  closedBy?: string;
+
+  // ---- Visibility (MVP) ----
+  visibility?: 'public' | 'linkOnly' | 'private';
+
+  // ---- Court rotation (MVP) ----
+  rotationSettings?: MeetupRotationSettings;
 }
 
 export type MeetupCompetitionType = 
@@ -1115,6 +1283,7 @@ export interface MeetupPricing {
 }
 
 export interface MeetupRSVP {
+  // User identity
   odUserId: string;
   odAccountId?: string;
   odOrganizationId?: string;
@@ -1122,15 +1291,36 @@ export interface MeetupRSVP {
   odUserEmail?: string;
   odUserPhone?: string;
   meetupId: string;
-  status: 'attending' | 'maybe' | 'not_attending' | 'waitlist';
-  paymentStatus: AttendeePaymentStatus;
+  rsvpAt: number;
+  updatedAt: number;
+  duprId?: string;
+
+  // LOCKED STATE MACHINE (single source of truth)
+  status: MeetupRsvpStatus;             // 'confirmed' | 'waitlisted' | 'cancelled' | 'no_show'
+  paymentStatus: MeetupPaymentStatus;   // 'not_required' | 'pending' | 'paid' | 'refunded' | 'failed' | 'expired'
+
+  // Payment tracking
   amountPaid?: number;
   paidAt?: number;
   stripeSessionId?: string;
   stripePaymentIntentId?: string;
-  rsvpAt: number;
-  updatedAt: number;
-  duprId?: string;
+
+  // Waitlist
+  waitlistPosition?: number;     // only meaningful if status === 'waitlisted'
+  promotedAt?: number;           // set when waitlisted -> confirmed
+  promotionExpiresAt?: number;   // 15-min hold for payment after promotion
+
+  // Check-in (only meaningful if status === 'confirmed')
+  checkedInAt?: number;
+  checkInMethod?: 'qr' | 'organizer' | 'manual';
+  checkedInBy?: string;
+
+  // Cancellation
+  cancelledAt?: number;
+  refundIssued?: boolean;
+  refundAmount?: number;
+
+  // NOTE: No isGuest or guestName fields. Guests use /guests subcollection only.
 }
 
 // ============================================

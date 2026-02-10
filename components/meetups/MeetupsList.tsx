@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { getMeetups, getPublicStandingMeetups } from '../../services/firebase';
+import { getMeetups, getPublicStandingMeetups, getMyMeetupInvites } from '../../services/firebase';
 import { MeetupsMap } from './MeetupsMap';
 import { formatTime } from '../../utils/timeFormat';
 import { getRoute } from '../../router/routes';
-import type { Meetup } from '../../types';
+import type { Meetup, MeetupInvite } from '../../types';
 import type { StandingMeetup } from '../../types/standingMeetup';
 
 interface MeetupsListProps {
@@ -19,26 +19,40 @@ export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelec
   const navigate = useNavigate();
   const [meetups, setMeetups] = useState<Meetup[]>([]);
   const [weeklyMeetups, setWeeklyMeetups] = useState<StandingMeetup[]>([]);
+  const [invites, setInvites] = useState<MeetupInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
 
   const loadMeetups = useCallback(async () => {
     setLoading(true);
+    try {
+      // Load social meetups, weekly meetups, and invites in parallel
+      const promises: [Promise<Meetup[]>, Promise<StandingMeetup[]>, Promise<MeetupInvite[]>] = [
+        getMeetups(currentUser?.uid),
+        getPublicStandingMeetups({ limit: 10 }),
+        currentUser?.uid
+          ? getMyMeetupInvites(currentUser.uid).catch(err => {
+              console.warn('Failed to load invites (index may be missing):', err.message);
+              return [] as MeetupInvite[];
+            })
+          : Promise.resolve([]),
+      ];
 
-    // Load both social meetups and weekly meetups in parallel
-    const [socialData, weeklyData] = await Promise.all([
-      getMeetups(),
-      getPublicStandingMeetups({ limit: 10 })
-    ]);
+      const [socialData, weeklyData, inviteData] = await Promise.all(promises);
 
-    const now = Date.now();
-    // Keep past events for 3 days (72 hours)
-    const cutoff = now - (3 * 24 * 60 * 60 * 1000);
-    const upcoming = socialData.filter(m => m.when >= cutoff);
-    setMeetups(upcoming);
-    setWeeklyMeetups(weeklyData);
-    setLoading(false);
-  }, []);
+      const now = Date.now();
+      // Keep past events for 3 days (72 hours)
+      const cutoff = now - (3 * 24 * 60 * 60 * 1000);
+      const upcoming = socialData.filter(m => m.when >= cutoff);
+      setMeetups(upcoming);
+      setWeeklyMeetups(weeklyData);
+      setInvites(inviteData);
+    } catch (err) {
+      console.error('Error loading meetups:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser?.uid]);
 
   // Reload meetups when navigating to this page (location.key changes on navigation)
   useEffect(() => {
@@ -128,6 +142,48 @@ export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelec
         </div>
       )}
 
+      {/* Your Invitations Section */}
+      {invites.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-lg font-bold text-white mb-4">Your Invitations</h2>
+          <div className="space-y-3">
+            {invites.map(invite => {
+              const inviteDate = invite.meetupDate ? new Date(invite.meetupDate) : null;
+              return (
+                <div
+                  key={invite.id}
+                  onClick={() => onSelectMeetup(invite.meetupId)}
+                  className="bg-gray-800 rounded-xl p-4 border border-lime-600/30 hover:border-lime-500/50 cursor-pointer transition-all group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-bold text-white group-hover:text-lime-400 transition-colors">
+                        {invite.meetupTitle}
+                      </h3>
+                      <p className="text-sm text-gray-400 mt-1">
+                        Invited by {invite.inviterName}
+                        {inviteDate && (
+                          <span> &middot; {inviteDate.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+                        )}
+                      </p>
+                      {invite.meetupLocation && (
+                        <p className="text-xs text-gray-500 mt-0.5">{invite.meetupLocation}</p>
+                      )}
+                    </div>
+                    <span className="text-lime-400 text-sm font-medium flex items-center gap-1 shrink-0">
+                      View
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Social Meetups Section */}
       <div className="flex items-center gap-2 mb-4">
         <h2 className="text-lg font-bold text-white">Social Meetups</h2>
@@ -186,6 +242,7 @@ export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelec
             const date = new Date(meetup.when);
             const isCreator = currentUser?.uid === meetup.createdByUserId;
             const isLinkOnly = meetup.visibility === 'linkOnly';
+            const isPrivate = meetup.visibility === 'private';
             const isCancelled = meetup.status === 'cancelled';
             const isPast = meetup.when < Date.now();
 
@@ -194,12 +251,18 @@ export const MeetupsList: React.FC<MeetupsListProps> = ({ onCreateClick, onSelec
                 key={meetup.id}
                 onClick={() => onSelectMeetup(meetup.id)}
                 className={'bg-gray-800 rounded-xl p-5 border shadow-lg hover:border-gray-500 cursor-pointer transition-all group relative overflow-hidden ' +
-                  (isCancelled ? 'border-red-800 opacity-60' : 'border-gray-700')
+                  (isCancelled ? 'border-red-800 opacity-60' : isPrivate ? 'border-lime-800/40' : 'border-gray-700')
                 }
               >
                 {isLinkOnly && (
                   <div className="absolute top-0 right-0 bg-yellow-900/80 text-yellow-200 text-[10px] px-2 py-1 rounded-bl uppercase font-bold">
                     Link Only
+                  </div>
+                )}
+
+                {isPrivate && (
+                  <div className="absolute top-0 right-0 bg-lime-900/80 text-lime-200 text-[10px] px-2 py-1 rounded-bl uppercase font-bold">
+                    Private
                   </div>
                 )}
 

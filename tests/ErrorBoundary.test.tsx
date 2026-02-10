@@ -45,8 +45,9 @@ describe('ErrorBoundary', () => {
       </ErrorBoundary>
     );
 
-    expect(screen.getByText('Oops!')).toBeInTheDocument();
-    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    // The error UI shows "Oops! Something went wrong" as a single heading
+    expect(screen.getByText(/Oops!/)).toBeInTheDocument();
+    expect(screen.getByText(/Something went wrong/)).toBeInTheDocument();
   });
 
   it('renders custom fallback when provided', () => {
@@ -89,7 +90,7 @@ describe('ErrorBoundary', () => {
     );
 
     // Error UI should be shown
-    expect(screen.getByText('Oops!')).toBeInTheDocument();
+    expect(screen.getByText(/Oops!/)).toBeInTheDocument();
 
     // Now we need to test the reset functionality
     // First, let's change the child to not throw

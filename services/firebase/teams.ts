@@ -16,8 +16,7 @@ import {
   writeBatch,
   runTransaction,
 } from '@firebase/firestore';
-import { httpsCallable } from '@firebase/functions';
-import { db, functions } from './config';
+import { db } from './config';
 import { getUserProfile } from './users';
 import type { Team, PartnerInvite, UserProfile } from '../../types';
 
@@ -43,25 +42,6 @@ export const createTeam = async (tournamentId: string, team: Team) => {
 
 export const deleteTeam = async (tournamentId: string, teamId: string) => {
   await deleteDoc(doc(db, 'tournaments', tournamentId, 'teams', teamId));
-};
-
-// ============================================
-// Team Server Functions
-// ============================================
-
-export const createTeamServer = async (opts: {
-  tournamentId: string;
-  divisionId: string;
-  playerIds: string[];
-  teamName?: string | null;
-}) => {
-  if (!functions) {
-    throw new Error('Firebase functions not initialized');
-  }
-  const { tournamentId, divisionId, playerIds, teamName } = opts;
-  const callable = httpsCallable(functions, 'createTeam');
-  const resp = await callable({ tournamentId, divisionId, playerIds, teamName });
-  return resp.data;
 };
 
 export const ensureTeamExists = async (

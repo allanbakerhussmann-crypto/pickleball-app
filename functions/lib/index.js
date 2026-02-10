@@ -38,8 +38,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.league_join = exports.dupr_updateMySubscriptions = exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_testConnection = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.standingMeetup_createQuickRegisterCheckoutSession = exports.standingMeetup_createGuestCheckoutSession = exports.stripe_cancelStandingMeetupSubscription = exports.stripe_createStandingMeetupSubscription = exports.stripe_seedSMSBundles = exports.stripe_purchaseSMSBundle = exports.stripe_createRefund = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_v2_webhook = exports.stripe_createUserAccountLinkV2 = exports.stripe_createUserAccountV2 = exports.stripe_getAccountStatusV2 = exports.stripe_createAccountLinkV2 = exports.stripe_createAccountV2 = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
-exports.seed_clearTestData = exports.seed_testData = exports.guest_unsubscribe = exports.guest_onGuestCreated = exports.standingMeetup_unregister = exports.standingMeetup_cancelUnpaidBankRegistration = exports.standingMeetup_confirmBankPayment = exports.standingMeetup_register = exports.standingMeetup_checkInPlayer = exports.standingMeetup_closeSession = exports.standingMeetup_addCashGuest = exports.standingMeetup_checkInSelf = exports.onOccurrenceDeleted = exports.standingMeetup_markNoShow = exports.standingMeetup_manualCheckIn = exports.standingMeetup_cancelOccurrence = exports.standingMeetup_cancelAttendance = exports.standingMeetup_generateCheckInToken = exports.standingMeetup_checkIn = exports.standingMeetup_ensureOccurrences = exports.user_deleteAccount = exports.platform_exportTransactions = exports.platform_addMissingTransaction = exports.platform_runReconciliation = exports.platform_getAccountPayouts = exports.platform_getAccountBalances = exports.receipt_resend = exports.comms_processLeagueQueue = exports.comms_processQueue = exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.league_markMemberAsPaid = void 0;
+exports.dupr_updateMySubscriptions = exports.dupr_onUserDuprLinked = exports.dupr_getSubscriptions = exports.dupr_subscribeAllUsers = exports.dupr_subscribeToRatings = exports.duprWebhook = exports.dupr_retryFailed = exports.dupr_testSubmitOneMatch = exports.dupr_testConnection = exports.dupr_refreshMyRating = exports.dupr_syncRatings = exports.dupr_getBatchStatus = exports.dupr_processCorrections = exports.dupr_processQueue = exports.dupr_submitMatches = exports.phone_verifyCode = exports.phone_sendVerificationCode = exports.sendBulkSMS = exports.sendSMS = exports.privacy_processRequest = exports.privacy_runDataCleanup = exports.privacy_scheduledDataCleanup = exports.privacy_logBreach = exports.privacy_notifyBreachAffectedUsers = exports.admin_getAuditLogs = exports.admin_demoteFromOrganizer = exports.admin_promoteToOrganizer = exports.admin_demoteFromAppAdmin = exports.admin_promoteToAppAdmin = exports.standingMeetup_createQuickRegisterCheckoutSession = exports.standingMeetup_verifyGuestCheckoutSession = exports.standingMeetup_createGuestCheckoutSession = exports.stripe_cancelStandingMeetupSubscription = exports.stripe_createStandingMeetupSubscription = exports.stripe_seedSMSBundles = exports.stripe_purchaseSMSBundle = exports.stripe_createRefund = exports.stripe_webhook = exports.stripe_createCheckoutSession = exports.stripe_v2_webhook = exports.stripe_createUserAccountLinkV2 = exports.stripe_createUserAccountV2 = exports.stripe_getAccountStatusV2 = exports.stripe_createAccountLinkV2 = exports.stripe_createAccountV2 = exports.stripe_createUserConnectLoginLink = exports.stripe_createUserConnectAccount = exports.stripe_createConnectLoginLink = exports.stripe_getConnectAccountStatus = exports.stripe_createConnectAccount = void 0;
+exports.seed_clearTestData = exports.seed_testData = exports.guest_unsubscribe = exports.guest_onGuestCreated = exports.meetup_undoNoShow = exports.meetup_undoCheckIn = exports.meetup_closeSession = exports.meetup_addCashGuest = exports.meetup_markNoShow = exports.meetup_manualCheckIn = exports.meetup_expirePromotionHolds = exports.meetup_cancelRsvp = exports.meetup_rsvpFree = exports.meetup_rsvpWithPayment = exports.standingMeetup_unregister = exports.standingMeetup_cancelUnpaidBankRegistration = exports.standingMeetup_confirmBankPayment = exports.standingMeetup_register = exports.standingMeetup_checkInPlayer = exports.standingMeetup_closeSession = exports.standingMeetup_addCashGuest = exports.standingMeetup_checkInSelf = exports.onOccurrenceDeleted = exports.standingMeetup_markNoShow = exports.standingMeetup_manualCheckIn = exports.standingMeetup_cancelOccurrence = exports.standingMeetup_cancelAttendance = exports.standingMeetup_generateCheckInToken = exports.standingMeetup_checkIn = exports.standingMeetup_ensureOccurrences = exports.user_deleteAccount = exports.platform_exportTransactions = exports.platform_addMissingTransaction = exports.platform_runOrganizerReconciliation = exports.platform_runReconciliation = exports.platform_getAccountPayouts = exports.platform_getAccountBalances = exports.receipt_resend = exports.comms_processLeagueQueue = exports.comms_processQueue = exports.migrate_getOrganizerAgreementStats = exports.migrate_markOrganizersForAgreement = exports.migrate_dryRun = exports.migrate_toOfficialResult = exports.league_markMemberAsPaid = exports.league_join = void 0;
 const admin = __importStar(require("firebase-admin"));
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -75,6 +75,7 @@ Object.defineProperty(exports, "stripe_createStandingMeetupSubscription", { enum
 Object.defineProperty(exports, "stripe_cancelStandingMeetupSubscription", { enumerable: true, get: function () { return stripe_1.stripe_cancelStandingMeetupSubscription; } });
 // Standing Meetup Guest Checkout (V07.59)
 Object.defineProperty(exports, "standingMeetup_createGuestCheckoutSession", { enumerable: true, get: function () { return stripe_1.standingMeetup_createGuestCheckoutSession; } });
+Object.defineProperty(exports, "standingMeetup_verifyGuestCheckoutSession", { enumerable: true, get: function () { return stripe_1.standingMeetup_verifyGuestCheckoutSession; } });
 // Standing Meetup Quick Register at door (V07.59)
 Object.defineProperty(exports, "standingMeetup_createQuickRegisterCheckoutSession", { enumerable: true, get: function () { return stripe_1.standingMeetup_createQuickRegisterCheckoutSession; } });
 // ============================================
@@ -96,11 +97,7 @@ Object.defineProperty(exports, "privacy_scheduledDataCleanup", { enumerable: tru
 Object.defineProperty(exports, "privacy_runDataCleanup", { enumerable: true, get: function () { return privacy_1.privacy_runDataCleanup; } });
 Object.defineProperty(exports, "privacy_processRequest", { enumerable: true, get: function () { return privacy_1.privacy_processRequest; } });
 // ============================================
-// TEAM FUNCTIONS (if you have them)
-// ============================================
-// export { createTeam } from './teams';
-// ============================================
-// SMS FUNCTIONS (Twilio)
+// SMS FUNCTIONS (SMSGlobal)
 // ============================================
 var sms_1 = require("./sms");
 Object.defineProperty(exports, "sendSMS", { enumerable: true, get: function () { return sms_1.sendSMS; } });
@@ -162,12 +159,13 @@ Object.defineProperty(exports, "comms_processLeagueQueue", { enumerable: true, g
 var receiptEmail_1 = require("./receiptEmail");
 Object.defineProperty(exports, "receipt_resend", { enumerable: true, get: function () { return receiptEmail_1.receipt_resend; } });
 // ============================================
-// PLATFORM FINANCE FUNCTIONS (V07.50)
+// PLATFORM FINANCE FUNCTIONS (V07.61)
 // ============================================
 var platformFinance_1 = require("./platformFinance");
 Object.defineProperty(exports, "platform_getAccountBalances", { enumerable: true, get: function () { return platformFinance_1.platform_getAccountBalances; } });
 Object.defineProperty(exports, "platform_getAccountPayouts", { enumerable: true, get: function () { return platformFinance_1.platform_getAccountPayouts; } });
 Object.defineProperty(exports, "platform_runReconciliation", { enumerable: true, get: function () { return platformFinance_1.platform_runReconciliation; } });
+Object.defineProperty(exports, "platform_runOrganizerReconciliation", { enumerable: true, get: function () { return platformFinance_1.platform_runOrganizerReconciliation; } });
 Object.defineProperty(exports, "platform_addMissingTransaction", { enumerable: true, get: function () { return platformFinance_1.platform_addMissingTransaction; } });
 Object.defineProperty(exports, "platform_exportTransactions", { enumerable: true, get: function () { return platformFinance_1.platform_exportTransactions; } });
 // ============================================
@@ -200,6 +198,20 @@ Object.defineProperty(exports, "standingMeetup_register", { enumerable: true, ge
 Object.defineProperty(exports, "standingMeetup_confirmBankPayment", { enumerable: true, get: function () { return standingMeetupRegistration_1.standingMeetup_confirmBankPayment; } });
 Object.defineProperty(exports, "standingMeetup_cancelUnpaidBankRegistration", { enumerable: true, get: function () { return standingMeetupRegistration_1.standingMeetup_cancelUnpaidBankRegistration; } });
 Object.defineProperty(exports, "standingMeetup_unregister", { enumerable: true, get: function () { return standingMeetupRegistration_1.standingMeetup_unregister; } });
+// ============================================
+// MEETUP FUNCTIONS (V07.61) - Enhanced Meetup System
+// ============================================
+var meetups_1 = require("./meetups");
+Object.defineProperty(exports, "meetup_rsvpWithPayment", { enumerable: true, get: function () { return meetups_1.meetup_rsvpWithPayment; } });
+Object.defineProperty(exports, "meetup_rsvpFree", { enumerable: true, get: function () { return meetups_1.meetup_rsvpFree; } });
+Object.defineProperty(exports, "meetup_cancelRsvp", { enumerable: true, get: function () { return meetups_1.meetup_cancelRsvp; } });
+Object.defineProperty(exports, "meetup_expirePromotionHolds", { enumerable: true, get: function () { return meetups_1.meetup_expirePromotionHolds; } });
+Object.defineProperty(exports, "meetup_manualCheckIn", { enumerable: true, get: function () { return meetups_1.meetup_manualCheckIn; } });
+Object.defineProperty(exports, "meetup_markNoShow", { enumerable: true, get: function () { return meetups_1.meetup_markNoShow; } });
+Object.defineProperty(exports, "meetup_addCashGuest", { enumerable: true, get: function () { return meetups_1.meetup_addCashGuest; } });
+Object.defineProperty(exports, "meetup_closeSession", { enumerable: true, get: function () { return meetups_1.meetup_closeSession; } });
+Object.defineProperty(exports, "meetup_undoCheckIn", { enumerable: true, get: function () { return meetups_1.meetup_undoCheckIn; } });
+Object.defineProperty(exports, "meetup_undoNoShow", { enumerable: true, get: function () { return meetups_1.meetup_undoNoShow; } });
 // ============================================
 // GUEST MARKETING FUNCTIONS (V07.61)
 // ============================================

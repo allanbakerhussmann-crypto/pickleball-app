@@ -33,7 +33,7 @@ if (import.meta.env.VITE_USE_EMULATORS === 'true') {
   }
 }
 
-type CheckInState = 'loading' | 'success' | 'error' | 'not_registered';
+type CheckInState = 'loading' | 'success' | 'error' | 'not_registered' | 'needs_login';
 
 interface CheckInResult {
   sessionDate: string;
@@ -91,7 +91,7 @@ export const CheckInPage: React.FC = () => {
   }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { currentUser } = useAuth();
+  const { currentUser, loading: authLoading } = useAuth();
 
   // Check if returning from successful payment
   const isPaymentReturn = searchParams.get('registered') === 'success';
@@ -118,10 +118,21 @@ export const CheckInPage: React.FC = () => {
         return;
       }
 
-      // User must be logged in (route should be protected, but double-check)
+      // User must be logged in - show login prompt if not
       if (!currentUser) {
-        setError({ code: 'NOT_AUTHORIZED', message: 'Please log in to check in' });
-        setState('error');
+        // Fetch session details to show on the login prompt
+        try {
+          const [meetup, occurrence] = await Promise.all([
+            getStandingMeetup(standingMeetupId),
+            getOccurrence(standingMeetupId, occurrenceId),
+          ]);
+          if (meetup && occurrence) {
+            setSessionDetails({ meetup, occurrence });
+          }
+        } catch (fetchErr) {
+          console.error('Failed to fetch session details for login prompt:', fetchErr);
+        }
+        setState('needs_login');
         return;
       }
 
@@ -238,11 +249,11 @@ export const CheckInPage: React.FC = () => {
       }
     };
 
-    // Only attempt check-in when user is available
-    if (currentUser !== undefined) {
+    // Only attempt check-in when auth has finished loading
+    if (!authLoading) {
       performCheckIn();
     }
-  }, [standingMeetupId, occurrenceId, currentUser, isPaymentReturn]);
+  }, [standingMeetupId, occurrenceId, currentUser, authLoading, isPaymentReturn]);
 
   const handleViewMeetup = () => {
     if (standingMeetupId) {
@@ -467,6 +478,97 @@ export const CheckInPage: React.FC = () => {
               Go to Home
             </button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Needs login state - show login prompt
+  if (state === 'needs_login') {
+    // Open login modal by adding ?login=1 to current URL
+    const handleOpenLogin = () => {
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.set('login', '1');
+      window.history.replaceState({}, '', currentUrl.toString());
+      // Trigger re-render by navigating to same page with login param
+      window.location.reload();
+    };
+
+    return (
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-4">
+        <div className="bg-gray-900 rounded-2xl p-8 border border-gray-800 max-w-md w-full text-center">
+          {/* Login icon */}
+          <div className="w-20 h-20 mx-auto mb-6 bg-blue-500/20 rounded-full flex items-center justify-center">
+            <svg
+              className="w-12 h-12 text-blue-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+              />
+            </svg>
+          </div>
+
+          <h1 className="text-2xl font-bold text-white mb-2">Log In to Check In</h1>
+          <p className="text-gray-400 mb-6">Please log in to check in for this session</p>
+
+          {/* Session details if available */}
+          {sessionDetails && (
+            <div className="bg-gray-800 rounded-xl p-4 mb-6 border border-gray-700 text-left">
+              <p className="text-white font-semibold text-lg">{sessionDetails.meetup.title}</p>
+              <p className="text-gray-400 mt-1">
+                {new Date(sessionDetails.occurrence.date + 'T12:00:00').toLocaleDateString('en-NZ', {
+                  weekday: 'long',
+                  day: 'numeric',
+                  month: 'long',
+                })}
+              </p>
+            </div>
+          )}
+
+          {/* Login button */}
+          <button
+            onClick={handleOpenLogin}
+            className="w-full py-4 px-4 bg-lime-500 hover:bg-lime-400 text-gray-900 font-bold rounded-xl transition-colors flex items-center justify-center gap-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"
+              />
+            </svg>
+            <span>Log In</span>
+          </button>
+
+          {/* Guest option */}
+          <div className="mt-6 pt-6 border-t border-gray-700">
+            <p className="text-gray-500 text-sm mb-3">Don't have an account?</p>
+            <button
+              onClick={() => {
+                if (standingMeetupId && occurrenceId) {
+                  navigate(`/guest-pay/${standingMeetupId}/${occurrenceId}`);
+                }
+              }}
+              className="w-full py-3 px-4 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-xl transition-colors"
+            >
+              Pay as Guest
+            </button>
+          </div>
+
+          {/* Home link */}
+          <button
+            onClick={handleGoHome}
+            className="w-full py-2 px-4 mt-4 text-gray-500 hover:text-gray-400 font-medium transition-colors text-sm"
+          >
+            Go to Home
+          </button>
         </div>
       </div>
     );

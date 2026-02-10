@@ -4,11 +4,12 @@
  * Server-side functions for platform-level finance operations:
  * - Account balances (requires Stripe API)
  * - Payout history (requires Stripe API)
- * - Reconciliation (Stripe vs Firestore comparison)
+ * - Club reconciliation (Stripe vs Firestore comparison)
+ * - Organizer reconciliation (balance transactions)
  * - Transaction export
  * - Missing transaction creation
  *
- * @version 07.50
+ * @version 07.61
  * @file functions/src/platformFinance.ts
  */
 
@@ -198,7 +199,7 @@ export const platform_getAccountPayouts = functions.https.onCall(async (data, co
 // ============================================
 
 interface ReconciliationDiscrepancy {
-  type: 'missing_in_firestore' | 'missing_in_stripe' | 'amount_mismatch';
+  type: 'missing_in_firestore' | 'missing_in_stripe' | 'amount_mismatch' | 'club_mismatch';
   stripeChargeId?: string;
   firestoreTransactionId?: string;
   stripeAmount?: number;
@@ -207,6 +208,7 @@ interface ReconciliationDiscrepancy {
   createdAt: number;
   description: string;
   canAutoFix: boolean;
+  actualClubId?: string; // For club_mismatch: which club the transaction is actually in
 }
 
 interface ReconciliationSummary {
@@ -217,6 +219,7 @@ interface ReconciliationSummary {
   missingInFirestore: number;
   missingInStripe: number;
   amountMismatches: number;
+  clubMismatches: number;
   matchRate: number;
 }
 
@@ -270,10 +273,11 @@ export const platform_runReconciliation = functions.https.onCall(async (data, co
     );
 
     // 2. Fetch Firestore transactions in date range
+    // Include both completed and partially_refunded payments (they still match to Stripe charges)
     const firestoreTxSnap = await db.collection('transactions')
       .where('odClubId', '==', clubId)
       .where('type', '==', 'payment')
-      .where('status', '==', 'completed')
+      .where('status', 'in', ['completed', 'partially_refunded'])
       .where('createdAt', '>=', startDate)
       .where('createdAt', '<=', endDate)
       .get();
@@ -298,15 +302,37 @@ export const platform_runReconciliation = functions.https.onCall(async (data, co
       const firestoreDoc = firestoreTxMap.get(charge.id);
 
       if (!firestoreDoc) {
-        // Missing in Firestore
-        discrepancies.push({
-          type: 'missing_in_firestore',
-          stripeChargeId: charge.id,
-          stripeAmount: charge.amount,
-          createdAt: charge.created * 1000,
-          description: `Charge ${charge.id} ($${(charge.amount / 100).toFixed(2)}) not found in Firestore`,
-          canAutoFix: true,
-        });
+        // Not found in this club - check if it exists in a DIFFERENT club (club mismatch)
+        const crossClubSnap = await db.collection('transactions')
+          .where('stripe.chargeId', '==', charge.id)
+          .limit(1)
+          .get();
+
+        if (!crossClubSnap.empty) {
+          // Transaction exists but in a different club!
+          const wrongClubTx = crossClubSnap.docs[0].data();
+          discrepancies.push({
+            type: 'club_mismatch',
+            stripeChargeId: charge.id,
+            firestoreTransactionId: crossClubSnap.docs[0].id,
+            stripeAmount: charge.amount,
+            firestoreAmount: wrongClubTx.amount || 0,
+            createdAt: charge.created * 1000,
+            description: `Charge ${charge.id} ($${(charge.amount / 100).toFixed(2)}) recorded under different club: ${wrongClubTx.odClubId || 'unknown'}`,
+            canAutoFix: false, // Needs manual review
+            actualClubId: wrongClubTx.odClubId || '',
+          });
+        } else {
+          // Truly missing in Firestore
+          discrepancies.push({
+            type: 'missing_in_firestore',
+            stripeChargeId: charge.id,
+            stripeAmount: charge.amount,
+            createdAt: charge.created * 1000,
+            description: `Charge ${charge.id} ($${(charge.amount / 100).toFixed(2)}) not found in Firestore`,
+            canAutoFix: true,
+          });
+        }
       } else {
         const firestoreAmount = firestoreDoc.data().amount || 0;
         firestoreTotal += firestoreAmount;
@@ -349,6 +375,7 @@ export const platform_runReconciliation = functions.https.onCall(async (data, co
     });
 
     // Calculate summary
+    const clubMismatchCount = discrepancies.filter(d => d.type === 'club_mismatch').length;
     const summary: ReconciliationSummary = {
       firestoreTotal,
       stripeTotal,
@@ -357,8 +384,10 @@ export const platform_runReconciliation = functions.https.onCall(async (data, co
       missingInFirestore: discrepancies.filter(d => d.type === 'missing_in_firestore').length,
       missingInStripe: discrepancies.filter(d => d.type === 'missing_in_stripe').length,
       amountMismatches: discrepancies.filter(d => d.type === 'amount_mismatch').length,
+      clubMismatches: clubMismatchCount,
+      // Club mismatches should count as "matched" for rate calculation - the transaction exists, just in wrong club
       matchRate: successfulCharges.length > 0
-        ? Math.round((matchedCount / successfulCharges.length) * 100)
+        ? Math.round(((matchedCount + clubMismatchCount) / successfulCharges.length) * 100)
         : 100,
     };
 
@@ -377,6 +406,234 @@ export const platform_runReconciliation = functions.https.onCall(async (data, co
   } catch (error: any) {
     console.error('Run reconciliation error:', error);
     throw new functions.https.HttpsError('internal', error.message || 'Failed to run reconciliation');
+  }
+});
+
+// ============================================
+// RUN ORGANIZER RECONCILIATION
+// ============================================
+
+interface OrganizerReconciliationDiscrepancy {
+  type: 'missing_in_firestore' | 'missing_in_stripe' | 'amount_mismatch';
+  stripeId: string;
+  stripeAmount?: number;
+  firestoreAmount?: number;
+  diff?: number;
+  description: string;
+  firestoreId?: string;
+}
+
+interface OrganizerReconciliationSummary {
+  stripeTotal: number;
+  firestoreTotal: number;
+  difference: number;
+  matched: number;
+  discrepancyCount: number;
+  matchRate: string;
+  ignoredCount: number;
+  ignoredTypes: Record<string, number>;
+}
+
+/**
+ * Run reconciliation for an individual organizer
+ * Uses Balance Transactions as the source of truth for payouts
+ *
+ * CRITICAL: Max date range is 90 days to prevent expensive queries
+ */
+export const platform_runOrganizerReconciliation = functions.https.onCall(async (data, context) => {
+  await requireAppAdmin(context);
+
+  const { organizerId, startDate, endDate } = data;
+
+  if (!organizerId || !startDate || !endDate) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing required parameters');
+  }
+
+  // Enforce date range limit (max 90 days)
+  const maxRangeMs = 90 * 24 * 60 * 60 * 1000; // 90 days in ms
+  if (endDate - startDate > maxRangeMs) {
+    throw new functions.https.HttpsError('invalid-argument', 'Date range must be 90 days or less');
+  }
+
+  const db = admin.firestore();
+
+  try {
+    // Get organizer's Stripe connected account
+    const orgDoc = await db.collection('users').doc(organizerId).get();
+    if (!orgDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Organizer not found');
+    }
+
+    const orgData = orgDoc.data()!;
+    const stripeAccountId = orgData.stripeConnectedAccountId;
+    const organizerName = orgData.displayName || orgData.email || organizerId;
+
+    if (!stripeAccountId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Organizer has no connected Stripe account');
+    }
+
+    // Fetch from Stripe using BALANCE TRANSACTIONS (source of truth for payouts)
+    const stripeBalanceTxns: Stripe.BalanceTransaction[] = [];
+    const startTimestamp = Math.floor(startDate / 1000);
+    const endTimestamp = Math.floor(endDate / 1000);
+
+    let hasMore = true;
+    let startingAfter: string | undefined;
+
+    while (hasMore) {
+      const page = await stripe.balanceTransactions.list(
+        {
+          created: { gte: startTimestamp, lte: endTimestamp },
+          limit: 100,
+          starting_after: startingAfter,
+          expand: ['data.source'],
+        },
+        { stripeAccount: stripeAccountId }
+      );
+
+      stripeBalanceTxns.push(...page.data);
+      hasMore = page.has_more;
+      if (page.data.length > 0) {
+        startingAfter = page.data[page.data.length - 1].id;
+      }
+    }
+
+    // Fetch Firestore transactions for this organizer
+    const firestoreTxSnap = await db.collection('transactions')
+      .where('organizerUserId', '==', organizerId)
+      .where('status', '==', 'completed')
+      .where('createdAt', '>=', startDate)
+      .where('createdAt', '<=', endDate)
+      .get();
+
+    // Build maps for matching
+    const firestoreByBalanceTxnId = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>();
+    const firestoreByChargeId = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>();
+
+    firestoreTxSnap.docs.forEach(doc => {
+      const data = doc.data();
+      if (data.stripe?.balanceTransactionId) {
+        firestoreByBalanceTxnId.set(data.stripe.balanceTransactionId, doc);
+      }
+      if (data.stripe?.chargeId) {
+        firestoreByChargeId.set(data.stripe.chargeId, doc);
+      }
+    });
+
+    // Compare and identify discrepancies
+    const discrepancies: OrganizerReconciliationDiscrepancy[] = [];
+    let matched = 0;
+    let stripeTotal = 0;
+    let firestoreTotal = 0;
+    let ignoredCount = 0;
+    const ignoredTypes: Record<string, number> = {};
+    const matchedBalanceTxnIds = new Set<string>();
+
+    for (const stripeTxn of stripeBalanceTxns) {
+      // Only process charges and refunds (skip payouts, fees, adjustments, etc.)
+      // Stripe balance_transaction.type can include: charge, payment, refund,
+      // adjustment, payout, stripe_fee, application_fee, etc.
+      if (!['charge', 'refund', 'payment'].includes(stripeTxn.type)) {
+        ignoredCount++;
+        ignoredTypes[stripeTxn.type] = (ignoredTypes[stripeTxn.type] || 0) + 1;
+        continue;
+      }
+
+      stripeTotal += stripeTxn.net; // Use net (after Stripe fees)
+
+      // Try to match by balance transaction ID first, then by charge ID
+      let firestoreDoc = firestoreByBalanceTxnId.get(stripeTxn.id);
+
+      if (!firestoreDoc && stripeTxn.source) {
+        // Try matching by source (charge) ID
+        const sourceId = typeof stripeTxn.source === 'string'
+          ? stripeTxn.source
+          : (stripeTxn.source as any).id;
+        firestoreDoc = firestoreByChargeId.get(sourceId);
+      }
+
+      if (!firestoreDoc) {
+        discrepancies.push({
+          type: 'missing_in_firestore',
+          stripeId: stripeTxn.id,
+          stripeAmount: stripeTxn.net,
+          description: `Stripe ${stripeTxn.type} not found in Firestore`,
+        });
+      } else {
+        const firestoreAmount = firestoreDoc.data().clubNetAmount || 0;
+        firestoreTotal += firestoreAmount;
+        matchedBalanceTxnIds.add(stripeTxn.id);
+
+        // Check amount match (allow 1 cent tolerance for rounding)
+        if (Math.abs(stripeTxn.net - firestoreAmount) > 1) {
+          discrepancies.push({
+            type: 'amount_mismatch',
+            stripeId: stripeTxn.id,
+            stripeAmount: stripeTxn.net,
+            firestoreAmount: firestoreAmount,
+            firestoreId: firestoreDoc.id,
+            diff: stripeTxn.net - firestoreAmount,
+            description: `Amount mismatch: Stripe ${stripeTxn.net} vs Firestore ${firestoreAmount}`,
+          });
+        } else {
+          matched++;
+        }
+      }
+    }
+
+    // Check for Firestore transactions missing from Stripe
+    firestoreTxSnap.docs.forEach(doc => {
+      const data = doc.data();
+      const balTxnId = data.stripe?.balanceTransactionId;
+      if (balTxnId && !matchedBalanceTxnIds.has(balTxnId)) {
+        // This transaction has a balance transaction ID that wasn't in our Stripe results
+        const hasStripeMatch = stripeBalanceTxns.some(s => s.id === balTxnId);
+        if (!hasStripeMatch) {
+          discrepancies.push({
+            type: 'missing_in_stripe',
+            stripeId: balTxnId,
+            firestoreId: doc.id,
+            firestoreAmount: data.clubNetAmount,
+            description: 'Firestore transaction not found in Stripe',
+          });
+        }
+      }
+    });
+
+    // Calculate match rate based on processed transactions (not ignored ones)
+    const processedCount = stripeBalanceTxns.length - ignoredCount;
+
+    const summary: OrganizerReconciliationSummary = {
+      stripeTotal,
+      firestoreTotal,
+      difference: Math.abs(stripeTotal - firestoreTotal),
+      matched,
+      discrepancyCount: discrepancies.length,
+      matchRate: processedCount > 0
+        ? ((matched / processedCount) * 100).toFixed(1)
+        : '100',
+      ignoredCount,
+      ignoredTypes,
+    };
+
+    console.log(`Organizer reconciliation for ${organizerName}: ${matched}/${processedCount} matched, ${discrepancies.length} discrepancies, ${ignoredCount} ignored`);
+
+    return {
+      organizerId,
+      organizerName,
+      stripeAccountId,
+      summary,
+      discrepancies,
+      period: { startDate, endDate },
+      runAt: Date.now(),
+      runByUserId: context.auth!.uid,
+    };
+  } catch (error: any) {
+    console.error('Organizer reconciliation error:', error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError('internal', error.message || 'Failed to run organizer reconciliation');
   }
 });
 

@@ -17,6 +17,8 @@ dist-ssr
 .env.local
 .env.development
 .env.production
+.env.productionsite
+.env.test
 .env*.local
 
 # Firebase emulator config (contains test API keys)
@@ -32,3 +34,13 @@ functions/.runtimeconfig.json
 *.njsproj
 *.sln
 *.sw?
+*.bak
+
+# Firebase emulator exports
+firebase-export-*/
+
+# Claude Code temp directories
+tmpclaude-*
+
+# Windows NUL artifact
+nul

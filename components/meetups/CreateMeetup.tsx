@@ -31,6 +31,7 @@ import type { CompetitionFormat } from '../../types/formats';
 import { getFormatOption } from '../../types/formats';
 import { FormatCards } from '../shared/FormatSelector';
 import { RollingTimePicker } from '../shared/RollingTimePicker';
+import { CoHostPicker } from './CoHostPicker';
 
 // ============================================
 // TYPES
@@ -224,6 +225,24 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
   
   const [, setLoadingStripe] = useState(true); // Used in useEffect
   
+  // RSVP Settings (new)
+  const [requirePayment, setRequirePayment] = useState(true);
+  const [waitlistEnabled, setWaitlistEnabled] = useState(true);
+  const [refundDeadlineHours, setRefundDeadlineHours] = useState(24);
+  const [checkInEnabled, setCheckInEnabled] = useState(true);
+  const [rsvpSettingsExpanded, setRsvpSettingsExpanded] = useState(false);
+
+  // Co-hosts (new)
+  const [coHostIds, setCoHostIds] = useState<string[]>([]);
+
+  // Court Rotation (new)
+  const [rotationEnabled, setRotationEnabled] = useState(false);
+  const [rotationCourts, setRotationCourts] = useState(2);
+  const [rotationPlayersPerCourt, setRotationPlayersPerCourt] = useState(4);
+
+  // More Options (new)
+  const [moreOptionsExpanded, setMoreOptionsExpanded] = useState(false);
+
   // Form state
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -403,6 +422,8 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
       };
 
       // Host info
+      meetupData.hostId = currentUser.uid;
+      meetupData.hostName = userProfile?.displayName || 'Organizer';
       if (hostType === 'club' && selectedClub) {
         meetupData.clubId = selectedClub.id;
         meetupData.clubName = selectedClub.name;
@@ -438,6 +459,51 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
         };
 
         meetupData.organizerStripeAccountId = stripeAccountId;
+
+        // RSVP settings for paid meetups
+        meetupData.rsvpSettings = {
+          requirePayment,
+          autoConfirm: true,
+          refundDeadlineHours,
+        };
+
+        meetupData.cancellationPolicy = {
+          refundDeadlineHours,
+          noRefundAfterDeadline: true,
+        };
+      }
+
+      // Waitlist
+      meetupData.waitlistEnabled = waitlistEnabled;
+
+      // Check-in
+      meetupData.checkInEnabled = checkInEnabled;
+
+      // Visibility (already set in meetupData from earlier)
+      meetupData.visibility = visibility;
+
+      // Initialize counters
+      meetupData.confirmedCount = 0;
+      meetupData.waitlistCount = 0;
+      meetupData.checkedInCount = 0;
+      meetupData.cancelledCount = 0;
+      meetupData.noShowCount = 0;
+      meetupData.guestCount = 0;
+      meetupData.guestRevenue = 0;
+
+      // Co-hosts
+      if (coHostIds.length > 0) {
+        meetupData.coHostIds = coHostIds;
+      }
+
+      // Court rotation
+      if (rotationEnabled) {
+        meetupData.rotationSettings = {
+          courts: rotationCourts,
+          playersPerCourt: rotationPlayersPerCourt,
+          rotationType: 'round_robin',
+          trackSitOuts: true,
+        };
       }
 
       // Competition settings
@@ -687,6 +753,11 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                   <option value="linkOnly">Link Only</option>
                   <option value="private">Private</option>
                 </select>
+                {visibility === 'private' && (
+                  <div className="mt-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
+                    Private meetups are invite-only. After creating, use the Manage tab to invite players.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -855,6 +926,79 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                     <div className="flex justify-between">
                       <span className="text-gray-400">{hostType === 'club' ? 'Club receives' : 'You receive'}</span>
                       <span className="text-white">{formatCurrency(feeCalculation.organizerReceives)}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* RSVP Settings (Expandable) */}
+                <button
+                  type="button"
+                  onClick={() => setRsvpSettingsExpanded(!rsvpSettingsExpanded)}
+                  className="w-full flex items-center justify-between p-4 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors"
+                >
+                  <span className="text-gray-300 font-medium">RSVP Settings</span>
+                  <svg className={`w-5 h-5 text-gray-400 transition-transform ${rsvpSettingsExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {rsvpSettingsExpanded && (
+                  <div className="space-y-4 p-4 bg-gray-800/30 rounded-lg border border-gray-700">
+                    {/* Require payment to confirm */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-white text-sm font-medium">Require payment to confirm spot</p>
+                        <p className="text-xs text-gray-500">Reduces no-shows by requiring payment upfront</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setRequirePayment(!requirePayment)}
+                        className={`relative w-12 h-6 flex-shrink-0 rounded-full transition-colors ${requirePayment ? 'bg-lime-500' : 'bg-gray-600'}`}
+                      >
+                        <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${requirePayment ? 'translate-x-6' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+
+                    {/* Enable waitlist */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-white text-sm font-medium">Enable waitlist when full</p>
+                        <p className="text-xs text-gray-500">Players auto-promoted when spots open. 15-min payment hold.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setWaitlistEnabled(!waitlistEnabled)}
+                        className={`relative w-12 h-6 flex-shrink-0 rounded-full transition-colors ${waitlistEnabled ? 'bg-lime-500' : 'bg-gray-600'}`}
+                      >
+                        <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${waitlistEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+
+                    {/* Refund deadline */}
+                    <div>
+                      <p className="text-white text-sm font-medium mb-2">Refund deadline</p>
+                      <p className="text-xs text-gray-500 mb-3">Full refund if cancelled before deadline. No refund after.</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setRefundDeadlineHours(Math.max(0, refundDeadlineHours - 6))}
+                          className="w-12 h-12 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-2xl font-bold"
+                        >
+                          -
+                        </button>
+                        <div className="flex-1 h-12 bg-gray-700 border border-gray-600 rounded-lg flex items-center justify-center">
+                          <span className="text-lime-400 text-lg font-bold font-mono">
+                            {refundDeadlineHours} hours before
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setRefundDeadlineHours(Math.min(168, refundDeadlineHours + 6))}
+                          className="w-12 h-12 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-2xl font-bold"
+                        >
+                          +
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1244,8 +1388,128 @@ export const CreateMeetup: React.FC<CreateMeetupProps> = ({ onBack, onCreated })
                     </span>
                   </div>
                 )}
+                {pricingEnabled && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">RSVP</span>
+                      <span className="text-white">
+                        {requirePayment ? 'Pay-to-play' : 'Free RSVP'} - Waitlist {waitlistEnabled ? 'ON' : 'OFF'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Refund</span>
+                      <span className="text-white">{refundDeadlineHours}hr deadline</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
+
+            {/* More Options (Expandable) */}
+            <button
+              type="button"
+              onClick={() => setMoreOptionsExpanded(!moreOptionsExpanded)}
+              className="w-full flex items-center justify-between p-4 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors"
+            >
+              <span className="text-gray-300 font-medium">More Options</span>
+              <svg className={`w-5 h-5 text-gray-400 transition-transform ${moreOptionsExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {moreOptionsExpanded && (
+              <div className="space-y-5 p-4 bg-gray-800/30 rounded-lg border border-gray-700">
+                {/* Co-hosts */}
+                {currentUser && (
+                  <CoHostPicker
+                    selectedIds={coHostIds}
+                    onChange={setCoHostIds}
+                    hostId={currentUser.uid}
+                  />
+                )}
+
+                {/* Check-in */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-white text-sm font-medium">Enable manual check-in</p>
+                    <p className="text-xs text-gray-500">Track who shows up</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCheckInEnabled(!checkInEnabled)}
+                    className={`relative w-12 h-6 flex-shrink-0 rounded-full transition-colors ${checkInEnabled ? 'bg-lime-500' : 'bg-gray-600'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${checkInEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+
+                {/* Court Rotation */}
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="text-white text-sm font-medium">Track sit-outs</p>
+                      <p className="text-xs text-gray-500">Calculate who sits out each round</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRotationEnabled(!rotationEnabled)}
+                      className={`relative w-12 h-6 flex-shrink-0 rounded-full transition-colors ${rotationEnabled ? 'bg-lime-500' : 'bg-gray-600'}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${rotationEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+
+                  {rotationEnabled && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Courts</label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setRotationCourts(Math.max(1, rotationCourts - 1))}
+                            className="w-10 h-10 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-xl font-bold"
+                          >
+                            -
+                          </button>
+                          <div className="flex-1 h-10 bg-gray-700 border border-gray-600 rounded-lg flex items-center justify-center">
+                            <span className="text-lime-400 font-bold font-mono">{rotationCourts}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setRotationCourts(Math.min(20, rotationCourts + 1))}
+                            className="w-10 h-10 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-xl font-bold"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Players/Court</label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setRotationPlayersPerCourt(Math.max(2, rotationPlayersPerCourt - 1))}
+                            className="w-10 h-10 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-xl font-bold"
+                          >
+                            -
+                          </button>
+                          <div className="flex-1 h-10 bg-gray-700 border border-gray-600 rounded-lg flex items-center justify-center">
+                            <span className="text-lime-400 font-bold font-mono">{rotationPlayersPerCourt}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setRotationPlayersPerCourt(Math.min(8, rotationPlayersPerCourt + 1))}
+                            className="w-10 h-10 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white text-xl font-bold"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Navigation */}
             <div className="flex justify-between pt-4">

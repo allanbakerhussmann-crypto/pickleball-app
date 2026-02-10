@@ -91,18 +91,76 @@ export const deleteMeetup = async (meetupId: string): Promise<void> => {
 };
 
 /**
- * Get all meetups (optionally include cancelled)
+ * Get all meetups the user can see.
+ * Splits into parallel queries to handle private meetup Firestore rules:
+ * - Query 1: Non-private meetups (public/linkOnly)
+ * - Query 2: Private meetups where user is invited
+ * - Query 3: Private meetups the user created
  */
-export const getMeetups = async (includeCancelled = false): Promise<Meetup[]> => {
-  const q = query(collection(db, 'meetups'), orderBy('when', 'asc'));
-  const snap = await getDocs(q);
-  const meetups = snap.docs.map(d => d.data() as Meetup);
-  
-  if (includeCancelled) {
-    return meetups;
+export const getMeetups = async (userId?: string, includeCancelled = false): Promise<Meetup[]> => {
+  const meetupsRef = collection(db, 'meetups');
+
+  // Helper: run a query, return empty array on failure (e.g. missing index)
+  const safeQuery = (q: ReturnType<typeof query>): Promise<Meetup[]> =>
+    getDocs(q)
+      .then(snap => snap.docs.map(d => d.data() as Meetup))
+      .catch(err => {
+        console.warn('getMeetups query failed (index may be missing):', err.message);
+        return [];
+      });
+
+  // Query 1: Non-private meetups (public, linkOnly)
+  const q1 = query(meetupsRef, where('visibility', 'in', ['public', 'linkOnly']), orderBy('when', 'asc'));
+
+  // Fallback: meetups without visibility field (legacy data, treated as public)
+  // Firestore can't query for "field does not exist", so we query all and filter client-side
+  // Only needed until legacy meetups are migrated
+  const qLegacy = query(meetupsRef, orderBy('when', 'asc'));
+
+  // Run queries in parallel
+  const promises: Promise<Meetup[]>[] = [
+    safeQuery(q1),
+    // Legacy fallback: get all meetups, keep only those without visibility set
+    safeQuery(qLegacy).then(meetups => meetups.filter(m => !m.visibility)),
+  ];
+
+  if (userId) {
+    // Query 2: Private meetups where user is invited
+    const q2 = query(
+      meetupsRef,
+      where('visibility', '==', 'private'),
+      where('invitedUserIds', 'array-contains', userId),
+      orderBy('when', 'asc')
+    );
+    promises.push(safeQuery(q2));
+
+    // Query 3: Private meetups user created (they won't be in invitedUserIds)
+    const q3 = query(
+      meetupsRef,
+      where('visibility', '==', 'private'),
+      where('createdByUserId', '==', userId),
+      orderBy('when', 'asc')
+    );
+    promises.push(safeQuery(q3));
   }
-  
-  return meetups.filter(m => m.status !== 'cancelled');
+
+  const results = await Promise.all(promises);
+
+  // Merge and deduplicate by id
+  const allMap = new Map<string, Meetup>();
+  for (const batch of results) {
+    for (const m of batch) {
+      allMap.set(m.id, m);
+    }
+  }
+
+  let meetups = Array.from(allMap.values()).sort((a, b) => a.when - b.when);
+
+  if (!includeCancelled) {
+    meetups = meetups.filter(m => m.status !== 'cancelled');
+  }
+
+  return meetups;
 };
 
 /**
@@ -175,7 +233,8 @@ export const getMeetupRSVPs = async (meetupId: string): Promise<MeetupRSVP[]> =>
     // Try to enrich with user profiles, but don't fail if it doesn't work
     if (rsvps.length > 0) {
       try {
-        const userIds = rsvps.map(r => r.userId);
+        // Handle both legacy (userId) and new (odUserId) field names
+        const userIds = rsvps.map(r => r.odUserId || (r as any).userId);
         console.log('Fetching user profiles for:', userIds);
 
         const users = await getUsersByIds(userIds);
@@ -184,13 +243,14 @@ export const getMeetupRSVPs = async (meetupId: string): Promise<MeetupRSVP[]> =>
         const userMap = new Map(users.map(u => [u.id, u]));
 
         return rsvps.map(r => {
-          const profile = userMap.get(r.userId);
+          const uid = r.odUserId || (r as any).userId;
+          const profile = userMap.get(uid);
           return {
             ...r,
             // Map to expected fields for MeetupScoring
-            odUserId: r.userId,
-            odUserName: profile?.displayName || 'Player',
-            duprId: profile?.duprId,
+            odUserId: uid,
+            odUserName: r.odUserName || profile?.displayName || 'Player',
+            duprId: r.duprId || profile?.duprId,
             userProfile: profile
           };
         });
@@ -199,8 +259,8 @@ export const getMeetupRSVPs = async (meetupId: string): Promise<MeetupRSVP[]> =>
         // Return RSVPs with at least odUserId mapped
         return rsvps.map(r => ({
           ...r,
-          odUserId: r.userId,
-          odUserName: 'Player'
+          odUserId: r.odUserId || (r as any).userId,
+          odUserName: r.odUserName || 'Player'
         }));
       }
     }

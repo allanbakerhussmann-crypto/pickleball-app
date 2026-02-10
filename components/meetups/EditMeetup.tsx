@@ -24,7 +24,7 @@ export const EditMeetup: React.FC<EditMeetupProps> = ({ meetupId, onBack, onSave
   const [locationName, setLocationName] = useState('');
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
-  const [visibility, setVisibility] = useState<'public' | 'linkOnly'>('public');
+  const [visibility, setVisibility] = useState<'public' | 'linkOnly' | 'private'>('public');
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export const EditMeetup: React.FC<EditMeetupProps> = ({ meetupId, onBack, onSave
         setLocationName(m.locationName);
         setLat(m.location?.lat || null);
         setLng(m.location?.lng || null);
-        setVisibility(m.visibility);
+        setVisibility(m.visibility || 'public');
         
         setLoading(false);
       } catch (e) {
@@ -210,12 +210,18 @@ export const EditMeetup: React.FC<EditMeetupProps> = ({ meetupId, onBack, onSave
               <label className="block text-sm font-medium text-gray-400 mb-1">Visibility</label>
               <select
                 value={visibility}
-                onChange={e => setVisibility(e.target.value as 'public' | 'linkOnly')}
+                onChange={e => setVisibility(e.target.value as 'public' | 'linkOnly' | 'private')}
                 className="w-full bg-gray-900 text-white p-3 rounded border border-gray-600 focus:border-green-500 outline-none"
               >
                 <option value="public">Public</option>
                 <option value="linkOnly">Link Only</option>
+                <option value="private">Private</option>
               </select>
+              {visibility === 'private' && (
+                <div className="mt-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
+                  Private meetups are invite-only. Use the Manage tab to invite players.
+                </div>
+              )}
             </div>
           </div>
 

@@ -11,10 +11,11 @@
  * 4. Guest clicks "Pay Now"
  * 5. Cloud function creates Stripe Checkout session
  * 6. Guest redirected to Stripe Checkout
- * 7. On success, redirected back with ?success=true
- * 8. Success message displayed
+ * 7. On success, redirected back with ?session_id={CHECKOUT_SESSION_ID}
+ * 8. Cloud function verifies payment status with Stripe
+ * 9. Success message displayed only if payment confirmed as 'paid'
  *
- * @version 07.58
+ * @version 07.61
  * @file pages/GuestPayPage.tsx
  */
 
@@ -48,7 +49,12 @@ export const GuestPayPage: React.FC = () => {
     occurrenceId: string;
   }>();
   const [searchParams] = useSearchParams();
-  const isSuccess = searchParams.get('success') === 'true';
+  const successSessionId = searchParams.get('session_id');
+  const isCancelled = searchParams.get('cancelled') === 'true';
+
+  // Verify Stripe Checkout session status before showing success
+  const [paymentVerified, setPaymentVerified] = useState(false);
+  const [verifying, setVerifying] = useState(!!successSessionId);
 
   // State
   const [meetup, setMeetup] = useState<StandingMeetup | null>(null);
@@ -60,6 +66,38 @@ export const GuestPayPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [processing, setProcessing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Verify Stripe Checkout session if returning from Stripe
+  useEffect(() => {
+    if (!successSessionId || !standingMeetupId) return;
+
+    const verifySession = async () => {
+      try {
+        const verifyCheckout = httpsCallable<
+          { sessionId: string; standingMeetupId: string },
+          { status: string; paid: boolean }
+        >(functionsAU, 'standingMeetup_verifyGuestCheckoutSession');
+
+        const result = await verifyCheckout({
+          sessionId: successSessionId,
+          standingMeetupId,
+        });
+
+        if (result.data.paid) {
+          setPaymentVerified(true);
+        } else {
+          // Payment not completed — treat as cancelled
+          setVerifying(false);
+        }
+      } catch (err) {
+        console.error('Error verifying checkout session:', err);
+        // On error, don't show success
+        setVerifying(false);
+      }
+    };
+
+    verifySession();
+  }, [successSessionId, standingMeetupId]);
 
   // Fetch standing meetup data
   useEffect(() => {
@@ -151,8 +189,8 @@ export const GuestPayPage: React.FC = () => {
         CreateGuestCheckoutSessionOutput
       >(functionsAU, 'standingMeetup_createGuestCheckoutSession');
 
-      // Build return URL - current page with success param
-      const returnUrl = `${window.location.origin}${window.location.pathname}${window.location.hash.split('?')[0]}?success=true`;
+      // Build return URL - base URL without query params (Cloud Function adds session_id/cancelled)
+      const returnUrl = `${window.location.origin}${window.location.pathname}${window.location.hash.split('?')[0]}`;
 
       const result = await createCheckoutSession({
         standingMeetupId,
@@ -163,7 +201,13 @@ export const GuestPayPage: React.FC = () => {
       });
 
       // Redirect to Stripe Checkout
-      window.location.href = result.data.checkoutUrl;
+      const checkoutUrl = result.data.checkoutUrl;
+      if (!checkoutUrl) {
+        setFormError('Failed to create payment session. Please try again.');
+        setProcessing(false);
+        return;
+      }
+      window.location.href = checkoutUrl;
     } catch (err: any) {
       console.error('Error creating checkout session:', err);
       const errorMessage = err.message || 'Payment setup failed. Please try again.';
@@ -171,6 +215,91 @@ export const GuestPayPage: React.FC = () => {
       setProcessing(false);
     }
   };
+
+  // SUCCESS STATE — check FIRST so payment success is never hidden by a meetup fetch error
+  if (paymentVerified && meetup) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-gray-800 rounded-xl p-8 border border-lime-500/30 text-center">
+          <div className="w-20 h-20 bg-lime-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-lime-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">Payment Successful!</h1>
+          <p className="text-lime-400 text-lg mb-4">You're checked in.</p>
+          <div className="bg-gray-900/50 rounded-lg p-4 mb-6">
+            <p className="text-gray-300 font-medium">{meetup.title}</p>
+            <p className="text-gray-500 text-sm">{meetup.clubName}</p>
+          </div>
+          <p className="text-gray-400 text-sm">
+            A receipt will be sent to your email. Enjoy your session!
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Payment verified but meetup data unavailable — still show success
+  if (paymentVerified) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-gray-800 rounded-xl p-8 border border-lime-500/30 text-center">
+          <div className="w-20 h-20 bg-lime-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-lime-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">Payment Successful!</h1>
+          <p className="text-lime-400 text-lg mb-4">You're checked in.</p>
+          <p className="text-gray-400 text-sm">
+            A receipt will be sent to your email. Enjoy your session!
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Verifying payment state
+  if (verifying && !paymentVerified) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-gray-800 rounded-xl p-8 border border-gray-700 text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-lime-500 mx-auto mb-4"></div>
+          <h2 className="text-xl font-bold text-white mb-2">Verifying Payment...</h2>
+          <p className="text-gray-400">Please wait while we confirm your payment.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Payment cancelled or failed verification
+  if (isCancelled || (successSessionId && !paymentVerified && !verifying)) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-gray-800 rounded-xl p-8 border border-yellow-500/30 text-center">
+          <div className="w-16 h-16 bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">Payment Not Completed</h2>
+          <p className="text-gray-400 mb-6">Your payment was not completed. No charge has been made.</p>
+          <button
+            onClick={() => {
+              // Strip query params and reload the form
+              const baseHash = window.location.hash.split('?')[0];
+              window.location.hash = baseHash;
+              window.location.reload();
+            }}
+            className="px-6 py-3 bg-lime-600 hover:bg-lime-500 text-white font-semibold rounded-lg transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Loading state
   if (loading) {
@@ -204,32 +333,8 @@ export const GuestPayPage: React.FC = () => {
     );
   }
 
-  // Success state
-  if (isSuccess) {
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-gray-800 rounded-xl p-8 border border-lime-500/30 text-center">
-          <div className="w-20 h-20 bg-lime-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
-            <svg className="w-10 h-10 text-lime-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Payment Successful!</h1>
-          <p className="text-lime-400 text-lg mb-4">You're checked in.</p>
-          <div className="bg-gray-900/50 rounded-lg p-4 mb-6">
-            <p className="text-gray-300 font-medium">{meetup.title}</p>
-            <p className="text-gray-500 text-sm">{meetup.clubName}</p>
-          </div>
-          <p className="text-gray-400 text-sm">
-            A receipt will be sent to your email. Enjoy your session!
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   // Payment form
-  const perSessionAmount = meetup.billing.perSessionAmount;
+  const perSessionAmount = meetup.billing.perSessionAmount || meetup.billing.amount;
   const currency = meetup.billing.currency;
 
   return (

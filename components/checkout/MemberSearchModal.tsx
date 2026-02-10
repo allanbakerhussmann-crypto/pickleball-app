@@ -12,6 +12,7 @@ import { collection, query, getDocs, limit } from '@firebase/firestore';
 import { db } from '../../services/firebase';
 import type { PaymentForMember } from '../../types/payForOthers';
 import { ModalShell } from '../shared/ModalShell';
+import { maskEmail } from '../../utils/privacy';
 
 // ============================================
 // TYPES
@@ -230,7 +231,7 @@ export const MemberSearchModal: React.FC<MemberSearchModalProps> = ({
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <p className="text-white font-medium truncate">{result.displayName}</p>
-                    <p className="text-gray-500 text-sm truncate">{result.email}</p>
+                    <p className="text-gray-500 text-sm truncate">{maskEmail(result.email)}</p>
                   </div>
                   
                   {/* Select indicator */}

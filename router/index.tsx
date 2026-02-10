@@ -190,14 +190,11 @@ export const router = createHashRouter([
       // MEETUP CHECK-IN & GUEST PAY (V07.58)
       // ==========================================
 
-      // Player self-check-in (scans session QR, must be logged in + registered)
+      // Player self-check-in (scans session QR)
+      // NOT wrapped in ProtectedRoute - page handles auth inline to keep user on URL after login
       {
         path: 'checkin/:standingMeetupId/:occurrenceId',
-        element: (
-          <ProtectedRoute>
-            <CheckInPage />
-          </ProtectedRoute>
-        ),
+        element: <CheckInPage />,
       },
 
       // Guest card payment (public - no login required, creates guest record)
@@ -343,6 +340,10 @@ export const router = createHashRouter([
       },
       {
         path: 'leagues/:id',
+        element: <LeaguesPage />,
+      },
+      {
+        path: 'leagues/:id/matches/:matchId',
         element: <LeaguesPage />,
       },
       {

@@ -47,15 +47,29 @@ export const OrganizerAgreementModal: React.FC<OrganizerAgreementModalProps> = (
     }
   }, [isOpen]);
 
-  // Track scroll to encourage reading
-  const handleScroll = () => {
+  // Check if scrolled to bottom (or content fits without scrolling)
+  const checkScrollPosition = () => {
     if (scrollContainerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-      // Consider "scrolled to bottom" when within 50px of bottom
-      if (scrollHeight - scrollTop - clientHeight < 50) {
+      // Consider "scrolled to bottom" when within 100px of bottom, or content fits without scrolling
+      if (scrollHeight <= clientHeight || scrollHeight - scrollTop - clientHeight < 100) {
         setHasScrolledToBottom(true);
       }
     }
+  };
+
+  // Check scroll position when modal opens and content renders
+  useEffect(() => {
+    if (isOpen) {
+      // Small delay to ensure content has rendered
+      const timer = setTimeout(checkScrollPosition, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen]);
+
+  // Track scroll to encourage reading
+  const handleScroll = () => {
+    checkScrollPosition();
   };
 
   const allChecked = mainAcceptance && integrityConfirmation && privacyConfirmation;

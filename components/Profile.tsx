@@ -304,6 +304,11 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                     <>
                         <h2 className="text-2xl font-bold mb-6 text-lime-400">My Profile</h2>
 
+                        {/* My Check-In QR */}
+                        <div className="mb-8">
+                            <MyCheckInQR />
+                        </div>
+
                         <form onSubmit={handleSubmit} className="space-y-6">
 
                             {/* Profile Picture Upload Section */}
@@ -336,6 +341,7 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                                     ref={fileInputRef}
                                     onChange={handleFileChange}
                                     accept="image/*"
+                                    capture="user"
                                     className="hidden"
                                 />
                                 <p className="text-xs text-gray-500 mt-2">JPG or PNG (Max 1MB).</p>
@@ -485,13 +491,6 @@ export const Profile: React.FC<ProfileProps> = ({ onBack }) => {
                             <MyWeeklyMeetups />
                         </div>
 
-                        {/* ============================================ */}
-                        {/* MY CHECK-IN QR SECTION */}
-                        {/* ============================================ */}
-                        <div className="mt-8 pt-8 border-t border-gray-700">
-                            <h3 className="text-lg font-bold text-white mb-4">My Check-In QR</h3>
-                            <MyCheckInQR />
-                        </div>
                     </>
                 )}
 

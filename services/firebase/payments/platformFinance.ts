@@ -26,16 +26,19 @@ import { FinanceTransaction, FinanceCurrency } from './types';
 import {
   PlatformFinanceOverview,
   ClubFinanceBreakdown,
+  OrganizerFinanceBreakdown,
   PlatformTransactionQueryOptions,
   PlatformTransactionsResult,
   AccountBalance,
   PayoutData,
   ReconciliationResult,
+  OrganizerReconciliationResult,
   GetPlatformOverviewInput,
   GetClubBreakdownInput,
   GetAccountBalancesInput,
   GetAccountPayoutsInput,
   RunReconciliationInput,
+  RunOrganizerReconciliationInput,
   AddMissingTransactionInput,
   ExportTransactionsInput,
   ExportResult,
@@ -323,6 +326,149 @@ export async function getClubFinanceBreakdown(
 }
 
 // ============================================
+// ORGANIZER BREAKDOWN
+// ============================================
+
+/**
+ * Get per-organizer finance breakdown
+ * For organizers who run events independently (not tied to a club)
+ *
+ * NOTE: This uses client-side filtering since Firestore can't query "NOT NULL".
+ * For large datasets, consider adding isOrganizerTransaction field to transactions.
+ */
+export async function getOrganizerFinanceBreakdown(
+  startDate: number,
+  endDate: number
+): Promise<OrganizerFinanceBreakdown[]> {
+  const transactionsRef = collection(db, 'transactions');
+
+  // Get completed transactions in the period
+  // We filter client-side for organizerUserId since Firestore can't do NOT NULL
+  const q = query(
+    transactionsRef,
+    where('status', '==', 'completed'),
+    where('createdAt', '>=', startDate),
+    where('createdAt', '<=', endDate),
+    orderBy('createdAt', 'desc'),
+    limit(1000) // Cap for performance
+  );
+
+  const snapshot = await getDocs(q);
+
+  // Aggregate by organizerUserId (filter out club transactions)
+  const organizerMap = new Map<
+    string,
+    {
+      grossVolume: number;
+      platformFees: number;
+      stripeFees: number;
+      netToOrganizer: number;
+      transactionCount: number;
+      refundCount: number;
+    }
+  >();
+
+  snapshot.docs.forEach((docSnap: QueryDocumentSnapshot<DocumentData>) => {
+    const tx = docSnap.data() as FinanceTransaction;
+
+    // Only include transactions that have organizerUserId AND no odClubId
+    // (independent organizer transactions)
+    const organizerId = tx.organizerUserId;
+    if (!organizerId || organizerId.trim() === '') return;
+    if (tx.odClubId && tx.odClubId.trim() !== '') return;
+
+    // Initialize if needed
+    if (!organizerMap.has(organizerId)) {
+      organizerMap.set(organizerId, {
+        grossVolume: 0,
+        platformFees: 0,
+        stripeFees: 0,
+        netToOrganizer: 0,
+        transactionCount: 0,
+        refundCount: 0,
+      });
+    }
+
+    const org = organizerMap.get(organizerId)!;
+
+    if (tx.type === 'payment') {
+      org.grossVolume += tx.amount;
+      org.platformFees += tx.platformFeeAmount || 0;
+      org.netToOrganizer += tx.clubNetAmount || 0;
+
+      // Estimate Stripe fee
+      const totalFee = (tx as any).totalFeeAmount || tx.platformFeeAmount || 0;
+      const stripeFee = totalFee - (tx.platformFeeAmount || 0);
+      if (stripeFee > 0) {
+        org.stripeFees += stripeFee;
+      }
+
+      org.transactionCount++;
+    } else if (tx.type === 'refund') {
+      org.refundCount++;
+      org.netToOrganizer -= Math.abs(tx.amount);
+    }
+  });
+
+  // Batch fetch user profiles for organizer names/emails
+  // Chunk into groups of 10 for Firestore 'in' query limit
+  const organizerIds = Array.from(organizerMap.keys());
+  const userProfiles = new Map<
+    string,
+    { displayName: string; email: string; stripeConnectedAccountId?: string; stripeChargesEnabled?: boolean; stripeDetailsSubmitted?: boolean }
+  >();
+
+  // Fetch in batches of 10
+  for (let i = 0; i < organizerIds.length; i += 10) {
+    const batch = organizerIds.slice(i, i + 10);
+    if (batch.length === 0) continue;
+
+    const usersRef = collection(db, 'users');
+    const usersQuery = query(usersRef, where('__name__', 'in', batch));
+    const usersSnapshot = await getDocs(usersQuery);
+
+    usersSnapshot.docs.forEach((docSnap) => {
+      const data = docSnap.data();
+      userProfiles.set(docSnap.id, {
+        displayName: data.displayName || data.email || docSnap.id,
+        email: data.email || '',
+        stripeConnectedAccountId: data.stripeConnectedAccountId,
+        stripeChargesEnabled: data.stripeChargesEnabled,
+        stripeDetailsSubmitted: data.stripeDetailsSubmitted,
+      });
+    });
+  }
+
+  // Helper to derive Stripe status from user profile
+  const deriveStripeStatus = (profile: any): 'ready' | 'pending' | 'none' => {
+    if (!profile?.stripeConnectedAccountId) return 'none';
+    if (profile.stripeChargesEnabled && profile.stripeDetailsSubmitted) return 'ready';
+    return 'pending';
+  };
+
+  // Build result array
+  const result: OrganizerFinanceBreakdown[] = [];
+
+  organizerMap.forEach((data, organizerId) => {
+    const profile = userProfiles.get(organizerId);
+
+    result.push({
+      organizerId,
+      organizerName: profile?.displayName || 'Unknown',
+      organizerEmail: profile?.email || '',
+      stripeConnectedAccountId: profile?.stripeConnectedAccountId,
+      stripeStatus: deriveStripeStatus(profile),
+      ...data,
+    });
+  });
+
+  // Sort by gross volume descending
+  result.sort((a, b) => b.grossVolume - a.grossVolume);
+
+  return result;
+}
+
+// ============================================
 // CLOUD FUNCTION WRAPPERS
 // ============================================
 
@@ -358,7 +504,7 @@ export async function getAccountPayouts(
 }
 
 /**
- * Run reconciliation via Cloud Function
+ * Run reconciliation via Cloud Function (for clubs)
  */
 export async function runReconciliation(
   input: RunReconciliationInput
@@ -366,6 +512,23 @@ export async function runReconciliation(
   const callable = httpsCallable<RunReconciliationInput, ReconciliationResult>(
     functions,
     'platform_runReconciliation'
+  );
+
+  const result = await callable(input);
+  return result.data;
+}
+
+/**
+ * Run organizer reconciliation via Cloud Function
+ * Compares Stripe balance transactions against Firestore transactions
+ * for an individual organizer's connected account
+ */
+export async function runOrganizerReconciliation(
+  input: RunOrganizerReconciliationInput
+): Promise<OrganizerReconciliationResult> {
+  const callable = httpsCallable<RunOrganizerReconciliationInput, OrganizerReconciliationResult>(
+    functions,
+    'platform_runOrganizerReconciliation'
   );
 
   const result = await callable(input);

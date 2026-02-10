@@ -24,6 +24,7 @@ import { getApp } from '@firebase/app';
 import { getUserProfile } from '../../services/firebase/users';
 import type { UserProfile } from '../../types';
 import type { CheckInPlayerInput, CheckInPlayerOutput } from '../../types/standingMeetup';
+import { maskEmail } from '../../utils/privacy';
 
 // Get functions instance for australia-southeast1 region
 const functionsAU = getFunctions(getApp(), 'australia-southeast1');
@@ -461,7 +462,7 @@ export const PlayerQRScanner: React.FC<PlayerQRScannerProps> = ({
 
                 {/* Email (if available) */}
                 {scannedPlayer.profile?.email && (
-                  <p className="text-gray-400 text-sm">{scannedPlayer.profile.email}</p>
+                  <p className="text-gray-400 text-sm">{maskEmail(scannedPlayer.profile.email)}</p>
                 )}
 
                 {/* DUPR Rating (if available) */}

@@ -18,7 +18,7 @@ import {
   limit,
   onSnapshot,
   Unsubscribe,
-} from 'firebase/firestore';
+} from '@firebase/firestore';
 import { db } from './index';
 import { StandingMeetupSubscription } from '../../types/standingMeetup';
 

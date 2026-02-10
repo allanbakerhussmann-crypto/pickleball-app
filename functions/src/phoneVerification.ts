@@ -2,7 +2,7 @@
  * Phone Verification Cloud Functions
  *
  * Handles SMS-based phone number verification with OTP codes.
- * Uses existing Twilio infrastructure via sms_messages collection.
+ * Uses SMSGlobal infrastructure via sms_messages collection.
  *
  * FILE LOCATION: functions/src/phoneVerification.ts
  * VERSION: 06.18

@@ -11,6 +11,7 @@ import {
     demoteFromPlayer
 } from '../services/firebase';
 import type { UserProfile } from '../types';
+import { maskEmail } from '../utils/privacy';
 
 export const AdminUsersPage: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     const { currentUser, isAppAdmin } = useAuth();
@@ -205,7 +206,7 @@ export const AdminUsersPage: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                                             {u.displayName || 'Unknown'}
                                             {isMe && <span className="ml-2 text-xs text-green-500 font-bold">(You)</span>}
                                         </td>
-                                        <td className="px-6 py-4 text-gray-400 align-top">{u.email}</td>
+                                        <td className="px-6 py-4 text-gray-400 align-top">{maskEmail(u.email)}</td>
                                         <td className="px-6 py-4 align-top">
                                             <div className="flex flex-wrap gap-1.5">
                                                 {isRoot && (

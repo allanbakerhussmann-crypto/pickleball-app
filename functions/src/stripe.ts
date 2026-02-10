@@ -16,6 +16,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
+import { v4 as uuidv4 } from 'uuid';
 import { sendReceiptEmail, sendRefundReceiptEmail } from './receiptEmail';
 import { sendEmail } from './comms';
 
@@ -32,6 +33,13 @@ const stripe = new Stripe(
 
 // Platform fee percentage (1.5%)
 const PLATFORM_FEE_PERCENT = 1.5;
+
+// Stripe Connect monthly active account fee recovery
+// See: https://stripe.com/connect/pricing ($2/month per active account)
+// EXPORTED: Used by standingMeetupRegistration.ts, meetups.ts
+export const STRIPE_ACCOUNT_FEE_CENTS = 200;           // $2.00
+export const MIN_PAYMENT_FOR_ACCOUNT_FEE = 300;        // $3.00 minimum to collect
+const ACCOUNT_FEE_LOCK_DURATION_MS = 30 * 60 * 1000;  // 30 minutes lock expiry
 
 // Free starter SMS credits for new organizers
 const FREE_STARTER_SMS_CREDITS = 25;
@@ -63,6 +71,74 @@ const DEFAULT_SMS_BUNDLES = [
     sortOrder: 3,
   },
 ];
+
+// ============================================
+// STRIPE ACCOUNT FEE CLAIM (INTERNAL HELPER)
+// ============================================
+
+/**
+ * Atomically claim the monthly account fee for an organizer.
+ * Uses Firestore transaction with expiring lock to prevent:
+ * - Double-charging from concurrent checkouts
+ * - Lost revenue from abandoned checkouts (lock expires, can reclaim)
+ *
+ * EXPORTED: Used by standingMeetupRegistration.ts, meetups.ts
+ * @returns lockId if fee should be charged, null if already claimed
+ */
+export async function tryClaimAccountFee(
+  organizerType: 'club' | 'user',
+  organizerId: string
+): Promise<{ shouldCharge: boolean; lockId: string | null; currentMonth: string }> {
+  const currentMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const collection = organizerType === 'club' ? 'clubs' : 'users';
+  const docRef = admin.firestore().collection(collection).doc(organizerId);
+  const now = Date.now();
+
+  const result = await admin.firestore().runTransaction(async (transaction) => {
+    const doc = await transaction.get(docRef);
+    if (!doc.exists) return { shouldCharge: false, lockId: null };
+
+    const data = doc.data()!;
+
+    // No connected account = no fee
+    if (!data.stripeConnectedAccountId) return { shouldCharge: false, lockId: null };
+
+    // Exempt organizers don't pay
+    if (data.stripeAccountFeeExempt === true) return { shouldCharge: false, lockId: null };
+
+    const lastMonth = data.stripeAccountFeeLastChargedMonth;
+    const chargeStatus = data.stripeAccountFeeChargeStatus;
+    const lockExpiresAt = data.stripeAccountFeeLockExpiresAt || 0;
+
+    // Check if already claimed this month
+    if (lastMonth === currentMonth) {
+      // If confirmed, definitely can't reclaim
+      if (chargeStatus === 'confirmed') {
+        return { shouldCharge: false, lockId: null };
+      }
+      // If pending but lock hasn't expired, can't reclaim
+      if (chargeStatus === 'pending' && lockExpiresAt > now) {
+        return { shouldCharge: false, lockId: null };
+      }
+      // Pending but expired - allow reclaim (previous checkout failed/abandoned)
+      console.log(`Reclaiming expired lock for ${organizerType}/${organizerId}`);
+    }
+
+    // Claim the month with new lock
+    const lockId = uuidv4();
+    transaction.update(docRef, {
+      stripeAccountFeeLastChargedMonth: currentMonth,
+      stripeAccountFeeLastChargedAt: now,
+      stripeAccountFeeLockId: lockId,
+      stripeAccountFeeLockExpiresAt: now + ACCOUNT_FEE_LOCK_DURATION_MS,
+      stripeAccountFeeChargeStatus: 'pending',
+    });
+
+    return { shouldCharge: true, lockId };
+  });
+
+  return { ...result, currentMonth };
+}
 
 // ============================================
 // CREATE CONNECT ACCOUNT (FOR CLUBS)
@@ -667,7 +743,12 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
   try {
     // Calculate total and platform fee
     const totalAmount = items.reduce((sum: number, item: any) => sum + item.amount * item.quantity, 0);
-    const platformFee = Math.round(totalAmount * (PLATFORM_FEE_PERCENT / 100));
+    let platformFee = Math.round(totalAmount * (PLATFORM_FEE_PERCENT / 100));
+
+    // Account fee tracking variables (set after routing)
+    let accountFeeIncluded = false;
+    let accountFeeMonth = '';
+    let accountFeeLockId = '';
 
     // Look up connected account and version from Firestore
     let connectedAccountId: string | null = null;
@@ -742,6 +823,30 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
 
     console.log(`[Checkout] Final routing: source=${routingSource}, connectedAccountId=${connectedAccountId}, currency=${currency}`);
 
+    // Try to claim monthly account fee if applicable
+    // Determine organizer type and ID from routing source
+    // IMPORTANT: organizerId must match the entity that owns the connected Stripe account
+    const organizerType: 'club' | 'user' = (routingSource === 'club' || routingSource === 'league') ? 'club' : 'user';
+    const organizerId = organizerType === 'club' ? clubId : organizerUserId;
+
+    if (organizerId && connectedAccountId && totalAmount >= MIN_PAYMENT_FOR_ACCOUNT_FEE) {
+      try {
+        const feeResult = await tryClaimAccountFee(organizerType, organizerId);
+        if (feeResult.shouldCharge && feeResult.lockId) {
+          platformFee += STRIPE_ACCOUNT_FEE_CENTS;
+          accountFeeIncluded = true;
+          accountFeeMonth = feeResult.currentMonth;
+          accountFeeLockId = feeResult.lockId;
+          console.log(`[Checkout] Claimed $2 account fee for ${organizerType}/${organizerId} (${accountFeeMonth}, lock=${accountFeeLockId})`);
+        } else {
+          console.log(`[Checkout] Account fee not claimed for ${organizerType}/${organizerId} (already collected or exempt)`);
+        }
+      } catch (feeError) {
+        // Don't fail checkout if fee claim fails - just log and continue
+        console.error(`[Checkout] Failed to claim account fee:`, feeError);
+      }
+    }
+
     // V07.54: Detect test/live mode mismatch
     // Test accounts start with acct_1 and have 18 chars, live accounts are longer
     // More reliable: check if we're using a live key (starts with sk_live_) vs test key (sk_test_)
@@ -807,6 +912,15 @@ export const stripe_createCheckoutSession = functions.https.onCall(async (data, 
     // V07.54: League payment fields (for webhook to update correct member)
     if (metadata.memberId) paymentMetadata.memberId = String(metadata.memberId);
     if (metadata.slot) paymentMetadata.slot = String(metadata.slot);
+
+    // Account fee metadata (for webhook to confirm collection)
+    if (accountFeeIncluded) {
+      paymentMetadata.accountFeeIncluded = 'true';
+      paymentMetadata.accountFeeMonth = accountFeeMonth;
+      paymentMetadata.accountFeeLockId = accountFeeLockId;
+      paymentMetadata.accountFeeOrganizerType = organizerType;
+      paymentMetadata.accountFeeOrganizerId = organizerId || '';
+    }
 
     // GATE: If leagueId, clubId or organizerUserId is provided, we MUST have a connected account
     // This catches organizer-owned events that should have Stripe Connect set up
@@ -1456,10 +1570,14 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
           referenceName: metadata.eventName || '',
           amount: session.amount_total || 0,
           currency: (session.currency || 'nzd').toUpperCase(),
-          // Don't calculate platformFeeAmount yet - wait for charge.succeeded
-          platformFeeAmount: 0,
-          clubNetAmount: 0,
+          // Use platformFee from metadata if available (standing meetup registrations pass this)
+          // Otherwise wait for charge.succeeded to populate with actual Stripe values
+          platformFeeAmount: metadata.platformFee ? parseInt(metadata.platformFee) : 0,
+          clubNetAmount: metadata.platformFee
+            ? (session.amount_total || 0) - parseInt(metadata.platformFee)
+            : 0,
           payerDisplayName: metadata.payerName || '',
+          payerEmail: metadata.payerEmail || metadata.userEmail || metadata.guestEmail || '',
           stripe: {
             schemaVersion: 1,
             accountId: connectedAccountId,
@@ -1472,6 +1590,43 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session, event: S
         });
 
         console.log(`✅ Created Finance transaction ${txRef.id} (processing) for session ${session.id}`);
+      }
+    }
+
+    // Confirm account fee collection if applicable (idempotent)
+    if (metadata.accountFeeIncluded === 'true') {
+      const orgType = metadata.accountFeeOrganizerType as 'club' | 'user';
+      const orgId = metadata.accountFeeOrganizerId;
+      const month = metadata.accountFeeMonth;
+      const lockId = metadata.accountFeeLockId;
+
+      if (orgId && month && lockId) {
+        const collection = orgType === 'club' ? 'clubs' : 'users';
+        const docRef = db.collection(collection).doc(orgId);
+
+        try {
+          // Idempotent: only confirm if this lockId owns the claim
+          const doc = await docRef.get();
+          const docData = doc.data();
+
+          if (docData?.stripeAccountFeeLockId === lockId) {
+            await docRef.update({
+              stripeAccountFeeChargeStatus: 'confirmed',
+              stripeAccountFeeConfirmedAt: Date.now(),
+              stripeAccountFeeLockExpiresAt: admin.firestore.FieldValue.delete(),
+            });
+            console.log(`✅ Confirmed $2 account fee for ${orgType}/${orgId} (${month})`);
+          } else if (docData?.stripeAccountFeeChargeStatus === 'confirmed' && docData?.stripeAccountFeeLastChargedMonth === month) {
+            // Already confirmed (webhook replay) - this is fine
+            console.log(`Account fee already confirmed for ${orgType}/${orgId} (${month})`);
+          } else {
+            // Lock was reclaimed by another checkout (edge case)
+            console.warn(`Account fee lock mismatch for ${orgType}/${orgId}: expected ${lockId}, found ${docData?.stripeAccountFeeLockId}`);
+          }
+        } catch (feeError) {
+          // Don't fail the webhook for fee confirmation errors
+          console.error(`Failed to confirm account fee for ${orgType}/${orgId}:`, feeError);
+        }
       }
     }
 
@@ -1580,18 +1735,41 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
       totalFees = balanceTx.fee || 0; // Total fees (Stripe + platform)
       netAmount = balanceTx.net || 0; // TRUE net to connected account
       console.log(`Balance transaction: gross=${balanceTx.amount}, totalFees=${totalFees}, net=${netAmount}`);
+    } else if (typeof balanceTx === 'string') {
+      // Just the ID - fetch the balance transaction separately to get actual fees
+      balanceTransactionId = balanceTx;
+      console.log(`Balance transaction returned as ID ${balanceTx}, fetching separately...`);
+      try {
+        const balanceTxFull = await stripe.balanceTransactions.retrieve(
+          balanceTx,
+          {},
+          { stripeAccount: connectedAccountId }
+        );
+        totalFees = balanceTxFull.fee || 0;
+        netAmount = balanceTxFull.net || 0;
+        console.log(`Balance transaction fetched: gross=${balanceTxFull.amount}, totalFees=${totalFees}, net=${netAmount}`);
+      } catch (btErr) {
+        console.error(`Failed to fetch balance_transaction ${balanceTx}:`, btErr);
+        // Ultimate fallback - estimate Stripe fee (~2.9% + 30c for NZ cards)
+        const estimatedStripeFee = Math.round(charge.amount * 0.029) + 30;
+        totalFees = platformFee + estimatedStripeFee;
+        netAmount = charge.amount - totalFees;
+        console.log(`Using estimated Stripe fee: estimatedStripeFee=${estimatedStripeFee}, totalFees=${totalFees}, net=${netAmount}`);
+      }
     } else {
-      // Just the ID - fall back to calculation
-      balanceTransactionId = balanceTx as string;
-      netAmount = charge.amount - platformFee;
-      totalFees = platformFee;
-      console.log(`Balance transaction not expanded, using fallback: net=${netAmount}`);
+      // No balance_transaction at all - estimate
+      const estimatedStripeFee = Math.round(charge.amount * 0.029) + 30;
+      totalFees = platformFee + estimatedStripeFee;
+      netAmount = charge.amount - totalFees;
+      console.log(`No balance_transaction, using estimate: totalFees=${totalFees}, net=${netAmount}`);
     }
   } catch (err) {
     console.error(`Failed to fetch charge ${charge.id} from ${connectedAccountId}:`, err);
-    // Fallback calculation
-    netAmount = charge.amount - platformFee;
-    totalFees = platformFee;
+    // Fallback - estimate Stripe fee (~2.9% + 30c for NZ cards)
+    const estimatedStripeFee = Math.round(charge.amount * 0.029) + 30;
+    totalFees = platformFee + estimatedStripeFee;
+    netAmount = charge.amount - totalFees;
+    console.log(`Using estimated fees after charge fetch failure: stripeFee=${estimatedStripeFee}, totalFees=${totalFees}`);
   }
 
   if (platformFee === 0) {
@@ -1615,6 +1793,7 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
       completedAt: Date.now(),
       updatedAt: Date.now(),
       platformFeeAmount: platformFee,
+      stripeFeeAmount: totalFees - platformFee, // Stripe processing fee (separate from platform fee)
       totalFeeAmount: totalFees, // Total fees including Stripe processing
       clubNetAmount: netAmount, // TRUE net from balance_transaction
       'stripe.chargeId': charge.id,
@@ -1694,9 +1873,11 @@ async function handleChargeSucceeded(charge: Stripe.Charge, event: Stripe.Event)
         amount: charge.amount,
         currency: (charge.currency || 'nzd').toUpperCase(),
         platformFeeAmount: platformFee,
+        stripeFeeAmount: totalFees - platformFee, // Stripe processing fee (separate from platform fee)
         totalFeeAmount: totalFees, // Total fees including Stripe processing
         clubNetAmount: netAmount, // TRUE net from balance_transaction
         payerDisplayName: metadata.payerName || '',
+        payerEmail: metadata.payerEmail || metadata.guestEmail || '',
         stripe: {
           schemaVersion: 1,
           accountId: connectedAccountId,
@@ -1935,48 +2116,74 @@ async function handleMeetupPayment(
   const db = admin.firestore();
 
   try {
-    // Get user info
-    const userDoc = await db.collection('users').doc(odUserId).get();
-    const userData = userDoc.exists ? userDoc.data() : null;
-    const userName = userData?.displayName || userData?.email || 'Unknown';
+    const amountPaid = session.amount_total || 0;
+    const rsvpRef = db.collection('meetups').doc(meetupId).collection('rsvps').doc(odUserId);
+    const rsvpSnap = await rsvpRef.get();
 
-    // Get meetup to verify and get pricing info
+    // Idempotency: if already paid, skip
+    if (rsvpSnap.exists) {
+      const rsvpData = rsvpSnap.data();
+      if (rsvpData?.paymentStatus === 'paid') {
+        console.log(`Meetup payment already processed for ${odUserId} in ${meetupId}, skipping`);
+        return;
+      }
+    }
+
+    // Get meetup to verify
     const meetupDoc = await db.collection('meetups').doc(meetupId).get();
     if (!meetupDoc.exists) {
       console.error('Meetup not found:', meetupId);
       return;
     }
 
-    const meetupData = meetupDoc.data()!;
-    const amountPaid = session.amount_total || 0;
+    const now = Date.now();
 
-    // Create or update RSVP with payment info
-    const rsvpRef = db.collection('meetups').doc(meetupId).collection('rsvps').doc(odUserId);
-    
-    await rsvpRef.set({
-      userId: odUserId,
-      userName,
-      status: 'going',
-      paymentStatus: 'paid',
-      amountPaid,
-      paidAt: Date.now(),
-      stripeSessionId: session.id,
-      stripePaymentIntentId: session.payment_intent as string,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    }, { merge: true });
+    if (rsvpSnap.exists) {
+      // Update existing RSVP (created by meetup_rsvpWithPayment)
+      await rsvpRef.update({
+        paymentStatus: 'paid',
+        amountPaid,
+        paidAt: now,
+        stripePaymentIntentId: session.payment_intent as string,
+        updatedAt: now,
+      });
+    } else {
+      // Fallback: create RSVP if it doesn't exist (e.g. old flow)
+      const userDoc = await db.collection('users').doc(odUserId).get();
+      const userData = userDoc.exists ? userDoc.data() : null;
+      const userName = userData?.displayName || userData?.email || 'Unknown';
+      const userEmail = userData?.email || '';
 
-    // Update meetup counters
-    const currentPaidPlayers = meetupData.paidPlayers || 0;
-    const currentTotalCollected = meetupData.totalCollected || 0;
+      await rsvpRef.set({
+        odUserId,
+        odUserName: userName,
+        odUserEmail: userEmail,
+        meetupId,
+        rsvpAt: now,
+        updatedAt: now,
+        status: 'confirmed',
+        paymentStatus: 'paid',
+        amountPaid,
+        paidAt: now,
+        stripeSessionId: session.id,
+        stripePaymentIntentId: session.payment_intent as string,
+      });
 
+      // Increment confirmed since this is a new RSVP
+      await db.collection('meetups').doc(meetupId).update({
+        confirmedCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: now,
+      });
+    }
+
+    // Update legacy counters for backwards compat
     await db.collection('meetups').doc(meetupId).update({
-      paidPlayers: currentPaidPlayers + 1,
-      totalCollected: currentTotalCollected + amountPaid,
-      updatedAt: Date.now(),
+      paidCount: admin.firestore.FieldValue.increment(1),
+      totalCollected: admin.firestore.FieldValue.increment(amountPaid),
+      updatedAt: now,
     });
 
-    console.log(`✅ Meetup payment successful: ${userName} paid ${amountPaid} cents for meetup ${meetupId}`);
+    console.log(`✅ Meetup payment successful: user ${odUserId} paid ${amountPaid} cents for meetup ${meetupId}`);
 
   } catch (error) {
     console.error('Error processing meetup payment:', error);
@@ -2366,6 +2573,7 @@ async function handleStandingMeetupRegistrationPayment(
     standingMeetupId,
     odUserId,
     registrationType,
+    registrationId: registrationIdFromMetadata, // Use the ID from checkout session
     selectedSessionIds: selectedSessionIdsJson,
     clubId,
     userName,
@@ -2388,8 +2596,9 @@ async function handleStandingMeetupRegistrationPayment(
   const db = admin.firestore();
   const now = Date.now();
 
-  // Build deterministic registration ID
-  const registrationId = `${standingMeetupId}_${odUserId}`;
+  // Use registration ID from metadata (handles multiple pick-and-pay registrations)
+  // Fallback to deterministic ID for backwards compatibility with old checkout sessions
+  const registrationId = registrationIdFromMetadata || `${standingMeetupId}_${odUserId}`;
 
   // Parse selectedSessionIds if present
   const selectedSessionIds = selectedSessionIdsJson ? JSON.parse(selectedSessionIdsJson) : undefined;
@@ -2703,13 +2912,18 @@ async function handleGuestSessionPayment(
         throw new Error('Occurrence not found in transaction');
       }
 
+      // Use baseAmount (the original session fee) for consistent revenue tracking
+      // This matches cash guests which also use the base amount
+      const revenueAmount = parseInt(metadata.baseAmount || '0', 10) || session.amount_total || 0;
+
       // Create the guest document
       const guestRef = occurrenceRef.collection('guests').doc();
       const guestData = {
         id: guestRef.id,
         name: guestName,
         email: guestEmail,
-        amount: session.amount_total || 0,
+        amount: revenueAmount,
+        amountCharged: session.amount_total || 0,
         paymentMethod: 'stripe',
         stripeCheckoutSessionId: session.id,
         stripePaymentIntentId: session.payment_intent as string || null,
@@ -2720,10 +2934,10 @@ async function handleGuestSessionPayment(
       transaction.set(guestRef, guestData);
 
       // Atomically increment guestCount and guestRevenue on the occurrence
-      // FieldValue.increment handles the case where fields don't exist (treats as 0)
+      // Uses baseAmount for consistency with cash guest amounts
       transaction.update(occurrenceRef, {
         guestCount: admin.firestore.FieldValue.increment(1),
-        guestRevenue: admin.firestore.FieldValue.increment(session.amount_total || 0),
+        guestRevenue: admin.firestore.FieldValue.increment(revenueAmount),
         updatedAt: now,
       });
     });
@@ -3466,6 +3680,23 @@ export const standingMeetup_createGuestCheckoutSession = functions
       throw new functions.https.HttpsError('invalid-argument', 'returnUrl is required');
     }
 
+    // Validate returnUrl domain to prevent open redirect attacks
+    const allowedOrigins = [
+      'https://pickleballdirector.co.nz',
+      'https://pickleball-app-dev.web.app',
+      'https://pickleball-app-test.web.app',
+      'http://localhost:3000',
+    ];
+    try {
+      const parsedUrl = new URL(returnUrl);
+      if (!allowedOrigins.includes(parsedUrl.origin)) {
+        throw new functions.https.HttpsError('invalid-argument', 'Invalid return URL domain');
+      }
+    } catch (e: any) {
+      if (e instanceof functions.https.HttpsError) throw e;
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid return URL format');
+    }
+
     const db = admin.firestore();
 
     // Get the standing meetup
@@ -3551,8 +3782,10 @@ export const standingMeetup_createGuestCheckoutSession = functions
     const platformFee = Math.round(chargedAmount * GUEST_PLATFORM_FEE_PERCENT);
 
     // Build success and cancel URLs
-    const successUrl = `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}success=true`;
-    const cancelUrl = returnUrl;
+    // Use {CHECKOUT_SESSION_ID} so the frontend can verify payment status
+    const separator = returnUrl.includes('?') ? '&' : '?';
+    const successUrl = `${returnUrl}${separator}session_id={CHECKOUT_SESSION_ID}`;
+    const cancelUrl = `${returnUrl}${separator}cancelled=true`;
 
     // Create Stripe Checkout Session
     const sessionMetadata = {
@@ -3566,6 +3799,7 @@ export const standingMeetup_createGuestCheckoutSession = functions
       payerName: name.trim(),
       payerEmail: email.trim().toLowerCase(),
       eventName: meetup.title || '',
+      baseAmount: String(baseAmount),
     };
 
     try {
@@ -3601,6 +3835,11 @@ export const standingMeetup_createGuestCheckoutSession = functions
 
       console.log(`✅ Created guest checkout session ${session.id} for ${name} at ${meetup.title}`);
 
+      if (!session.url) {
+        console.error(`Stripe session ${session.id} has no URL`);
+        throw new functions.https.HttpsError('internal', 'Stripe did not return a checkout URL');
+      }
+
       return {
         checkoutUrl: session.url,
         checkoutSessionId: session.id,
@@ -3608,6 +3847,70 @@ export const standingMeetup_createGuestCheckoutSession = functions
     } catch (error: any) {
       console.error('Failed to create guest checkout session:', error);
       throw new functions.https.HttpsError('internal', error.message || 'Failed to create checkout session');
+    }
+  });
+
+// ============================================
+// STANDING MEETUP VERIFY GUEST CHECKOUT SESSION
+// ============================================
+
+/**
+ * Verify a guest Checkout Session payment status.
+ * Called by the frontend after returning from Stripe Checkout to confirm
+ * the payment was actually completed (prevents back-button false positives).
+ *
+ * @region australia-southeast1
+ */
+export const standingMeetup_verifyGuestCheckoutSession = functions
+  .region('australia-southeast1')
+  .https.onCall(async (data: {
+    sessionId: string;
+    standingMeetupId: string;
+  }) => {
+    const { sessionId, standingMeetupId } = data;
+
+    if (!sessionId) {
+      throw new functions.https.HttpsError('invalid-argument', 'sessionId is required');
+    }
+    if (!standingMeetupId) {
+      throw new functions.https.HttpsError('invalid-argument', 'standingMeetupId is required');
+    }
+
+    // Get the meetup to find the connected Stripe account
+    const db = admin.firestore();
+    const meetupDoc = await db.collection('standingMeetups').doc(standingMeetupId).get();
+    if (!meetupDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Standing meetup not found');
+    }
+
+    const meetup = meetupDoc.data() as { organizerStripeAccountId: string };
+    if (!meetup.organizerStripeAccountId) {
+      throw new functions.https.HttpsError('failed-precondition', 'No Stripe account found');
+    }
+
+    try {
+      // Retrieve the Checkout Session from the connected account
+      const session = await stripe.checkout.sessions.retrieve(
+        sessionId,
+        { stripeAccount: meetup.organizerStripeAccountId }
+      );
+
+      // Validate the session actually belongs to this meetup
+      if (session.metadata?.standingMeetupId !== standingMeetupId) {
+        console.warn(`Session ${sessionId} belongs to meetup ${session.metadata?.standingMeetupId}, not ${standingMeetupId}`);
+        return { status: 'mismatch', paid: false };
+      }
+
+      const paid = session.payment_status === 'paid';
+      console.log(`Guest checkout verify: session=${sessionId}, status=${session.payment_status}, paid=${paid}`);
+
+      return {
+        status: session.payment_status,
+        paid,
+      };
+    } catch (error: any) {
+      console.error('Error verifying guest checkout session:', error);
+      throw new functions.https.HttpsError('internal', 'Failed to verify payment status');
     }
   });
 

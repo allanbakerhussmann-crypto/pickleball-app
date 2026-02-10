@@ -26,7 +26,7 @@ import {
 import type { Club, ClubJoinRequest, UserProfile, ClubBookingSettings } from '../types';
 import type { MeetupOccurrenceIndex } from '../types/standingMeetup';
 import { formatTime } from '../utils/timeFormat';
-import { BulkClubImport } from './BulkClubImport';
+import { maskEmail } from '../utils/privacy';
 import { CourtBookingCalendar } from './clubs/CourtBookingCalendar';
 import { ManageCourts } from './clubs/ManageCourts';
 import { ClubStripeConnect } from './clubs/ClubStripeConnect';
@@ -53,7 +53,6 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
     const [memberProfiles, setMemberProfiles] = useState<Record<string, UserProfile>>({});
     const [pendingJoin, setPendingJoin] = useState(false);
     const [hasPendingRequest, setHasPendingRequest] = useState(false);
-    const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [processingRequest, setProcessingRequest] = useState<string | null>(null);
     const [loadingMembers, setLoadingMembers] = useState(false);
     
@@ -618,7 +617,9 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                         ) : (
                             <div className="space-y-2">
                                 {upcomingSessions.map((session) => {
-                                    const sessionDate = new Date(session.when);
+                                    // Use occurrenceDate (YYYY-MM-DD) for display to avoid timezone drift
+                                    const [year, month, day] = session.occurrenceDate.split('-').map(Number);
+                                    const sessionDate = new Date(year, month - 1, day);
                                     const isToday = new Date().toDateString() === sessionDate.toDateString();
                                     const dayName = sessionDate.toLocaleDateString('en-NZ', { weekday: 'short' });
                                     const dateNum = sessionDate.getDate();
@@ -695,7 +696,7 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                                                 <p className="text-white font-medium">
                                                     {user?.displayName || 'Unknown User'}
                                                 </p>
-                                                <p className="text-gray-400 text-sm">{user?.email}</p>
+                                                <p className="text-gray-400 text-sm">{maskEmail(user?.email)}</p>
                                             </div>
                                             <div className="flex gap-2">
                                                 <button
@@ -727,14 +728,6 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                 <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
                     <div className="flex items-center justify-between mb-4">
                         <h2 className="text-lg font-bold text-white">Members ({club.members?.length || 0})</h2>
-                        {isAdmin && (
-                            <button
-                                onClick={() => setIsImportModalOpen(true)}
-                                className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-sm font-semibold"
-                            >
-                                Import Members
-                            </button>
-                        )}
                     </div>
                     
                     {loadingMembers ? (
@@ -750,7 +743,7 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                                             <p className="text-white font-medium">
                                                 {profile?.displayName || 'Unknown User'}
                                             </p>
-                                            <p className="text-gray-400 text-sm">{profile?.email || memberId}</p>
+                                            <p className="text-gray-400 text-sm">{maskEmail(profile?.email) || memberId}</p>
                                         </div>
                                         {memberIsAdmin && (
                                             <span className="bg-purple-600 text-white text-xs px-2 py-1 rounded font-semibold">Admin</span>
@@ -980,16 +973,6 @@ export const ClubDetailPage: React.FC<ClubDetailPageProps> = ({ clubId, onBack }
                 </div>
             )}
 
-            {/* Import Modal - uses onComplete not onSuccess */}
-            {isImportModalOpen && (
-                <BulkClubImport
-                    clubId={clubId}
-                    onClose={() => setIsImportModalOpen(false)}
-                    onComplete={() => {
-                        setIsImportModalOpen(false);
-                    }}
-                />
-            )}
         </div>
     );
 };

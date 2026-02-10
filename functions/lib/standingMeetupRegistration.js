@@ -53,6 +53,7 @@ const functions = __importStar(require("firebase-functions"));
 const admin = __importStar(require("firebase-admin"));
 const firestore_1 = require("firebase-admin/firestore");
 const stripe_1 = __importDefault(require("stripe"));
+const stripe_2 = require("./stripe");
 const db = admin.firestore();
 // Stripe configuration (same as standingMeetups.ts)
 // Check if running in test mode (emulator or explicit test flag)
@@ -295,6 +296,29 @@ exports.standingMeetup_register = functions.https.onCall(async (data, context) =
             totalAmount = Math.ceil((amount + STRIPE_FIXED_FEE_CENTS) / divisor);
             platformFee = Math.round(totalAmount * PLATFORM_FEE_PERCENT);
         }
+        // Try to claim monthly account fee ($2/month for active Stripe Connect accounts)
+        let accountFeeIncluded = false;
+        let accountFeeMonth = '';
+        let accountFeeLockId = '';
+        if (meetup.clubId && stripeAccountId && totalAmount >= stripe_2.MIN_PAYMENT_FOR_ACCOUNT_FEE) {
+            try {
+                const feeResult = await (0, stripe_2.tryClaimAccountFee)('club', meetup.clubId);
+                if (feeResult.shouldCharge && feeResult.lockId) {
+                    platformFee += stripe_2.STRIPE_ACCOUNT_FEE_CENTS;
+                    accountFeeIncluded = true;
+                    accountFeeMonth = feeResult.currentMonth;
+                    accountFeeLockId = feeResult.lockId;
+                    console.log(`[StandingMeetup] Claimed $2 account fee for club/${meetup.clubId} (${accountFeeMonth}, lock=${accountFeeLockId})`);
+                }
+                else {
+                    console.log(`[StandingMeetup] Account fee not claimed for club/${meetup.clubId} (already collected or exempt)`);
+                }
+            }
+            catch (feeError) {
+                // Don't fail checkout if fee claim fails - just log and continue
+                console.error(`[StandingMeetup] Failed to claim account fee:`, feeError);
+            }
+        }
         // Extract origin from returnUrl or use default
         // returnUrl might be full URL like "https://example.com/clubs/123/settings?..."
         // We only need the origin (protocol + host)
@@ -352,6 +376,13 @@ exports.standingMeetup_register = functions.https.onCall(async (data, context) =
                 amount: String(amount),
                 sessionCount: String(sessionCount),
                 maxPlayers: String(meetup.maxPlayers),
+                platformFee: String(platformFee), // For Finance transaction
+                // Account fee metadata (for webhook confirmation)
+                accountFeeIncluded: accountFeeIncluded ? 'true' : 'false',
+                accountFeeMonth,
+                accountFeeLockId,
+                accountFeeOrganizerType: 'club',
+                accountFeeOrganizerId: meetup.clubId,
             },
             payment_intent_data: {
                 application_fee_amount: platformFee,

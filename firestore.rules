@@ -272,21 +272,57 @@ service cloud.firestore {
       allow create: if isOwner(userId);
       allow update: if isOwner(userId) &&
         // Prevent users from self-promoting to admin
-        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAppAdmin', 'isRootAdmin']));
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAppAdmin', 'isRootAdmin'])) &&
+        // Prevent users from modifying Stripe account fee fields (server-only)
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'stripeAccountFeeLastChargedMonth', 'stripeAccountFeeLastChargedAt',
+          'stripeAccountFeeLockId', 'stripeAccountFeeLockExpiresAt',
+          'stripeAccountFeeChargeStatus', 'stripeAccountFeeConfirmedAt',
+          'stripeAccountFeeExempt'
+        ]));
       allow delete: if false; // Users cannot delete profiles
     }
 
-    // Meetups collection - SECURED
-    // V07.12: Allow public read so users can browse meetups before signing in
+    // Meetups collection - SECURED (V07.62: Private meetup invitations)
+    // Public/linkOnly: anyone can read. Private: only creator, co-hosts, or invited users.
     match /meetups/{meetupId} {
-      allow read: if true;
+      allow read: if
+        resource.data.get('visibility', 'public') != 'private' ||
+        (isAuthenticated() && (
+          resource.data.createdByUserId == request.auth.uid ||
+          (resource.data.coHostIds != null && request.auth.uid in resource.data.coHostIds) ||
+          (resource.data.invitedUserIds != null && request.auth.uid in resource.data.invitedUserIds)
+        ));
       allow create: if isAuthenticated();
-      allow update, delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
+      // Host or co-hosts can update; only host can delete
+      allow update: if isAuthenticated() && (
+        resource.data.createdByUserId == request.auth.uid ||
+        (resource.data.coHostIds != null && request.auth.uid in resource.data.coHostIds)
+      );
+      allow delete: if isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
 
+      // RSVPs subcollection (V07.61: Locked state machine)
+      // Players can create/cancel their own RSVP.
+      // Counter mutations, check-in, no-show handled by Cloud Functions (admin SDK).
       match /rsvps/{odUserId} {
-        // V07.12: Allow public read for viewing meetup attendees
         allow read: if true;
-        allow write: if isAuthenticated() && request.auth.uid == odUserId;
+        allow create: if isAuthenticated() && request.auth.uid == odUserId;
+        allow update: if isAuthenticated() && request.auth.uid == odUserId;
+        allow delete: if isAuthenticated() && request.auth.uid == odUserId;
+      }
+
+      // Guests subcollection (V07.61: separate from RSVPs)
+      // Writes go through Cloud Functions (organizer auth checked server-side)
+      match /guests/{guestId} {
+        allow read: if isAuthenticated();
+        allow write: if false;
+      }
+
+      // Sit-outs subcollection (V07.61: append-only records)
+      match /sitouts/{sitoutId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated();
+        allow update, delete: if false;
       }
 
       // Meetup matches subcollection (V06.16)
@@ -414,10 +450,18 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isAuthenticated();
       // Club admins, creator, owner, or app admins can update/delete the club
-      allow update: if isClubAdmin(clubId) ||
+      // But block client writes to Stripe account fee fields (server-only)
+      allow update: if (isClubAdmin(clubId) ||
         (isAuthenticated() && resource.data.createdByUserId == request.auth.uid) ||
         (isAuthenticated() && resource.data.ownerId == request.auth.uid) ||
-        isAppAdmin();
+        isAppAdmin()) &&
+        // Prevent clients from modifying Stripe account fee fields (server-only)
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'stripeAccountFeeLastChargedMonth', 'stripeAccountFeeLastChargedAt',
+          'stripeAccountFeeLockId', 'stripeAccountFeeLockExpiresAt',
+          'stripeAccountFeeChargeStatus', 'stripeAccountFeeConfirmedAt',
+          'stripeAccountFeeExempt'
+        ]));
       allow delete: if isAuthenticated() && (
         resource.data.createdByUserId == request.auth.uid ||
         resource.data.ownerId == request.auth.uid
@@ -427,8 +471,8 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         // Users can create their own join requests
         allow create: if isAuthenticated();
-        // Only club admins can approve/deny requests
-        allow update, delete: if isClubAdmin(clubId);
+        // Club admins or app admins can approve/deny requests
+        allow update, delete: if isClubAdmin(clubId) || isAppAdmin();
       }
       match /courts/{courtId} {
         allow read: if isAuthenticated();
@@ -781,6 +825,18 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && resource.data.inviterId == request.auth.uid;
     }
 
+    // V07.62: Meetup Invites - SECURED (for private meetups)
+    // Sender or recipient can read. Sender can create/update/delete.
+    match /meetupInvites/{inviteId} {
+      allow read: if isAuthenticated() && (
+        resource.data.inviterId == request.auth.uid ||
+        resource.data.invitedUserId == request.auth.uid
+      );
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && resource.data.inviterId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.inviterId == request.auth.uid;
+    }
+
     // V07.27: League Join Requests - DEPRECATED (V07.28)
     // This collection is no longer actively used since open teams now auto-accept partners.
     // Rules kept for cleanup of legacy data only.
@@ -1062,8 +1118,10 @@ service cloud.firestore {
       // Allow read for any authenticated user
       // Security is via write rules (only admins can modify) and payment (must pay to participate)
       // V07.59: Allow all authenticated users to read for check-in QR flow
+      // V07.61: Allow unauthenticated reads when card payments enabled (guest QR payment page)
       allow read: if isAuthenticated() ||
-                     resource.data.visibility == 'public';
+                     resource.data.visibility == 'public' ||
+                     resource.data.paymentMethods.acceptCardPayments == true;
       allow create: if isClubOwnerOrAdmin(request.resource.data.clubId) || isAppAdmin();
       allow update: if isClubOwnerOrAdmin(resource.data.clubId) || isAppAdmin();
       allow delete: if isClubOwnerOrAdmin(resource.data.clubId) || isAppAdmin();

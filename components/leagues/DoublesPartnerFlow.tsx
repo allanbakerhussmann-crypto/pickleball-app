@@ -17,6 +17,7 @@ import {
   getOpenLeagueMembers,
 } from '../../services/firebase';
 import type { League, UserProfile, LeagueMember } from '../../types';
+import { maskEmail } from '../../utils/privacy';
 
 // ============================================
 // TYPES
@@ -399,7 +400,7 @@ export const DoublesPartnerFlow: React.FC<DoublesPartnerFlowProps> = ({
                 <h4 className="font-semibold text-white text-lg">
                   {selectedPartner.displayName || selectedPartner.email}
                 </h4>
-                <p className="text-gray-400 text-sm">{selectedPartner.email}</p>
+                <p className="text-gray-400 text-sm">{maskEmail(selectedPartner.email)}</p>
                 {selectedPartner.duprId && (
                   <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded bg-lime-500/20 text-lime-400 text-xs font-medium">
                     <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
@@ -482,7 +483,7 @@ export const DoublesPartnerFlow: React.FC<DoublesPartnerFlowProps> = ({
                         <div className="font-medium text-white truncate">
                           {user.displayName || user.email}
                         </div>
-                        <div className="text-sm text-gray-400 truncate">{user.email}</div>
+                        <div className="text-sm text-gray-400 truncate">{maskEmail(user.email)}</div>
                         {reasons.length > 0 && (
                           <div className="text-xs text-red-400 mt-1">
                             {reasons.join(' • ')}

@@ -84,7 +84,6 @@ export {
   subscribeToTeams,
   createTeam,
   deleteTeam,
-  createTeamServer,
   ensureTeamExists,
   getUserTeamsForTournament,
   withdrawPlayerFromDivision,
@@ -215,23 +214,17 @@ export {
   getMyMeetups,
 } from './meetups';
 
-// Social Events & Game Sessions
+// ============================================
+// MEETUP INVITES (V07.62: Private meetups)
+// ============================================
 export {
-  // Legacy Social Events
-  createSocialEvent,
-  subscribeToSocialEvents,
-  joinSocialEvent,
-  leaveSocialEvent,
-  deleteSocialEvent,
-  // Game Sessions
-  createGameSession,
-  getGameSession,
-  subscribeToGameSessions,
-  joinGameSession,
-  leaveGameSession,
-  updateGameSessionStatus,
-  deleteGameSession,
-} from './social';
+  sendMeetupInvite,
+  removeMeetupInvite,
+  getMeetupInvites,
+  getMyMeetupInvites,
+  subscribeToMyMeetupInvites,
+  subscribeToMeetupInvites,
+} from './meetupInvites';
 
 // ============================================
 // LEAGUES (UPDATED V05.32)

@@ -33,8 +33,9 @@ import {
   type MeetupMatch,
   type MeetupStanding,
 } from '../../services/firebase/meetupMatches';
-import type { MeetupRSVP } from '../../types';
+import type { Meetup } from '../../types';
 import { formatTimestamp } from '../../utils/timeFormat';
+import { MeetupOrganizerTools } from './MeetupOrganizerTools';
 
 // ============================================
 // TYPES
@@ -103,17 +104,28 @@ interface ExtendedMeetup {
   };
 }
 
-interface ExtendedMeetupRSVP extends MeetupRSVP {
+interface ExtendedMeetupRSVP {
   odUserId: string;
   odUserName: string;
+  odUserEmail?: string;
+  meetupId: string;
+  rsvpAt: number;
+  updatedAt: number;
   userId?: string;  // Legacy field
   userName?: string;
-  paymentStatus?: 'not_required' | 'pending' | 'paid' | 'refunded' | 'waived';
+  status: string;   // 'confirmed' | 'waitlisted' | 'cancelled' | 'no_show' | legacy 'going' | 'attending'
+  paymentStatus?: string;
   amountPaid?: number;
   paidAt?: number;
+  stripeSessionId?: string;
+  duprId?: string;
+  checkedInAt?: number;
+  waitlistPosition?: number;
+  promotedAt?: number;
+  promotionExpiresAt?: number;
 }
 
-type MeetupTab = 'details' | 'attendees' | 'scoring' | 'results';
+type MeetupTab = 'details' | 'attendees' | 'scoring' | 'results' | 'manage';
 
 // ============================================
 // CONSTANTS
@@ -148,6 +160,7 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showWithdrawConfirm, setShowWithdrawConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   // Tab state
   const [activeTab, setActiveTab] = useState<MeetupTab>('details');
@@ -166,10 +179,14 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
         getMeetupById(meetupId),
         getMeetupRSVPs(meetupId)
       ]);
-      setMeetup(m as ExtendedMeetup);
+      setMeetup(m as unknown as ExtendedMeetup);
       setRsvps((r || []) as ExtendedMeetupRSVP[]);
-    } catch (e) {
-      console.error('Error loading meetup data:', e);
+    } catch (e: any) {
+      if (e?.code === 'permission-denied') {
+        setPermissionDenied(true);
+      } else {
+        console.error('Error loading meetup data:', e);
+      }
       setRsvps([]);
     } finally {
       setLoading(false);
@@ -207,6 +224,8 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
   // ============================================
 
   const isCreator = currentUser?.uid === meetup?.createdByUserId;
+  const isCoHost = (meetup as any)?.coHostIds?.includes(currentUser?.uid);
+  const isOrganizer = isCreator || isCoHost;
   const isCancelled = meetup?.status === 'cancelled';
   const isPaid = meetup?.pricing?.enabled && (meetup?.pricing?.totalPerPerson || 0) > 0;
   
@@ -383,12 +402,29 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
     );
   }
 
+  if (permissionDenied) {
+    return (
+      <div className="max-w-2xl mx-auto p-4 text-center">
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-8">
+          <svg className="w-12 h-12 text-gray-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+          <h2 className="text-lg font-bold text-white mb-2">Private Meetup</h2>
+          <p className="text-gray-400 mb-6">This is a private meetup. You need an invitation to view it.</p>
+          <button onClick={onBack} className="text-lime-400 hover:text-lime-300 font-medium">
+            &larr; Back to Meetups
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!meetup) {
     return (
       <div className="max-w-2xl mx-auto p-4 text-center">
         <p className="text-gray-400">Meetup not found</p>
         <button onClick={onBack} className="mt-4 text-green-400 hover:text-green-300">
-          ← Back to Meetups
+          &larr; Back to Meetups
         </button>
       </div>
     );
@@ -512,6 +548,18 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
               }`}
             >
               📊 Results
+            </button>
+          )}
+          {isOrganizer && (
+            <button
+              onClick={() => setActiveTab('manage')}
+              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'manage'
+                  ? 'text-lime-400 border-b-2 border-lime-400 bg-gray-900/30'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Manage
             </button>
           )}
         </div>
@@ -768,6 +816,14 @@ export const MeetupDetail: React.FC<MeetupDetailProps> = ({ meetupId, onBack, on
               matches={matches}
               competitionType={meetup.competition.type}
               meetupTitle={meetup.title}
+            />
+          )}
+
+          {/* ========== MANAGE TAB ========== */}
+          {activeTab === 'manage' && isOrganizer && (
+            <MeetupOrganizerTools
+              meetup={meetup as unknown as Meetup}
+              onMeetupUpdate={loadData}
             />
           )}
         </div>

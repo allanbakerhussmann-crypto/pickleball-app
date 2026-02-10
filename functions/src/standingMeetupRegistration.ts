@@ -15,6 +15,12 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import Stripe from 'stripe';
+import { v4 as uuidv4 } from 'uuid';
+import {
+  tryClaimAccountFee,
+  STRIPE_ACCOUNT_FEE_CENTS,
+  MIN_PAYMENT_FOR_ACCOUNT_FEE,
+} from './stripe';
 
 const db = admin.firestore();
 
@@ -349,6 +355,29 @@ export const standingMeetup_register = functions.https.onCall(async (data, conte
       platformFee = Math.round(totalAmount * PLATFORM_FEE_PERCENT);
     }
 
+    // Try to claim monthly account fee ($2/month for active Stripe Connect accounts)
+    let accountFeeIncluded = false;
+    let accountFeeMonth = '';
+    let accountFeeLockId = '';
+
+    if (meetup.clubId && stripeAccountId && totalAmount >= MIN_PAYMENT_FOR_ACCOUNT_FEE) {
+      try {
+        const feeResult = await tryClaimAccountFee('club', meetup.clubId);
+        if (feeResult.shouldCharge && feeResult.lockId) {
+          platformFee += STRIPE_ACCOUNT_FEE_CENTS;
+          accountFeeIncluded = true;
+          accountFeeMonth = feeResult.currentMonth;
+          accountFeeLockId = feeResult.lockId;
+          console.log(`[StandingMeetup] Claimed $2 account fee for club/${meetup.clubId} (${accountFeeMonth}, lock=${accountFeeLockId})`);
+        } else {
+          console.log(`[StandingMeetup] Account fee not claimed for club/${meetup.clubId} (already collected or exempt)`);
+        }
+      } catch (feeError) {
+        // Don't fail checkout if fee claim fails - just log and continue
+        console.error(`[StandingMeetup] Failed to claim account fee:`, feeError);
+      }
+    }
+
     // Extract origin from returnUrl or use default
     // returnUrl might be full URL like "https://example.com/clubs/123/settings?..."
     // We only need the origin (protocol + host)
@@ -409,6 +438,13 @@ export const standingMeetup_register = functions.https.onCall(async (data, conte
           amount: String(amount),
           sessionCount: String(sessionCount),
           maxPlayers: String(meetup.maxPlayers),
+          platformFee: String(platformFee), // For Finance transaction
+          // Account fee metadata (for webhook confirmation)
+          accountFeeIncluded: accountFeeIncluded ? 'true' : 'false',
+          accountFeeMonth,
+          accountFeeLockId,
+          accountFeeOrganizerType: 'club',
+          accountFeeOrganizerId: meetup.clubId,
         },
         payment_intent_data: {
           application_fee_amount: platformFee,

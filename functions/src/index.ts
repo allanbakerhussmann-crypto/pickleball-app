@@ -50,6 +50,7 @@ export {
 
   // Standing Meetup Guest Checkout (V07.59)
   standingMeetup_createGuestCheckoutSession,
+  standingMeetup_verifyGuestCheckoutSession,
   // Standing Meetup Quick Register at door (V07.59)
   standingMeetup_createQuickRegisterCheckoutSession,
 } from './stripe';
@@ -79,13 +80,7 @@ export {
 } from './privacy';
 
 // ============================================
-// TEAM FUNCTIONS (if you have them)
-// ============================================
-
-// export { createTeam } from './teams';
-
-// ============================================
-// SMS FUNCTIONS (Twilio)
+// SMS FUNCTIONS (SMSGlobal)
 // ============================================
 
 export {
@@ -171,13 +166,14 @@ export {
 } from './receiptEmail';
 
 // ============================================
-// PLATFORM FINANCE FUNCTIONS (V07.50)
+// PLATFORM FINANCE FUNCTIONS (V07.61)
 // ============================================
 
 export {
   platform_getAccountBalances,
   platform_getAccountPayouts,
   platform_runReconciliation,
+  platform_runOrganizerReconciliation, // V07.61: Organizer-level reconciliation
   platform_addMissingTransaction,
   platform_exportTransactions,
 } from './platformFinance';
@@ -219,6 +215,23 @@ export {
   standingMeetup_cancelUnpaidBankRegistration,
   standingMeetup_unregister,
 } from './standingMeetupRegistration';
+
+// ============================================
+// MEETUP FUNCTIONS (V07.61) - Enhanced Meetup System
+// ============================================
+
+export {
+  meetup_rsvpWithPayment,
+  meetup_rsvpFree,
+  meetup_cancelRsvp,
+  meetup_expirePromotionHolds,
+  meetup_manualCheckIn,
+  meetup_markNoShow,
+  meetup_addCashGuest,
+  meetup_closeSession,
+  meetup_undoCheckIn,
+  meetup_undoNoShow,
+} from './meetups';
 
 // ============================================
 // GUEST MARKETING FUNCTIONS (V07.61)
